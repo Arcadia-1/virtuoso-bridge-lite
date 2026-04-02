@@ -1,12 +1,16 @@
-// Capacitor DC + AC testbench (no PDK needed — pure analogLib)
-// Measures capacitance from AC current: C = dI/dV / (2*pi*f)
+// RC low-pass filter DC + AC testbench (no PDK needed — pure analogLib)
+// Circuit: VDD → R0 (1K) → VO → C1 (50f) → GND
+//          VDD → C0 (50f) → GND (reference cap)
+// AC response: first-order RC roll-off at f_3dB = 1/(2*pi*R*C)
 simulator lang=spectre
 global 0
 parameters VDC=1
 
+C1 (VO GND) capacitor c=50f
 C0 (VDD GND) capacitor c=50f
 V58 (GND 0) vsource dc=0 type=dc
 V57 (VDD 0) vsource dc=VDC mag=1 type=dc
+R0 (VDD VO) resistor r=1K
 
 simulatorOptions options psfversion="1.4.0" reltol=1e-4 vabstol=1e-6 \
     iabstol=1e-12 temp=27 tnom=27 scalem=1.0 scale=1.0 gmin=1e-12 rforce=1 \
