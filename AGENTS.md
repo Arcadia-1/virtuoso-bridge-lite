@@ -29,7 +29,7 @@ When a user first opens this project, run these checks **before anything else**:
 
 5. **Verify** — `virtuoso-bridge status`
 
-6. **Quick test** — `BridgeClient().execute_skill("1+2")`
+6. **Quick test** — `VirtuosoClient.from_env().execute_skill("1+2")`
 
 ### Local mode
 
@@ -67,7 +67,7 @@ bridge.execute_skill("1+2")
 
 ## Key conventions
 
-- All SKILL execution goes through `BridgeClient` or `VirtuosoClient`. Never SSH and run SKILL manually.
+- All SKILL execution goes through `VirtuosoClient`. Never SSH and run SKILL manually.
 - Layout/schematic editing: `client.layout.edit()` / `client.schematic.edit()` context managers.
 - Spectre simulation: `SpectreSimulator.from_env()`. Requires `VB_CADENCE_CSHRC` in `.env`.
 - `core/` is for understanding the mechanism (3 files, 180 lines). Use the installed package for real work.

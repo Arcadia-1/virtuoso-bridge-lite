@@ -122,9 +122,9 @@ SSHClient ──SSH──► port forward + file upload
 <span class="cmd">virtuoso-bridge init</span>        <span class="cmt"># generates .env</span>
 <span class="cmt"># edit .env → set VB_REMOTE_HOST=my-server</span>
 <span class="cmd">virtuoso-bridge start</span></code></pre>
-    <pre><code><span class="kw">from</span> virtuoso_bridge <span class="kw">import</span> BridgeClient
+    <pre><code><span class="kw">from</span> virtuoso_bridge <span class="kw">import</span> VirtuosoClient
 
-client = BridgeClient()
+client = VirtuosoClient.from_env()
 result = client.<span class="fn">execute_skill</span>(<span class="str">"1+2"</span>)
 <span class="fn">print</span>(result)  <span class="cmt"># {'ok': True, 'result': {'output': '3', ...}}</span></code></pre>
   </div>
@@ -134,7 +134,7 @@ result = client.<span class="fn">execute_skill</span>(<span class="str">"1+2"</s
     <h2>API Reference</h2>
 
     <div class="api-group">
-      <h3>BridgeClient — high-level JSON client</h3>
+      <h3>VirtuosoClient — SKILL execution</h3>
       <table>
         <tr><th>Method</th><th>Description</th></tr>
         <tr><td><code>execute_skill(code)</code></td><td>Run any SKILL expression, return result dict</td></tr>

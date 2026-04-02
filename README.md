@@ -35,9 +35,9 @@ virtuoso-bridge start
 ```
 
 ```python
-from virtuoso_bridge import BridgeClient
+from virtuoso_bridge import VirtuosoClient
 
-client = BridgeClient()
+client = VirtuosoClient.from_env()
 result = client.execute_skill("1+2")
 print(result)  # {'ok': True, 'result': {'output': '3', ...}}
 ```
@@ -57,7 +57,7 @@ The bridge is two independent layers:
 ┌─────────────────┐          ┌──────────────────────────────────┐
 │  Your Machine   │          │   Remote Virtuoso Server         │
 │                 │          │                                  │
-│  BridgeClient   │          │   RAMIC daemon (Python)          │
+│  VirtuosoClient   │          │   RAMIC daemon (Python)          │
 │       │         │          │       │                          │
 │       ▼         │          │       ▼                          │
 │  VirtuosoClient    │──TCP───► │   evalstring() in Virtuoso       │
@@ -70,7 +70,6 @@ The bridge is two independent layers:
 
 - **VirtuosoClient** — pure TCP SKILL client. No SSH awareness. Sends SKILL over TCP, gets results.
 - **SSHClient** — manages SSH tunnel, uploads daemon to remote, handles file transfer. Provides the `localhost:port` endpoint that VirtuosoClient connects to.
-- **BridgeClient** — thin JSON client that talks to the BridgeService (which wraps VirtuosoClient + SSHClient).
 
 These two layers are fully decoupled: VirtuosoClient works with any TCP endpoint (SSH tunnel, VPN, direct LAN, local).
 

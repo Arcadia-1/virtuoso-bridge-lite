@@ -12,8 +12,8 @@ Two approaches — use whichever fits:
 ### 1. Python API (preferred)
 
 ```python
-from virtuoso_bridge import BridgeClient
-client = BridgeClient()
+from virtuoso_bridge import VirtuosoClient
+client = VirtuosoClient.from_env()
 
 # Execute any SKILL expression
 client.execute_skill("1+2")

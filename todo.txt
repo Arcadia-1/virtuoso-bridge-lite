@@ -1,9 +1,0 @@
-在spectre样例中，我希望增加一个：仿真dc和ac。我从spectre中导出了网表是这样的：      
-                                                                                                                                            
-                                                                   
-  [Pasted text #1 +40 lines]                                                          
-                                                                                                                                            
-                                                                   
-                                         
-                                                                                      
-  观察的电容值的表达式是：(value(deriv(mag(IF("/C0/PLUS"))) 100000000) / 2 / 3.14159)    

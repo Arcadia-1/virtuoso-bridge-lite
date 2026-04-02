@@ -56,4 +56,4 @@ bridge_client.py                      Virtuoso process
    "3"
 ```
 
-`core/` is for understanding the mechanism. For production use, install the full package (`pip install -e .`) which adds SSHClient (auto SSH tunnel, reconnection, file transfer) and BridgeClient (JSON service protocol).
+`core/` is for understanding the mechanism. For production use, install the full package (`pip install -e .`) which adds SSHClient (auto SSH tunnel, reconnection, file transfer) and VirtuosoClient (layout/schematic API, Spectre integration).
