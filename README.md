@@ -53,25 +53,14 @@ Done.
 
 The bridge is two independent layers:
 
-```
-┌─────────────────┐          ┌──────────────────────────────────┐
-│  Your Machine   │          │   Remote Virtuoso Server         │
-│                 │          │                                  │
-│  VirtuosoClient   │          │   RAMIC daemon (Python)          │
-│       │         │          │       │                          │
-│       ▼         │          │       ▼                          │
-│  VirtuosoClient    │──TCP───► │   evalstring() in Virtuoso       │
-│  (pure TCP)     │          │                                  │
-│                 │          │                                  │
-│  SSHClient  │──SSH───► │   (port forward + file transfer) │
-│  (SSH tunnel)   │          │                                  │
-└─────────────────┘          └──────────────────────────────────┘
-```
+<p align="center">
+  <img src="assets/architecture.svg" alt="Architecture" width="100%"/>
+</p>
 
-- **VirtuosoClient** — pure TCP SKILL client. No SSH awareness. Sends SKILL over TCP, gets results.
-- **SSHClient** — manages SSH tunnel, uploads daemon to remote, handles file transfer. Provides the `localhost:port` endpoint that VirtuosoClient connects to.
+- **VirtuosoClient** — pure TCP SKILL client. Sends SKILL, gets results. No SSH awareness.
+- **SSHClient** — manages SSH tunnel + daemon deployment. Provides the `localhost:port` that VirtuosoClient connects to. Optional (not needed for local mode).
 
-These two layers are fully decoupled: VirtuosoClient works with any TCP endpoint (SSH tunnel, VPN, direct LAN, local).
+Fully decoupled: VirtuosoClient works with any TCP endpoint — SSH tunnel, VPN, direct LAN, or local.
 
 > Want to understand the raw mechanism? See [`core/`](core/) — the entire bridge distilled into 3 files (180 lines).
 
