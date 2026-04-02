@@ -257,7 +257,7 @@ If you use virtuoso-bridge in academic work, please cite:
 ```bibtex
 @article{zhang2025virtuosobridge,
   title   = {Virtuoso-Bridge: An Agent-Native Bridge for Harness Engineering
-             in Virtuoso-Centered Workflows},
+             in Analog and Mixed-Signal Workflows},
   author  = {Zhang, Zhishuai and Li, Xintian and Sun, Nan and Jie, Lu},
   year    = {2025}
 }
