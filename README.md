@@ -6,6 +6,16 @@ Lightweight Python bridge for Cadence Virtuoso. Three capabilities:
 2. **Layout & Schematic editing** — Python API for creating/modifying cellviews
 3. **Spectre simulation** — run simulations remotely, parse results automatically
 
+> This is a distilled version of [virtuoso-bridge (full)](https://github.com/Arcadia-1/virtuoso-bridge). Compared to the full version:
+>
+> - **Removed** Calibre DRC/LVS/PEX wrappers and all associated CSH scripts
+> - **Removed** OCEAN script integration
+> - **Removed** example netlists, simulation outputs, and Calibre rule decks
+> - **Removed** all hardcoded PDK paths, internal usernames, and site-specific server paths from source and git history
+> - **Trimmed** docstrings and redundant code (~21% smaller)
+>
+> What remains is the core: SSH transport, SKILL execution, layout/schematic editing, and Spectre simulation.
+
 ## Quick Start
 
 ```bash
