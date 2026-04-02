@@ -7,6 +7,8 @@
 
 ### You describe intent. The agent writes SKILL, builds layouts, and runs simulations.
 
+**Strongly recommended:** use a coding agent (Claude Code, Cursor, etc.) to read this repo and tailor it to your actual project environment — PDK, libraries, tech node, and directory structure.
+
 Lightweight Python bridge for Cadence Virtuoso — **work from anywhere, on any machine**.
 
 Virtuoso runs on a remote Linux server. This bridge lets you control it from your laptop (macOS, Windows, Linux) over SSH. No VNC, no X11 forwarding, no manual terminal sessions.
