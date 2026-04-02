@@ -26,7 +26,7 @@ Virtuoso runs on a remote Linux server. This bridge lets you control it from you
 2. **Layout & Schematic editing** — Python API for creating/modifying cellviews
 3. **Spectre simulation** — run simulations remotely, parse results automatically
 
-> This is a distilled version of virtuoso-bridge (full). Compared to the full version:
+> Distilled from [virtuoso-bridge (full)](https://github.com/Arcadia-1/virtuoso-bridge) — a fully verified end-to-end environment harness covering SKILL execution, Spectre simulation, OCEAN analysis, and Calibre DRC/LVS/PEX, tested in production TSMC 28nm tape-out workflows. This lite version extracts the core and removes all site-specific paths and credentials. Compared to the full version:
 >
 > - **Removed** Calibre DRC/LVS/PEX wrappers and all associated CSH scripts
 > - **Removed** OCEAN script integration
