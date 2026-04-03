@@ -45,6 +45,7 @@ Control Cadence Virtuoso from anywhere, locally or remotely. Verified across mac
 | **Python ↔ SKILL types** | String-based | Automatic bidirectional mapping |
 | **IDE tab completion** | No (agents don't need it) | Yes (Jupyter, PyCharm stubs) |
 | **Local mode** | Yes | Yes |
+| **Core mechanism** | `ipcBeginProcess` + `evalstring` | `ipcBeginProcess` + `evalstring` |
 
 **In short:** skillbridge is a transparent SKILL RPC client optimized for interactive local use. virtuoso-bridge-lite is a full harness for remote automation, AI-driven workflows, and simulation.
 
