@@ -21,7 +21,6 @@ Control Cadence Virtuoso from anywhere, locally or remotely. Verified across mac
 **2. AI-native design** — Built for coding agents (Claude Code, Cursor, etc.) to drive.
 - You describe intent; the agent writes SKILL, builds layouts, runs simulations, optimizes parameters
 - Ships with agent skill files (`skills/`) that teach the agent how to use the bridge
-- 30+ runnable examples: SKILL, layout, schematic, and Spectre simulation
 
 **3. Batteries included** — 30+ runnable examples, ready to use out of the box.
 - Layout: polygon, via, multi-layer routing, bus wiring, read-back geometry
