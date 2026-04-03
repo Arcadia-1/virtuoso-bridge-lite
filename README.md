@@ -48,7 +48,43 @@ Control Cadence Virtuoso from anywhere, locally or remotely. Verified across mac
 | **Python ↔ SKILL types** | String-based | Auto bidirectional mapping |
 | **IDE tab completion** | No (not needed by agents) | Yes (Jupyter, PyCharm stubs) |
 
-**In short:** Both projects are built on the same SKILL-native mechanism: `ipcBeginProcess()` spawns a daemon subprocess inside Virtuoso, and `evalstring()` executes code sent from that daemon. This is a standard Cadence SKILL IPC facility, not invented by either project. skillbridge wraps it as a Pythonic RPC client for interactive local use. virtuoso-bridge-lite builds a full harness on top for remote automation, AI-driven workflows, and simulation.
+**In short:** Both projects are built on the same Cadence SKILL IPC facility, using the same core mechanism: `ipcBeginProcess` + `evalstring` + `ipcWriteProcess`. Here are the core lines from each:
+
+<details>
+<summary><b>virtuoso-bridge-lite</b> — <code>core/ramic_bridge.il</code></summary>
+
+```skill
+RBIpc = ipcBeginProcess(
+  sprintf(nil "%s %L %L %L" RBPython RBDPath host RBPort)
+  "" 'RBIpcDataHandler 'RBIpcErrHandler 'RBIpcFinishHandler "")
+
+procedure(RBIpcDataHandler(ipcId data)
+  if(errset(result = evalstring(data)) then
+    ipcWriteProcess(ipcId sprintf(nil "%c%L%c" 2 result 30))
+  else
+    ipcWriteProcess(ipcId sprintf(nil "%c%L%c" 21 errset.errset 30))
+  )
+)
+```
+</details>
+
+<details>
+<summary><b>skillbridge</b> — <code>skillbridge/server/python_server.il</code></summary>
+
+```skill
+pyStartServer.ipc = ipcBeginProcess(
+  executableWithArgs "" '__pyOnData '__pyOnError '__pyOnFinish pyStartServer.logName)
+
+defun(__pyOnData (id data)
+  foreach(line parseString(data "\n")
+    capturedWarning = __pyCaptureWarnings(errset(result=evalstring(line)))
+    ipcWriteProcess(id lsprintf("success %L\n" result))
+  )
+)
+```
+</details>
+
+The divergence is in what's built on top: skillbridge stays thin — a Pythonic RPC client for interactive local use. virtuoso-bridge-lite adds SSH remote access, high-level layout/schematic APIs, Spectre simulation, and an AI-agent-ready harness.
 
 ## Quick Start
 
