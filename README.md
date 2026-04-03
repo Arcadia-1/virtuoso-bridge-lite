@@ -99,6 +99,23 @@ virtuoso-bridge restart   # force-restart
 virtuoso-bridge status    # check connection + Spectre license
 ```
 
+## Comparison with skillbridge
+
+| Feature | virtuoso-bridge-lite | [skillbridge](https://github.com/unihd-cag/skillbridge) |
+|---|---|---|
+| **Remote execution** | SSH tunnel, jump host, auto-reconnect | Local only |
+| **Load .il files** | `client.load_il("script.il")` | Not supported |
+| **Raw SKILL execution** | `client.execute_skill(...)` | `ws.db.open_cell_view_by_type(...)` |
+| **Layout/schematic API** | `client.layout.edit()` context manager | Raw SKILL calls only |
+| **Spectre simulation** | Built-in runner + PSF parser | Not supported |
+| **AI agent support** | Skill files, CLI-first, command logging | Not designed for agents |
+| **Python ↔ SKILL types** | String-based | Automatic bidirectional mapping |
+| **IDE tab completion** | No | Yes (Jupyter, PyCharm stubs) |
+| **Dependencies** | python-dotenv, pydantic | None |
+| **Local mode** | Yes | Yes (optimized) |
+
+**In short:** skillbridge is a transparent SKILL RPC client optimized for interactive local use. virtuoso-bridge-lite is a full harness for remote automation, AI-driven workflows, and simulation.
+
 ## Build & Test
 
 ```bash
