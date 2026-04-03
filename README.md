@@ -48,7 +48,7 @@ Control Cadence Virtuoso from anywhere, locally or remotely. Verified across mac
 | **Python ↔ SKILL types** | String-based | Auto bidirectional mapping |
 | **IDE tab completion** | No (not needed by agents) | Yes (Jupyter, PyCharm stubs) |
 
-**In short:** Both projects share the same core mechanism. skillbridge wraps it as a Pythonic RPC client for interactive local use. virtuoso-bridge-lite builds a full harness on top for remote automation, AI-driven workflows, and simulation.
+**In short:** Both projects are built on the same SKILL-native mechanism: `ipcBeginProcess()` spawns a daemon subprocess inside Virtuoso, and `evalstring()` executes code sent from that daemon. This is a standard Cadence SKILL IPC facility, not invented by either project. skillbridge wraps it as a Pythonic RPC client for interactive local use. virtuoso-bridge-lite builds a full harness on top for remote automation, AI-driven workflows, and simulation.
 
 ## Quick Start
 
