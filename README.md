@@ -22,6 +22,7 @@ Control Cadence Virtuoso from anywhere, locally or remotely. Verified across mac
 - You describe intent; the agent writes SKILL, builds layouts, runs simulations, optimizes parameters
 - CLI-first: `virtuoso-bridge start/status/restart` — agents can operate the bridge without GUI
 - Ships with agent skill files (`skills/`) that teach the agent how to use the bridge
+- Harness engineering ready: structured API + command logging for reproducibility and debugging
 
 **3. Batteries included** — 30+ runnable examples, ready to use out of the box.
 - Layout: polygon, via, multi-layer routing, bus wiring, read-back geometry
