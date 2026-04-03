@@ -37,17 +37,18 @@ Control Cadence Virtuoso from anywhere, locally or remotely. Verified across mac
 | Feature | virtuoso-bridge-lite | [skillbridge](https://github.com/unihd-cag/skillbridge) |
 |---|---|---|
 | **Core mechanism** | `ipcBeginProcess` + `evalstring` | `ipcBeginProcess` + `evalstring` |
+| **Setup** | Connect and use immediately | Must run `skillbridge generate` in Virtuoso first |
 | **Local mode** | Yes | Yes |
 | **Remote execution** | SSH tunnel, jump host, auto-reconnect | Not supported |
+| **Calling style** | String-based: `execute_skill("dbOpenCellViewByType(...)")` | Pythonic mapping: `ws.db.open_cell_view_by_type(...)` |
 | **Load .il files** | `client.load_il()` | Not supported |
-| **Raw SKILL execution** | `client.execute_skill(...)` | `ws.db.open_cell_view_by_type(...)` |
 | **Layout / schematic API** | `client.layout.edit()` context manager | Raw SKILL only |
 | **Spectre simulation** | Built-in runner + PSF parser | Not supported |
 | **AI agent support** | Skill files, CLI-first, command logging | Not designed for agents |
 | **Python ↔ SKILL types** | String-based | Auto bidirectional mapping |
-| **IDE tab completion** | — | Jupyter, PyCharm stubs |
+| **IDE tab completion** | No (not needed by agents) | Yes (Jupyter, PyCharm stubs) |
 
-**In short:** skillbridge is a transparent SKILL RPC client for interactive local use. virtuoso-bridge-lite is a full harness for remote automation, AI-driven workflows, and simulation.
+**In short:** Both projects share the same core mechanism. skillbridge wraps it as a Pythonic RPC client for interactive local use. virtuoso-bridge-lite builds a full harness on top for remote automation, AI-driven workflows, and simulation.
 
 ## Quick Start
 
