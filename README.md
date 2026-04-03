@@ -36,7 +36,7 @@ Control Cadence Virtuoso from anywhere, locally or remotely. Verified across mac
 
 <table>
   <tr>
-    <th align="left" width="220">Feature</th>
+    <th align="left" width="200">Feature</th>
     <th align="center" width="280">virtuoso-bridge-lite</th>
     <th align="center" width="280"><a href="https://github.com/unihd-cag/skillbridge">skillbridge</a></th>
   </tr>
@@ -52,43 +52,43 @@ Control Cadence Virtuoso from anywhere, locally or remotely. Verified across mac
   </tr>
   <tr>
     <td><strong>Remote execution</strong></td>
-    <td align="center">&#9989; SSH tunnel, jump host, auto-reconnect</td>
+    <td align="center">&#9989;<br><sub>SSH tunnel, jump host, auto-reconnect</sub></td>
     <td align="center">&#10060;</td>
   </tr>
   <tr>
     <td><strong>Load .il files</strong></td>
-    <td align="center">&#9989; <code>client.load_il()</code></td>
+    <td align="center">&#9989;<br><sub><code>client.load_il()</code></sub></td>
     <td align="center">&#10060;</td>
   </tr>
   <tr>
     <td><strong>Raw SKILL execution</strong></td>
-    <td align="center">&#9989; <code>execute_skill()</code></td>
-    <td align="center">&#9989; <code>ws.db.func()</code></td>
+    <td align="center">&#9989;<br><sub><code>execute_skill()</code></sub></td>
+    <td align="center">&#9989;<br><sub><code>ws.db.func()</code></sub></td>
   </tr>
   <tr>
     <td><strong>Layout / schematic API</strong></td>
-    <td align="center">&#9989; <code>layout.edit()</code> context manager</td>
-    <td align="center">&#10060; Raw SKILL only</td>
+    <td align="center">&#9989;<br><sub><code>layout.edit()</code> context manager</sub></td>
+    <td align="center">&#10060;<br><sub>Raw SKILL only</sub></td>
   </tr>
   <tr>
     <td><strong>Spectre simulation</strong></td>
-    <td align="center">&#9989; Runner + PSF parser</td>
+    <td align="center">&#9989;<br><sub>Runner + PSF parser</sub></td>
     <td align="center">&#10060;</td>
   </tr>
   <tr>
     <td><strong>AI agent support</strong></td>
-    <td align="center">&#9989; Skill files, CLI, logging</td>
+    <td align="center">&#9989;<br><sub>Skill files, CLI, logging</sub></td>
     <td align="center">&#10060;</td>
   </tr>
   <tr>
     <td><strong>Python ↔ SKILL types</strong></td>
-    <td align="center">String-based</td>
-    <td align="center">&#9989; Auto bidirectional mapping</td>
+    <td align="center">—<br><sub>String-based</sub></td>
+    <td align="center">&#9989;<br><sub>Auto bidirectional mapping</sub></td>
   </tr>
   <tr>
     <td><strong>IDE tab completion</strong></td>
     <td align="center">—</td>
-    <td align="center">&#9989; Jupyter, PyCharm stubs</td>
+    <td align="center">&#9989;<br><sub>Jupyter, PyCharm stubs</sub></td>
   </tr>
 </table>
 
