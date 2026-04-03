@@ -14,7 +14,7 @@ Control Cadence Virtuoso from anywhere, locally or remotely. Verified across mac
 
 ### Why use this?
 
-**1. Dual-level programmability** — Write raw SKILL or use Pythonic wrappers, your choice.
+**1. Three ways to program Virtuoso** — from raw SKILL to Pythonic APIs, your choice.
 - **Load entire `.il` files**: hot-load complex SKILL scripts into Virtuoso with one call, then invoke their functions from Python
 - **Execute any SKILL expression**: `client.execute_skill('dbOpenCellViewByType(...)')` for full Virtuoso API access
 - **Python APIs**: high-level wrappers for layout, schematic, and Spectre simulation when you don't want to write SKILL
