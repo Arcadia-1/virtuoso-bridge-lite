@@ -16,16 +16,17 @@ Control Cadence Virtuoso from anywhere, locally or remotely. Verified across mac
 
 **1. Dual-level programmability** — Write raw SKILL or use Pythonic wrappers, your choice.
 - **Direct SKILL injection**: hot-load `.il` files on the fly, execute any SKILL expression
-- **Python APIs**: high-level functions for layout, schematic, and simulation — readable by both humans and LLMs
+- **Python APIs**: high-level functions for basic operations in layout, schematic, and simulation
 
 **2. AI-native design** — Built for coding agents (Claude Code, Cursor, etc.) to drive.
 - You describe intent; the agent writes SKILL, builds layouts, runs simulations, optimizes parameters
-- Ships with agent skill files (`skills/`) that teach the agent how to use the bridge — no prompt engineering needed
-- Full CRUD across schematics and layouts, PDK-agnostic — works with `analogLib` out of the box
+- Ships with agent skill files (`skills/`) that teach the agent how to use the bridge
+- 30+ runnable examples: SKILL, layout, schematic, and Spectre simulation
 
-**3. Zero infrastructure** — No VNC, no X11, no remote desktop. Just Python + SSH.
-- One SSH tunnel handles everything: SKILL execution, file transfer, Spectre simulation
-- Local mode works without SSH at all — connect directly to Virtuoso on the same machine
+**3. Batteries included** — 30+ runnable examples, ready to use out of the box.
+- Layout: polygon, via, multi-layer routing, bus wiring, read-back geometry
+- Schematic: create RC circuits, read connectivity, export CDL netlist
+- Spectre: transient, DC+AC frequency response, PSS+Pnoise (StrongArm comparator)
 
 > **If you are an AI agent**, read [`AGENTS.md`](AGENTS.md) first and follow its setup checklist.
 
