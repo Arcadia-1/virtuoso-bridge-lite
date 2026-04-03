@@ -20,6 +20,7 @@ Control Cadence Virtuoso from anywhere, locally or remotely. Verified across mac
 
 **2. AI-native design** — Built for coding agents (Claude Code, Cursor, etc.) to drive.
 - You describe intent; the agent writes SKILL, builds layouts, runs simulations, optimizes parameters
+- Ships with agent skill files (`skills/`) that teach the agent how to use the bridge — no prompt engineering needed
 - Full CRUD across schematics and layouts, PDK-agnostic — works with `analogLib` out of the box
 
 **3. Zero infrastructure** — No VNC, no X11, no remote desktop. Just Python + SSH.
