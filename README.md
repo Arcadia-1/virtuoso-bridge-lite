@@ -37,7 +37,6 @@ Control Cadence Virtuoso from anywhere, locally or remotely. Verified across mac
 | Feature | virtuoso-bridge-lite | [skillbridge](https://github.com/unihd-cag/skillbridge) |
 |---|---|---|
 | **Core mechanism** | `ipcBeginProcess` + `evalstring` | `ipcBeginProcess` + `evalstring` |
-| **Setup** | Connect and use immediately | Must run `skillbridge generate` in Virtuoso first |
 | **Local mode** | Yes | Yes |
 | **Remote execution** | SSH tunnel, jump host, auto-reconnect | Not supported |
 | **Calling style** | String-based: `execute_skill("dbOpenCellViewByType(...)")` | Pythonic mapping: `ws.db.open_cell_view_by_type(...)` |
