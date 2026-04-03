@@ -80,33 +80,47 @@ If not healthy: `virtuoso-bridge restart`. If it says to load `virtuoso_setup.il
 - **Large edits**: split into chunks, open first with `mode="w"`, append with `mode="a"`
 - **Screenshot after layout work**: use `examples/01_virtuoso/basic/04_screenshot.py` pattern to verify visually
 
-## ADE control
+## ADE control (Maestro mae* API)
 
-Load `ade_bridge.il` to control ADE Explorer / Assembler from Python:
+All functions below are native Cadence SKILL — no extra `.il` file needed.
 
 ```python
-client.load_il("examples/01_virtuoso/assets/ade_bridge.il")
-
 # List / get / set design variables
-client.execute_skill('adeBridgeListVars()')
-client.execute_skill('adeBridgeGetVar("VDD")')
-client.execute_skill('adeBridgeSetVar("VDD" "0.85")')
+client.execute_skill('maeGetSetup(?typeName "globalVar")')
+client.execute_skill('maeGetVar("VDD")')
+client.execute_skill('maeSetVar("VDD" "0.85")')
 
-# Set parametric sweep
-client.execute_skill('adeBridgeSetVar("VDD" "0.81:0.09:0.99")')
-
-# Trigger simulation
-client.execute_skill('maeRunSimulation()')   # ADE Assembler (Maestro)
-client.execute_skill('adeBridgeRunSim()')    # ADE Explorer
+# Trigger simulation (async — GUI stays responsive)
+client.execute_skill('maeRunSimulation()')
+client.execute_skill("maeWaitUntilDone('All)")
 
 # Read results via OCEAN (built into CIW, no extra loading)
 client.execute_skill('openResults("...")')
-client.execute_skill('selectResults("pss_td")')
-client.execute_skill('ocnPrint(v("/LP") ?output "/tmp/lp.txt")')
-client.download_file('/tmp/lp.txt', local_path)
+client.execute_skill('selectResults("ac")')
+client.execute_skill('ocnPrint(v("/OUT") ?output "/tmp/out.txt")')
+client.download_file('/tmp/out.txt', local_path)
 ```
 
-Note: `sevRun` only works for ADE Explorer. For ADE Assembler use `maeRunSimulation()`.
+### Maestro: create, run, and display results
+
+```python
+# Create maestro + AC analysis
+ses = client.execute_skill(f'maeOpenSetup("{lib}" "{cell}" "maestro")').output.strip('"')
+client.execute_skill(f'maeCreateTest("AC" ?lib "{lib}" ?cell "{cell}" ?view "schematic" ?simulator "spectre" ?session "{ses}")')
+client.execute_skill(f'maeSetAnalysis("AC" "ac" ?enable t ?options `(("start" "1") ("stop" "10G") ("dec" "20")) ?session "{ses}")')
+client.execute_skill(f'maeSaveSetup(?lib "{lib}" ?cell "{cell}" ?view "maestro" ?session "{ses}")')
+
+# Run simulation (async — GUI stays responsive)
+client.execute_skill('maeRunSimulation()')
+client.execute_skill("maeWaitUntilDone('All)")
+
+# Open maestro GUI with latest history
+# 1. Close old sessions (edit mode is exclusive)
+# 2. List histories: getDirFiles on results dir, filter dot-prefixed
+# 3. deOpenCellView → maeMakeEditable → maeRestoreHistory → maeSaveSetup
+```
+
+See `examples/01_virtuoso/ade/01_rc_filter_sweep.py` for the complete workflow.
 
 ## References
 
