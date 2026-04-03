@@ -34,20 +34,65 @@ Control Cadence Virtuoso from anywhere, locally or remotely. Verified across mac
 
 ## Comparison with skillbridge
 
-| Feature | virtuoso-bridge-lite | [skillbridge](https://github.com/unihd-cag/skillbridge) |
-|---|---|---|
-| **Remote execution** | SSH tunnel, jump host, auto-reconnect | Local only |
-| **Load .il files** | `client.load_il("script.il")` | Not supported |
-| **Raw SKILL execution** | `client.execute_skill(...)` | `ws.db.open_cell_view_by_type(...)` |
-| **Layout/schematic API** | `client.layout.edit()` context manager | Raw SKILL calls only |
-| **Spectre simulation** | Built-in runner + PSF parser | Not supported |
-| **AI agent support** | Skill files, CLI-first, command logging | Not designed for agents |
-| **Python ↔ SKILL types** | String-based | Automatic bidirectional mapping |
-| **IDE tab completion** | No (agents don't need it) | Yes (Jupyter, PyCharm stubs) |
-| **Local mode** | Yes | Yes |
-| **Core mechanism** | `ipcBeginProcess` + `evalstring` | `ipcBeginProcess` + `evalstring` |
+<table>
+  <tr>
+    <th align="left" width="220">Feature</th>
+    <th align="center" width="280">virtuoso-bridge-lite</th>
+    <th align="center" width="280"><a href="https://github.com/unihd-cag/skillbridge">skillbridge</a></th>
+  </tr>
+  <tr>
+    <td><strong>Core mechanism</strong></td>
+    <td align="center"><code>ipcBeginProcess</code> + <code>evalstring</code></td>
+    <td align="center"><code>ipcBeginProcess</code> + <code>evalstring</code></td>
+  </tr>
+  <tr>
+    <td><strong>Local mode</strong></td>
+    <td align="center">&#9989;</td>
+    <td align="center">&#9989;</td>
+  </tr>
+  <tr>
+    <td><strong>Remote execution</strong></td>
+    <td align="center">&#9989; SSH tunnel, jump host, auto-reconnect</td>
+    <td align="center">&#10060;</td>
+  </tr>
+  <tr>
+    <td><strong>Load .il files</strong></td>
+    <td align="center">&#9989; <code>client.load_il()</code></td>
+    <td align="center">&#10060;</td>
+  </tr>
+  <tr>
+    <td><strong>Raw SKILL execution</strong></td>
+    <td align="center">&#9989; <code>execute_skill()</code></td>
+    <td align="center">&#9989; <code>ws.db.func()</code></td>
+  </tr>
+  <tr>
+    <td><strong>Layout / schematic API</strong></td>
+    <td align="center">&#9989; <code>layout.edit()</code> context manager</td>
+    <td align="center">&#10060; Raw SKILL only</td>
+  </tr>
+  <tr>
+    <td><strong>Spectre simulation</strong></td>
+    <td align="center">&#9989; Runner + PSF parser</td>
+    <td align="center">&#10060;</td>
+  </tr>
+  <tr>
+    <td><strong>AI agent support</strong></td>
+    <td align="center">&#9989; Skill files, CLI, logging</td>
+    <td align="center">&#10060;</td>
+  </tr>
+  <tr>
+    <td><strong>Python ↔ SKILL types</strong></td>
+    <td align="center">String-based</td>
+    <td align="center">&#9989; Auto bidirectional mapping</td>
+  </tr>
+  <tr>
+    <td><strong>IDE tab completion</strong></td>
+    <td align="center">—</td>
+    <td align="center">&#9989; Jupyter, PyCharm stubs</td>
+  </tr>
+</table>
 
-**In short:** skillbridge is a transparent SKILL RPC client optimized for interactive local use. virtuoso-bridge-lite is a full harness for remote automation, AI-driven workflows, and simulation.
+<sub><b>In short:</b> skillbridge is a transparent SKILL RPC client for interactive local use. virtuoso-bridge-lite is a full harness for remote automation, AI-driven workflows, and simulation.</sub>
 
 ## Quick Start
 
