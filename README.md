@@ -10,9 +10,21 @@
   <a href="https://claude.ai/code"><img src="https://img.shields.io/badge/AI%20Native-agent--driven%20development-blueviolet" alt="AI Native"/></a>
 </p> 
 
-Control a remote Cadence Virtuoso from any machine over SSH. No VNC, no X11, no manual terminal sessions.
+Control Cadence Virtuoso from anywhere, locally or remotely. Verified across macOS, Windows, and Linux.
 
-Use a coding agent (Claude Code, Cursor, etc.) to read this repo and tailor it to your project — PDK, libraries, tech node, directory structure. You describe intent; the agent writes SKILL, builds layouts, runs simulations, and optimizes circuit parameters.
+### Why use this?
+
+**1. Dual-level programmability** — Write raw SKILL or use Pythonic wrappers, your choice.
+- **Direct SKILL injection**: hot-load `.il` files on the fly, execute any SKILL expression
+- **Python APIs**: high-level functions for layout, schematic, and simulation — readable by both humans and LLMs
+
+**2. AI-native design** — Built for coding agents (Claude Code, Cursor, etc.) to drive.
+- You describe intent; the agent writes SKILL, builds layouts, runs simulations, optimizes parameters
+- Full CRUD across schematics and layouts, PDK-agnostic — works with `analogLib` out of the box
+
+**3. Zero infrastructure** — No VNC, no X11, no remote desktop. Just Python + SSH.
+- One SSH tunnel handles everything: SKILL execution, file transfer, Spectre simulation
+- Local mode works without SSH at all — connect directly to Virtuoso on the same machine
 
 > **If you are an AI agent**, read [`AGENTS.md`](AGENTS.md) first and follow its setup checklist.
 
@@ -40,7 +52,7 @@ from virtuoso_bridge import VirtuosoClient
 
 client = VirtuosoClient.from_env()
 result = client.execute_skill("1+2")
-print(result)  # {'ok': True, 'result': {'output': '3', ...}}
+print(result)  # VirtuosoResult(status=SUCCESS, output='3')
 ```
 
 Done.
@@ -51,8 +63,6 @@ Done.
 2. **Virtuoso**: a Virtuoso process must be running on the remote (or local) machine.
 
 ## Architecture
-
-The bridge is two independent layers:
 
 <p align="center">
   <img src="assets/arch.png" alt="Architecture" width="100%"/>
@@ -67,8 +77,6 @@ Fully decoupled: VirtuosoClient works with any TCP endpoint — SSH tunnel, VPN,
 
 ### Local mode (no SSH)
 
-If Virtuoso runs on your local machine:
-
 ```python
 from virtuoso_bridge import VirtuosoClient
 
@@ -82,7 +90,7 @@ No tunnel, no `.env`, no SSH. Just load `core/ramic_bridge.il` in Virtuoso CIW a
 
 ```bash
 virtuoso-bridge init      # create .env template
-virtuoso-bridge start     # start the bridge service
+virtuoso-bridge start     # start SSH tunnel + deploy daemon
 virtuoso-bridge restart   # force-restart
 virtuoso-bridge status    # check connection + Spectre license
 ```
