@@ -7,3 +7,4 @@ build/
 .pytest_cache/
 output/
 logs/
+examples/01_virtuoso/schematic/skillbridge
