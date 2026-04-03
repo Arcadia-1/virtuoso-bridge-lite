@@ -1,0 +1,43 @@
+`include "constants.vams"
+`include "disciplines.vams"
+`default_transition 30p
+
+// Ideal 4-bit binary DAC.
+// Converts din[3:0] to an analog voltage on vout.
+// vout = code * V(vdd,vss)/16; full-scale = 15/16 * V(vdd,vss).
+
+module dac_ideal_4b (
+    input  electrical [3:0]  din,
+    input  electrical        vdd,
+    input  electrical        vss,
+    input  electrical        rst_n,
+    output electrical        vout
+);
+
+    integer bin_val;
+    real    vstep, v_target, v_supply, vth;
+    genvar  k;
+
+    analog begin
+        @(initial_step)
+            $strobe("[dac_ideal_4b] INIT | vdd_vss=%.3gV", V(vdd, vss));
+
+        v_supply = V(vdd, vss);
+        vth      = (V(vdd) + V(vss)) / 2.0;
+        vstep    = v_supply / 16.0;
+        bin_val  = 0;
+
+        if (V(rst_n, vss) < vth) begin
+            v_target = V(vss);
+        end else begin
+            for (k = 0; k < 4; k = k + 1) begin
+                if (V(din[k], vss) > vth)
+                    bin_val = bin_val + (1 << k);
+            end
+            v_target = V(vss) + bin_val * vstep;
+        end
+
+        V(vout) <+ transition(v_target);
+    end
+
+endmodule

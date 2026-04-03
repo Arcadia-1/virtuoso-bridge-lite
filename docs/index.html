@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>virtuoso-bridge-lite</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --blue: #58a6ff;
+      --purple: #bc8cff;
+      --orange: #f78166;
+      --green: #3fb950;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    .container { max-width: 900px; margin: 0 auto; padding: 0 24px; }
+    .hero { text-align: center; padding: 80px 0 32px; }
+    .hero h1 { font-size: 2.8rem; font-weight: 800; letter-spacing: -1px; margin-bottom: 16px; }
+    .hero h1 .lite { color: var(--purple); font-weight: 400; }
+    .hero p { font-size: 1.15rem; color: var(--muted); max-width: 600px; margin: 0 auto 32px; }
+    .hero-buttons { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+    .btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 24px; border-radius: 8px; font-size: 1rem; font-weight: 600; text-decoration: none; transition: opacity 0.2s; }
+    .btn:hover { opacity: 0.85; }
+    .btn-primary { background: var(--blue); color: #fff; }
+    .btn-secondary { background: var(--card); color: var(--text); border: 1px solid var(--border); }
+
+    .bridge-visual { text-align: center; padding: 16px 0 32px; }
+    .bridge-svg { max-width: 600px; width: 100%; }
+
+    .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; padding: 32px 0; }
+    @media (max-width: 640px) { .features { grid-template-columns: 1fr; } }
+    .feature { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
+    .feature h3 { font-size: 1rem; margin-bottom: 8px; }
+    .feature p { font-size: 0.9rem; color: var(--muted); }
+
+    .section { padding: 48px 0; }
+    .section h2 { font-size: 1.6rem; font-weight: 700; margin-bottom: 24px; text-align: center; }
+    pre { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; overflow-x: auto; font-size: 0.9rem; line-height: 1.7; margin-bottom: 16px; }
+    code { font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace; }
+    .kw { color: var(--purple); }
+    .str { color: var(--green); }
+    .fn { color: var(--blue); }
+    .cmt { color: var(--muted); }
+    .cmd { color: var(--orange); }
+
+    .arch-box { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 24px; text-align: center; font-family: monospace; font-size: 0.85rem; white-space: pre; overflow-x: auto; line-height: 1.5; color: var(--muted); margin-bottom: 16px; }
+    .arch-note { color: var(--muted); font-size: 0.9rem; text-align: center; margin-bottom: 8px; }
+
+    table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+    th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+    th { color: var(--muted); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; }
+    td code { color: var(--blue); background: none; font-size: 0.85rem; }
+    .api-group { margin-bottom: 32px; }
+    .api-group h3 { font-size: 1.1rem; margin-bottom: 12px; color: var(--text); }
+
+    .footer { text-align: center; padding: 48px 0 32px; color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--border); }
+    .footer a { color: var(--blue); text-decoration: none; }
+    .footer a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <div class="hero">
+    <p style="margin-bottom:24px"><img src="https://raw.githubusercontent.com/Arcadia-1/virtuoso-bridge-lite/main/assets/banner.svg" alt="virtuoso-bridge-lite" style="max-width:100%;border-radius:8px"/></p>
+    <p>Control Cadence Virtuoso from macOS, Windows, or Linux — locally or remotely over SSH. Three ways to program, AI-agent ready.</p>
+    <div class="hero-buttons">
+      <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite" class="btn btn-primary">GitHub</a>
+      <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite#quick-start" class="btn btn-secondary">Quick Start</a>
+    </div>
+  </div>
+
+  <div class="features">
+    <div class="feature"><h3>Three ways to program</h3><p>Load .il files into Virtuoso, execute any SKILL expression, or use Python APIs for layout, schematic, and Spectre simulation.</p></div>
+    <div class="feature"><h3>AI-native design</h3><p>CLI-first, ships with agent skill files, persistent SSH for high-frequency interactions, full command logging.</p></div>
+    <div class="feature"><h3>Batteries included</h3><p>30+ runnable examples: layout editing, schematic creation, DC/AC/transient/PSS/Pnoise simulation.</p></div>
+  </div>
+
+  <!-- Architecture -->
+  <div class="section">
+    <h2>Architecture</h2>
+    <p style="text-align:center;margin-bottom:16px"><img src="https://raw.githubusercontent.com/Arcadia-1/virtuoso-bridge-lite/main/assets/arch.png" alt="Architecture" style="max-width:100%;border-radius:8px;border:1px solid var(--border)"/></p>
+  </div>
+
+  <!-- Quick Start -->
+  <div class="section">
+    <h2>Quick Start</h2>
+    <pre><code><span class="cmd">pip install -e .</span>
+<span class="cmd">virtuoso-bridge init</span>        <span class="cmt"># generates .env</span>
+<span class="cmt"># edit .env → set VB_REMOTE_HOST=my-server</span>
+<span class="cmd">virtuoso-bridge start</span></code></pre>
+    <pre><code><span class="kw">from</span> virtuoso_bridge <span class="kw">import</span> VirtuosoClient
+
+client = VirtuosoClient.from_env()
+result = client.<span class="fn">execute_skill</span>(<span class="str">"1+2"</span>)
+<span class="fn">print</span>(result)  <span class="cmt"># {'ok': True, 'result': {'output': '3', ...}}</span></code></pre>
+  </div>
+
+  <!-- API Reference -->
+  <div class="section">
+    <h2>API Reference</h2>
+
+    <div class="api-group">
+      <h3>VirtuosoClient — SKILL execution</h3>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>execute_skill(code)</code></td><td>Run any SKILL expression, return result dict</td></tr>
+        <tr><td><code>load_il(path)</code></td><td>Upload &amp; load a .il file in Virtuoso</td></tr>
+        <tr><td><code>execute_operations(cmds)</code></td><td>Run a batch of SKILL commands</td></tr>
+        <tr><td><code>get_current_design()</code></td><td>Returns (lib, cell, view) of active cellview</td></tr>
+        <tr><td><code>open_window(lib, cell)</code></td><td>Open a cellview in Virtuoso GUI</td></tr>
+        <tr><td><code>save_current_cellview()</code></td><td>Save the active cellview</td></tr>
+        <tr><td><code>upload_file(local, remote)</code></td><td>Upload a file to the remote machine</td></tr>
+        <tr><td><code>download_file(remote, local)</code></td><td>Download a file from the remote machine</td></tr>
+        <tr><td><code>run_shell_command(cmd)</code></td><td>Run a shell command on the remote host</td></tr>
+        <tr><td><code>test_connection()</code></td><td>Ping the daemon to check connectivity</td></tr>
+      </table>
+    </div>
+
+    <div class="api-group">
+      <h3>Layout editing</h3>
+      <pre><code><span class="kw">with</span> client.layout.<span class="fn">edit</span>(<span class="str">"myLib"</span>, <span class="str">"myCell"</span>) <span class="kw">as</span> layout:
+    layout.<span class="fn">add_rect</span>(<span class="str">"M1"</span>, <span class="str">"drawing"</span>, (0, 0, 1, 0.5))
+    layout.<span class="fn">add_path</span>(<span class="str">"M2"</span>, <span class="str">"drawing"</span>, [(0,0),(1,0)], width=0.1)
+    layout.<span class="fn">add_label</span>(<span class="str">"M1"</span>, <span class="str">"pin"</span>, (0.5, 0.25), <span class="str">"VDD"</span>)
+    layout.<span class="fn">add_instance</span>(<span class="str">"tsmcN28"</span>, <span class="str">"nch_ulvt_mac"</span>, (0,0), <span class="str">"M0"</span>)
+    layout.<span class="fn">add_via</span>(<span class="str">"M1_M2"</span>, (0.5, 0.25))
+    layout.<span class="fn">add_polygon</span>(<span class="str">"M3"</span>, <span class="str">"drawing"</span>, [(0,0),(1,0),(1,1)])
+    shapes = layout.<span class="fn">get_shapes</span>()</code></pre>
+    </div>
+
+    <div class="api-group">
+      <h3>Schematic editing</h3>
+      <pre><code><span class="kw">with</span> client.schematic.<span class="fn">edit</span>(<span class="str">"myLib"</span>, <span class="str">"myCell"</span>) <span class="kw">as</span> sch:
+    sch.<span class="fn">add_instance</span>(<span class="str">"analogLib"</span>, <span class="str">"vdc"</span>, (0,0), <span class="str">"V0"</span>, params={<span class="str">"vdc"</span>: <span class="str">"0.9"</span>})
+    sch.<span class="fn">add_wire</span>([(0, 0), (0, 0.5)])
+    sch.<span class="fn">add_pin</span>(<span class="str">"VDD"</span>, <span class="str">"inputOutput"</span>, (0, 1.0))</code></pre>
+    </div>
+
+    <div class="api-group">
+      <h3>Spectre simulation</h3>
+      <pre><code><span class="kw">from</span> virtuoso_bridge.spectre.runner <span class="kw">import</span> SpectreSimulator
+
+sim = SpectreSimulator.<span class="fn">from_env</span>(work_dir=<span class="str">"./output"</span>)
+result = sim.<span class="fn">run_simulation</span>(<span class="str">"tb_inv.scs"</span>, {})
+
+<span class="fn">print</span>(result.status)          <span class="cmt"># ExecutionStatus.SUCCESS</span>
+<span class="fn">print</span>(result.data.keys())     <span class="cmt"># ['time', 'VOUT', 'VIN', ...]</span>
+<span class="fn">print</span>(result.data[<span class="str">"VOUT"</span>][:5]) <span class="cmt"># first 5 voltage samples</span></code></pre>
+    </div>
+
+    <div class="api-group">
+      <h3>SSHClient — independent SSH layer</h3>
+      <pre><code><span class="kw">from</span> virtuoso_bridge <span class="kw">import</span> SSHClient, VirtuosoClient
+
+<span class="cmt"># Create tunnel independently</span>
+tunnel = SSHClient.<span class="fn">from_env</span>()
+tunnel.<span class="fn">warm</span>()
+
+<span class="cmt"># Create bridge from tunnel</span>
+bridge = VirtuosoClient.<span class="fn">from_tunnel</span>(tunnel)
+bridge.<span class="fn">execute_skill</span>(<span class="str">"1+2"</span>)
+
+<span class="cmt"># Or local mode — no tunnel needed</span>
+bridge = VirtuosoClient.<span class="fn">local</span>(port=65432)</code></pre>
+    </div>
+  </div>
+
+  <div class="footer">
+    <p>
+      <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite">GitHub</a> ·
+      MIT License ·
+      Tsinghua University
+    </p>
+  </div>
+
+</div>
+</body>
+</html>

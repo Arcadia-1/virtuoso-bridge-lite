@@ -1,0 +1,51 @@
+`include "constants.vams"
+`include "disciplines.vams"
+`default_transition 30p
+
+// Ideal 4-bit clocked ADC.
+// Samples vin on each rising edge of clk → 4-bit binary code on dout[3:0].
+// vstep = V(vdd,vss)/16; codes 0..15.
+
+module adc_ideal_4b (
+    input  electrical        vin,
+    input  electrical        clk,
+    input  electrical        vdd,
+    input  electrical        vss,
+    input  electrical        rst_n,
+    output electrical [3:0]  dout
+);
+
+    integer code;
+    real    vstep, v_in, v_supply, vth;
+    genvar  k;
+
+    analog begin
+        @(initial_step)
+            $strobe("[adc_ideal_4b] INIT | vdd_vss=%.3gV", V(vdd, vss));
+
+        v_supply = V(vdd, vss);
+        vth      = (V(vdd) + V(vss)) / 2.0;
+        vstep    = v_supply / 16.0;
+
+        // Sample on rising clock edge
+        @(cross(V(clk, vss) - vth, +1)) begin
+            if (V(rst_n, vss) < vth) begin
+                code = 0;
+            end else begin
+                v_in = V(vin, vss);
+                code = v_in / vstep;
+                if (code <  0) code =  0;
+                if (code > 15) code = 15;
+            end
+            $strobe("\n[adc_ideal_4b] t=%.3f ns | vin=%g | code=%d", $abstime*1e9, v_in, code);
+        end
+
+        for (k = 0; k < 4; k = k + 1) begin
+            if ((code >> k) & 1)
+                V(dout[k]) <+ transition(V(vdd));
+            else
+                V(dout[k]) <+ transition(V(vss));
+        end
+    end
+
+endmodule

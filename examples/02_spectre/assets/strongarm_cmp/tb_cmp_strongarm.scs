@@ -1,0 +1,99 @@
+// StrongArm Dynamic Comparator — SAR ADC Testbench
+// Process  : TSMC 28nm HPC+ (CRN28HPC+ULL)
+// VDD      : 0.9 V   Vcm : 0.45 V (= VDD/2)   Vid : 1 mV
+// CLK rate : 1 GHz   Preset: conservative
+// Design targets:  Tcmp < 50 ps,  Input-referred noise < 400 µV rms
+//
+// StrongArm topology (4-phase operation)
+// ─────────────────────────────────────────────────────────────────
+//  RESET  (CLK=0) : PMOS reset pull VP1/VN1/LP/LM → VDD
+//                   M79 (source=LM, drain=LP) equalises latch nodes
+//  INTEGRATION    : CLK rises, tail M88 turns on; M0/M1 discharge
+//                   VN1 faster if VINP>VINN (more Vgs → more Id)
+//  REGENERATION   : NMOS latch M45/M6 + PMOS latch M48/M49 kick in;
+//                   LP/LM race to VDD/0 with time-constant τ = C/gm
+//  OUTPUT BUFFER  : Double inverter per rail: LP → net1 → DCMPP
+//                                             LM → net2 → DCMPN
+//
+// Transistor mapping:
+//   VS              tail node (source of M0 & M1)
+//   VP1             drain of M1 (VINN input transistor)
+//   VN1             drain of M0 (VINP input transistor)
+//   LP, LM          differential latch nodes (observable at top level)
+//   DCMPP, DCMPN    buffered digital outputs
+//   net1 = inv(LM)  intermediate buffer node
+//   net2 = inv(LP)  intermediate buffer node
+// ─────────────────────────────────────────────────────────────────
+simulator lang=spectre
+global 0
+parameters VDD=0.9 Vcm=0.45 Vid=1m f=1G
+include "/home/process/tsmc28n/PDK_mmWave/iPDK_CRN28HPC+ULL_v1.8_2p2a_20190531/models/spectre/toplevel.scs" section=TOP_TT
+
+// ── Subcircuit ─────────────────────────────────────────────────────────────
+// Identical transistors to tb_cmp_pss_pnoise.scs (original Virtuoso export)
+// No layout-parameter changes; proven-good in Spectre.
+subckt CMP_BUFF CLK DCMPN DCMPP LM LP VDD VINN VINP VSS
+    M88 (VS CLK VSS VSS) nch_ulvt_mac l=30n w=2u multi=1 nf=4
+    M10 (net1 LM VSS VSS) nch_ulvt_mac l=30n w=500n multi=1 nf=1
+    M16 (net2 LP VSS VSS) nch_ulvt_mac l=30n w=500n multi=1 nf=1
+    M1 (VP1 VINN VS VSS) nch_ulvt_mac l=30n w=16.0u multi=1 nf=32
+    M0 (VN1 VINP VS VSS) nch_ulvt_mac l=30n w=16.0u multi=1 nf=32
+    M45 (LM LP VN1 VSS) nch_ulvt_mac l=30n w=4u multi=1 nf=8
+    M6 (LP LM VP1 VSS) nch_ulvt_mac l=30n w=4u multi=1 nf=8
+    M105 (DCMPN net2 VSS VSS) nch_ulvt_mac l=30n w=1.5u multi=1 nf=3
+    M106 (DCMPP net1 VSS VSS) nch_ulvt_mac l=30n w=1.5u multi=1 nf=3
+    M2 (VSS VN1 VSS VSS) nch_ehvt_mac l=1u w=500n multi=1 nf=1
+    M23 (VSS VP1 VSS VSS) nch_ehvt_mac l=1u w=500n multi=1 nf=1
+    M78 (DCMPP net1 VDD VDD) pch_ulvt_mac l=30n w=1.5u multi=1 nf=3
+    M77 (DCMPN net2 VDD VDD) pch_ulvt_mac l=30n w=1.5u multi=1 nf=3
+    M79 (LP CLK LM VDD) pch_ulvt_mac l=30n w=500n multi=1 nf=1
+    M5 (VP1 CLK VDD VDD) pch_ulvt_mac l=30n w=2u multi=1 nf=4
+    M4 (VN1 CLK VDD VDD) pch_ulvt_mac l=30n w=2u multi=1 nf=4
+    M7 (LP CLK VDD VDD) pch_ulvt_mac l=30n w=2u multi=1 nf=4
+    M50 (LM CLK VDD VDD) pch_ulvt_mac l=30n w=2u multi=1 nf=4
+    M48 (LM LP VDD VDD) pch_ulvt_mac l=30n w=4u multi=1 nf=8
+    M49 (LP LM VDD VDD) pch_ulvt_mac l=30n w=4u multi=1 nf=8
+    M19 (net1 LM VDD VDD) pch_ulvt_mac l=30n w=500n multi=1 nf=1
+    M21 (net2 LP VDD VDD) pch_ulvt_mac l=30n w=500n multi=1 nf=1
+ends CMP_BUFF
+
+// ── Testbench ──────────────────────────────────────────────────────────────
+// Differential input: VINP = Vcm + Vid/2,  VINN = Vcm - Vid/2
+// For Vid=1mV: VINP=0.4505 V, VINN=0.4495 V  → VINP > VINN (positive input)
+V3 (VINN 0) vsource dc=Vcm-0.5*Vid type=dc
+V2 (VINP 0) vsource dc=Vcm+0.5*Vid type=dc
+V1 (VSS 0)  vsource dc=0 type=dc
+V0 (VDD 0)  vsource dc=VDD type=dc
+V4 (CLK 0)  vsource type=pulse val0=0 val1=VDD period=1/f rise=10p fall=10p \
+    delay=0 width=0.5/f
+
+// DUT: StrongArm comparator (CMP_BUFF subcircuit)
+I4 (CLK DCMPN DCMPP LM LP VDD VINN VINP VSS) CMP_BUFF
+
+// ── Simulation options ─────────────────────────────────────────────────────
+simulatorOptions options psfversion="1.4.0" temp=27 tnom=27 scalem=1.0 \
+    scale=1.0 gmin=1e-12 rforce=1 maxnotes=5 maxwarns=5 digits=5 cols=80 \
+    pivrel=1e-3 sensfile="../psf/sens.output" checklimitdest=psf
+
+// PSS: 1 clock period (1 ns), 10 harmonics
+pss  pss  fund=1G  harms=10  errpreset=conservative  autotstab=yes \
+    saveinit=yes  annotate=status
+
+// Pnoise: sampled noise, jitter event on latch nodes LP/LM
+// Outputs input-referred noise spectral density: out [V/√Hz] vs freq
+pnoise pnoise start=0 stop=500M pnoisemethod=fullspectrum \
+    noisetype=sampled measurement=[pm0] annotate=status
+pm0 jitterevent trigger=[I4.LP I4.LM] triggerthresh=50m triggernum=1 \
+    triggerdir=rise target=[I4.LP I4.LM]
+
+// ── Info output ────────────────────────────────────────────────────────────
+modelParameter info what=models where=rawfile
+element info what=inst where=rawfile
+outputParameter info what=output where=rawfile
+designParamVals info what=parameters where=rawfile
+primitives info what=primitives where=rawfile
+subckts info what=subckts where=rawfile
+
+// Save: top-level nodes + internal VX nodes for 4-phase waveform analysis
+save CLK VINP VINN DCMPN DCMPP LP LM V0:p I4.VP1 I4.VN1 I4.VS
+saveOptions options save=selected

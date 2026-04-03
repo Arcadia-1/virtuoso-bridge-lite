@@ -1,0 +1,35 @@
+// sh_ideal.va -- ideal sample-and-hold
+//
+// Samples vin on the rising edge of clk (same edge as adc_ideal_4b).
+// Holds the sampled value until the next rising edge.
+// Output uses transition() with tr=30p to match adc_ideal_4b/dac_ideal_4b.
+// Reset (active-low rst_n) holds output at 0 V until deasserted.
+
+`include "disciplines.vams"
+`default_transition 30p
+
+module sh_ideal(vin, clk, vdd, vss, rst_n, vout);
+    input  vin, clk, vdd, vss, rst_n;
+    output vout;
+    electrical vin, clk, vdd, vss, rst_n, vout;
+
+    parameter real tr = 30p from [0:inf);
+
+    real v_hold, vth;
+
+    analog begin
+        @(initial_step) begin
+            v_hold = 0.0;
+            $strobe("[sh_ideal] INIT | vdd_vss=%.3gV", V(vdd, vss));
+        end
+
+        vth = (V(vdd) + V(vss)) / 2.0;
+
+        @(cross(V(clk, vss) - vth, +1)) begin
+            if (V(rst_n, vss) > vth)
+                v_hold = V(vin, vss);
+        end
+
+        V(vout, vss) <+ transition(v_hold, 0, tr);
+    end
+endmodule

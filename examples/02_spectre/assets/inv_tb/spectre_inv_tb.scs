@@ -1,0 +1,42 @@
+// Generated for: spectre
+// Generated on: Mar 18 22:51:38 2026
+// Design library name: LLM_Layout_Design
+// Design cell name: _tb_inv
+// Design view name: schematic
+simulator lang=spectre
+global 0
+include "/home/process/tsmc28n/PDK_mmWave/iPDK_CRN28HPC+ULL_v1.8_2p2a_20190531/models/spectre/toplevel.scs" section=TOP_TT
+
+// Library name: LLM_Layout_Design
+// Cell name: inv
+// View name: schematic
+subckt inv VDD VIN VOUT VSS
+    M0 (VOUT VIN VSS VSS) nch_mac l=30n w=1u multi=1 nf=1 sd=100n
+    M1 (VOUT VIN VDD VDD) pch_mac l=30n w=2u multi=1 nf=1 sd=100n
+ends inv
+// End of subcircuit definition.
+
+// Library name: LLM_Layout_Design
+// Cell name: _tb_inv
+// View name: schematic
+V1 (VDD 0) vsource dc=900.0m type=dc
+V0 (VSS 0) vsource dc=0 type=dc
+V2 (VIN 0) vsource dc=0 type=pulse val0=0 val1=900.0m period=1n width=500p \
+        rise=20p fall=20p
+Cload (VOUT 0) capacitor c=10f
+I3 (VDD VIN VOUT VSS) inv
+simulatorOptions options psfversion="1.4.0" reltol=1e-4 vabstol=1e-6 \
+    iabstol=1e-12 temp=27 tnom=27 scalem=1.0 scale=1.0 gmin=1e-12 rforce=1 \
+    maxnotes=5 maxwarns=5 digits=5 cols=80 pivrel=1e-3 \
+    sensfile="../psf/sens.output" checklimitdest=psf 
+tran tran stop=3n errpreset=conservative write="spectre.ic" \
+    writefinal="spectre.fc" savetime=[600] savefile="spectre.tran.save" \
+    annotate=status flushtime=30 maxiters=5 
+finalTimeOP info what=oppoint where=rawfile
+modelParameter info what=models where=rawfile
+element info what=inst where=rawfile
+outputParameter info what=output where=rawfile
+designParamVals info what=parameters where=rawfile
+primitives info what=primitives where=rawfile
+subckts info what=subckts where=rawfile
+saveOptions options save=allpub

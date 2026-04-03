@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 240">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0d1117"/>
+      <stop offset="100%" style="stop-color:#161b22"/>
+    </linearGradient>
+    <linearGradient id="bridge" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#58a6ff"/>
+      <stop offset="50%" style="stop-color:#bc8cff"/>
+      <stop offset="100%" style="stop-color:#f78166"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#58a6ff20"/>
+      <stop offset="50%" style="stop-color:#bc8cff18"/>
+      <stop offset="100%" style="stop-color:#f7816620"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="240" rx="12" fill="url(#bg)"/>
+
+  <!-- Bridge arch -->
+  <g fill="none" stroke-linecap="round">
+    <path d="M180 175 Q450 40 720 175" stroke="url(#bridge)" stroke-width="2.5" opacity="0.9"/>
+    <path d="M180 175 Q450 40 720 175" stroke="url(#glow)" stroke-width="12"/>
+    <line x1="180" y1="175" x2="720" y2="175" stroke="url(#bridge)" stroke-width="1.2" opacity="0.4"/>
+    <line x1="300" y1="142" x2="300" y2="175" stroke="#58a6ff" stroke-width="1.2" opacity="0.5"/>
+    <line x1="450" y1="95" x2="450" y2="175" stroke="#bc8cff" stroke-width="1.2" opacity="0.5"/>
+    <line x1="600" y1="142" x2="600" y2="175" stroke="#f78166" stroke-width="1.2" opacity="0.5"/>
+  </g>
+
+  <!-- Left: Python — larger terminal box -->
+  <g>
+    <rect x="30" y="120" width="110" height="75" rx="8" fill="#58a6ff10" stroke="#58a6ff" stroke-width="1.5"/>
+    <!-- Terminal top bar -->
+    <rect x="30" y="120" width="110" height="16" rx="8" fill="#58a6ff18"/>
+    <circle cx="43" cy="128" r="3" fill="#f7816680"/>
+    <circle cx="53" cy="128" r="3" fill="#e3b34180"/>
+    <circle cx="63" cy="128" r="3" fill="#58a6ff80"/>
+    <!-- Terminal text -->
+    <text x="42" y="155" font-family="monospace" font-size="13" fill="#58a6ff" opacity="0.9">$ python</text>
+    <text x="42" y="173" font-family="monospace" font-size="11" fill="#58a6ff" opacity="0.5">>>> _</text>
+    <text x="47" y="212" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="600" fill="#58a6ff">Python</text>
+  </g>
+
+  <!-- Right: Virtuoso — larger IC chip -->
+  <g>
+    <rect x="760" y="120" width="110" height="75" rx="8" fill="#f7816610" stroke="#f78166" stroke-width="1.5"/>
+    <!-- Chip die -->
+    <rect x="788" y="138" width="54" height="40" rx="3" fill="none" stroke="#f78166" stroke-width="1" opacity="0.6"/>
+    <!-- Chip pins left -->
+    <line x1="788" y1="148" x2="775" y2="148" stroke="#f78166" stroke-width="1.2" opacity="0.7"/>
+    <line x1="788" y1="158" x2="775" y2="158" stroke="#f78166" stroke-width="1.2" opacity="0.7"/>
+    <line x1="788" y1="168" x2="775" y2="168" stroke="#f78166" stroke-width="1.2" opacity="0.7"/>
+    <!-- Chip pins right -->
+    <line x1="842" y1="148" x2="855" y2="148" stroke="#f78166" stroke-width="1.2" opacity="0.7"/>
+    <line x1="842" y1="158" x2="855" y2="158" stroke="#f78166" stroke-width="1.2" opacity="0.7"/>
+    <line x1="842" y1="168" x2="855" y2="168" stroke="#f78166" stroke-width="1.2" opacity="0.7"/>
+    <!-- Chip pins top -->
+    <line x1="803" y1="138" x2="803" y2="128" stroke="#f78166" stroke-width="1.2" opacity="0.7"/>
+    <line x1="815" y1="138" x2="815" y2="128" stroke="#f78166" stroke-width="1.2" opacity="0.7"/>
+    <line x1="827" y1="138" x2="827" y2="128" stroke="#f78166" stroke-width="1.2" opacity="0.7"/>
+    <!-- Chip pins bottom -->
+    <line x1="803" y1="178" x2="803" y2="188" stroke="#f78166" stroke-width="1.2" opacity="0.7"/>
+    <line x1="815" y1="178" x2="815" y2="188" stroke="#f78166" stroke-width="1.2" opacity="0.7"/>
+    <line x1="827" y1="178" x2="827" y2="188" stroke="#f78166" stroke-width="1.2" opacity="0.7"/>
+    <!-- IC label -->
+    <text x="804" y="163" font-family="monospace" font-size="11" font-weight="700" fill="#f78166" opacity="0.8">IC</text>
+    <text x="776" y="212" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="600" fill="#f78166">Virtuoso</text>
+  </g>
+
+  <!-- Data flowing across bridge -->
+  <circle r="2.5" fill="#58a6ff" opacity="0.6">
+    <animate attributeName="cx" values="180;720" dur="3s" repeatCount="indefinite"/>
+    <animate attributeName="cy" values="175;95;175" dur="3s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0;0.9;0" dur="3s" repeatCount="indefinite"/>
+  </circle>
+  <circle r="2.5" fill="#f78166" opacity="0.6">
+    <animate attributeName="cx" values="720;180" dur="3.5s" repeatCount="indefinite"/>
+    <animate attributeName="cy" values="175;95;175" dur="3.5s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0;0.9;0" dur="3.5s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- SSH label on bridge -->
+  <text x="435" y="84" font-family="monospace" font-size="12" fill="#bc8cff" opacity="0.7">SSH</text>
+
+  <!-- Title -->
+  <text x="450" y="42" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="38" font-weight="700" fill="#ffffff" letter-spacing="-0.5" text-anchor="middle">
+    virtuoso-bridge-lite
+  </text>
+
+  <!-- Subtitle -->
+  <text x="450" y="228" font-family="system-ui, sans-serif" font-size="12" fill="#8b949e" text-anchor="middle">
+    Control remote Cadence Virtuoso from anywhere — Python + SSH — AI-native
+  </text>
+</svg>

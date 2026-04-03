@@ -1,0 +1,42 @@
+// adc_dac_ideal_4b_sine: 4-bit clocked ADC -> DAC with sine input
+//
+// ADC samples vin at fs = 1 GHz (period = 1 ns).
+// Input sine at fin = fs/63 ~= 15.873 MHz -> 63 samples/cycle x 1 cycle.
+// DAC reconstructs combinatorially; vout shows the 16-step staircase.
+//
+simulator lang=spectre
+global 0
+
+ahdl_include "adc_ideal_4b.va"
+ahdl_include "dac_ideal_4b.va"
+ahdl_include "sh_ideal.va"
+
+parameters vdd=0.9 fs=1e9 fin=15.873016e6
+
+// Supply rails
+Vvdd (vdd 0) vsource dc=vdd
+Vvss (vss 0) vsource dc=0
+
+// Sampling clock: 1 GHz  (period = 1 ns)
+Vclk (clk 0) vsource type=pulse val0=0 val1=vdd period=1n \
+             rise=50p fall=50p
+
+// Reset: active-low for first 2 sampling-clock cycles (2 ns)
+Vrst_n (rst_n 0) vsource type=pwl wave=[0 0  1.5n 0  2n vdd  65n vdd]
+
+// Input: near-full-swing sine, 1 cycle at ~15.873 MHz
+Vvin (vin 0) vsource type=sine sinedc=0.45 ampl=0.44 freq=fin
+
+// ADC: vin clk vdd vss rst_n -> dout[3:0]
+IADC (vin clk vdd vss rst_n dout_3 dout_2 dout_1 dout_0) \
+      adc_ideal_4b
+
+// DAC: din[3:0] vdd vss rst_n -> vout  (combinational)
+IDAC (dout_3 dout_2 dout_1 dout_0 vdd vss rst_n vout) \
+      dac_ideal_4b
+
+// S&H: samples vin on same rising clk edge as ADC -> vin_sh
+ISH (vin clk vdd vss rst_n vin_sh) sh_ideal
+
+tran tran stop=65n maxstep=200p
+save vin:3f vin_sh:3f clk:2e rst_n:d vout:3f dout_3:d dout_2:d dout_1:d dout_0:d

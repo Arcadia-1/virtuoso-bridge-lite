@@ -1,0 +1,37 @@
+// adc_dac_ideal_4b_ramp: 4-bit ideal ADC → DAC with ramp input
+//
+// Ramp input from 0 to VDD over 200 ns → all 16 codes exercised.
+// ADC samples at 1 GHz (clk period = 1 ns); maxstep = 200 ps.
+//
+simulator lang=spectre
+global 0
+
+ahdl_include "adc_ideal_4b.va"
+ahdl_include "dac_ideal_4b.va"
+
+parameters vdd=0.9 fs=1e9
+
+// Supply rails
+Vvdd (vdd 0) vsource dc=vdd
+Vvss (vss 0) vsource dc=0
+
+// Sampling clock: 1 GHz
+Vclk (clk 0) vsource type=pulse val0=0 val1=vdd period=1n \
+             rise=50p fall=50p
+
+// Reset: active-low for first 10 ns (10 clock cycles)
+Vrst_n (rst_n 0) vsource type=pwl wave=[0 0  9.5n 0  10n vdd  200n vdd]
+
+// Input: linear ramp from 0 to VDD over 50 ns
+Vvin (vin 0) vsource type=pwl wave=[0 0  50n 0.9]
+
+// ADC: vin clk vdd vss rst_n -> dout[3:0]
+IADC (vin clk vdd vss rst_n dout_3 dout_2 dout_1 dout_0) \
+      adc_ideal_4b
+
+// DAC: din[3:0] vdd vss rst_n -> vout  (combinational)
+IDAC (dout_3 dout_2 dout_1 dout_0 vdd vss rst_n vout) \
+      dac_ideal_4b
+
+tran tran stop=50n maxstep=100p
+save vin:3f clk:2e rst_n:d vout:3f dout_3:d dout_2:d dout_1:d dout_0:d
