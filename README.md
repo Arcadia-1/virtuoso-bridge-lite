@@ -19,10 +19,10 @@ Control Cadence Virtuoso from anywhere, locally or remotely. Verified across mac
 - **Python APIs**: high-level functions for basic operations in layout, schematic, and simulation
 
 **2. AI-native design** — Built for coding agents (Claude Code, Cursor, etc.) to drive.
-- You describe intent; the agent writes SKILL, builds layouts, runs simulations, optimizes parameters
 - CLI-first: `virtuoso-bridge start/status/restart` — agents can operate the bridge without GUI
 - Ships with agent skill files (`skills/`) that teach the agent how to use the bridge
-- All SSH and SKILL commands are logged to `logs/commands.log` — full traceability for agent-driven workflows
+- Persistent SSH connection — one long-lived tunnel for high-frequency agent interactions, no repeated logins
+- All SSH and SKILL commands are logged for traceability for agent-driven workflows
 
 **3. Batteries included** — 30+ runnable examples, ready to use out of the box.
 - Layout: polygon, via, multi-layer routing, bus wiring, read-back geometry
