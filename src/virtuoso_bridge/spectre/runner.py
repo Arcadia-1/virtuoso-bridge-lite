@@ -428,6 +428,7 @@ class SpectreSimulator:
         keep_remote_files: bool = False,
         remote: bool = False,
         ssh_runner: SSHRunner | None = None,
+        profile: str | None = None,
     ) -> None:
         self._spectre_cmd = spectre_cmd
         self._spectre_args = list(spectre_args or [])
@@ -438,10 +439,11 @@ class SpectreSimulator:
         self._ssh_config_path = ssh_config_path
         self._keep_remote_files = keep_remote_files
         self._ssh_runner: SSHRunner | None = ssh_runner
+        self._profile = profile
 
         rh, ru, jh, ju = remote_host, remote_user, jump_host, jump_user
         if remote:
-            env = remote_ssh_env_from_os()
+            env = remote_ssh_env_from_os(profile)
             if rh is None:
                 rh = env.remote_host
             if ru is None:
@@ -494,6 +496,7 @@ class SpectreSimulator:
             keep_remote_files=keep_remote_files,
             remote=True,
             ssh_runner=ssh_runner,
+            profile=profile,
         )
 
     @classmethod
@@ -540,7 +543,11 @@ class SpectreSimulator:
         runner = self._get_ssh_runner()
 
         # Build env setup: source cshrc in csh, then check spectre
-        cadence_cshrc = shlex.quote(os.environ.get("VB_CADENCE_CSHRC", ""))
+        suffix = f"_{self._profile}" if self._profile else ""
+        cadence_cshrc = shlex.quote(
+            os.environ.get(f"VB_CADENCE_CSHRC{suffix}", "")
+            or os.environ.get("VB_CADENCE_CSHRC", "")
+        )
         check_script = (
             'HOSTNAME=`hostname 2>/dev/null || echo localhost`; export HOSTNAME && '
             f'export VB_CADENCE_CSHRC={cadence_cshrc} && '

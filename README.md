@@ -86,24 +86,60 @@ defun(__pyOnData (id data)
 
 The divergence is in what's built on top: skillbridge stays thin — a Pythonic RPC client for interactive local use. virtuoso-bridge-lite adds SSH remote access, high-level layout/schematic APIs, Spectre simulation, and an AI-agent-ready harness.
 
-## Quick Start
+## Getting Started
+
+### Prerequisites
+
+1. **SSH**: `ssh my-server` must work in your terminal without a password prompt.
+2. **Virtuoso**: a Virtuoso process must be running on the remote (or local) machine.
+
+### Step-by-step setup
+
+**1. Install**
 
 ```bash
 pip install -e .
-virtuoso-bridge init        # generates .env
 ```
 
-Edit `.env`, fill in one variable:
+**2. Generate config**
+
+```bash
+virtuoso-bridge init        # creates .env template in current directory
+```
+
+**3. Edit `.env`**
+
+Open the generated `.env` and fill in your connection details:
 
 ```dotenv
-VB_REMOTE_HOST=my-server    # SSH host alias from ~/.ssh/config
+VB_REMOTE_HOST=my-server              # SSH host alias from ~/.ssh/config
+VB_REMOTE_USER=username               # SSH username on the remote
+VB_REMOTE_PORT=65081                  # port for the bridge daemon on remote
+VB_LOCAL_PORT=65082                   # local port forwarded via SSH tunnel
+VB_CADENCE_CSHRC=/path/to/.cshrc     # Cadence environment setup script on remote
 ```
 
-Then:
+**4. Start the bridge**
 
 ```bash
 virtuoso-bridge start
 ```
+
+**5. Load SKILL in Virtuoso CIW**
+
+On the remote machine, in the Virtuoso CIW (Command Interpreter Window), load the bridge SKILL file:
+
+```
+load("/path/to/virtuoso-bridge-lite/core/ramic_bridge.il")
+```
+
+**6. Verify**
+
+```bash
+virtuoso-bridge status      # checks SSH tunnel, remote host, Spectre license
+```
+
+**7. Connect from Python**
 
 ```python
 from virtuoso_bridge import VirtuosoClient
@@ -115,11 +151,6 @@ print(result)  # VirtuosoResult(status=SUCCESS, output='3')
 
 Done. For full API reference, see the [documentation site](https://virtuoso-bridge.tokenzhang.com).
 
-### Prerequisites
-
-1. **SSH**: `ssh my-server` must work in your terminal without a password prompt.
-2. **Virtuoso**: a Virtuoso process must be running on the remote (or local) machine.
-
 ### Jump host setup
 
 If you access Virtuoso through a bastion/jump host, set both hosts in `.env`:
@@ -130,6 +161,44 @@ VB_JUMP_HOST=jump-host        # the bastion you SSH through
 ```
 
 Common mistake: setting `VB_REMOTE_HOST` to the jump host. `VB_REMOTE_HOST` must be the machine where Virtuoso is actually running. Verify with `virtuoso-bridge status` — it checks the remote hostname matches.
+
+### Multi-profile setup
+
+To connect to multiple Virtuoso instances simultaneously, use the `-p` flag. Profile names are **case-sensitive** and appended as suffixes to env var names.
+
+Add profile-suffixed variables to your `.env`:
+
+```dotenv
+# Default (no profile)
+VB_REMOTE_HOST=server-a
+VB_REMOTE_USER=user1
+
+# Profile "worker1" — used with `-p worker1`
+VB_REMOTE_HOST_worker1=server-b
+VB_REMOTE_USER_worker1=user2
+VB_CADENCE_CSHRC_worker1=/path/to/.cshrc.worker1
+
+# Profile "worker2" — used with `-p worker2`
+VB_REMOTE_HOST_worker2=server-c
+VB_REMOTE_USER_worker2=user3
+VB_CADENCE_CSHRC_worker2=/path/to/.cshrc.worker2
+```
+
+Then start and use each profile independently:
+
+```bash
+virtuoso-bridge start -p worker1
+virtuoso-bridge start -p worker2
+virtuoso-bridge status -p worker1
+```
+
+```python
+from virtuoso_bridge.spectre import SpectreSimulator
+
+sim = SpectreSimulator.from_env(profile="worker1")
+```
+
+> **Note:** Profile suffixes are case-sensitive. `-p worker1` reads `VB_REMOTE_HOST_worker1`, not `VB_REMOTE_HOST_WORKER1`.
 
 ## Architecture
 
