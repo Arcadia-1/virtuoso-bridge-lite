@@ -295,6 +295,10 @@ class SSHClient:
         if self._ssh_runner.is_tunnel_alive:
             return
         if SSHRunner.can_reach_port(self._port):
+            # Port reachable (external tunnel) — load PID from state if available
+            state = self.read_state()
+            if state and state.get("tunnel_pid"):
+                self._ssh_runner.tunnel_pid = state["tunnel_pid"]
             return
 
         max_attempts = 10

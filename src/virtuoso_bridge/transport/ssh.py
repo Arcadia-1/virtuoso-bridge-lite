@@ -174,6 +174,10 @@ class SSHRunner:
         tunnel (port already reachable).  Raises RuntimeError on failure.
         """
         cmd: list[str] = [self._ssh_cmd]
+        # Use ControlMaster options — if a master already exists, the slave
+        # will request port-forwarding from it and then exit.  The master
+        # keeps the forward alive.  If no master exists, this becomes the
+        # master (ControlMaster=auto).
         cmd += self._common_ssh_options()
         cmd += [
             "-o", "ExitOnForwardFailure=yes",
@@ -227,7 +231,12 @@ class SSHRunner:
                     err_msg = proc.stderr.read().decode("utf-8", errors="ignore")
                 except (OSError, ValueError):
                     pass
-            if "address already in use" in err_msg.lower() and self.can_reach_port(port):
+            # Slave exited — check if ControlMaster took over the forward
+            if self.can_reach_port(port):
+                logger.info("Port forward active at localhost:%d (ControlMaster)", port)
+                self._tunnel_using_external = True
+                return None
+            if "address already in use" in err_msg.lower():
                 logger.info("Reusing existing tunnel at localhost:%d", port)
                 self._tunnel_using_external = True
                 return None
@@ -237,7 +246,26 @@ class SSHRunner:
         return proc  # running
 
     def stop_port_forward(self) -> None:
-        """Stop the port-forwarding tunnel."""
+        """Stop the port-forwarding tunnel.
+
+        If ControlMaster is managing the forward, use ``ssh -O exit`` to
+        cleanly shut it down.  Falls back to SIGTERM on a standalone tunnel
+        process.
+        """
+        # Try ControlMaster exit first
+        if Path(self._control_path).exists():
+            cmd = [self._ssh_cmd, "-o", f"ControlPath={self._control_path}", "-O", "exit"]
+            if self._user:
+                cmd.append(f"{self._user}@{self._host}")
+            else:
+                cmd.append(self._host)
+            try:
+                subprocess.run(cmd, capture_output=True, timeout=5)
+                logger.info("ControlMaster exited via -O exit")
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+
+        # Fallback: kill by PID
         pid = None
         if self._tunnel_proc is not None and self._tunnel_proc.poll() is None:
             pid = self._tunnel_proc.pid
