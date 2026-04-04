@@ -130,10 +130,23 @@ result = client.<span class="fn">execute_skill</span>(<span class="str">"1+2"</s
     layout.<span class="fn">add_rect</span>(<span class="str">"M1"</span>, <span class="str">"drawing"</span>, (0, 0, 1, 0.5))
     layout.<span class="fn">add_path</span>(<span class="str">"M2"</span>, <span class="str">"drawing"</span>, [(0,0),(1,0)], width=0.1)
     layout.<span class="fn">add_label</span>(<span class="str">"M1"</span>, <span class="str">"pin"</span>, (0.5, 0.25), <span class="str">"VDD"</span>)
+    layout.<span class="fn">add_polygon</span>(<span class="str">"M3"</span>, <span class="str">"drawing"</span>, [(0,0),(1,0),(1,1)])
     layout.<span class="fn">add_instance</span>(<span class="str">"tsmcN28"</span>, <span class="str">"nch_ulvt_mac"</span>, (0,0), <span class="str">"M0"</span>)
     layout.<span class="fn">add_via</span>(<span class="str">"M1_M2"</span>, (0.5, 0.25))
-    layout.<span class="fn">add_polygon</span>(<span class="str">"M3"</span>, <span class="str">"drawing"</span>, [(0,0),(1,0),(1,1)])
+    layout.<span class="fn">add_mosaic</span>(<span class="str">"tsmcN28"</span>, <span class="str">"nch_ulvt_mac"</span>, (0,0), rows=2, cols=4,
+                      row_pitch=0.5, col_pitch=1.0)
     shapes = layout.<span class="fn">get_shapes</span>()</code></pre>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>layout.read_geometry(lib, cell)</code></td><td>Read all shapes and instances as dicts</td></tr>
+        <tr><td><code>layout.list_shapes(lib, cell)</code></td><td>Shape summary</td></tr>
+        <tr><td><code>layout.fit_view()</code></td><td>Fit view to all geometry</td></tr>
+        <tr><td><code>layout.show_only_layers(["M1","M2"])</code></td><td>Show only specified layers</td></tr>
+        <tr><td><code>layout.clear_routing()</code></td><td>Delete routing metals, keep instances</td></tr>
+        <tr><td><code>layout.clear_current()</code></td><td>Delete all shapes</td></tr>
+        <tr><td><code>layout.delete_shapes_on_layer(lib, cell, layer, purpose)</code></td><td>Delete shapes on specific layer</td></tr>
+        <tr><td><code>layout.delete_cell(lib, cell)</code></td><td>Delete a cell</td></tr>
+      </table>
     </div>
 
     <div class="api-group">
@@ -141,7 +154,15 @@ result = client.<span class="fn">execute_skill</span>(<span class="str">"1+2"</s
       <pre><code><span class="kw">with</span> client.schematic.<span class="fn">edit</span>(<span class="str">"myLib"</span>, <span class="str">"myCell"</span>) <span class="kw">as</span> sch:
     sch.<span class="fn">add_instance</span>(<span class="str">"analogLib"</span>, <span class="str">"vdc"</span>, (0,0), <span class="str">"V0"</span>, params={<span class="str">"vdc"</span>: <span class="str">"0.9"</span>})
     sch.<span class="fn">add_wire</span>([(0, 0), (0, 0.5)])
-    sch.<span class="fn">add_pin</span>(<span class="str">"VDD"</span>, <span class="str">"inputOutput"</span>, (0, 1.0))</code></pre>
+    sch.<span class="fn">add_pin</span>(<span class="str">"VDD"</span>, <span class="str">"inputOutput"</span>, (0, 1.0))
+    sch.<span class="fn">add_net_label_to_instance_term</span>(<span class="str">"V0"</span>, <span class="str">"PLUS"</span>, <span class="str">"VDD"</span>)
+    sch.<span class="fn">add_wire_between_instance_terms</span>(<span class="str">"V0"</span>, <span class="str">"MINUS"</span>, <span class="str">"GND0"</span>, <span class="str">"gnd!"</span>)
+    sch.<span class="fn">add_pin_to_instance_term</span>(<span class="str">"V0"</span>, <span class="str">"PLUS"</span>, <span class="str">"VIN"</span>, <span class="str">"input"</span>)</code></pre>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>schematic.check(lib, cell)</code></td><td>Run schematic check (schCheck)</td></tr>
+        <tr><td><code>schematic.save(lib, cell)</code></td><td>Save schematic</td></tr>
+      </table>
     </div>
 
     <div class="api-group">
@@ -153,7 +174,12 @@ result = sim.<span class="fn">run_simulation</span>(<span class="str">"tb_inv.sc
 
 <span class="fn">print</span>(result.status)          <span class="cmt"># ExecutionStatus.SUCCESS</span>
 <span class="fn">print</span>(result.data.keys())     <span class="cmt"># ['time', 'VOUT', 'VIN', ...]</span>
-<span class="fn">print</span>(result.data[<span class="str">"VOUT"</span>][:5]) <span class="cmt"># first 5 voltage samples</span></code></pre>
+<span class="fn">print</span>(result.data[<span class="str">"VOUT"</span>][:5]) <span class="cmt"># first 5 voltage samples</span>
+
+<span class="cmt"># Check license before running</span>
+info = sim.<span class="fn">check_license</span>()
+<span class="fn">print</span>(info[<span class="str">"spectre_path"</span>])    <span class="cmt"># /path/to/spectre</span>
+<span class="fn">print</span>(info[<span class="str">"licenses"</span>])        <span class="cmt"># license feature usage</span></code></pre>
     </div>
 
     <div class="api-group">
@@ -218,6 +244,48 @@ bridge = VirtuosoClient.<span class="fn">local</span>(port=65432)</code></pre>
         <tr><td><code>virtuoso-bridge stop</code></td><td>Stop tunnel</td></tr>
       </table>
     </div>
+  </div>
+
+  <!-- Examples -->
+  <div class="section">
+    <h2>Examples</h2>
+    <table>
+      <tr><th>Category</th><th>Example</th><th>Description</th></tr>
+      <tr><td rowspan="4">Basic</td><td><code>01_execute_skill.py</code></td><td>Run SKILL expressions (Hello World)</td></tr>
+      <tr><td><code>02_load_il.py</code></td><td>Load .il file into Virtuoso</td></tr>
+      <tr><td><code>03_list_library_cells.py</code></td><td>Enumerate libraries and cells</td></tr>
+      <tr><td><code>04_screenshot.py</code></td><td>Capture window screenshot and download</td></tr>
+      <tr><td rowspan="5">Layout</td><td><code>01_create_layout.py</code></td><td>Create layout with NMOS/PMOS/CFMOM instances</td></tr>
+      <tr><td><code>02_add_polygon.py</code></td><td>Add polygon shapes</td></tr>
+      <tr><td><code>03_add_via.py</code></td><td>Place vias</td></tr>
+      <tr><td><code>04_multilayer_routing.py</code></td><td>M2-M7 multi-layer routing</td></tr>
+      <tr><td><code>05_bus_routing.py</code></td><td>8-bit bus wiring</td></tr>
+      <tr><td rowspan="4">Schematic</td><td><code>01a_create_rc_stepwise.py</code></td><td>Create RC circuit step by step</td></tr>
+      <tr><td><code>01b_create_rc_load_skill.py</code></td><td>Create RC via .il script injection</td></tr>
+      <tr><td><code>02_read_connectivity.py</code></td><td>Read nets, pins, instances</td></tr>
+      <tr><td><code>08_import_cdl_cap_array.py</code></td><td>Import CDL netlist via spiceIn</td></tr>
+      <tr><td>ADE</td><td><code>01_rc_filter_sweep.py</code></td><td>Complete Maestro workflow with parametric sweep</td></tr>
+      <tr><td rowspan="4">Spectre</td><td><code>01_veriloga_adc_dac.py</code></td><td>4-bit ADC/DAC with Verilog-A</td></tr>
+      <tr><td><code>02_cap_dc_ac.py</code></td><td>RC filter DC+AC frequency response</td></tr>
+      <tr><td><code>04_strongarm_pss_pnoise.py</code></td><td>StrongArm comparator PSS+Pnoise</td></tr>
+      <tr><td><code>flower.py</code></td><td>Draw a flower in layout (fun)</td></tr>
+    </table>
+  </div>
+
+  <!-- SKILL Assets -->
+  <div class="section">
+    <h2>Bundled SKILL Assets</h2>
+    <table>
+      <tr><th>File</th><th>Description</th></tr>
+      <tr><td><code>schematic_ops.il</code></td><td>Schematic CRUD helpers (SchOpenNew, SchCreateAnalogInst, etc.)</td></tr>
+      <tr><td><code>layout_ops.il</code></td><td>Layout operation helpers</td></tr>
+      <tr><td><code>screenshot.il</code></td><td>Capture Virtuoso window screenshot to PNG</td></tr>
+      <tr><td><code>maestro_utils.il</code></td><td>MaestroOpen / MaestroClose / MaestroCloseAll</td></tr>
+      <tr><td><code>create_rc.il</code></td><td>Create RC circuit schematic in one call</td></tr>
+      <tr><td><code>read_connectivity.il</code></td><td>Read schematic nets and connectivity</td></tr>
+      <tr><td><code>file_ops.il</code></td><td>VbReadFile / VbWriteFile for remote file I/O</td></tr>
+      <tr><td><code>sonnet18.il</code></td><td>Print Shakespeare to CIW (demo)</td></tr>
+    </table>
   </div>
 
   <div class="footer">
