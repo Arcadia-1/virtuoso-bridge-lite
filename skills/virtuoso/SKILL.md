@@ -129,3 +129,4 @@ Load only when needed:
 - `references/layout.md` — layout API details and SKILL examples
 - `references/schematic.md` — schematic API details and examples
 - `references/ade.md` — ADE control, simulation triggering, OCEAN result reading
+- `references/netlist.md` — CDL/Spectre netlist formats, spiceIn import, netlist export
