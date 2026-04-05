@@ -231,9 +231,7 @@ def _print_status() -> int:
     running = SSHClient.is_running(profile)
 
     label = f" [{profile}]" if profile else ""
-    print("========================================================================")
     print(f"  Virtuoso Bridge Status{label}")
-    print("========================================================================")
 
     # Tunnel
     suffix = f"_{profile}" if profile else ""
