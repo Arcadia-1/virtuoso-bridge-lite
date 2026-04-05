@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import time
 from pathlib import Path
 
@@ -221,7 +222,7 @@ def _print_status() -> int:
     else:
         setup_path = None
 
-    # Daemon
+    # Daemon (Virtuoso CIW)
     if running and state:
         port = state["port"]
         try:
@@ -252,13 +253,113 @@ def _print_status() -> int:
             print(f"  After starting, load in Virtuoso CIW:")
             print(f"    load(\"{setup_path}\")")
 
+    # Spectre
+    if running:
+        _print_spectre_status(profile, suffix)
+
     print("\n========================================================================")
     return 0 if running else 1
 
 
+def _print_spectre_status(profile: str | None, suffix: str) -> None:
+    """Check and print Spectre availability via SSH.
+
+    Strategy: try ``which spectre`` directly first (works when the user's
+    login shell already has Cadence on PATH).  If that fails and
+    VB_CADENCE_CSHRC is set, source it in a csh sub-shell and retry.
+    """
+    from virtuoso_bridge.transport.tunnel import SSHClient
+
+    try:
+        ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
+        ssh._ssh_runner._verbose = False
+
+        # 1. Direct check — works if spectre is already on PATH
+        result = ssh._ssh_runner.run_command(
+            "which spectre 2>/dev/null && spectre -V 2>&1 | head -1",
+            timeout=10,
+        )
+        stdout = result.stdout.strip()
+
+        # 2. Fallback — source VB_CADENCE_CSHRC to set up PATH
+        if not stdout:
+            cadence_cshrc = (
+                os.getenv(f"VB_CADENCE_CSHRC{suffix}", "").strip()
+                or os.getenv("VB_CADENCE_CSHRC", "").strip()
+            )
+            if cadence_cshrc:
+                check_cmd = (
+                    "cat > /tmp/_vb_spectre_check.csh << 'EOFCSH'\n"
+                    "#!/bin/csh -f\n"
+                    'if (! $?HOSTNAME) setenv HOSTNAME `hostname`\n'
+                    'if (! $?LD_LIBRARY_PATH) setenv LD_LIBRARY_PATH ""\n'
+                    f"source {cadence_cshrc}\n"
+                    "which spectre\n"
+                    "spectre -V\n"
+                    "EOFCSH\n"
+                    "csh -f /tmp/_vb_spectre_check.csh 2>&1 | head -5; "
+                    "rm -f /tmp/_vb_spectre_check.csh"
+                )
+                result = ssh._ssh_runner.run_command(check_cmd, timeout=15)
+                stdout = result.stdout.strip()
+
+        ssh.close()
+
+        spectre_path = None
+        version = None
+        for line in stdout.splitlines():
+            line = line.strip()
+            if line.startswith("@(#)$CDS:"):
+                version = line
+            elif "/" in line and "spectre" in line.lower():
+                spectre_path = line
+
+        if spectre_path:
+            print(f"\n[spectre] OK")
+            print(f"  path    : {spectre_path}")
+            if version:
+                print(f"  version : {version}")
+        else:
+            print(f"\n[spectre] NOT FOUND")
+    except Exception as e:
+        print(f"\n[spectre] error: {e}")
+
+
+def _discover_profiles() -> list[str | None]:
+    """Scan environment for all VB_REMOTE_HOST* variables and return profile list.
+
+    Returns a list where None represents the default (unsuffixed) profile
+    and strings represent named profiles.
+    """
+    profiles: list[str | None] = []
+    pattern = re.compile(r"^VB_REMOTE_HOST(?:_(.+))?$")
+    for key in sorted(os.environ):
+        m = pattern.match(key)
+        if m and os.environ[key].strip():
+            profiles.append(m.group(1))  # None for default, name for suffixed
+    return profiles
+
+
 def cli_status() -> int:
     _load_repo_env()
-    return _print_status()
+    profile = _get_cli_profile()
+    if profile is not None:
+        # Explicit profile requested — show only that one
+        return _print_status()
+    # No profile specified — show all discovered profiles
+    profiles = _discover_profiles()
+    if not profiles:
+        print("No profiles found. Set VB_REMOTE_HOST in .env first.")
+        return 1
+    any_running = False
+    for i, p in enumerate(profiles):
+        _CLI_PROFILE[0] = p
+        ret = _print_status()
+        if ret == 0:
+            any_running = True
+        if i < len(profiles) - 1:
+            print()  # blank line between profiles
+    return 0 if any_running else 1
 
 
 # -- license ----------------------------------------------------------------

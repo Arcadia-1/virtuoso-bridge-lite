@@ -91,7 +91,10 @@ The divergence is in what's built on top: skillbridge stays thin — a Pythonic 
 ### Prerequisites
 
 1. **SSH**: `ssh my-server` must work in your terminal without a password prompt.
-2. **Virtuoso**: a Virtuoso process must be running on the remote (or local) machine.
+2. **Virtuoso** (for SKILL execution): a Virtuoso process must be running on the remote (or local) machine. After starting the tunnel, load the bridge SKILL script in the CIW.
+3. **Spectre** (for simulation only): `spectre` must be on PATH in the remote shell, or set `VB_CADENCE_CSHRC` to a cshrc that adds Cadence tools to PATH.
+
+> Virtuoso and Spectre are **independent** — you can run Spectre simulations without loading the SKILL bridge in Virtuoso, and you can use the SKILL bridge without Spectre installed. `virtuoso-bridge status` reports both.
 
 ### Step-by-step setup
 
@@ -116,7 +119,9 @@ VB_REMOTE_HOST=my-server              # SSH host alias from ~/.ssh/config
 VB_REMOTE_USER=username               # SSH username on the remote
 VB_REMOTE_PORT=65081                  # port for the bridge daemon on remote
 VB_LOCAL_PORT=65082                   # local port forwarded via SSH tunnel
-VB_CADENCE_CSHRC=/path/to/.cshrc     # Cadence environment setup script on remote
+
+# Optional — only needed if `spectre` is not already on PATH in the remote shell.
+# VB_CADENCE_CSHRC=/path/to/.cshrc   # cshrc that sets up Cadence tools on the remote
 ```
 
 **4. Start the bridge**
@@ -231,7 +236,7 @@ No tunnel, no `.env`, no SSH. Just load `core/ramic_bridge.il` in Virtuoso CIW a
 virtuoso-bridge init      # create .env template
 virtuoso-bridge start     # start SSH tunnel + deploy daemon
 virtuoso-bridge restart   # force-restart
-virtuoso-bridge status    # check connection + Spectre license
+virtuoso-bridge status    # check tunnel + Virtuoso daemon + Spectre
 ```
 
 ## Build & Test
