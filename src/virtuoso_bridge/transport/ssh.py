@@ -184,12 +184,17 @@ class SSHRunner:
 
     # -- port-forwarding tunnel ----------------------------------------------
 
-    def start_port_forward(self, port: int, settle: float = 1.5) -> subprocess.Popen[bytes] | None:
+    def start_port_forward(self, port: int, settle: float = 1.5, *, remote_port: int | None = None) -> subprocess.Popen[bytes] | None:
         """Start a persistent SSH port-forwarding tunnel.
+
+        *port* is the local port to bind.  *remote_port* is the port on the
+        remote side; defaults to *port* when not specified.
 
         Returns the Popen process on success, or None if reusing an existing
         tunnel (port already reachable).  Raises RuntimeError on failure.
         """
+        if remote_port is None:
+            remote_port = port
         cmd: list[str] = [self._ssh_cmd]
         # Use ControlMaster options — if a master already exists, the slave
         # will request port-forwarding from it and then exit.  The master
@@ -199,7 +204,7 @@ class SSHRunner:
         cmd += [
             "-o", "ExitOnForwardFailure=yes",
             "-N",
-            "-L", f"{port}:127.0.0.1:{port}",
+            "-L", f"{port}:127.0.0.1:{remote_port}",
         ]
         if self._user:
             cmd.append(f"{self._user}@{self._host}")

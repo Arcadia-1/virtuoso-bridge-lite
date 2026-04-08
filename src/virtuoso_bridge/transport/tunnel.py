@@ -156,6 +156,7 @@ class SSHClient:
         remote_host: str,
         remote_user: str | None = None,
         port: int = 65432,
+        local_port: int | None = None,
         jump_host: str | None = None,
         jump_user: str | None = None,
         timeout: int = 30,
@@ -164,7 +165,8 @@ class SSHClient:
     ) -> None:
         self._remote_host = remote_host
         self._remote_user = remote_user
-        self._port = port
+        self._port = port  # remote daemon port
+        self._local_port = local_port if local_port is not None else port
         self._jump_host = jump_host
         self._jump_user = jump_user
         self._timeout = timeout
@@ -226,10 +228,20 @@ class SSHClient:
         except (ValueError, TypeError):
             port = _default_remote_port(remote_user)
 
+        # Local port (defaults to remote port if not set)
+        local_port_str = os.getenv(f"VB_LOCAL_PORT{suffix}", "").strip()
+        local_port: int | None = None
+        if local_port_str:
+            try:
+                local_port = int(local_port_str)
+            except (ValueError, TypeError):
+                pass
+
         return cls(
             remote_host=remote_host,
             remote_user=remote_user,
             port=port,
+            local_port=local_port,
             jump_host=jump_host,
             jump_user=jump_user,
             keep_remote_files=keep_remote_files,
@@ -240,7 +252,8 @@ class SSHClient:
 
     @property
     def port(self) -> int:
-        return self._port
+        """Local port that VirtuosoClient should connect to."""
+        return self._local_port
 
     @property
     def remote_host(self) -> str:
@@ -397,7 +410,7 @@ class SSHClient:
             return
         if self._ssh_runner.is_tunnel_alive:
             return
-        if SSHRunner.can_reach_port(self._port):
+        if SSHRunner.can_reach_port(self._local_port):
             # Port reachable (external tunnel) — load PID from state if available
             state = self.read_state(self._profile)
             if state and state.get("tunnel_pid"):
@@ -405,38 +418,38 @@ class SSHClient:
             return
 
         max_attempts = 10
-        port = self._port
+        local_port = self._local_port
         for attempt in range(max_attempts):
             settle = _TUNNEL_STARTUP_SETTLE_SECONDS
             if self._jump_host:
                 settle = max(settle, 3.0)
-            proc = self._ssh_runner.start_port_forward(port, settle=settle)
+            proc = self._ssh_runner.start_port_forward(local_port, settle=settle, remote_port=self._port)
             if proc is None:
                 # Reusing existing tunnel
-                self._port = port
+                self._local_port = local_port
                 return
             if proc.poll() is None:
                 # Tunnel running
-                if port != self._port:
-                    logger.info("Port %d was busy, using port %d", self._port, port)
-                    print(f"[port] {self._port} busy, auto-switched to {port}", flush=True)
-                    self._port = port
-                    _update_env_file("VB_REMOTE_PORT", str(port))
+                if local_port != self._local_port:
+                    logger.info("Local port %d was busy, using port %d", self._local_port, local_port)
+                    print(f"[port] {self._local_port} busy, auto-switched to {local_port}", flush=True)
+                    self._local_port = local_port
+                    _update_env_file("VB_LOCAL_PORT", str(local_port))
                 logger.info(
                     "SSH tunnel established (PID %d): localhost:%d -> %s:localhost:%d",
-                    proc.pid, port, self._remote_host, port,
+                    proc.pid, local_port, self._remote_host, self._port,
                 )
                 return
             # Failed
             stderr = proc.stderr
             err_msg = stderr.read().decode("utf-8", errors="ignore") if stderr else ""
             if "address already in use" in err_msg.lower() or "cannot listen" in err_msg.lower():
-                logger.info("Port %d in use, trying %d", port, port + 1)
-                port += 1
+                logger.info("Local port %d in use, trying %d", local_port, local_port + 1)
+                local_port += 1
                 continue
             raise RuntimeError(f"SSH tunnel failed: {err_msg.strip()}")
 
-        raise RuntimeError(f"No free port found after {max_attempts} attempts ({self._port}–{port - 1})")
+        raise RuntimeError(f"No free local port found after {max_attempts} attempts ({self._local_port}–{local_port - 1})")
 
     # -- high-level lifecycle -----------------------------------------------
 
@@ -505,7 +518,7 @@ class SSHClient:
         tunnel_pid = None if is_local else self._ssh_runner.tunnel_pid
         state = {
             "mode": "local" if is_local else "remote",
-            "port": self._port,
+            "port": self._local_port,
             "tunnel_pid": tunnel_pid,
             "remote_host": self._remote_host,
             "setup_path": self._remote_virtuoso_setup_path,

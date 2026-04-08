@@ -15,5 +15,6 @@ optimization/
 reference/
 .vscode/
 .DS_Store
+.claude/
 spectre.out
 test/

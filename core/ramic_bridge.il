@@ -23,8 +23,10 @@ procedure(RBStart()
   if(boundp('RBIpc) && ipcIsAliveProcess(RBIpc) then
     printf("[RAMIC] already running\n")
   else
+    ; Use "env -u" to strip Virtuoso's LD_LIBRARY_PATH / LD_PRELOAD
+    ; so the system Python links against its own libs.
     RBIpc = ipcBeginProcess(
-      sprintf(nil "python %s %s %d"
+      sprintf(nil "/usr/bin/env -u LD_LIBRARY_PATH -u LD_PRELOAD python %s %s %d"
         strcat(getShellEnvVar("RB_DAEMON_PATH") || "." "/ramic_daemon.py")
         "127.0.0.1" RBPort)
       "" 'RBIpcDataHandler nil 'RBIpcFinishHandler "")
