@@ -266,48 +266,89 @@ class SSHClient:
 
     # -- remote deployment --------------------------------------------------
 
-    def _detect_remote_python(self) -> tuple[str, int]:
-        detect_cmd = (
-            'python3 --version 2>&1 && echo "CMD:python3" || '
-            '(python --version 2>&1 && echo "CMD:python") || '
-            '(python2.7 --version 2>&1 && echo "CMD:python2.7") || '
-            'echo "CMD:NONE"'
-        )
-        result = self._ssh_runner.run_command(detect_cmd)
-        output = result.stdout.strip()
-        logger.info("Remote Python detection output: %s", output)
+    def _detect_remote_python(self) -> tuple[str, int, int]:
+        """Detect Python interpreter on the remote host.
 
-        python_cmd = None
-        python_major = None
-        for line in output.splitlines():
-            line = line.strip()
-            if line.startswith("CMD:"):
-                cmd = line[4:]
-                if cmd != "NONE":
-                    python_cmd = cmd
-            elif line.startswith("Python "):
-                try:
-                    python_major = int(line.split()[1].split(".")[0])
-                except (IndexError, ValueError):
-                    pass
+        Returns:
+            tuple of (python_cmd, major_version, minor_version)
 
-        if python_cmd is None or python_major is None:
-            raise RuntimeError(
-                f"No Python interpreter found on {self._remote_host}. "
-                f"Detection output: {output!r}"
+        Raises:
+            RuntimeError: if no suitable Python interpreter is found
+
+        Selection logic:
+            - python3 >= 3.9  -> daemon_3
+            - python3 < 3.9   -> daemon_27 (compatible with older Python 3)
+            - python (if different from python3) with version >= 3.9 -> daemon_3
+            - python < 3.9    -> daemon_27
+            - python2.7 >= 2.7 -> daemon_27
+            - Otherwise -> error with detailed message
+        """
+        candidates = [
+            ("python3", self._remote_host),
+            ("python", self._remote_host),
+            ("python2.7", self._remote_host),
+        ]
+
+        last_error = None
+
+        for cmd, host in candidates:
+            version_output = self._ssh_runner.run_command(
+                f"{cmd} --version 2>&1", timeout=10
             )
-        logger.info("Detected remote Python: %s (major version %d)", python_cmd, python_major)
-        return python_cmd, python_major
+            stdout = version_output.stdout.strip()
+            stderr = version_output.stderr.strip()
+
+            # Combine stdout and stderr since version info can be in either
+            version_text = stdout if stdout else stderr
+
+            if not version_text or "not found" in version_text.lower() or "no such file" in version_text.lower():
+                last_error = f"{cmd}: command not found"
+                continue
+
+            # Parse version from output like "Python 3.9.0" or "Python 3.6.12"
+            version_match = re.search(r"Python\s+(\d+)\.(\d+)", version_text)
+            if not version_match:
+                last_error = f"{cmd}: output not recognized: {version_text!r}"
+                continue
+
+            major = int(version_match.group(1))
+            minor = int(version_match.group(2))
+            full_version = f"{major}.{minor}"
+
+            logger.info(
+                "Remote Python check: %s -> Python %s (major=%d, minor=%d)",
+                cmd, full_version, major, minor
+            )
+
+            return cmd, major, minor
+
+        # All candidates failed
+        raise RuntimeError(
+            f"No suitable Python interpreter found on {self._remote_host}.\n"
+            f"  Tried: python3, python, python2.7\n"
+            f"  Last error: {last_error}\n"
+            f"  Requirement: Python >= 2.7 (for daemon_27) or Python >= 3.9 (for daemon_3)\n"
+            f"  Please ensure Python is installed and on PATH."
+        )
 
     def ensure_remote_setup(self) -> None:
         """Upload daemon files and generate virtuoso_setup.il on the remote host."""
         if self._remote_setup_done:
             return
 
-        python_cmd, python_major = self._detect_remote_python()
-        daemon_local = _find_ramic_bridge_daemon(python_major)
+        python_cmd, python_major, python_minor = self._detect_remote_python()
+
+        # Determine which daemon to use based on Python version
+        # daemon_3 requires Python >= 3.9
+        # daemon_27 works with Python 3.x < 3.9 or Python 2.7.x
+        if python_major >= 3 and python_minor >= 9:
+            daemon_local = _find_ramic_bridge_daemon(3)  # daemon_3
+            daemon_name = "ramic_bridge_daemon_3.py"
+        else:
+            daemon_local = _find_ramic_bridge_daemon(2)  # daemon_27
+            daemon_name = "ramic_bridge_daemon_27.py"
+
         il_local = _find_ramic_bridge_il()
-        daemon_filename = daemon_local.name
 
         remote_username = resolve_remote_username(
             configured_user=self._remote_user,
@@ -315,7 +356,7 @@ class SSHClient:
         )
         self._remote_work_dir = default_virtuoso_bridge_dir(remote_username, "virtuoso_bridge")
 
-        remote_daemon = f"{self._remote_work_dir}/{daemon_filename}"
+        remote_daemon = f"{self._remote_work_dir}/{daemon_name}"
         remote_il = f"{self._remote_work_dir}/ramic_bridge.il"
         remote_setup = f"{self._remote_work_dir}/virtuoso_setup.il"
 
@@ -326,7 +367,7 @@ class SSHClient:
         if mkdir_result.returncode != 0:
             raise RuntimeError(f"Failed to create remote directory: {mkdir_result.stderr.strip()}")
 
-        logger.info("Uploading daemon script (%s) to %s", daemon_filename, remote_daemon)
+        logger.info("Uploading daemon script (%s) to %s", daemon_name, remote_daemon)
         daemon_content = daemon_local.read_text(encoding="utf-8")
         up = self._ssh_runner.upload_text(daemon_content, remote_daemon)
         if up.returncode != 0:
