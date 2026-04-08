@@ -16,3 +16,4 @@ reference/
 .vscode/
 .DS_Store
 spectre.out
+test/

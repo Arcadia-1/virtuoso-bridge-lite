@@ -202,6 +202,9 @@ def schematic_label_instance_term(
         f'"{escape_skill_string(style)}" {height:g} nil)))'
     )
 
+def _schematic_pin_master_expr() -> str:
+    return 'dbOpenCellViewByType("basic" "iopin" "symbol")'
+
 def schematic_create_pin(
     pin_name: str,
     x: float,
@@ -229,10 +232,11 @@ def schematic_create_pin_at_instance_term(
 ) -> str:
     """Build SKILL to create a schematic pin at an instance terminal center."""
     return (
-        "let((rbCtr) "
+        "let((rbPinMaster rbCtr) "
+        f"rbPinMaster = {_schematic_pin_master_expr()} "
         f"rbCtr = {_schematic_term_center_expr(instance_name, term_name, cv_expr=cv_expr)} "
         "when(rbCtr "
-        f'schCreatePin({cv_expr} nil "{escape_skill_string(pin_name)}" '
+        f'schCreatePin({cv_expr} rbPinMaster "{escape_skill_string(pin_name)}" '
         f'"{escape_skill_string(direction)}" nil rbCtr '
         f'"{escape_skill_string(orientation)}")))'
     )
