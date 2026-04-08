@@ -305,14 +305,43 @@ class SSHClient:
         last_error = None
 
         for cmd, host in candidates:
+            # First try with bash login shell to load ~/.bashrc, ~/.bash_profile, etc.
+            # This ensures user's PATH settings (like ~/.local/bin) are available.
             version_output = self._ssh_runner.run_command(
-                f"{cmd} --version 2>&1", timeout=10
+                f"bash -l -c 'which {cmd} && {cmd} --version' 2>&1", timeout=10
             )
             stdout = version_output.stdout.strip()
             stderr = version_output.stderr.strip()
+            output = stdout if stdout else stderr
 
-            # Combine stdout and stderr since version info can be in either
-            version_text = stdout if stdout else stderr
+            logger.debug("bash -l -c 'which %s && %s --version' => %r", cmd, cmd, output)
+
+            # Parse the output: first line is path, second line is version
+            lines = output.split('\n')
+            python_path = None
+            version_text = None
+
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                # Path line: /home/user/.local/bin/python3
+                if line.startswith('/') and cmd in line:
+                    python_path = line
+                # Version line: Python 3.9.17
+                if line.startswith('Python '):
+                    version_text = line
+
+            if not version_text or "not found" in output.lower() or "no such file" in output.lower():
+                # Fallback: try direct command without login shell
+                version_output = self._ssh_runner.run_command(
+                    f"{cmd} --version 2>&1", timeout=10
+                )
+                stdout = version_output.stdout.strip()
+                stderr = version_output.stderr.strip()
+                version_text = stdout if stdout else stderr
+
+                logger.debug("%s --version (fallback) => %r", cmd, version_text)
 
             if not version_text or "not found" in version_text.lower() or "no such file" in version_text.lower():
                 last_error = f"{cmd}: command not found"
@@ -329,10 +358,11 @@ class SSHClient:
             full_version = f"{major}.{minor}"
 
             logger.info(
-                "Remote Python check: %s -> Python %s (major=%d, minor=%d)",
-                cmd, full_version, major, minor
+                "Detected remote Python: %s -> Python %s (major=%d, minor=%d, path=%s)",
+                cmd, full_version, major, minor, python_path or 'unknown'
             )
 
+            # Return the first found version (prioritize python3 > python > python2.7)
             return cmd, major, minor
 
         # All candidates failed
@@ -341,7 +371,8 @@ class SSHClient:
             f"  Tried: python3, python, python2.7\n"
             f"  Last error: {last_error}\n"
             f"  Requirement: Python >= 2.7 (for daemon_27) or Python >= 3.9 (for daemon_3)\n"
-            f"  Please ensure Python is installed and on PATH."
+            f"  Please ensure Python is installed and on PATH.\n"
+            f"  Tip: If python3 works in interactive shell but not here, check your ~/.bashrc PATH settings."
         )
 
     def ensure_remote_setup(self) -> None:
@@ -357,9 +388,11 @@ class SSHClient:
         if python_major >= 3 and python_minor >= 9:
             daemon_local = _find_ramic_bridge_daemon(3)  # daemon_3
             daemon_name = "ramic_bridge_daemon_3.py"
+            logger.info("Selected daemon_3 (Python %d.%d >= 3.9)", python_major, python_minor)
         else:
             daemon_local = _find_ramic_bridge_daemon(2)  # daemon_27
             daemon_name = "ramic_bridge_daemon_27.py"
+            logger.info("Selected daemon_27 (Python %d.%d < 3.9 or Python 2.7)", python_major, python_minor)
 
         il_local = _find_ramic_bridge_il()
 
