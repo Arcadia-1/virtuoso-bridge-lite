@@ -157,7 +157,7 @@ def handle_external_connection(conn, addr):
             escaped_path = tmp_il_path.replace("\\", "/")
             send_code = f'load("{escaped_path}") hiFlush() _vb_eval_result\n'
         else:
-            send_code = f'{skill_code} hiFlush()'
+            send_code = f'let(((__vb_r {skill_code})) hiFlush() __vb_r)\n'
 
         sys.stdout.buffer.write(send_code.encode("utf-8"))
         sys.stdout.buffer.flush()

@@ -21,8 +21,11 @@ Control Cadence Virtuoso via Python — remotely over SSH or locally on the same
 
 **1. Install**
 
+> **Use `uv` + virtual environment** — never install into the global Python.
+
 ```bash
-pip install -e .
+uv venv .venv && source .venv/bin/activate   # Windows: source .venv/Scripts/activate
+uv pip install -e .
 ```
 
 **2. Generate config**
@@ -226,11 +229,26 @@ virtuoso-bridge status    # check tunnel + Virtuoso daemon + Spectre
 
 ## Build & test
 
+> **Recommended: use `uv` to manage the virtual environment.** `uv` refuses to install packages globally (unless `--system` is explicitly passed), preventing accidental pollution of the system Python.
+
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+uv venv .venv && source .venv/bin/activate   # Windows: source .venv/Scripts/activate
+uv pip install -e ".[dev]"
 pytest
 ```
+
+## Windows: fix symlinks
+
+Git on Windows clones symlinks as plain text files (`core.symlinks = false`),
+which breaks skill loading for any agent that follows `.claude/skills/` (or
+similar) links. Run this **once** after cloning:
+
+```bash
+bash scripts/fix-symlinks.sh
+```
+
+The script replaces broken symlinks with NTFS junctions — no admin rights, no
+Developer Mode required.
 
 ## Skills
 
