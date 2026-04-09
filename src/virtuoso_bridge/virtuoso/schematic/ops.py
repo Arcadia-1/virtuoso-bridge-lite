@@ -266,3 +266,32 @@ def schematic_create_wire_between_instance_terms(
 def schematic_check(*, cv_expr: str = "cv") -> str:
     """Build SKILL to run schematic checking."""
     return f"schCheck({cv_expr})"
+
+def schematic_set_cdf_param(
+    lib: str,
+    cell: str,
+    inst: str,
+    param: str,
+    value: str,
+    *,
+    cv_expr: str = "cv",
+) -> str:
+    """Build SKILL to update a CDF parameter if the instance and parameter exist."""
+    escaped_lib = escape_skill_string(lib)
+    escaped_cell = escape_skill_string(cell)
+    escaped_inst = escape_skill_string(inst)
+    escaped_param = escape_skill_string(param)
+    escaped_value = escape_skill_string(value)
+    return (
+        "let((cv i cdfId p) "
+        f'cv = dbOpenCellViewByType("{escaped_lib}" "{escaped_cell}" "schematic" nil "a") '
+        f'i = car(setof(x {cv_expr}~>instances x~>name == "{escaped_inst}")) '
+        "when(i "
+        "cdfId = cdfGetInstCDF(i) "
+        "when(cdfId "
+        f'p = cdfFindParamByName(cdfId "{escaped_param}") '
+        "when(p "
+        f'p~>value = "{escaped_value}")))) '
+        f"schCheck({cv_expr}) "
+        f"dbSave({cv_expr}))"
+    )
