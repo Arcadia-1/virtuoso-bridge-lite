@@ -292,7 +292,7 @@ def _print_status() -> int:
         try:
             vc = VirtuosoClient(host="127.0.0.1", port=port, timeout=5)
             ok = vc.test_connection(timeout=5)
-            print(f"\n[daemon] {'OK — connected to Virtuoso CIW' if ok else 'NO RESPONSE'}")
+            print(f"\n[daemon] {'OK - connected to Virtuoso CIW' if ok else 'NO RESPONSE'}")
             if ok:
                 # Query Virtuoso environment info
                 for skill_expr, label in [
@@ -311,7 +311,7 @@ def _print_status() -> int:
 
                 # Say hello in Virtuoso CIW with timestamp
                 vc.execute_skill(
-                    r'printf("\n  [virtuoso-bridge] Status check at %s — connection OK.\n\n" getCurrentTime())',
+                    r'printf("\n  [virtuoso-bridge] Status check at %s - connection OK.\n\n" getCurrentTime())',
                     timeout=5,
                 )
             if not ok and setup_path:
