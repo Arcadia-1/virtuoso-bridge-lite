@@ -278,7 +278,7 @@ def _parse_psf_swept_data(
     if not sweep_var:
         return {}
 
-    data: dict[str, list[float]] = {sweep_var: []}
+    data: dict[str, list[float | complex]] = {sweep_var: []}
     for name in trace_names:
         data[name] = []
 

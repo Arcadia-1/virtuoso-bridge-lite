@@ -228,8 +228,14 @@ class SSHClient:
         return self._remote_host
 
     @property
-    def ssh_runner(self) -> SSHRunner:
+    def ssh_runner(self) -> SSHRunner | None:
         return self._ssh_runner
+
+    def _require_runner(self) -> SSHRunner:
+        runner = self._ssh_runner
+        if runner is None:
+            raise RuntimeError("SSH runner is unavailable in local mode")
+        return runner
 
     @property
     def remote_work_dir(self) -> str | None:
@@ -259,7 +265,8 @@ class SSHClient:
             '(python2.7 --version 2>&1 && echo "CMD:python2.7") || '
             'echo "CMD:NONE"'
         )
-        result = self._ssh_runner.run_command(detect_cmd)
+        runner = self._require_runner()
+        result = runner.run_command(detect_cmd)
         output = result.stdout.strip()
         logger.info("Remote Python detection output: %s", output)
 
@@ -293,6 +300,7 @@ class SSHClient:
         if self._remote_setup_done:
             return
 
+        runner = self._require_runner()
         python_cmd, python_major, python_minor = self._detect_remote_python()
         daemon_local = _find_ramic_bridge_daemon(
             3 if python_major >= 3 else 2
@@ -302,7 +310,7 @@ class SSHClient:
 
         remote_username = resolve_remote_username(
             configured_user=self._remote_user,
-            runner=self._ssh_runner,
+            runner=runner,
         )
         self._remote_work_dir = default_virtuoso_bridge_dir(remote_username, "virtuoso_bridge")
 
@@ -311,7 +319,7 @@ class SSHClient:
         remote_setup = f"{self._remote_work_dir}/virtuoso_setup.il"
 
         logger.info("Creating remote directory: %s", self._remote_work_dir)
-        mkdir_result = self._ssh_runner.run_command(
+        mkdir_result = runner.run_command(
             f"mkdir -p {self._remote_work_dir} && chmod 755 {self._remote_work_dir}"
         )
         if mkdir_result.returncode != 0:
@@ -319,19 +327,19 @@ class SSHClient:
 
         logger.info("Uploading daemon script (%s) to %s", daemon_filename, remote_daemon)
         daemon_content = daemon_local.read_text(encoding="utf-8")
-        up = self._ssh_runner.upload_text(daemon_content, remote_daemon)
+        up = runner.upload_text(daemon_content, remote_daemon)
         if up.returncode != 0:
             raise RuntimeError(f"Failed to upload daemon: {up.stderr.strip()}")
 
         logger.info("Uploading IL script to %s", remote_il)
         il_content = il_local.read_text(encoding="utf-8")
-        up = self._ssh_runner.upload_text(il_content, remote_il)
+        up = runner.upload_text(il_content, remote_il)
         if up.returncode != 0:
             raise RuntimeError(f"Failed to upload IL script: {up.stderr.strip()}")
 
         setup_content = _generate_virtuoso_setup_il(remote_daemon, remote_il, python_cmd, port=self._port)
         logger.info("Uploading setup script to %s", remote_setup)
-        up = self._ssh_runner.upload_text(setup_content, remote_setup)
+        up = runner.upload_text(setup_content, remote_setup)
         if up.returncode != 0:
             raise RuntimeError(f"Failed to upload setup script: {up.stderr.strip()}")
 
@@ -386,13 +394,14 @@ class SSHClient:
         """Ensure SSH tunnel is running, auto-retry on port conflict."""
         if _is_localhost(self._remote_host):
             return
-        if self._ssh_runner.is_tunnel_alive:
+        runner = self._require_runner()
+        if runner.is_tunnel_alive:
             return
         if SSHRunner.can_reach_port(self._local_port):
             # Port reachable (external tunnel) — load PID from state if available
             state = self.read_state(self._profile)
             if state and state.get("tunnel_pid"):
-                self._ssh_runner.tunnel_pid = state["tunnel_pid"]
+                runner.tunnel_pid = state["tunnel_pid"]
             return
 
         max_attempts = 10
@@ -401,7 +410,7 @@ class SSHClient:
             settle = _TUNNEL_STARTUP_SETTLE_SECONDS
             if self._jump_host:
                 settle = max(settle, 3.0)
-            proc = self._ssh_runner.start_port_forward(local_port, settle=settle, remote_port=self._port)
+            proc = runner.start_port_forward(local_port, settle=settle, remote_port=self._port)
             if proc is None:
                 # Reusing existing tunnel
                 self._local_port = local_port
@@ -439,8 +448,9 @@ class SSHClient:
             return
         try:
             self.ensure_remote_setup()
-            if self._ssh_runner.persistent_shell_enabled:
-                self._ssh_runner.ensure_persistent_shell(timeout=timeout)
+            runner = self._require_runner()
+            if runner.persistent_shell_enabled:
+                runner.ensure_persistent_shell(timeout=timeout)
             self.ensure_tunnel()
             self.save_state()
         except Exception:
@@ -459,24 +469,25 @@ class SSHClient:
                 sf.unlink(missing_ok=True)
             return
 
+        runner = self._require_runner()
         # Try state file PID first (may be from a previous session)
-        if not self._ssh_runner.is_tunnel_alive:
+        if not runner.is_tunnel_alive:
             state = self.read_state(self._profile)
             if state:
                 pid = state.get("tunnel_pid")
                 if pid:
-                    self._ssh_runner.tunnel_pid = pid
+                    runner.tunnel_pid = pid
 
-        self._ssh_runner.stop_port_forward()
+        runner.stop_port_forward()
 
         if not self._keep_remote_files and self._remote_setup_done and self._remote_work_dir:
             try:
-                self._ssh_runner.run_command(f"rm -rf {self._remote_work_dir}")
+                runner.run_command(f"rm -rf {self._remote_work_dir}")
             except Exception:
                 logger.warning("Failed to clean up remote files at %s", self._remote_work_dir)
 
         try:
-            self._ssh_runner.close()
+            runner.close()
         except Exception:
             pass
 
@@ -500,7 +511,9 @@ class SSHClient:
         """Save tunnel state so other processes can find the port."""
         _STATE_DIR.mkdir(parents=True, exist_ok=True)
         is_local = _is_localhost(self._remote_host)
-        tunnel_pid = None if is_local else self._ssh_runner.tunnel_pid
+        tunnel_pid = None
+        if not is_local:
+            tunnel_pid = self._require_runner().tunnel_pid
         state = {
             "mode": "local" if is_local else "remote",
             "port": self._port if is_local else self._local_port,
@@ -557,13 +570,17 @@ class SSHClient:
     # -- file transfer (delegated to SSHRunner) -----------------------------
 
     def upload_file(self, local_path: Path, remote_path: str, timeout: int | None = None) -> CommandResult:
-        return self._ssh_runner.upload(local_path, remote_path, timeout=timeout or self._timeout)
+        runner = self._require_runner()
+        return runner.upload(local_path, remote_path, timeout=timeout or self._timeout)
 
     def download_file(self, remote_path: str, local_path: Path, timeout: int | None = None, recursive: bool = False) -> CommandResult:
-        return self._ssh_runner.download(remote_path, local_path, recursive=recursive, timeout=timeout or self._timeout)
+        runner = self._require_runner()
+        return runner.download(remote_path, local_path, recursive=recursive, timeout=timeout or self._timeout)
 
     def upload_text(self, text: str, remote_path: str, timeout: int | None = None) -> CommandResult:
-        return self._ssh_runner.upload_text(text, remote_path, timeout=timeout or self._timeout)
+        runner = self._require_runner()
+        return runner.upload_text(text, remote_path, timeout=timeout or self._timeout)
 
     def run_command(self, cmd: str, timeout: int | None = None) -> CommandResult:
-        return self._ssh_runner.run_command(cmd, timeout=timeout or self._timeout)
+        runner = self._require_runner()
+        return runner.run_command(cmd, timeout=timeout or self._timeout)

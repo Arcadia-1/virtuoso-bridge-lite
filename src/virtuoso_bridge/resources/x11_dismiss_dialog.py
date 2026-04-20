@@ -34,7 +34,7 @@ def find_x11_env(user=None):
         pids = subprocess.check_output(
             ["pgrep", "-u", user or os.environ.get("USER", ""), "-x", "virtuoso"],
             stderr=subprocess.PIPE
-        ).strip().split("\n")
+        ).strip().splitlines()
         for pid in pids:
             pid = pid.strip()
             if not pid:
@@ -49,7 +49,9 @@ def find_x11_env(user=None):
             env_file = "/proc/%s/environ" % pid
             try:
                 data = open(env_file, "rb").read()
-                info = {"DISPLAY": None, "XAUTHORITY": None}
+                info = {}
+                info["DISPLAY"] = None
+                info["XAUTHORITY"] = None
                 for chunk in data.split(b"\x00"):
                     if chunk.startswith(b"DISPLAY="):
                         info["DISPLAY"] = chunk.split(b"=", 1)[1].decode()
@@ -406,8 +408,9 @@ def main():
         if not display:
             print(json.dumps({"error": "cannot detect DISPLAY"}))
             sys.exit(2)
-        if x11_env.get("XAUTHORITY"):
-            os.environ["XAUTHORITY"] = x11_env["XAUTHORITY"]
+        xauth = x11_env.get("XAUTHORITY")
+        if isinstance(xauth, str) and xauth:
+            os.environ["XAUTHORITY"] = xauth
     dialogs = find_dialogs(display)
     for d in dialogs:
         print(json.dumps(d))

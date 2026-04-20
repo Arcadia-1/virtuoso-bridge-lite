@@ -23,7 +23,7 @@ client = VirtuosoClient.from_env()
 result = client.load_il(SONNET_IL)
 
 
-print_elapsed("load_il", result.execution_time)
+print_elapsed("load_il", result.execution_time or 0.0)
 upload_tag = "uploaded" if result.metadata.get("uploaded") else "cache hit"
 print(f"[{upload_tag}]")
 print(f"[OK] local:  {SONNET_IL}")

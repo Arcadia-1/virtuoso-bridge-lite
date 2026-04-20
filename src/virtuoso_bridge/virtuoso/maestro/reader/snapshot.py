@@ -156,7 +156,10 @@ def _dump_run_artifacts(client: VirtuosoClient, snap_dir: Path, *,
                 else:
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
-                with tf.extractfile(m) as src, open(target, "wb") as dst:
+                src = tf.extractfile(m)
+                if src is None:
+                    continue
+                with src, open(target, "wb") as dst:
                     dst.write(src.read())
     finally:
         try:

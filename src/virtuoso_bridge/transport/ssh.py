@@ -131,6 +131,14 @@ def _tool_override_from_env(var_name: str) -> str | None:
     value = os.path.expandvars(os.path.expanduser(raw.strip()))
     return value or None
 
+
+def _as_text(value: bytes | str | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
 def _derive_tool(base_cmd: str, old_name: str, new_name: str) -> str:
     """Derive a sibling tool path from a known tool (e.g. ssh -> scp).
 
@@ -199,13 +207,13 @@ class SSHRunner:
         if persistent_shell and not self._persistent_shell_enabled:
             logger.debug("Persistent SSH shell disabled on Windows for host %s", host)
 
-        self._shell_proc: subprocess.Popen[bytes] | None = None
+        self._shell_proc: subprocess.Popen[Any] | None = None
         self._shell_queue: queue.Queue[str | None] | None = None
         self._shell_reader: threading.Thread | None = None
         self._shell_lock = threading.RLock()
 
         # Port-forwarding tunnel state
-        self._tunnel_proc: subprocess.Popen[bytes] | None = None
+        self._tunnel_proc: subprocess.Popen[Any] | None = None
         self._tunnel_pid: int | None = None
         self._tunnel_using_external = False
 
@@ -226,7 +234,7 @@ class SSHRunner:
 
     # -- port-forwarding tunnel ----------------------------------------------
 
-    def start_port_forward(self, port: int, settle: float = 1.5, *, remote_port: int | None = None) -> subprocess.Popen[bytes] | None:
+    def start_port_forward(self, port: int, settle: float = 1.5, *, remote_port: int | None = None) -> subprocess.Popen[Any] | None:
         """Start a persistent SSH port-forwarding tunnel.
 
         *port* is the local port to bind.  *remote_port* is the port on the
@@ -553,11 +561,11 @@ class SSHRunner:
             tar_proc.wait()
 
             if ssh_proc.returncode != 0:
-                stderr_text = ssh_err.decode(errors="replace")
+                stderr_text = _as_text(ssh_err)
                 logger.warning("tar batch upload failed (rc=%d): %s", ssh_proc.returncode, stderr_text.strip())
                 return CommandResult(
                     returncode=ssh_proc.returncode,
-                    stdout=ssh_out.decode(errors="replace"),
+                    stdout=_as_text(ssh_out),
                     stderr=stderr_text,
                 )
 
@@ -696,8 +704,8 @@ class SSHRunner:
             raise
 
         if ssh_proc.returncode != 0 or tar_proc.returncode != 0:
-            ssh_err = ssh_proc.stderr.read().decode(errors="replace") if ssh_proc.stderr else ""
-            tar_err_str = tar_err.decode(errors="replace")
+            ssh_err = _as_text(ssh_proc.stderr.read()) if ssh_proc.stderr else ""
+            tar_err_str = _as_text(tar_err)
             combined_err = f"SSH error: {ssh_err.strip()} | Tar error: {tar_err_str.strip()}"
             logger.warning("download (tar) failed (rc=%d/%d): %s", ssh_proc.returncode, tar_proc.returncode, combined_err)
             return CommandResult(returncode=ssh_proc.returncode or tar_proc.returncode, stdout="", stderr=combined_err)
@@ -752,8 +760,8 @@ class SSHRunner:
         tar_proc.wait()
         return CommandResult(
             returncode=ssh_proc.returncode,
-            stdout=ssh_out.decode(errors="replace"),
-            stderr=ssh_err.decode(errors="replace"),
+            stdout=_as_text(ssh_out),
+            stderr=_as_text(ssh_err),
         )
 
     def ensure_persistent_shell(self, timeout: int | None = None) -> None:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Open a maestro in background, read config, then close it.
+"""Open a maestro in background, read basic session config, then close it.
 
 Usage::
 
@@ -20,9 +20,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "src"))
 
 from virtuoso_bridge import VirtuosoClient
-from virtuoso_bridge.virtuoso.maestro import open_session, close_session, read_config
+from virtuoso_bridge.virtuoso.maestro import close_session, open_session
 
 CELL = "TB_AMP_5T_D2S_DC_AC"
+
+
+def _decode_atom(raw: str | None) -> str:
+    text = (raw or "").strip().strip('"')
+    return "" if not text or text.lower() == "nil" else text
 
 
 def main() -> int:
@@ -52,7 +57,26 @@ def main() -> int:
 
     session = open_session(client, lib, CELL)
     try:
-        cfg = read_config(client, session)
+        cfg: dict[str, str] = {"session": session}
+        test = _decode_atom(
+            client.execute_skill(
+                f'maeGetSetup(?session "{session}")', timeout=15
+            ).output
+        )
+        if test:
+            cfg["test"] = test
+            cfg["lib"] = _decode_atom(
+                client.execute_skill(
+                    f'maeGetEnvOption("{test}" ?option "lib" ?session "{session}")',
+                    timeout=15,
+                ).output
+            )
+            cfg["cell"] = _decode_atom(
+                client.execute_skill(
+                    f'maeGetEnvOption("{test}" ?option "cell" ?session "{session}")',
+                    timeout=15,
+                ).output
+            )
         print(json.dumps(cfg, indent=2, default=str))
     finally:
         close_session(client, session)

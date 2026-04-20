@@ -17,6 +17,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from _timing import decode_skill, format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
+from virtuoso_bridge.virtuoso.layout.ops import (
+    layout_delete_shapes_on_layer,
+    layout_list_shapes,
+)
 
 # ----------------------------------------------------------------------
 # Customize to match the layer/purpose you want to delete
@@ -28,18 +32,20 @@ DELETE_PURPOSE = "drawing"
 
 
 def main() -> int:
-    client  = VirtuosoClient.from_env()
+    client = VirtuosoClient.from_env()
 
     # Always list shapes first
-    result = client.layout.list_shapes(timeout=15)
+    result = client.execute_skill(layout_list_shapes(), timeout=15)
     shapes = decode_skill(result.output or "")
     print("Shapes in open layout:")
     print(shapes or "  (none)")
 
     delete_elapsed, result = timed_call(
-        lambda: client.layout.delete_shapes_on_layer(DELETE_LAYER, DELETE_PURPOSE, timeout=30)
+        lambda: client.execute_skill(
+            layout_delete_shapes_on_layer(DELETE_LAYER, DELETE_PURPOSE), timeout=30
+        )
     )
-    print(f"[layout.delete_shapes_on_layer] [{format_elapsed(delete_elapsed)}]")
+    print(f"[layout_delete_shapes_on_layer] [{format_elapsed(delete_elapsed)}]")
     print(decode_skill(result.output or ""))
 
     # Save after delete

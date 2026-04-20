@@ -288,6 +288,9 @@ def _print_status() -> int:
     # For local mode, check daemon if we have state (don't require 'running')
     can_check_daemon = (is_local and state) or (running and state)
     if can_check_daemon:
+        if state is None:
+            print("\n[daemon] cannot check (state missing)")
+            return 1
         port = state["port"]
         try:
             vc = VirtuosoClient(host="127.0.0.1", port=port, timeout=5)
@@ -382,10 +385,14 @@ def _print_spectre_status(profile: str | None, suffix: str) -> None:
     ssh = None
     try:
         ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
-        ssh._ssh_runner._verbose = False
+        runner = ssh.ssh_runner
+        if runner is None:
+            print("\n[spectre] local mode (no SSH runner)")
+            return
+        runner._verbose = False
 
         # 1. Direct check — works if spectre is already on PATH
-        result = ssh._ssh_runner.run_command(
+        result = runner.run_command(
             "which spectre 2>/dev/null && spectre -V 2>&1 | head -1",
             timeout=10,
         )
@@ -410,7 +417,7 @@ def _print_spectre_status(profile: str | None, suffix: str) -> None:
                     "csh -f /tmp/_vb_spectre_check.csh 2>&1 | head -5; "
                     "rm -f /tmp/_vb_spectre_check.csh"
                 )
-                result = ssh._ssh_runner.run_command(check_cmd, timeout=15)
+                result = runner.run_command(check_cmd, timeout=15)
                 stdout = result.stdout.strip()
 
         spectre_path = None
@@ -509,8 +516,12 @@ def cli_license() -> int:
         else:
             # Create SSHRunner with verbose=False to suppress [cmd] output
             ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
-            ssh._ssh_runner._verbose = False
-            sim = SpectreSimulator.from_env(profile=profile, ssh_runner=ssh._ssh_runner)
+            runner = ssh.ssh_runner
+            if runner is None:
+                print("No SSH runner available for remote license check.")
+                return 1
+            runner._verbose = False
+            sim = SpectreSimulator.from_env(profile=profile, ssh_runner=runner)
 
         info = sim.check_license()
 
@@ -531,7 +542,7 @@ def cli_license() -> int:
 
 # -- main -------------------------------------------------------------------
 
-def _make_ssh_runner() -> "SSHRunner":
+def _make_ssh_runner() -> tuple["SSHRunner", str]:
     """Create an SSHRunner from .env config (for X11 commands)."""
     from virtuoso_bridge.transport.ssh import SSHRunner
     profile = _get_cli_profile()

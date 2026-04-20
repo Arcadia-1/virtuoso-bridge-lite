@@ -116,6 +116,8 @@ class VirtuosoClient(VirtuosoInterface):
         # Check if tunnel is already running
         if SSHClient.is_running(profile):
             state = SSHClient.read_state(profile)
+            if not state:
+                raise RuntimeError("Tunnel state file is missing or invalid.")
             port = state["port"]
             ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
             return cls(host="127.0.0.1", port=port, timeout=timeout, tunnel=ssh, log_to_ciw=log_to_ciw)
@@ -380,7 +382,13 @@ class VirtuosoClient(VirtuosoInterface):
         effective_timeout = timeout if timeout is not None else self._timeout
         actual_view = view or "layout"
         actual_view_type = view_type or default_view_type_for(actual_view)
-        skill = op_open_cell_view(lib, cell, actual_view, actual_view_type, mode)
+        skill = op_open_cell_view(
+            lib,
+            cell,
+            view=actual_view,
+            view_type=actual_view_type,
+            mode=mode,
+        )
         return self.execute_skill(skill, timeout=effective_timeout)
 
     def open_window(self, lib: str, cell: str, *, view: str = "schematic",

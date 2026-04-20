@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Snapshot the currently-focused maestro via two primitives.
 
-    1. read_session_info(client)  →  identify the focused session
-    2. snapshot_to_dir(client, info=..., ...)  →  dump artifacts to disk
+    1. snapshot(client, output_root=...)  →  identify and dump artifacts
 
 Writes ``{OUTPUT_ROOT}/{YYYYMMDD_HHMMSS}__{lib}__{cell}/`` with three
 "tracks" of state — each derived from a different source so they never
@@ -29,7 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "src"))
 
 from virtuoso_bridge import VirtuosoClient
-from virtuoso_bridge.virtuoso.maestro import read_session_info, snapshot_to_dir
+from virtuoso_bridge.virtuoso.maestro import snapshot
 
 
 OUTPUT_ROOT = Path(__file__).parent.parent.parent.parent / "output"
@@ -38,26 +37,20 @@ OUTPUT_ROOT = Path(__file__).parent.parent.parent.parent / "output"
 def main() -> int:
     client = VirtuosoClient.from_env()
 
-    # 1) "Where am I?"
-    info = read_session_info(client)
-    if not info.get("session"):
+    # 1) "Where am I?" + 2) "Dump what I see."
+    snap = snapshot(client, output_root=str(OUTPUT_ROOT))
+    if not snap.get("session"):
         # Something IS focused — just not a maestro window.  Report it so
         # the user knows exactly what to click away from.
         raise RuntimeError(
             "Focused window is not an ADE Assembler / Explorer maestro.\n"
-            f"  Current: {info.get('focused_window_title') or '(no window)'}\n"
-            f"  Open assembler windows:\n" +
-            "\n".join(
-                f"    - {t}" for t in (info.get('all_window_titles') or [])
-                if t and ('Assembler' in t or 'Explorer' in t)
-            ) +
-            "\n  Click one of the above and retry."
+            "  Click an ADE Assembler/Explorer window and retry."
         )
-    print(f"Focused: {info['lib']}/{info['cell']}/{info['view']}  "
-          f"(session {info['session']}, {info['application']})")
-
-    # 2) "Dump what I see."
-    snap_dir = snapshot_to_dir(client, info=info, output_root=str(OUTPUT_ROOT))
+    print(
+        f"Focused: {snap['lib']}/{snap['cell']}/{snap['view']}  "
+        f"(session {snap['session']}, {snap.get('app') or 'unknown'})"
+    )
+    snap_dir = snap.get("output_dir")
     print(f"Wrote snapshot to: {snap_dir}")
     return 0
 

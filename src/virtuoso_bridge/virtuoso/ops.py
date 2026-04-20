@@ -67,7 +67,7 @@ def open_window(
         f'existing = nil '
         f'foreach(w hiGetWindowList() '
         f'  let((cv) '
-        f'    cv = geGetEditCellView(w) '
+        f'    cv = w~>cellView '
         f'    when(cv && cv~>libName == "{elib}" '
         f'         && cv~>cellName == "{ecell}" '
         f'         && cv~>viewName == "{eview}" '

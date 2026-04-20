@@ -7,6 +7,7 @@ import logging
 import os
 import shlex
 import shutil
+import subprocess
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -625,8 +626,8 @@ class SpectreSimulator:
 
         *max_workers* overrides the instance default for this batch only.
         """
+        old = self._max_workers
         if max_workers is not None:
-            old = self._max_workers
             self._max_workers = max_workers
             # Force new pool with the override
             self.shutdown()
@@ -803,6 +804,11 @@ class SpectreSimulator:
             )
             self._remote_work_dir = default_remote_spectre_work_dir(username)
             logger.info("Remote work dir: %s", self._remote_work_dir)
+        if self._remote_work_dir is None:
+            return SimulationResult(
+                status=ExecutionStatus.ERROR,
+                errors=["Remote work dir is not configured"],
+            )
 
         base_output_dir = self._work_dir or netlist.parent
         run_result = _run_spectre_remote(

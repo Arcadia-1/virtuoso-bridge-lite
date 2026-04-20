@@ -4,13 +4,28 @@
 import sys
 import socket
 import os
-import fcntl
 import json
 import signal
 import threading
 import time
 import errno
 import traceback
+
+try:
+    import fcntl as _fcntl
+except ImportError:
+    _fcntl = None
+
+_fcntl_fn = getattr(_fcntl, "fcntl", None)
+_f_getfl = getattr(_fcntl, "F_GETFL", 3)
+_f_setfl = getattr(_fcntl, "F_SETFL", 4)
+_o_nonblock = int(getattr(os, "O_NONBLOCK", 0))
+
+
+def _fcntl_or_die(*args):
+    if _fcntl_fn is None:
+        raise RuntimeError("fcntl is unavailable on this platform")
+    return _fcntl_fn(*args)
 
 HOST = sys.argv[1]
 PORT = int(sys.argv[2])
@@ -30,17 +45,13 @@ def get_grandparent_pid():
 virtuoso_pid = get_grandparent_pid()
 
 # Set stdin to non-blocking, keep stdout blocking.
-# Under `python -u` (unbuffered), sys.stdin.buffer / sys.stdout.buffer is a raw
-# FileIO directly and has no `.raw` attribute, so fall back to the buffer itself.
-_stdin_buf = sys.stdin.buffer
-stdin_fd = (_stdin_buf.raw if hasattr(_stdin_buf, 'raw') else _stdin_buf).fileno()
-stdin_fl = fcntl.fcntl(stdin_fd, fcntl.F_GETFL)
-fcntl.fcntl(stdin_fd, fcntl.F_SETFL, stdin_fl | os.O_NONBLOCK)
+stdin_fd = sys.stdin.fileno()
+stdin_fl = _fcntl_or_die(stdin_fd, _f_getfl)
+_fcntl_or_die(stdin_fd, _f_setfl, stdin_fl | _o_nonblock)
 
-_stdout_buf = sys.stdout.buffer
-stdout_fd = (_stdout_buf.raw if hasattr(_stdout_buf, 'raw') else _stdout_buf).fileno()
-stdout_fl = fcntl.fcntl(stdout_fd, fcntl.F_GETFL)
-fcntl.fcntl(stdout_fd, fcntl.F_SETFL, stdout_fl & ~os.O_NONBLOCK)
+stdout_fd = sys.stdout.fileno()
+stdout_fl = _fcntl_or_die(stdout_fd, _f_getfl)
+_fcntl_or_die(stdout_fd, _f_setfl, stdout_fl & ~_o_nonblock)
 
 watchdog_timer = None
 

@@ -6,8 +6,7 @@ maestro window the user currently has focused).  This script owns the
 whole lifecycle:
 
     1. open_gui_session(lib, cell)   -> opens GUI, focuses the window
-    2. read_session_info(client)     -> resolves lib/cell/view/session
-    3. snapshot_to_dir(...)          -> dumps all artifacts
+    2. snapshot(client, output_root) -> resolves and dumps all artifacts
     4. close_gui_session(session)    -> clean close (saves if dirty)
 
 Usage::
@@ -27,8 +26,7 @@ from virtuoso_bridge import VirtuosoClient
 from virtuoso_bridge.virtuoso.maestro import (
     close_gui_session,
     open_gui_session,
-    read_session_info,
-    snapshot_to_dir,
+    snapshot,
 )
 
 
@@ -51,19 +49,17 @@ def main() -> int:
     print(f"Opened: {lib}/{cell}  (session {session})")
 
     try:
-        info = read_session_info(client)
-        if info.get("session") != session:
+        snap = snapshot(client, output_root=str(OUTPUT_ROOT))
+        if snap.get("session") != session:
             # The opened window should be focused and match the returned
             # session.  Mismatch means something else grabbed focus.
             raise RuntimeError(
-                f"Focused window session ({info.get('session')}) does not "
+                f"Focused window session ({snap.get('session')}) does not "
                 f"match the one we just opened ({session}). "
-                f"Focused title: {info.get('focused_window_title')!r}"
+                "Another window may have grabbed focus."
             )
 
-        snap_dir = snapshot_to_dir(
-            client, info=info, output_root=str(OUTPUT_ROOT)
-        )
+        snap_dir = snap.get("output_dir")
         print(f"Wrote snapshot to: {snap_dir}")
     finally:
         close_gui_session(client, session)

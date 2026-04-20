@@ -11,7 +11,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from _timing import decode_skill, format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
-from virtuoso_bridge.virtuoso.layout.api import parse_layout_geometry_output
+from virtuoso_bridge.virtuoso.layout import parse_layout_geometry_output
+from virtuoso_bridge.virtuoso.layout.ops import layout_read_geometry
 
 
 def _format_value(value: object) -> str:
@@ -33,12 +34,14 @@ def main() -> int:
     elapsed, design = timed_call(client.get_current_design)
     print(f"[get_current_design] [{format_elapsed(elapsed)}]")
     lib, cell, _ = design
-    if not lib:
+    if not lib or not cell:
         print("Open a layout in Virtuoso first.")
         return 1
 
-    read_elapsed, result = timed_call(lambda: client.layout.read_geometry(lib, cell, timeout=30))
-    print(f"[layout.read_geometry] [{format_elapsed(read_elapsed)}]")
+    read_elapsed, result = timed_call(
+        lambda: client.execute_skill(layout_read_geometry(lib, cell), timeout=30)
+    )
+    print(f"[layout_read_geometry] [{format_elapsed(read_elapsed)}]")
     print()
 
     output = decode_skill(result.output or "")
