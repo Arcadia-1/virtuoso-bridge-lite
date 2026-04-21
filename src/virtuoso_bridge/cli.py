@@ -78,7 +78,7 @@ def _ssh_precheck(profile: str | None = None) -> int | None:
         runner = SSHRunner(
             host=ssh_env.remote_host, user=ssh_env.remote_user,
             jump_host=ssh_env.jump_host, jump_user=jump_user,
-            connect_timeout=5, persistent_shell=False,
+            connect_timeout=30, persistent_shell=False,
         )
         if not runner.test_connection():
             print(f"SSH to {ssh_env.remote_host} failed.")
