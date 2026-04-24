@@ -89,7 +89,7 @@ def main() -> int:
             file=sys.stderr,
         )
         print("=" * 60, file=sys.stderr)
-        raise SystemExit(1)
+        return 1
 
     lib_name = sys.argv[1]
     cell_name = f"layout_demo_{datetime.now().strftime('%Y%m%d_%H%M%S')}"

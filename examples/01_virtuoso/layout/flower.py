@@ -25,7 +25,7 @@ import math
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from virtuoso_bridge import VirtuosoClient
 from virtuoso_bridge.virtuoso.layout.ops import (

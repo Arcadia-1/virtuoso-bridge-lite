@@ -33,9 +33,9 @@ def main() -> int:
 
     elapsed, design = timed_call(client.get_current_design)
     print(f"[get_current_design] [{format_elapsed(elapsed)}]")
-    lib, cell, _ = design
-    if not lib or not cell:
-        print("Open a layout in Virtuoso first.")
+    lib, cell, view = design
+    if not lib or not cell or view != "layout":
+        print("Open a layout cellview in Virtuoso first.")
         return 1
 
     read_elapsed, result = timed_call(
