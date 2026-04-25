@@ -15,7 +15,11 @@ RBPython = if(getShellEnvVar("RB_PYTHON_PATH") then
             else
                 "python"
             )
-RBPort = 65432                                                                   ; TCP port for client connections
+RBPort = if(getShellEnvVar("RB_PORT") then
+                atoi(getShellEnvVar("RB_PORT"))
+            else
+                65432
+            )                                                                      ; TCP port for client connections
 RBLocal = nil                                                                      ; Local-only connections (127.0.0.1 vs 0.0.0.0)
 RBEcho = nil                                                                     ; Echo bridging messages for debugging
 RBDLog = nil                                                                     ; Enable daemon logging to /tmp/RB.log
@@ -24,9 +28,16 @@ RBDLog = nil                                                                    
 ; clearing RBIpc would make RBStart spawn a second daemon -> bind failure (exit 1).
 unless(boundp('RBIpc) RBIpc = 'unbound)
 
+; Ring buffer for daemon stderr; flushed to CIW only on non-zero exit.
+unless(boundp('RBStderrBuf) RBStderrBuf = "")
+
 procedure(RBIpcDataHandler(ipcId data)
-  ; Handler for successful data received from the Python daemon
-  ; This function is called when the daemon sends back Virtuoso's response
+  ; Handler for successful data received from the Python daemon.
+  ; Code is executed via evalstring(), which bypasses CIW's interactive loop.
+  ; As a result, CIW output (printf) is line-buffered: only text ending with
+  ; "\n" is flushed immediately.  Without "\n", output stays in the buffer
+  ; until the next newline or explicit flush.  This differs from typing
+  ; directly in CIW, where the interactive loop flushes after every command.
   let((result)
     when(RBEcho printf("[RAMIC Bridge (%L)] receive:%L\n" ipcId data))
     if(errset(result=evalstring(data)) then
@@ -41,8 +52,12 @@ procedure(RBIpcDataHandler(ipcId data)
 )
 
 procedure(RBIpcErrHandler(ipcId data)
-    ; Daemon process stderr etc.; not echoed to CIW (use RBDLog or host logs if needed)
-    nil
+    ; Buffer daemon stderr; emitted to CIW only on non-zero exit
+    ; (RBIpcFinishHandler). Avoids flooding CIW with routine startup
+    ; chatter / Python warnings while preserving fatal-error context.
+    RBStderrBuf = strcat(RBStderrBuf data)
+    when(strlen(RBStderrBuf) > 8192
+        RBStderrBuf = substring(RBStderrBuf strlen(RBStderrBuf)-8191 8192))
 )
 
 procedure(RBIpcFinishHandler(ipcId data)
@@ -50,6 +65,9 @@ procedure(RBIpcFinishHandler(ipcId data)
   let((exitStatus)
 	exitStatus = ipcGetExitStatus(ipcId)
     printf("[RAMIC Bridge (%L)] exit at (%s) with state = %L\n" ipcId getCurrentTime() exitStatus)
+    when(exitStatus != 0 && strlen(RBStderrBuf) > 0
+        printf("[RAMIC Bridge stderr]\n%s\n" RBStderrBuf))
+    RBStderrBuf = ""
   )
 )
 
@@ -72,8 +90,11 @@ procedure(RBStart()
 			else
 				logpath = ""
 			)
-			; Start the Python daemon process with IPC handlers
-			RBIpc = ipcBeginProcess(sprintf(nil "%s %L %L %L" RBPython RBDPath host RBPort) "" 'RBIpcDataHandler 'RBIpcErrHandler 'RBIpcFinishHandler logpath)
+			; Start the Python daemon process with IPC handlers.
+			; Use "env -u" to strip Virtuoso's LD_LIBRARY_PATH / LD_PRELOAD
+			; so the system Python links against its own libs, not Virtuoso's
+			; bundled (and often incompatible) copies.
+			RBIpc = ipcBeginProcess(sprintf(nil "/usr/bin/env -u LD_LIBRARY_PATH -u LD_PRELOAD stdbuf -oL %s -u %L %L %L" RBPython RBDPath host RBPort) "" 'RBIpcDataHandler 'RBIpcErrHandler 'RBIpcFinishHandler logpath)
 		)
 		printf("[RAMIC Bridge (%L)] start at (%s)\n" RBIpc getCurrentTime())
 	)
@@ -90,12 +111,21 @@ procedure(RBStop()
 
 procedure(RBStopAll()
     ; Emergency function to kill all RAMIC Bridge daemon processes
-    ; 1. Try graceful SIGTERM first, then force SIGKILL after 2s
-    ; 2. Also kill any process holding the configured RBPort
-    ; 3. Reset Skill-side IPC state
-    sh(sprintf(nil "pgrep -f 'python.*ramic_bridge_daemon' | xargs -r kill 2>/dev/null; sleep 2; pgrep -f 'python.*ramic_bridge_daemon' | xargs -r kill -9 2>/dev/null; fuser -k %d/tcp 2>/dev/null" RBPort))
+    ; 1. Release Virtuoso's IPC bookkeeping for the live handle (if any)
+    ; 2. Match daemon by script filename (ramic_bridge_daemon_[23]),
+    ;    not by interpreter name -- works with pypy, conda pythons, etc.
+    ; 3. SIGTERM, wait 2s, then SIGKILL holdouts
+    ; 4. Free the port: fuser if available, otherwise surface the holder
+    ;    via ss/lsof so the user can see what to kill
+    ; 5. Reset Skill-side IPC state and stderr buffer
+    if(boundp('RBIpc) && RBIpc != 'unbound then
+        errset(ipcKillProcess(RBIpc)))
+    sh(sprintf(nil
+        "pgrep -f 'ramic_bridge_daemon_[23]' | xargs -r kill; sleep 2; pgrep -f 'ramic_bridge_daemon_[23]' | xargs -r kill -9; if command -v fuser >/dev/null 2>&1; then fuser -k %d/tcp 2>/dev/null; elif command -v ss >/dev/null 2>&1; then ss -tlnp 2>/dev/null | awk -v p=%d '$4 ~ \":\"p\"$\"' >&2; elif command -v lsof >/dev/null 2>&1; then lsof -iTCP:%d -sTCP:LISTEN >&2; fi"
+        RBPort RBPort RBPort))
     RBIpc = 'unbound
-    printf("[RAMIC Bridge] RBStopAll: all daemon processes killed, port %d released\n" RBPort)
+    RBStderrBuf = ""
+    printf("[RAMIC Bridge] RBStopAll: kill issued; verify with: ss -tlnp | grep %d (or lsof -iTCP:%d)\n" RBPort RBPort)
 )
 
 ; ============================================================================

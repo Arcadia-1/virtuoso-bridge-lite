@@ -4,13 +4,28 @@
 import sys
 import socket
 import os
-import fcntl
 import json
 import signal
 import threading
 import time
 import errno
 import traceback
+
+try:
+    import fcntl as _fcntl
+except ImportError:
+    _fcntl = None
+
+_fcntl_fn = getattr(_fcntl, "fcntl", None)
+_f_getfl = getattr(_fcntl, "F_GETFL", 3)
+_f_setfl = getattr(_fcntl, "F_SETFL", 4)
+_o_nonblock = int(getattr(os, "O_NONBLOCK", 0))
+
+
+def _fcntl_or_die(*args):
+    if _fcntl_fn is None:
+        raise RuntimeError("fcntl is unavailable on this platform")
+    return _fcntl_fn(*args)
 
 HOST = sys.argv[1]
 PORT = int(sys.argv[2])
@@ -29,16 +44,34 @@ def get_grandparent_pid():
 
 virtuoso_pid = get_grandparent_pid()
 
-# Set stdin to non-blocking, keep stdout blocking
-stdin_fd = sys.stdin.buffer.raw.fileno()
-stdin_fl = fcntl.fcntl(stdin_fd, fcntl.F_GETFL)
-fcntl.fcntl(stdin_fd, fcntl.F_SETFL, stdin_fl | os.O_NONBLOCK)
+# Set stdin to non-blocking, keep stdout blocking.
+stdin_fd = sys.stdin.fileno()
+stdin_fl = _fcntl_or_die(stdin_fd, _f_getfl)
+_fcntl_or_die(stdin_fd, _f_setfl, stdin_fl | _o_nonblock)
 
-stdout_fd = sys.stdout.buffer.raw.fileno()
-stdout_fl = fcntl.fcntl(stdout_fd, fcntl.F_GETFL)
-fcntl.fcntl(stdout_fd, fcntl.F_SETFL, stdout_fl & ~os.O_NONBLOCK)
+stdout_fd = sys.stdout.fileno()
+stdout_fl = _fcntl_or_die(stdout_fd, _f_getfl)
+_fcntl_or_die(stdout_fd, _f_setfl, stdout_fl & ~_o_nonblock)
 
 watchdog_timer = None
+
+
+def _safe_sendall(conn, data):
+    try:
+        conn.sendall(data)
+    except OSError:
+        pass
+
+
+def _safe_close_connection(conn):
+    try:
+        conn.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    try:
+        conn.close()
+    except OSError:
+        pass
 
 def watchdog_callback():
     global timeout_flag
@@ -126,7 +159,22 @@ def handle_external_connection(conn, addr):
             except IOError:
                 break
 
-        sys.stdout.buffer.write(skill_code.encode("utf-8"))
+        # Multi-line SKILL: write to temp file and load() it.
+        # This preserves comments (;) which would break single-line flattening.
+        # We wrap the code so the return value is captured in a global variable,
+        # because load() itself only returns t, not the last expression's value.
+        tmp_il_path = None
+        if "\n" in skill_code:
+            import tempfile
+            fd, tmp_il_path = tempfile.mkstemp(suffix=".il", prefix="vb_eval_")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(f"_vb_eval_result = progn(\n{skill_code}\n)\n")
+            escaped_path = tmp_il_path.replace("\\", "/")
+            send_code = f'load("{escaped_path}") hiFlush() _vb_eval_result\n'
+        else:
+            send_code = f'let(((__vb_r {skill_code})) hiFlush() __vb_r)\n'
+
+        sys.stdout.buffer.write(send_code.encode("utf-8"))
         sys.stdout.buffer.flush()
 
         # Start watchdog timer
@@ -140,19 +188,25 @@ def handle_external_connection(conn, addr):
             timeout_flag = True
         watchdog_timer.cancel()
 
-        conn.sendall(returnData)
+        _safe_sendall(conn, returnData)
+
+        # Clean up temp file if we used one
+        if tmp_il_path:
+            try:
+                os.unlink(tmp_il_path)
+            except OSError:
+                pass
 
     except json.JSONDecodeError as e:
-        conn.sendall(f"\x15JSONDecodeError: {e}".encode("utf-8"))
+        _safe_sendall(conn, f"\x15JSONDecodeError: {e}".encode("utf-8"))
     except Exception as e:
         traceback.print_exc()
-        conn.sendall(f"\x15{e}".encode("utf-8"))
+        _safe_sendall(conn, f"\x15{e}".encode("utf-8"))
     finally:
         timeout_flag = True
         if watchdog_timer:
             watchdog_timer.cancel()
-        conn.shutdown(socket.SHUT_RDWR)
-        conn.close()
+        _safe_close_connection(conn)
 
 def start_server():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -167,7 +221,11 @@ def start_server():
         s.listen(1)
         while True:
             conn, addr = s.accept()
-            handle_external_connection(conn, addr)
+            try:
+                handle_external_connection(conn, addr)
+            except Exception:
+                traceback.print_exc()
+                _safe_close_connection(conn)
 
 if __name__ == "__main__":
     start_server()

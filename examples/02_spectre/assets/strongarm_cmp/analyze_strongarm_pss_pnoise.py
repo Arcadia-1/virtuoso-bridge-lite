@@ -11,6 +11,12 @@ import matplotlib.pyplot as plt
 
 _trapz = getattr(np, "trapezoid", None) or getattr(np, "trapz", None)
 
+
+def _trapz_safe(y: np.ndarray, x: np.ndarray) -> float:
+    if _trapz is None:
+        raise RuntimeError("NumPy trapezoid/trapz is unavailable.")
+    return float(_trapz(y, x))
+
 VDD = 0.9
 TARGET_TCMP_PS = 50.0
 TARGET_NOISE_UV = 400.0
@@ -64,7 +70,7 @@ def extract_metrics(raw_dir: Path, *, vcm: float) -> dict:
     noise_out = pnoise["out"]
 
     period = float(time_values[-1] - time_values[0])
-    avg_current = float(_trapz(supply_current, time_values)) / period
+    avg_current = _trapz_safe(supply_current, time_values) / period
     power_uW = -avg_current * VDD * 1e6
 
     diff = dcmpn - dcmpp
@@ -75,7 +81,7 @@ def extract_metrics(raw_dir: Path, *, vcm: float) -> dict:
     tcmprst = (tcmprst_raw - 5.05e-10) if tcmprst_raw is not None else None
 
     mask = (freq >= 0.0) & (freq <= 500e6)
-    noise_rms = float(np.sqrt(_trapz(noise_out[mask] ** 2, freq[mask]))) / 50.0
+    noise_rms = float(np.sqrt(_trapz_safe(noise_out[mask] ** 2, freq[mask]))) / 50.0
 
     fom1 = noise_rms**2 * (power_uW * 1e-6) * 1e12
     fom2_u = (noise_rms**2 * (power_uW * 1e-6) * tcmp * 1e18 * 1e6) if tcmp is not None else None

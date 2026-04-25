@@ -10,12 +10,17 @@ import os
 import queue
 import shlex
 import shutil
+import signal
+import tempfile
+import socket
 import subprocess
 import threading
 import time
 import uuid
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
+
+from virtuoso_bridge.env import load_vb_env
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +61,30 @@ def _mark_interpreter_shutdown() -> None:
 
 atexit.register(_mark_interpreter_shutdown)
 
+
+def _windows_no_window_kwargs(
+    *,
+    detached: bool = False,
+    new_process_group: bool = False,
+) -> dict[str, Any]:
+    """Best-effort Windows process flags for CLI tools like ssh/scp/tar."""
+    if os.name != "nt":
+        return {}
+
+    startupinfo = subprocess.STARTUPINFO()  # type: ignore[attr-defined]
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # type: ignore[attr-defined]
+    startupinfo.wShowWindow = 0  # SW_HIDE
+    creationflags = subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
+    if detached:
+        creationflags |= subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
+    if new_process_group:
+        creationflags |= subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+    return {
+        "creationflags": creationflags,
+        "close_fds": True,
+        "startupinfo": startupinfo,
+    }
+
 class RemoteSshEnv(NamedTuple):
     """SSH settings read from environment variables."""
 
@@ -64,11 +93,17 @@ class RemoteSshEnv(NamedTuple):
     jump_host: str | None
     jump_user: str | None
 
-def remote_ssh_env_from_os() -> RemoteSshEnv:
-    """Read remote SSH target from environment variables."""
+def remote_ssh_env_from_os(profile: str | None = None) -> RemoteSshEnv:
+    """Read remote SSH target from environment variables.
+
+    If *profile* is given (e.g. ``"gpu1"``), reads ``VB_REMOTE_HOST_GPU1``
+    etc.  Otherwise reads the default unsuffixed variables.
+    """
+    load_vb_env()
+    suffix = f"_{profile}" if profile else ""
 
     def _strip(name: str) -> str | None:
-        raw = os.environ.get(name)
+        raw = os.environ.get(f"{name}{suffix}")
         if raw is None:
             return None
         s = raw.strip()
@@ -88,6 +123,35 @@ class CommandResult(NamedTuple):
     stdout: str
     stderr: str
 
+
+def _tool_override_from_env(var_name: str) -> str | None:
+    raw = os.environ.get(var_name)
+    if raw is None:
+        return None
+    value = os.path.expandvars(os.path.expanduser(raw.strip()))
+    return value or None
+
+
+def _as_text(value: bytes | str | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+def _derive_tool(base_cmd: str, old_name: str, new_name: str) -> str:
+    """Derive a sibling tool path from a known tool (e.g. ssh -> scp).
+
+    Handles both 'ssh' and 'ssh.exe' endings.
+    """
+    for suffix in (old_name + ".exe", old_name):
+        if base_cmd.endswith(suffix):
+            candidate = base_cmd[: -len(suffix)] + new_name + (".exe" if suffix.endswith(".exe") else "")
+            if os.path.isfile(candidate):
+                return candidate
+    return shutil.which(new_name) or new_name
+
+
 class SSHRunner:
     """Generic SSH/rsync/tar runner using OpenSSH CLI tools."""
 
@@ -105,6 +169,7 @@ class SSHRunner:
         persistent_shell: bool = False,
         verbose: bool = False,
     ) -> None:
+        load_vb_env()
         self._host = host
         self._user = user
         self._jump_host = jump_host
@@ -113,16 +178,64 @@ class SSHRunner:
         self._ssh_config_path = ssh_config_path
         self._timeout = timeout
         self._connect_timeout = connect_timeout
-        self._persistent_shell_enabled = persistent_shell
         self._verbose = verbose
 
-        self._ssh_cmd = ssh_cmd or shutil.which("ssh") or "ssh"
-        self._tar_cmd = shutil.which("tar") or "tar"
+        env_ssh_cmd = _tool_override_from_env("VB_SSH_CMD")
+        env_scp_cmd = _tool_override_from_env("VB_SCP_CMD")
+        env_tar_cmd = _tool_override_from_env("VB_TAR_CMD")
 
-        self._shell_proc: subprocess.Popen[bytes] | None = None
+        self._ssh_cmd = ssh_cmd or env_ssh_cmd or shutil.which("ssh") or "ssh"
+        self._scp_cmd = env_scp_cmd or _derive_tool(self._ssh_cmd, "ssh", "scp")
+        self._tar_cmd = env_tar_cmd or shutil.which("tar") or "tar"
+
+        # ControlMaster socket path for SSH connection multiplexing.
+        # All ssh/scp calls to the same host reuse one TCP connection.
+        # Enabled by default on every OS; set VB_DISABLE_CONTROL_MASTER=1
+        # to opt out if a specific platform trips mux errors.
+        _disable_cm = os.environ.get("VB_DISABLE_CONTROL_MASTER", "").strip().lower() in ("1", "true", "yes")
+        _force_cm = os.environ.get("VB_FORCE_CONTROL_MASTER", "").strip().lower() in ("1", "true", "yes")
+        self._use_control_master = _force_cm or (not _disable_cm)
+
+        _user_part = user or "default"
+        _tmp = tempfile.gettempdir()
+        self._control_path = f"{_tmp}/vb_ssh_{_user_part}@{host}:{jump_host or 'direct'}"
+
+        # Persistent SSH shell = one long-lived ``ssh host sh -s`` subprocess
+        # shared by every run_command call.  Turns N cold handshakes into 1.
+        #
+        # POSIX: always allowed when the caller asks for it.
+        # Windows: historically disabled after stdin-pipe lifetime issues
+        # with ``-J`` + ``ControlMaster=auto`` on native ssh.exe.  Re-enable
+        # *only* when neither of those risk factors is present, i.e. direct
+        # connection with mux off.  Users who need both features can still
+        # set VB_DISABLE_CONTROL_MASTER=1 to trade mux for persistent-shell
+        # on Windows.
+        if os.name == "nt":
+            self._persistent_shell_enabled = (
+                persistent_shell
+                and not self._use_control_master
+                and not jump_host
+            )
+        else:
+            self._persistent_shell_enabled = persistent_shell
+
+        if not self._use_control_master:
+            logger.debug("ControlMaster disabled (os=%s, env_override=%s)", os.name, _disable_cm)
+        if persistent_shell and not self._persistent_shell_enabled:
+            logger.debug(
+                "Persistent SSH shell disabled for %s (os=%s, use_cm=%s, jump=%s)",
+                host, os.name, self._use_control_master, bool(jump_host),
+            )
+
+        self._shell_proc: subprocess.Popen[Any] | None = None
         self._shell_queue: queue.Queue[str | None] | None = None
         self._shell_reader: threading.Thread | None = None
         self._shell_lock = threading.RLock()
+
+        # Port-forwarding tunnel state
+        self._tunnel_proc: subprocess.Popen[Any] | None = None
+        self._tunnel_pid: int | None = None
+        self._tunnel_using_external = False
 
     @property
     def host(self) -> str:
@@ -139,6 +252,209 @@ class SSHRunner:
         """Whether run_command / upload_text reuse one SSH shell."""
         return self._persistent_shell_enabled
 
+    # -- port-forwarding tunnel ----------------------------------------------
+
+    def start_port_forward(self, port: int, settle: float = 1.5, *, remote_port: int | None = None) -> subprocess.Popen[Any] | None:
+        """Start a persistent SSH port-forwarding tunnel.
+
+        *port* is the local port to bind.  *remote_port* is the port on the
+        remote side; defaults to *port* when not specified.
+
+        Returns the Popen process on success, or None if reusing an existing
+        tunnel (port already reachable).  Raises RuntimeError on failure.
+        """
+        if remote_port is None:
+            remote_port = port
+
+        cmd: list[str] = [self._ssh_cmd]
+        # Use ControlMaster options — if a master already exists, the slave
+        # will request port-forwarding from it and then exit.  The master
+        # keeps the forward alive.  If no master exists, this becomes the
+        # master (ControlMaster=auto).
+        cmd += self._common_ssh_options()
+        cmd += [
+            "-o", "ExitOnForwardFailure=yes",
+            "-N",
+            "-L", f"{port}:127.0.0.1:{remote_port}",
+        ]
+        if self._user:
+            cmd.append(f"{self._user}@{self._host}")
+        else:
+            cmd.append(self._host)
+
+        logger.info("Starting SSH tunnel: %s", " ".join(cmd))
+        if self._verbose:
+            print(f"[cmd] {' '.join(cmd)}", flush=True)
+
+        if os.name == "nt":
+            # Capture stderr so we can surface "banner exchange timeout"
+            # / "permission denied" etc. to the user.  Previously this
+            # was DEVNULL and any failure became an opaque "rc=1".
+            tunnel_stderr_file = tempfile.NamedTemporaryFile(
+                prefix="vb_tunnel_stderr_", suffix=".log", delete=False
+            )
+            tunnel_stderr_path = tunnel_stderr_file.name
+            tunnel_stderr_file.close()
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=open(tunnel_stderr_path, "wb"),
+                **_windows_no_window_kwargs(detached=True, new_process_group=True),
+            )
+            # Jump-host cold handshakes can exceed 10 s (slow PAM,
+            # flaky banner exchange).  The previous 3 s budget was
+            # below the P50 of observed cold handshakes and made the
+            # tunnel start appear to fail when it was merely still
+            # handshaking.  Align with the probe ConnectTimeout.
+            jh_settle = max(settle, 30.0) if self._jump_host else max(settle, 10.0)
+            deadline = time.monotonic() + jh_settle
+            while time.monotonic() < deadline:
+                if self.can_reach_port(port):
+                    self._tunnel_proc = proc
+                    self._tunnel_pid = proc.pid
+                    self._tunnel_using_external = False
+                    return proc
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.1)
+            if self.can_reach_port(port):
+                logger.info("Reusing existing tunnel at localhost:%d", port)
+                self._tunnel_using_external = True
+                return None
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except OSError:
+                pass
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            rc = proc.poll()
+            stderr_tail = ""
+            try:
+                with open(tunnel_stderr_path, "rb") as f:
+                    raw = f.read().decode("utf-8", errors="replace").strip()
+                if raw:
+                    stderr_tail = " | " + raw.splitlines()[-1]
+            except OSError:
+                pass
+            try:
+                os.unlink(tunnel_stderr_path)
+            except OSError:
+                pass
+            detail = f" (rc={rc})" if rc is not None else ""
+            raise RuntimeError(
+                f"SSH tunnel failed to start on Windows{detail}{stderr_tail}"
+            )
+
+        popen_kwargs: dict[str, Any] = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "start_new_session": True,
+            "stderr": subprocess.PIPE,
+        }
+        proc = subprocess.Popen(cmd, **popen_kwargs)
+
+        jh_settle = max(settle, 3.0) if self._jump_host else settle
+        deadline = time.monotonic() + jh_settle
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                break
+            time.sleep(0.1)
+
+        if proc.poll() is not None:
+            err_msg = ""
+            if proc.stderr and proc.stderr.readable():
+                try:
+                    err_msg = proc.stderr.read().decode("utf-8", errors="ignore")
+                except (OSError, ValueError):
+                    pass
+            # Slave exited — check if ControlMaster took over the forward
+            if self.can_reach_port(port):
+                logger.info("Port forward active at localhost:%d (ControlMaster)", port)
+                self._tunnel_using_external = True
+                return None
+            if "address already in use" in err_msg.lower():
+                logger.info("Reusing existing tunnel at localhost:%d", port)
+                self._tunnel_using_external = True
+                return None
+            return proc  # failed — caller inspects poll/stderr
+        self._tunnel_proc = proc
+        self._tunnel_pid = proc.pid
+        return proc  # running
+
+    def stop_port_forward(self) -> None:
+        """Stop the port-forwarding tunnel.
+
+        If ControlMaster is managing the forward, use ``ssh -O exit`` to
+        cleanly shut it down.  Falls back to SIGTERM on a standalone tunnel
+        process.
+        """
+        # Try ControlMaster exit first
+        if self._use_control_master and Path(self._control_path).exists():
+            cmd = [self._ssh_cmd, "-o", f"ControlPath={self._control_path}", "-O", "exit"]
+            if self._user:
+                cmd.append(f"{self._user}@{self._host}")
+            else:
+                cmd.append(self._host)
+            try:
+                subprocess.run(cmd, capture_output=True, timeout=5)
+                logger.info("ControlMaster exited via -O exit")
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+
+        # Fallback: kill by PID
+        pid = None
+        if self._tunnel_proc is not None and self._tunnel_proc.poll() is None:
+            pid = self._tunnel_proc.pid
+        elif self._tunnel_pid:
+            pid = self._tunnel_pid
+        if pid:
+            logger.info("Terminating SSH tunnel (PID %d)", pid)
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except (OSError, PermissionError):
+                pass
+        self._tunnel_proc = None
+        self._tunnel_pid = None
+        self._tunnel_using_external = False
+
+    @property
+    def is_tunnel_alive(self) -> bool:
+        if self._tunnel_proc is not None and self._tunnel_proc.poll() is None:
+            return True
+        if self._tunnel_using_external and self._tunnel_pid:
+            try:
+                os.kill(self._tunnel_pid, 0)
+                return True
+            except (OSError, PermissionError):
+                pass
+        return False
+
+    @property
+    def tunnel_pid(self) -> int | None:
+        if self._tunnel_proc is not None and self._tunnel_proc.poll() is None:
+            return self._tunnel_proc.pid
+        return self._tunnel_pid
+
+    @tunnel_pid.setter
+    def tunnel_pid(self, value: int | None) -> None:
+        self._tunnel_pid = value
+        if value is not None:
+            self._tunnel_using_external = True
+
+    @staticmethod
+    def can_reach_port(port: int) -> bool:
+        """Check if localhost:port accepts TCP connections."""
+        try:
+            s = socket.create_connection(("127.0.0.1", port), timeout=2)
+            s.close()
+            return True
+        except (ConnectionRefusedError, OSError):
+            return False
+
+    # -- connection test -------------------------------------------------------
+
     def test_connection(self, timeout: int | None = None) -> bool:
         """Test SSH connectivity to the remote host."""
         effective_timeout = timeout or self._connect_timeout
@@ -150,6 +466,7 @@ class SSHRunner:
                 capture_output=True,
                 text=True,
                 timeout=effective_timeout,
+                **_windows_no_window_kwargs(),
             )
             success = result.returncode == 0
             if success:
@@ -190,6 +507,28 @@ class SSHRunner:
         if self._verbose:
             print(f"[cmd] {' '.join(cmd)}", flush=True)
 
+    # Transport-level SSH error patterns that indicate a flaky cold
+    # handshake rather than a server-side problem.  Seeing any of these
+    # once is common on shared jump hosts (slow banner, intermittent
+    # TCP reset); a single retry almost always succeeds because the TCP
+    # path and jump-host PAM stack are now warm.  We deliberately
+    # exclude "permission denied" / "host key" / "could not resolve" —
+    # those are real configuration errors and must not be masked.
+    _TRANSIENT_SSH_ERROR_FRAGMENTS = (
+        "connection timed out during banner exchange",
+        "kex_exchange_identification",
+        "connection reset by peer",
+        "connection closed by",
+        "no route to host",
+    )
+
+    @classmethod
+    def _is_transient_ssh_error(cls, returncode: int, stderr: str) -> bool:
+        if returncode == 0:
+            return False
+        low = stderr.lower()
+        return any(fragment in low for fragment in cls._TRANSIENT_SSH_ERROR_FRAGMENTS)
+
     def _run_command_once(self, command: str, timeout: int | None = None) -> CommandResult:
         effective_timeout = timeout or self._timeout
         # Pipe the command to `ssh host sh` via stdin so it always runs in sh
@@ -199,20 +538,53 @@ class SSHRunner:
         cmd = self._build_ssh_base() + ["sh"]
         self._print_cmd(cmd)
         logger.info("[server] %s", command)
-        result = subprocess.run(
-            cmd,
-            input=command,
-            capture_output=True,
-            text=True,
-            timeout=effective_timeout,
-        )
+        # Use bytes (text=False) to bypass Windows universal-newlines translation
+        # of '\n' → '\r\n' on stdin. Heredoc payloads (cat > file << EOF ...)
+        # otherwise land on the remote with CRLF line endings, which csh reads
+        # as part of the next token (e.g. `source /path/to/cshrc\r` → file not
+        # found). On POSIX the behavior is identical to text mode.
+        #
+        # Retry once on transient SSH transport errors.  Windows OpenSSH
+        # cannot reliably multiplex (getsockname/mux_client_request_session
+        # failures) so each call is a fresh handshake, and cold handshakes
+        # to congested jump hosts occasionally trip "banner exchange
+        # timeout" or "kex_exchange_identification: connection closed".
+        # A second attempt almost always succeeds because the intervening
+        # TCP/KEX state is still warm on the jump.  Without this, a single
+        # flake in any of ``warm()``'s 5-6 sequential SSH calls kills the
+        # whole start, and the user sees a misleading "No Python
+        # interpreter found" (empty detection output).
+        attempts = 2
+        last: subprocess.CompletedProcess[bytes] | None = None
+        for attempt in range(attempts):
+            last = subprocess.run(
+                cmd,
+                input=command.encode("utf-8"),
+                capture_output=True,
+                text=False,
+                timeout=effective_timeout,
+                **_windows_no_window_kwargs(),
+            )
+            stderr_text = last.stderr.decode("utf-8", errors="replace")
+            if not self._is_transient_ssh_error(last.returncode, stderr_text):
+                break
+            if attempt + 1 < attempts:
+                logger.info(
+                    "Transient SSH error on %s (rc=%d); retrying once: %s",
+                    self._host,
+                    last.returncode,
+                    stderr_text.strip().splitlines()[0] if stderr_text.strip() else "",
+                )
+        assert last is not None
+        stdout = last.stdout.decode("utf-8", errors="replace")
+        stderr = last.stderr.decode("utf-8", errors="replace")
         logger.debug(
             "Remote command returned %d (stdout=%d bytes, stderr=%d bytes)",
-            result.returncode,
-            len(result.stdout),
-            len(result.stderr),
+            last.returncode,
+            len(stdout),
+            len(stderr),
         )
-        return CommandResult(returncode=result.returncode, stdout=result.stdout, stderr=result.stderr)
+        return CommandResult(returncode=last.returncode, stdout=stdout, stderr=stderr)
 
     def upload(
         self,
@@ -257,12 +629,21 @@ class SSHRunner:
 
             tar_cmd = [self._tar_cmd, "cf", "-"]
             for local_path, _ in entries:
-                tar_cmd += ["-C", str(local_path.resolve().parent), local_path.name]
+                tar_cmd += ["-C", str(local_path.resolve().parent).replace("\\", "/"), local_path.name]
 
             logger.debug("Batch tar upload: %d file(s) -> %s:%s", len(entries), self._host, remote_dir)
-            tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            tar_proc = subprocess.Popen(
+                tar_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                **_windows_no_window_kwargs(),
+            )
             ssh_proc = subprocess.Popen(
-                ssh_cmd, stdin=tar_proc.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                ssh_cmd,
+                stdin=tar_proc.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                **_windows_no_window_kwargs(),
             )
             if tar_proc.stdout:
                 tar_proc.stdout.close()
@@ -275,11 +656,11 @@ class SSHRunner:
             tar_proc.wait()
 
             if ssh_proc.returncode != 0:
-                stderr_text = ssh_err.decode(errors="replace")
+                stderr_text = _as_text(ssh_err)
                 logger.warning("tar batch upload failed (rc=%d): %s", ssh_proc.returncode, stderr_text.strip())
                 return CommandResult(
                     returncode=ssh_proc.returncode,
-                    stdout=ssh_out.decode(errors="replace"),
+                    stdout=_as_text(ssh_out),
                     stderr=stderr_text,
                 )
 
@@ -321,7 +702,14 @@ class SSHRunner:
         if self._verbose:
             print(f"[cmd] {' '.join(cmd)}  # upload -> {remote_path}", flush=True)
         logger.debug("Uploading text payload (%d chars) -> %s:%s", len(text), self._host, remote_path)
-        result = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=effective_timeout)
+        result = subprocess.run(
+            cmd,
+            input=text,
+            capture_output=True,
+            text=True,
+            timeout=effective_timeout,
+            **_windows_no_window_kwargs(),
+        )
         if result.returncode != 0:
             logger.warning("SSH text upload failed (rc=%d): %s", result.returncode, result.stderr.strip())
         else:
@@ -342,27 +730,17 @@ class SSHRunner:
             return self._download_via_tar(remote_path, local_path, timeout=effective_timeout)
 
         local_path.parent.mkdir(parents=True, exist_ok=True)
-        cmd = [self._ssh_cmd.replace("ssh", "scp") if self._ssh_cmd.endswith("ssh") else (shutil.which("scp") or "scp")]
-        cmd += [
-            "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", f"ConnectTimeout={self._connect_timeout}",
-        ]
-        if self._ssh_config_path:
-            cmd += ["-F", str(self._ssh_config_path)]
-        if self._ssh_key_path:
-            cmd += ["-i", str(self._ssh_key_path)]
-        if self._jump_host:
-            jump_target = (
-                f"{self._jump_user}@{self._jump_host}"
-                if self._jump_user
-                else self._jump_host
-            )
-            cmd += ["-J", jump_target]
+        cmd = [self._scp_cmd] + self._common_ssh_options()
         cmd += [self._remote_scp_target(remote_path), str(local_path)]
         self._print_cmd(cmd)
         logger.debug("Downloading via scp %s:%s -> %s", self._host, remote_path, local_path)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=effective_timeout)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=effective_timeout,
+            **_windows_no_window_kwargs(),
+        )
         if result.returncode != 0:
             logger.warning("download (scp) failed (rc=%d): %s", result.returncode, result.stderr.strip())
         else:
@@ -390,15 +768,24 @@ class SSHRunner:
         remote_cmd = f"sh -c {shlex.quote(inner_cmd)}"
 
         ssh_cmd = self._build_ssh_base() + [remote_cmd]
-        tar_cmd = [self._tar_cmd, "xzf", "-", "-C", str(local_path.parent)]
+        tar_cmd = [self._tar_cmd, "xzf", "-", "-C", str(local_path.parent).replace("\\", "/")]
 
         if self._verbose:
             print(f"[cmd] {' '.join(ssh_cmd)} | {' '.join(tar_cmd)}  # download {remote_path} -> {local_path}", flush=True)
         logger.debug("Downloading via tar pipe %s:%s -> %s", self._host, remote_path, local_path)
 
-        ssh_proc = subprocess.Popen(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        ssh_proc = subprocess.Popen(
+            ssh_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **_windows_no_window_kwargs(),
+        )
         tar_proc = subprocess.Popen(
-            tar_cmd, stdin=ssh_proc.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            tar_cmd,
+            stdin=ssh_proc.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **_windows_no_window_kwargs(),
         )
         if ssh_proc.stdout:
             ssh_proc.stdout.close()
@@ -412,8 +799,8 @@ class SSHRunner:
             raise
 
         if ssh_proc.returncode != 0 or tar_proc.returncode != 0:
-            ssh_err = ssh_proc.stderr.read().decode(errors="replace") if ssh_proc.stderr else ""
-            tar_err_str = tar_err.decode(errors="replace")
+            ssh_err = _as_text(ssh_proc.stderr.read()) if ssh_proc.stderr else ""
+            tar_err_str = _as_text(tar_err)
             combined_err = f"SSH error: {ssh_err.strip()} | Tar error: {tar_err_str.strip()}"
             logger.warning("download (tar) failed (rc=%d/%d): %s", ssh_proc.returncode, tar_proc.returncode, combined_err)
             return CommandResult(returncode=ssh_proc.returncode or tar_proc.returncode, stdout="", stderr=combined_err)
@@ -440,13 +827,22 @@ class SSHRunner:
         remote_dir_q = shlex.quote(remote_dir)
         remote_cmd = f"mkdir -p {remote_dir_q} && tar xf - -C {remote_dir_q}"
         ssh_cmd = self._build_ssh_base() + [remote_cmd]
-        tar_cmd = [self._tar_cmd, "cf", "-", "-C", str(local_path.parent), local_path.name]
+        tar_cmd = [self._tar_cmd, "cf", "-", "-C", str(local_path.parent).replace("\\", "/"), local_path.name]
         if self._verbose:
             print(f"[cmd] {' '.join(tar_cmd)} | {' '.join(ssh_cmd)}  # upload {local_path} -> {remote_path}", flush=True)
         logger.debug("Uploading via tar pipe %s -> %s:%s", local_path, self._host, remote_path)
-        tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        tar_proc = subprocess.Popen(
+            tar_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **_windows_no_window_kwargs(),
+        )
         ssh_proc = subprocess.Popen(
-            ssh_cmd, stdin=tar_proc.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            ssh_cmd,
+            stdin=tar_proc.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **_windows_no_window_kwargs(),
         )
         if tar_proc.stdout:
             tar_proc.stdout.close()
@@ -459,8 +855,8 @@ class SSHRunner:
         tar_proc.wait()
         return CommandResult(
             returncode=ssh_proc.returncode,
-            stdout=ssh_out.decode(errors="replace"),
-            stderr=ssh_err.decode(errors="replace"),
+            stdout=_as_text(ssh_out),
+            stderr=_as_text(ssh_err),
         )
 
     def ensure_persistent_shell(self, timeout: int | None = None) -> None:
@@ -483,6 +879,7 @@ class SSHRunner:
                 stderr=subprocess.STDOUT,
                 text=False,
                 bufsize=0,
+                **_windows_no_window_kwargs(),
             )
             if proc.stdin is None or proc.stdout is None:
                 proc.terminate()
@@ -760,30 +1157,58 @@ class SSHRunner:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
+        if proc is not None and proc.stdout is not None:
+            try:
+                proc.stdout.close()
+            except OSError:
+                pass
         if reader is not None and reader.is_alive():
             reader.join(timeout=1)
         self._shell_proc = None
         self._shell_queue = None
         self._shell_reader = None
 
-    def _build_ssh_base(self) -> list[str]:
-        cmd: list[str] = [self._ssh_cmd]
-        cmd += [
+    def _common_ssh_options(self) -> list[str]:
+        """SSH options shared by both ssh and scp commands."""
+        opts: list[str] = [
             "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=no",
             "-o", f"ConnectTimeout={self._connect_timeout}",
+            # Skip GSSAPI/Kerberos auth.  In many EDA environments the
+            # Kerberos KDC is either unreachable from the client or on
+            # a separate network; when sshd advertises gssapi-* the
+            # client will silently stall 15-30 s waiting for the KDC
+            # before falling back to publickey.  That stall looks to
+            # the caller exactly like "banner exchange timeout" because
+            # ConnectTimeout covers the whole pre-session phase.
+            # We never use GSSAPI here — disable it explicitly.
+            "-o", "GSSAPIAuthentication=no",
+            # Same treatment for hostbased (rarely configured, same
+            # risk of a slow reverse-DNS / IdentityFile probe).
+            "-o", "HostbasedAuthentication=no",
         ]
+        if self._use_control_master:
+            opts += [
+                "-o", "ControlMaster=auto",
+                "-o", f"ControlPath={self._control_path}",
+                "-o", "ControlPersist=3600",
+            ]
         if self._ssh_config_path:
-            cmd += ["-F", str(self._ssh_config_path)]
+            opts += ["-F", str(self._ssh_config_path)]
         if self._ssh_key_path:
-            cmd += ["-i", str(self._ssh_key_path)]
+            opts += ["-i", str(self._ssh_key_path)]
         if self._jump_host:
             jump_target = (
                 f"{self._jump_user}@{self._jump_host}"
                 if self._jump_user
                 else self._jump_host
             )
-            cmd += ["-J", jump_target]
+            opts += ["-J", jump_target]
+        return opts
+
+    def _build_ssh_base(self) -> list[str]:
+        cmd: list[str] = [self._ssh_cmd]
+        cmd += self._common_ssh_options()
         if self._user:
             cmd += [f"{self._user}@{self._host}"]
         else:

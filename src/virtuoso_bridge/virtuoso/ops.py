@@ -52,14 +52,31 @@ def open_window(
     view_type: str | None = None,
     mode: str = "a",
 ) -> str:
-    """Build SKILL to open a Virtuoso window for a target cellview."""
+    """Build SKILL to open a Virtuoso window for a target cellview.
+
+    Reuses an existing window if one is already open for the same
+    lib/cell/view combination, focusing it instead of opening a duplicate.
+    """
+    elib = escape_skill_string(lib)
+    ecell = escape_skill_string(cell)
+    eview = escape_skill_string(view)
     resolved_view_type = view_type or default_view_type_for(view)
+    evtype = escape_skill_string(resolved_view_type)
     return (
-        f'window = geOpen(?lib "{escape_skill_string(lib)}" '
-        f'?cell "{escape_skill_string(cell)}" '
-        f'?view "{escape_skill_string(view)}" '
-        f'?viewType "{escape_skill_string(resolved_view_type)}" '
-        f'?mode "{escape_skill_string(mode)}")'
+        f'let((existing) '
+        f'existing = nil '
+        f'foreach(w hiGetWindowList() '
+        f'  let((cv) '
+        f'    cv = w~>cellView '
+        f'    when(cv && cv~>libName == "{elib}" '
+        f'         && cv~>cellName == "{ecell}" '
+        f'         && cv~>viewName == "{eview}" '
+        f'      existing = w))) '
+        f'if(existing '
+        f'  then hiRaiseWindow(existing) window = existing '
+        f'  else window = geOpen(?lib "{elib}" ?cell "{ecell}" '
+        f'    ?view "{eview}" ?viewType "{evtype}" ?mode "{mode}")) '
+        f'window)'
     )
 
 def save_current_cellview() -> str:

@@ -1,0 +1,231 @@
+# Snapshot filter — what to keep when stripping Cadence Maestro XML
+# files for snapshot output.  Acts as both *config* and *documentation*:
+# every Cadence element we know about is listed below.  Items in
+# `keep:` lists are kept in the filtered output.  Items in `drop:` lists
+# are documented for reference but excluded from the filter — uncomment
+# them under `keep:` if you want them included.
+#
+# Two files are filtered (raw copies kept under their Cadence names):
+#   * maestro.sdb     →  state_from_sdb.xml
+#   * active.state    →  state_from_active_state.xml
+#
+# This file is loaded once per snapshot.  Edit and re-run snapshot to
+# change the filter behavior — no code changes required.
+
+# ---------------------------------------------------------------------------
+# maestro.sdb
+# ---------------------------------------------------------------------------
+# Top level:  <setupdb> contains <active> and many <history> snapshots.
+# History snapshots are full duplicates of <active> at past run times —
+# ~90% of total file bytes.  They are never kept; only <active> matters.
+#
+# Inside <active>, these direct children are known to Cadence.  Most are
+# GUI prefs / view state with no setup intent.  The defaults below keep
+# the high-signal ~10%.
+
+maestro_sdb:
+  active_keep:
+    # The actual setup — what will run, with what knobs.
+    - currentmode            # run mode (Single Run / Sweeps and Corners / ...)
+    - jobcontrolmode         # LSCS / Local / ...
+    - corners                # PVT corners (with vars / temperature / models)
+    - tests                  # per-test setup (tooloptions / vars / outputs)
+    - vars                   # global design variables
+    - parameters             # per-instance CDF overrides
+    - specs                  # design spec targets / limits
+    - parametersets          # named parameter sweep sets
+    - overwritehistoryname   # next-run history name
+
+  active_drop:
+    # GUI / view-state — uncomment under active_keep to include.
+    # - plottingoptions       # waveform plot prefs
+    # - outputscustomcols     # output table column layout
+    # - runoptions            # GUI run-button prefs
+    # - extensions            # ADE Assembler extensions toggles
+    # - exploreroptions       # ADE Explorer toggles
+    # - checksasserts         # checks/asserts toggle state
+    # - incrementalsim        # incremental sim cache state
+    # - incrementalsimcache   # ditto
+    # - resultscustomcols     # results table column layout
+    # - waveforms             # last-shown waveform list
+    # - viewoptions           # tree view prefs
+
+# ---------------------------------------------------------------------------
+# active.state
+# ---------------------------------------------------------------------------
+# Top level:  <statedb> contains one or more <Test Name="..."> blocks.
+# Inside each <Test>, components carry per-test state.  Most components
+# exist on every test even when empty — they are placeholder containers
+# that the GUI populates when used.
+#
+# The defaults keep the ones that hold actual setup; the rest are listed
+# under components_drop with one-line descriptions for reference.
+
+active_state:
+  components_keep:
+    # Identity + design pointer.
+    - adeInfo                 # designInfo + projectDir + description
+    # Per-analysis full settings — for pss/pnoise the active.state entry
+    # is more complete than SKILL's maeGetAnalysis (which omits defaults).
+    - analyses                # <analysis Name="pss|pnoise|tran|ac|dc|noise|sp|stb">
+    # Per-test variables — distinct scope from sdb's globals.
+    - variables
+    # RF stimulus — large-signal sources for PSS; not in SKILL track.
+    - rfstim
+    # Simulator engine selection — Spectre X accuracy preset (AX / CX /
+    # MX) and APS-vs-Spectre-X choice live here.
+    - turboOptions            # uniMode / spectreXAccuracyScale / mtOption / ...
+    # Optional per-test setups — populated only when the user uses these
+    # features, but high-signal when populated.
+    - mdlOptions              # MDL measurement testbench cell ref
+    - mtsSetup                # multi-technology simulation
+    - graphicalStimuli        # GUI-drawn stimulus waveforms
+
+  components_drop:
+    # Redundant with the SKILL track — the same data is in
+    # ``state_from_skill.txt`` under ``maeGetTestOutputs() expanded`` /
+    # ``maeGetEnvOption()`` (which embeds modelFiles).  Active.state
+    # adds ~700 lines of GUI scratch fields per cell when included.
+    # - outputs                # = maeGetTestOutputs (in SKILL track)
+    # - environmentOptions     # = maeGetEnvOption    (in SKILL track)
+    # - modelSetup             # = maeGetEnvOption.modelFiles
+    # Pure GUI defaults across all observed cells (verified against
+    # 5 example_artifacts cells — 0 fields vary).
+    # - simulatorOptions       # spectre options (temp/reltol/...) — 151/152
+    #                          # fields are GUI defaults; uncomment to
+    #                          # capture user overrides of temp / tnom / etc.
+    # - convergence            # convergence aids (gmin/homotopy/...)
+    # - cosimOptions           # AMS / mixed-signal cosim
+    # - devCheckingSetup       # device-checking / DC op-point check
+    # - emirOptions            # EMIR (electromigration / IR drop)
+    # - faultRules             # fault-injection rules
+    # - faults                 # specific fault definitions
+    # - opPoints               # operating-point save list
+    # - otherInfo              # misc GUI scratch
+    # - paramSetup             # parametric-analysis setup (sdb covers this)
+    # - relxOptions            # RelXpert / reliability sim
+    # - simulationFiles        # extra include / stim files
+    # - subckts                # subckt overrides
+
+# ---------------------------------------------------------------------------
+# Per-point run artifacts
+# ---------------------------------------------------------------------------
+# Snapshot walks the per-point run directory
+#   <scratch>/<lib>/<cell>/<view>/results/maestro/<history>/<pt>/<tb>/
+# and pulls files matching the lists below.  Each entry is a
+# ``find -name`` pattern — exact basename or a shell glob (``*.tran``).
+# Items in a list are included; comment out a line to skip it.
+#
+# Defaults target the "Budget A" design-review set documented in
+# logs/snapshot_anatomy_20260422.md.  Redundant / non-semantic files
+# are listed commented-out so you can cheaply opt in.
+#
+# Not listed here = not pulled.  Files physically in Cadence's
+# per-point dir but never listed (e.g. ``*.raw`` binary waveforms,
+# ``wavedb/``, ``modelParameter.info``) are deliberately skipped.
+#
+# Every file carries its own recommendation tag as the first token of
+# its trailing comment.  Group headers are just topic separators —
+# each file is judged individually.
+#
+#   [KEEP]        on by default; unambiguously useful (design /
+#                 testbench / sim result); recommended
+#   [REDUNDANT]   same info already in a [KEEP] file, different form;
+#                 enabling just adds bytes, no new information
+#   [SCAFFOLDING] Cadence netlist-assembly internals, no design semantics
+#   [METADATA]    per-run progress / IPC / counters
+#   [DEBUG-ONLY]  large text logs, only useful when debugging a failed sim
+#   [GUI-CONFIG]  Maestro / ADE session prefs, irrelevant to circuit/sim
+#   [RARELY]      occasionally useful but niche
+#   [NEVER]       listed only so you know they exist — turning any on
+#                 explodes snapshot size without adding design-level info
+
+per_point:
+
+  # Files under each per-point ``.../netlist/`` directory.
+  netlist:
+    # --- Budget-A must-reads ---
+    - netlist              # [KEEP] main SPICE netlist (subckts + primitive instances)
+    - input.scs            # [KEEP] top-level testbench (models + analyses + parameters)
+    - qpInformation.ils    # [KEEP] FOM / output-expression definitions
+    - paramInfo.ils        # [KEEP] corner-label + run/point id
+
+    # --- Same info as a [KEEP] file, different form ---
+    # - .controlStatements   # [REDUNDANT] = input.scs's pss/pnoise/pm0/save block
+    # - .designVariables     # [REDUNDANT] = input.scs's `parameters ...` line
+    # - .modelFiles          # [REDUNDANT] = input.scs's PDK `include`
+    # - .includedModels      # [REDUNDANT] MOS-model-name list (also visible in netlist)
+    # - netlistHeader        # [REDUNDANT] leading comments already inside `netlist`
+    # - variables_file       # [REDUNDANT] PSF-format VDD/Vcm snapshot (= .designVariables)
+    # - designInfo           # [REDUNDANT] = state_from_skill.txt's designInfo probe
+    # - toolArgs.ils         # [REDUNDANT] mostly abs paths; relevant bits in state_from_skill
+    # - exprOutputs.json     # [REDUNDANT] JSON form of qpInformation.ils content
+
+    # --- Netlist-assembly internals ---
+    # - control              # [SCAFFOLDING] `[?netlistHeader] [?variables] ...` directive
+    # - spectre.inp          # [SCAFFOLDING] 1-line "Spectre Source Statements" comment
+    # - spectre.sim          # [SCAFFOLDING] entirely commented-out example analyses
+    # - tmpNetlistFile       # [SCAFFOLDING] 1-line `include "netlist"` stub
+    # - netlistFooter        # [SCAFFOLDING] always 0 bytes
+    # - si.env               # [SCAFFOLDING] netlister internal env
+
+    # --- Runtime / progress / spectre invocation ---
+    # - runSimulation        # [METADATA] spectre CLI line used to launch sim
+    # - tempRun              # [METADATA] duplicate of runSimulation
+    # - .tries               # [METADATA] retry counter
+    # - .spectre_port        # [METADATA] spectre IPC port
+    # - .netlistPointTimeStamp   # [METADATA] netlist generation timestamp
+
+    # --- Verbose per-point logs ---
+    # - artistLogFile        # [DEBUG-ONLY] PSF log header block
+    # - artSimEnvLog         # [DEBUG-ONLY] ~3-line netlister status
+    # - amps_evaluator.log   # [DEBUG-ONLY] single process id
+    # - exprOutputs.log      # [DEBUG-ONLY] verbose output-expr evaluation log
+    # - si.foregnd.log       # [DEBUG-ONLY] full Cadence session log (~35 KB per point)
+
+    # --- Maestro / ADE session prefs ---
+    # - .vdsenv.il           # [GUI-CONFIG] ADE GUI env toggles
+    # - .vdsinit.il          # [GUI-CONFIG] ADE GUI init hooks
+    # - .__master.optionFile # [GUI-CONFIG] DSPF / netlist processing options
+    # - .__master.termorder  # [GUI-CONFIG] top-cell pin order (already in netlist)
+    # - ".*.parameters"      # [GUI-CONFIG] per-subckt MOS-type list (dotfile glob)
+
+  # Files under each per-point ``.../psf/`` directory.
+  psf:
+    # --- Spectre console output ---
+    - spectre.out          # [KEEP] stdout of this point's spectre run
+    - logFile              # [KEEP] per-point spectre log
+
+    # --- DC operating point ---
+    - dcOp.dc              # [KEEP] DC bias solution (node voltages + branch currents)
+    - dcOpInfo.info        # [KEEP] per-instance DC op info (region / Vgs / Vds / gm / ...)
+
+    # --- PSF design-variable snapshot ---
+    - variables_file       # [KEEP] exact VDD/Vcm/... values used in this point
+
+    # --- Per-analysis result files (matched by suffix glob) ---
+    - "*.ac"               # [KEEP] AC sweep result
+    - "*.dc"               # [KEEP] DC sweep result
+    - "*.tran"             # [KEEP] transient waveform
+    - "*.noise"            # [KEEP] noise spectrum
+    - "*.pss"              # [KEEP] PSS periodic steady state
+    - "*.pnoise"           # [KEEP] PSS-based pnoise
+    - "*.pac"              # [KEEP] PSS-based pac
+    - "*.pxf"              # [KEEP] PSS-based pxf
+    - "*.stb"              # [KEEP] stability analysis (loop gain / phase)
+    - "*.xf"               # [KEEP] transfer function
+    - "*.sens"             # [KEEP] sensitivity analysis
+
+    # --- Spectre state / initial conditions ---
+    # - spectre.dc           # [RARELY] saved DC state for re-use
+    # - spectre.ic           # [RARELY] initial conditions
+    # - spectre.fc           # [RARELY] force conditions
+
+    # --- PDK dumps + binary waveforms — explode size, no design info ---
+    # - modelParameter.info          # [NEVER] ~100 KB PDK model params, already in .scs
+    # - element.info                 # [NEVER] post-flatten per-element bias (derivable from dcOpInfo.info)
+    # - primitives.info.primitives   # [NEVER] PDK primitive catalog
+    # - subckts.info.subckts         # [NEVER] PDK subckt dumps
+    # - designParamVals.info         # [NEVER] derived parameter expansions
+    # - outputParameter.info         # [NEVER] derived output-expr dumps
+    # - "*.raw"                      # [NEVER] binary PSF waveforms (MB-scale; use reader.runs.read_results)

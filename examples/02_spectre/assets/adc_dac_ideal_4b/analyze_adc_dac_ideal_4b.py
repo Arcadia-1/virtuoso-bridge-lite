@@ -1,14 +1,19 @@
 """Analyze adc_dac_ideal_4b: 4-bit ideal ADC -> DAC round-trip (ramp + sine)."""
+import importlib
 import time
 from pathlib import Path
 
 import matplotlib
 import numpy as np
+from matplotlib.ticker import MultipleLocator
 
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from evas.netlist.runner import evas_simulate
+
+def evas_simulate(*args, **kwargs):
+    module = importlib.import_module("evas.netlist.runner")
+    return module.evas_simulate(*args, **kwargs)
 
 HERE = Path(__file__).parent
 _DEFAULT_OUT = HERE.parent.parent.parent / 'output' / 'adc_dac_ideal_4b'
@@ -54,7 +59,7 @@ def _plot_ramp(out_dir: Path, wall_s: float) -> None:
     l2, = ax2.plot(t, vout, linewidth=1.0, color='C1', linestyle='--', label='vout (DAC)')
     ax.set_ylabel('ADC code (0-15)')
     ax.set_ylim(-0.5, 15.5)
-    ax.yaxis.set_major_locator(plt.MultipleLocator(4))
+    ax.yaxis.set_major_locator(MultipleLocator(4))
     ax2.set_ylabel('vout (V)')
     ax2.set_ylim(-0.5 * VSTEP, 15.5 * VSTEP)
     ax.set_xlabel('Time (ns)')
@@ -95,7 +100,7 @@ def _plot_sine(out_dir: Path, wall_s: float, samples_per_cycle: int, fig_name: s
     ax.step(t, code, where='post', linewidth=1.0, color='C2')
     ax.set_ylabel('dout_code')
     ax.set_ylim(-0.5, 15.5)
-    ax.yaxis.set_major_locator(plt.MultipleLocator(4))
+    ax.yaxis.set_major_locator(MultipleLocator(4))
     ax.grid(True, alpha=0.3)
 
     ax = axes[2]

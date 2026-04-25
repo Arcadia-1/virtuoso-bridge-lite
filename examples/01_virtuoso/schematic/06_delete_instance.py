@@ -15,41 +15,43 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from _timing import format_elapsed
+from _timing import format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
-
-IL_FILE = Path(__file__).resolve().parent.parent / "assets" / "schematic_ops.il"
-
-
-def _decode(raw: str) -> str:
-    text = (raw or "").strip().strip('"')
-    return text.replace("\\n", "\n").replace('\\"', '"')
 
 
 def main() -> int:
     client = VirtuosoClient.from_env()
 
-    load_result = client.load_il(IL_FILE)
-    print(f"[load_il] {'uploaded' if load_result.metadata.get('uploaded') else 'cache hit'}"
-          f"  [{format_elapsed(load_result.execution_time or 0.0)}]")
-
-    # Get current instance list
-    result = client.execute_skill("SchListInsts()", timeout=15)
-    names = [n for n in _decode(result.output or "").splitlines() if n]
-    print(f"[SchListInsts] {names}  [{format_elapsed(result.execution_time or 0.0)}]")
+    # List current instances
+    r = client.execute_skill('''
+let((cv out)
+  cv = geGetEditCellView()
+  out = ""
+  foreach(inst cv~>instances
+    out = strcat(out inst~>name "\\n"))
+  out)
+''')
+    from virtuoso_bridge import decode_skill_output
+    raw = decode_skill_output(r.output)
+    names = [n for n in raw.splitlines() if n]
+    print(f"Instances: {names}")
 
     if not names:
         print("No instances to delete.")
         return 0
 
-    # Save first (pre-flight checkpoint), then delete and save again
+    # Save, delete first instance, save again
     target = names[0]
-    result = client.execute_operations(
-        ["SchSave()", f'SchDeleteInst("{target}")', "SchSave()"],
-        timeout=30,
-    )
-    print(f"[execute_operations] [{format_elapsed(result.execution_time or 0.0)}]")
-    print(_decode(result.output or ""))
+    elapsed, r = timed_call(lambda: client.execute_skill(f'''
+let((cv inst)
+  cv = geGetEditCellView()
+  schCheck(cv) dbSave(cv)
+  inst = car(setof(x cv~>instances x~>name == "{target}"))
+  when(inst dbDeleteObject(inst))
+  schCheck(cv) dbSave(cv)
+  sprintf(nil "deleted: {target}"))
+'''))
+    print(f"{r.output}  [{format_elapsed(elapsed)}]")
     return 0
 
 

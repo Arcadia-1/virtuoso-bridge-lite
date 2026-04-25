@@ -4,21 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "virtuoso-bridge"
-version = "0.1.0"
+version = "0.6.0"
 description = "Lightweight Python bridge for Cadence Virtuoso SKILL execution and Spectre simulation"
 requires-python = ">=3.9"
 dependencies = [
     "python-dotenv>=1.0",
     "pydantic>=2.0",
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]
 virtuoso-bridge = "virtuoso_bridge.cli:main"
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=7",
-]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -26,3 +22,4 @@ where = ["src"]
 [tool.setuptools.package-data]
 "virtuoso_bridge.resources" = [".env_template"]
 "virtuoso_bridge.virtuoso.basic.resources" = ["*.il", "*.py"]
+"virtuoso_bridge.virtuoso.maestro" = ["*.yaml"]

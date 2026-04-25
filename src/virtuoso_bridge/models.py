@@ -32,6 +32,24 @@ class VirtuosoResult(BaseModel):
         """True if execution succeeded."""
         return self.status == ExecutionStatus.SUCCESS
 
+    @property
+    def is_nil(self) -> bool:
+        """True if SKILL returned ``nil``.
+
+        In SKILL, ``nil`` is simultaneously boolean false, the empty list,
+        and the "no value" sentinel.  Many Maestro/ADE functions (e.g.
+        ``maeEnableTests``, ``maeSetVar``) return ``t`` on success and
+        ``nil`` on failure or no-op — indistinguishable from a void return
+        unless the caller checks explicitly.
+
+        This property makes that check idiomatic::
+
+            r = client.execute_skill('maeEnableTests()')
+            if r.ok and not r.is_nil:
+                ...  # something was actually enabled
+        """
+        return self.ok and (self.output or "").strip().strip('"') in ("nil", "")
+
     def save_json(self, path: Path, *, indent: int = 2, encoding: str = "utf-8") -> None:
         """Write result to a JSON file."""
         path = Path(path)

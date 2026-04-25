@@ -1,24 +1,31 @@
-"""High-level schematic editor for declarative Virtuoso operations."""
+"""Schematic editor — context manager for batch SKILL operations.
+
+Usage:
+    from virtuoso_bridge.virtuoso.schematic.ops import *
+
+    with client.schematic.edit(LIB, CELL) as sch:
+        sch.add(schematic_create_inst_by_master_name("tsmcN28", "nch_ulvt_mac", "symbol", "M0", 0, 0, "R0"))
+        sch.add(schematic_label_instance_term("M0", "D", "OUT"))
+        sch.add(schematic_create_pin("IN", -1.0, 0.75, "R0", direction="input"))
+        # schCheck + dbSave on exit
+
+    Convenience shortcut for MOS terminals:
+        sch.add_net_label_to_transistor("M0", drain_net="OUT", gate_net="IN", source_net="VSS", body_net="VSS")
+"""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Iterable
+from typing import Any, TYPE_CHECKING
 
 from virtuoso_bridge.virtuoso.ops import open_cell_view, save_current_cellview
 from virtuoso_bridge.virtuoso.schematic.ops import (
     schematic_check,
-    schematic_create_inst,
-    schematic_create_inst_by_master_name,
-    schematic_create_pin,
-    schematic_create_pin_at_instance_term,
-    schematic_create_wire_between_instance_terms,
     schematic_label_instance_term,
-    schematic_create_wire,
-    schematic_create_wire_label,
 )
 
 if TYPE_CHECKING:
     from virtuoso_bridge import VirtuosoClient
+
 
 def _ensure_operation_response(response: Any, *, context: str) -> None:
     from virtuoso_bridge.models import ExecutionStatus, VirtuosoResult
@@ -34,8 +41,9 @@ def _ensure_operation_response(response: Any, *, context: str) -> None:
         errors = result.get("errors") or [result.get("status", "unknown failure")]
         raise RuntimeError(f"{context} failed: {errors[0]}")
 
+
 class SchematicEditor:
-    """Context manager for schematic editing operations."""
+    """Context manager: open cellview → accumulate commands → check → save."""
 
     def __init__(
         self,
@@ -58,121 +66,22 @@ class SchematicEditor:
         self.commands.append(open_cell_view(self.lib, self.cell, view=self.view, mode=self.mode))
         return self
 
-    def add_instance(
-        self,
-        lib: str,
-        cell: str,
-        xy: tuple[float, float],
-        orientation: str = "R0",
-        view: str = "symbol",
-        name: str = "",
-    ) -> None:
-        """Add a schematic instance."""
-        self.commands.append(
-            schematic_create_inst_by_master_name(
-                lib,
-                cell,
-                view,
-                name,
-                xy[0],
-                xy[1],
-                orientation,
-            )
-        )
-
-    def add_wire(self, points: Iterable[tuple[float, float]]) -> None:
-        """Add a schematic wire."""
-        self.commands.append(schematic_create_wire(points))
-
-    def add_label(
-        self,
-        xy: tuple[float, float],
-        text: str,
-        justification: str = "lowerLeft",
-        rotation: str = "R0",
-    ) -> None:
-        """Add a wire label."""
-        self.commands.append(
-            schematic_create_wire_label(xy[0], xy[1], text, justification, rotation)
-        )
-
-    def add_net_label_to_instance_term(
-        self,
-        instance_name: str,
-        term_name: str,
-        net_name: str,
-    ) -> None:
-        """Add a net label at an instance terminal center."""
-        self.commands.append(
-            schematic_label_instance_term(instance_name, term_name, net_name)
-        )
+    def add(self, skill_cmd: str) -> None:
+        """Append a SKILL command to the batch."""
+        self.commands.append(skill_cmd)
 
     def add_net_label_to_transistor(
         self,
         instance_name: str,
-        drain_net: str | None,
-        gate_net: str | None,
-        source_net: str | None,
-        body_net: str | None,
+        drain_net: str | None = None,
+        gate_net: str | None = None,
+        source_net: str | None = None,
+        body_net: str | None = None,
     ) -> None:
-        """Label MOS terminals in SPICE/CDL order: D, G, S, B."""
-        for term_name, net_name in (
-            ("D", drain_net),
-            ("G", gate_net),
-            ("S", source_net),
-            ("B", body_net),
-        ):
-            if net_name:
-                self.add_net_label_to_instance_term(instance_name, term_name, net_name)
-
-    def add_pin(
-        self,
-        name: str,
-        xy: tuple[float, float],
-        orientation: str = "R0",
-        direction: str = "inputOutput",
-    ) -> None:
-        """Add a schematic pin."""
-        self.commands.append(
-            schematic_create_pin(name, xy[0], xy[1], orientation, direction=direction)
-        )
-
-    def add_pin_to_instance_term(
-        self,
-        instance_name: str,
-        term_name: str,
-        pin_name: str,
-        *,
-        direction: str = "inputOutput",
-        orientation: str = "R0",
-    ) -> None:
-        """Add a schematic pin at an instance terminal center."""
-        self.commands.append(
-            schematic_create_pin_at_instance_term(
-                instance_name,
-                term_name,
-                pin_name,
-                direction=direction,
-                orientation=orientation,
-            )
-        )
-
-    def add_wire_between_instance_terms(
-        self,
-        from_instance: str,
-        from_term: str,
-        to_instance: str,
-        to_term: str,
-    ) -> None:
-        """Add a wire directly between two instance terminals."""
-        self.commands.append(
-            schematic_create_wire_between_instance_terms(
-                from_instance,
-                from_term,
-                to_instance,
-                to_term,
-            )
-        )
+        """Label MOS terminals D/G/S/B with net names."""
+        for term, net in (("D", drain_net), ("G", gate_net), ("S", source_net), ("B", body_net)):
+            if net:
+                self.commands.append(schematic_label_instance_term(instance_name, term, net))
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         if exc_type is None:

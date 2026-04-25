@@ -1,0 +1,14 @@
+.SUBCKT rc_unit IN OUT VSS
+R0 IN OUT res r=1k
+C0 OUT VSS cap c=1p
+.ENDS
+
+.SUBCKT rc_cascade_2 VIN VOUT VSS
+X1 VIN MID VSS rc_unit
+X2 MID VOUT VSS rc_unit
+.ENDS
+
+.SUBCKT tb_rc_cascade VIN VOUT VSS
+V1 VIN VSS vsin mag=1
+X_DUT VIN VOUT VSS rc_cascade_2
+.ENDS

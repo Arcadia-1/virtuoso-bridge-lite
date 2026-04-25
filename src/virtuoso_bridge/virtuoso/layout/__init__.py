@@ -1,7 +1,11 @@
 """SKILL builders for Cadence Virtuoso layout editing."""
 
-from virtuoso_bridge.virtuoso.layout.api import LayoutOps, parse_layout_geometry_output
+from __future__ import annotations
+
+from typing import Any, TYPE_CHECKING
+
 from virtuoso_bridge.virtuoso.layout.editor import LayoutEditor
+from virtuoso_bridge.virtuoso.layout.reader import parse_layout_geometry_output
 from virtuoso_bridge.virtuoso.layout.ops import (
     layout_bind_current_or_open_cell_view,
     close_current_cellview,
@@ -31,6 +35,22 @@ from virtuoso_bridge.virtuoso.layout.ops import (
     layout_create_via,
     layout_via_def_expr_from_name,
 )
+
+if TYPE_CHECKING:
+    from virtuoso_bridge import VirtuosoClient
+
+
+class LayoutOps:
+    """Attached to VirtuosoClient as ``client.layout``."""
+
+    def __init__(self, owner: VirtuosoClient) -> None:
+        self._owner = owner
+
+    def edit(self, lib: str, cell: str, view: str = "layout",
+             mode: str = "w", timeout: int = 60) -> LayoutEditor:
+        """Return a LayoutEditor context manager."""
+        return LayoutEditor(self._owner, lib, cell, view=view, mode=mode, timeout=timeout)
+
 
 __all__ = [
     "LayoutOps",

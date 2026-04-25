@@ -202,6 +202,12 @@ def schematic_label_instance_term(
         f'"{escape_skill_string(style)}" {height:g} nil)))'
     )
 
+_PIN_MASTER_CELL = {"input": "ipin", "output": "opin", "inputOutput": "iopin"}
+
+def _pin_master_expr(direction: str) -> str:
+    cell = _PIN_MASTER_CELL.get(direction, "iopin")
+    return f'dbOpenCellViewByType("basic" "{cell}" "symbol")'
+
 def schematic_create_pin(
     pin_name: str,
     x: float,
@@ -213,7 +219,7 @@ def schematic_create_pin(
 ) -> str:
     """Build SKILL to create a schematic pin."""
     return (
-        f'schCreatePin({cv_expr} nil "{escape_skill_string(pin_name)}" '
+        f'schCreatePin({cv_expr} {_pin_master_expr(direction)} "{escape_skill_string(pin_name)}" '
         f'"{escape_skill_string(direction)}" nil {skill_point(x, y)} '
         f'"{escape_skill_string(orientation)}")'
     )
@@ -232,7 +238,7 @@ def schematic_create_pin_at_instance_term(
         "let((rbCtr) "
         f"rbCtr = {_schematic_term_center_expr(instance_name, term_name, cv_expr=cv_expr)} "
         "when(rbCtr "
-        f'schCreatePin({cv_expr} nil "{escape_skill_string(pin_name)}" '
+        f'schCreatePin({cv_expr} {_pin_master_expr(direction)} "{escape_skill_string(pin_name)}" '
         f'"{escape_skill_string(direction)}" nil rbCtr '
         f'"{escape_skill_string(orientation)}")))'
     )

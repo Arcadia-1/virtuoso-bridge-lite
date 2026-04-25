@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <title>virtuoso-bridge-lite</title>
   <style>
     :root {
@@ -34,9 +35,6 @@
     .btn-primary { background: var(--blue); color: #fff; }
     .btn-secondary { background: var(--card); color: var(--text); border: 1px solid var(--border); }
 
-    .bridge-visual { text-align: center; padding: 16px 0 32px; }
-    .bridge-svg { max-width: 600px; width: 100%; }
-
     .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; padding: 32px 0; }
     @media (max-width: 640px) { .features { grid-template-columns: 1fr; } }
     .feature { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
@@ -45,6 +43,7 @@
 
     .section { padding: 48px 0; }
     .section h2 { font-size: 1.6rem; font-weight: 700; margin-bottom: 24px; text-align: center; }
+    .section h3 { font-size: 1.1rem; margin-bottom: 12px; }
     pre { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; overflow-x: auto; font-size: 0.9rem; line-height: 1.7; margin-bottom: 16px; }
     code { font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace; }
     .kw { color: var(--purple); }
@@ -53,9 +52,6 @@
     .cmt { color: var(--muted); }
     .cmd { color: var(--orange); }
 
-    .arch-box { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 24px; text-align: center; font-family: monospace; font-size: 0.85rem; white-space: pre; overflow-x: auto; line-height: 1.5; color: var(--muted); margin-bottom: 16px; }
-    .arch-note { color: var(--muted); font-size: 0.9rem; text-align: center; margin-bottom: 8px; }
-
     table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
     th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
     th { color: var(--muted); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -63,9 +59,17 @@
     .api-group { margin-bottom: 32px; }
     .api-group h3 { font-size: 1.1rem; margin-bottom: 12px; color: var(--text); }
 
+    .comparison { overflow-x: auto; }
+    .comparison table td:first-child { font-weight: 600; white-space: nowrap; }
+
     .footer { text-align: center; padding: 48px 0 32px; color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--border); }
     .footer a { color: var(--blue); text-decoration: none; }
     .footer a:hover { text-decoration: underline; }
+
+    .note { background: var(--card); border-left: 3px solid var(--blue); border-radius: 4px; padding: 12px 16px; margin: 16px 0; font-size: 0.9rem; color: var(--muted); }
+    .note strong { color: var(--text); }
+
+    .citation { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; font-size: 0.85rem; font-family: monospace; white-space: pre; overflow-x: auto; margin-bottom: 16px; color: var(--muted); }
   </style>
 </head>
 <body>
@@ -73,37 +77,126 @@
 
   <div class="hero">
     <p style="margin-bottom:24px"><img src="https://raw.githubusercontent.com/Arcadia-1/virtuoso-bridge-lite/main/assets/banner.svg" alt="virtuoso-bridge-lite" style="max-width:100%;border-radius:8px"/></p>
-    <p>Control Cadence Virtuoso from macOS, Windows, or Linux — locally or remotely over SSH. Three ways to program, AI-agent ready.</p>
+    <p>A new infrastructure for Agentic Analog and Mixed-Signal Design. LLM Agents drive Cadence Virtuoso instances &mdash; locally or remotely &mdash; turning tedious handcrafting into automated design flows.</p>
     <div class="hero-buttons">
       <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite" class="btn btn-primary">GitHub</a>
-      <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite#quick-start" class="btn btn-secondary">Quick Start</a>
+      <a href="#getting-started" class="btn btn-secondary">Getting Started</a>
     </div>
   </div>
 
   <div class="features">
-    <div class="feature"><h3>Three ways to program</h3><p>Load .il files into Virtuoso, execute any SKILL expression, or use Python APIs for layout, schematic, and Spectre simulation.</p></div>
-    <div class="feature"><h3>AI-native design</h3><p>CLI-first, ships with agent skill files, persistent SSH for high-frequency interactions, full command logging.</p></div>
-    <div class="feature"><h3>Batteries included</h3><p>30+ runnable examples: layout editing, schematic creation, DC/AC/transient/PSS/Pnoise simulation.</p></div>
+    <div class="feature">
+      <h3>Deep Virtuoso Integration</h3>
+      <p>Control across Schematic, Layout, Maestro, and Spectre. Flexible programming: execute inline SKILL, load .il files, or use Python APIs.</p>
+    </div>
+    <div class="feature">
+      <h3>Scalable Architecture</h3>
+      <p>Multi-server, multi-session. Built for modern distributed design clusters with parallel simulations across servers and accounts.</p>
+    </div>
+    <div class="feature">
+      <h3>AI-Native Design</h3>
+      <p>CLI-first, ships with pre-defined agent skills, optimized for high-frequency agent interactions with persistent SSH tunnels.</p>
+    </div>
+  </div>
+
+  <!-- Comparison -->
+  <div class="section">
+    <h2>Comparison with skillbridge</h2>
+    <div class="comparison">
+      <table>
+        <tr><th>Feature</th><th>virtuoso-bridge-lite</th><th><a href="https://github.com/unihd-cag/skillbridge" style="color:var(--blue);text-decoration:none">skillbridge</a></th></tr>
+        <tr><td>Core mechanism</td><td><code>ipcBeginProcess</code> + <code>evalstring</code></td><td><code>ipcBeginProcess</code> + <code>evalstring</code></td></tr>
+        <tr><td>Local mode</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Remote execution</td><td>SSH tunnel, jump host, auto-reconnect</td><td>Not supported</td></tr>
+        <tr><td>Calling style</td><td>String-based: <code>execute_skill("...")</code></td><td>Pythonic: <code>ws.db.open_cell_view_by_type(...)</code></td></tr>
+        <tr><td>Load .il files</td><td><code>client.load_il()</code></td><td>Not supported</td></tr>
+        <tr><td>Layout / schematic API</td><td><code>client.layout.edit()</code> context manager</td><td>Raw SKILL only</td></tr>
+        <tr><td>Spectre simulation</td><td>Built-in runner + PSF parser</td><td>Not supported</td></tr>
+        <tr><td>AI agent support</td><td>Skill files, CLI-first, command logging</td><td>Not designed for agents</td></tr>
+        <tr><td>Python &harr; SKILL types</td><td>String-based</td><td>Auto bidirectional mapping</td></tr>
+        <tr><td>IDE tab completion</td><td>No (not needed by agents)</td><td>Yes (Jupyter, PyCharm stubs)</td></tr>
+      </table>
+    </div>
+    <p style="color:var(--muted);font-size:0.9rem;text-align:center;margin-top:8px">Both projects use the same Cadence SKILL IPC facility. The divergence is in what's built on top: skillbridge stays thin &mdash; a Pythonic RPC client. virtuoso-bridge-lite adds SSH remote access, high-level APIs, Spectre simulation, and an AI-agent-ready harness.</p>
   </div>
 
   <!-- Architecture -->
   <div class="section">
     <h2>Architecture</h2>
     <p style="text-align:center;margin-bottom:16px"><img src="https://raw.githubusercontent.com/Arcadia-1/virtuoso-bridge-lite/main/assets/arch.png" alt="Architecture" style="max-width:100%;border-radius:8px;border:1px solid var(--border)"/></p>
+    <table>
+      <tr><th>Component</th><th>Description</th></tr>
+      <tr><td><code>VirtuosoClient</code></td><td>Pure TCP SKILL client. Sends SKILL as JSON, gets results. No SSH awareness.</td></tr>
+      <tr><td><code>SpectreSimulator</code></td><td>Runs Spectre simulations remotely via SSH shell commands, transfers netlists and results via rsync.</td></tr>
+      <tr><td><code>SSHClient</code></td><td>Persistent ControlMaster connection multiplexing TCP port-forwarding, SSH shell, and rsync. Optional &mdash; bypassed in local mode.</td></tr>
+    </table>
+    <p style="color:var(--muted);font-size:0.9rem;text-align:center;margin-top:12px">Fully decoupled: VirtuosoClient works with any TCP endpoint &mdash; SSH tunnel, VPN, direct LAN, or local.</p>
   </div>
 
-  <!-- Quick Start -->
-  <div class="section">
-    <h2>Quick Start</h2>
-    <pre><code><span class="cmd">pip install -e .</span>
-<span class="cmd">virtuoso-bridge init</span>        <span class="cmt"># generates .env</span>
-<span class="cmt"># edit .env → set VB_REMOTE_HOST=my-server</span>
-<span class="cmd">virtuoso-bridge start</span></code></pre>
+  <!-- Getting Started -->
+  <div class="section" id="getting-started">
+    <h2>Getting Started</h2>
+
+    <h3>Prerequisites</h3>
+    <table>
+      <tr><td><strong>SSH</strong></td><td><code>ssh my-server</code> must work without a password prompt</td></tr>
+      <tr><td><strong>Virtuoso</strong></td><td>A running Virtuoso process on the remote (or local) machine</td></tr>
+      <tr><td><strong>Spectre</strong></td><td>(Simulation only) <code>spectre</code> on PATH, or set <code>VB_CADENCE_CSHRC</code></td></tr>
+    </table>
+    <div class="note"><strong>Note:</strong> Virtuoso and Spectre are independent &mdash; you can run Spectre without the SKILL bridge, and use the SKILL bridge without Spectre.</div>
+
+    <h3>Step-by-step setup</h3>
+    <pre><code><span class="cmt"># 1. Install</span>
+<span class="cmd">pip install -e .</span>
+
+<span class="cmt"># 2. Generate config (fills host/user/jump + port in one shot)</span>
+<span class="cmd">virtuoso-bridge init</span> user@host <span class="cmd">-J</span> user@jump-host
+<span class="cmt">#   or `virtuoso-bridge init` for an empty template to edit manually</span>
+
+<span class="cmt"># 3. (only if step 2 left anything blank) edit ~/.virtuoso-bridge/.env</span>
+<span class="cmt"># VB_REMOTE_HOST=my-server</span>
+<span class="cmt"># VB_REMOTE_USER=username</span>
+<span class="cmt"># VB_REMOTE_PORT=65081     # auto-assigned by hashing VB_REMOTE_USER</span>
+<span class="cmt"># VB_LOCAL_PORT=65082</span>
+
+<span class="cmt"># 4. Start the bridge</span>
+<span class="cmd">virtuoso-bridge start</span>
+
+<span class="cmt"># 5. Load SKILL in Virtuoso CIW</span>
+<span class="cmt"># load("/path/to/virtuoso-bridge-lite/core/ramic_bridge.il")</span>
+
+<span class="cmt"># 6. Verify</span>
+<span class="cmd">virtuoso-bridge status</span></code></pre>
+
+    <pre><code><span class="cmt"># 7. Connect from Python</span>
+<span class="kw">from</span> virtuoso_bridge <span class="kw">import</span> VirtuosoClient
+
+client = VirtuosoClient.<span class="fn">from_env</span>()
+result = client.<span class="fn">execute_skill</span>(<span class="str">"1+2"</span>)
+<span class="fn">print</span>(result)  <span class="cmt"># VirtuosoResult(status=SUCCESS, output='3')</span></code></pre>
+
+    <h3>Jump host setup</h3>
+    <pre><code><span class="cmt"># In .env &mdash; VB_REMOTE_HOST is where Virtuoso runs, NOT the jump host</span>
+VB_REMOTE_HOST=compute-host
+VB_JUMP_HOST=jump-host</code></pre>
+
+    <h3>Multi-profile setup</h3>
+    <pre><code><span class="cmt"># Default (no profile)</span>
+VB_REMOTE_HOST=server-a
+VB_REMOTE_USER=user1
+
+<span class="cmt"># Profile "worker1" &mdash; used with -p worker1</span>
+VB_REMOTE_HOST_worker1=server-b
+VB_REMOTE_USER_worker1=user2</code></pre>
+    <pre><code><span class="cmd">virtuoso-bridge start -p worker1</span>
+<span class="cmd">virtuoso-bridge status -p worker1</span></code></pre>
+
+    <h3>Local mode (no SSH)</h3>
     <pre><code><span class="kw">from</span> virtuoso_bridge <span class="kw">import</span> VirtuosoClient
 
-client = VirtuosoClient.from_env()
-result = client.<span class="fn">execute_skill</span>(<span class="str">"1+2"</span>)
-<span class="fn">print</span>(result)  <span class="cmt"># {'ok': True, 'result': {'output': '3', ...}}</span></code></pre>
+bridge = VirtuosoClient.<span class="fn">local</span>(port=65432)
+bridge.<span class="fn">execute_skill</span>(<span class="str">"1+2"</span>)</code></pre>
+    <p style="color:var(--muted);font-size:0.9rem">No tunnel, no <code>.env</code>, no SSH. Just load <code>core/ramic_bridge.il</code> in Virtuoso CIW and connect.</p>
   </div>
 
   <!-- API Reference -->
@@ -111,40 +204,59 @@ result = client.<span class="fn">execute_skill</span>(<span class="str">"1+2"</s
     <h2>API Reference</h2>
 
     <div class="api-group">
-      <h3>VirtuosoClient — SKILL execution</h3>
+      <h3>VirtuosoClient &mdash; SKILL execution</h3>
       <table>
         <tr><th>Method</th><th>Description</th></tr>
-        <tr><td><code>execute_skill(code)</code></td><td>Run any SKILL expression, return result dict</td></tr>
+        <tr><td><code>execute_skill(code)</code></td><td>Run any SKILL expression, return result</td></tr>
         <tr><td><code>load_il(path)</code></td><td>Upload &amp; load a .il file in Virtuoso</td></tr>
         <tr><td><code>execute_operations(cmds)</code></td><td>Run a batch of SKILL commands</td></tr>
         <tr><td><code>get_current_design()</code></td><td>Returns (lib, cell, view) of active cellview</td></tr>
         <tr><td><code>open_window(lib, cell)</code></td><td>Open a cellview in Virtuoso GUI</td></tr>
         <tr><td><code>save_current_cellview()</code></td><td>Save the active cellview</td></tr>
-        <tr><td><code>upload_file(local, remote)</code></td><td>Upload a file to the remote machine</td></tr>
-        <tr><td><code>download_file(remote, local)</code></td><td>Download a file from the remote machine</td></tr>
-        <tr><td><code>run_shell_command(cmd)</code></td><td>Run a shell command on the remote host</td></tr>
         <tr><td><code>test_connection()</code></td><td>Ping the daemon to check connectivity</td></tr>
       </table>
     </div>
 
     <div class="api-group">
       <h3>Layout editing</h3>
-      <pre><code><span class="kw">with</span> client.layout.<span class="fn">edit</span>(<span class="str">"myLib"</span>, <span class="str">"myCell"</span>) <span class="kw">as</span> layout:
-    layout.<span class="fn">add_rect</span>(<span class="str">"M1"</span>, <span class="str">"drawing"</span>, (0, 0, 1, 0.5))
-    layout.<span class="fn">add_path</span>(<span class="str">"M2"</span>, <span class="str">"drawing"</span>, [(0,0),(1,0)], width=0.1)
-    layout.<span class="fn">add_label</span>(<span class="str">"M1"</span>, <span class="str">"pin"</span>, (0.5, 0.25), <span class="str">"VDD"</span>)
-    layout.<span class="fn">add_instance</span>(<span class="str">"tsmcN28"</span>, <span class="str">"nch_ulvt_mac"</span>, (0,0), <span class="str">"M0"</span>)
-    layout.<span class="fn">add_via</span>(<span class="str">"M1_M2"</span>, (0.5, 0.25))
-    layout.<span class="fn">add_polygon</span>(<span class="str">"M3"</span>, <span class="str">"drawing"</span>, [(0,0),(1,0),(1,1)])
-    shapes = layout.<span class="fn">get_shapes</span>()</code></pre>
+      <pre><code><span class="kw">from</span> virtuoso_bridge.virtuoso.layout <span class="kw">import</span> (
+    layout_create_rect <span class="kw">as</span> rect,
+    layout_create_path <span class="kw">as</span> path,
+    layout_create_param_inst <span class="kw">as</span> inst,
+    layout_create_via_by_name <span class="kw">as</span> via,
+)
+
+<span class="kw">with</span> client.layout.<span class="fn">edit</span>(<span class="str">"myLib"</span>, <span class="str">"myCell"</span>) <span class="kw">as</span> lay:
+    lay.<span class="fn">add</span>(rect(<span class="str">"M1"</span>, <span class="str">"drawing"</span>, 0, 0, 1, 0.5))
+    lay.<span class="fn">add</span>(path(<span class="str">"M2"</span>, <span class="str">"drawing"</span>, [(0,0),(1,0)], 0.1))
+    lay.<span class="fn">add</span>(inst(<span class="str">"tsmcN28"</span>, <span class="str">"nch_ulvt_mac"</span>, <span class="str">"layout"</span>, <span class="str">"M0"</span>, 0, 0, <span class="str">"R0"</span>))
+    lay.<span class="fn">add</span>(via(<span class="str">"M1_M2"</span>, 0.5, 0.25))</code></pre>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>lay.add(skill_cmd)</code></td><td>Queue a SKILL command (from ops functions)</td></tr>
+      </table>
     </div>
 
     <div class="api-group">
       <h3>Schematic editing</h3>
-      <pre><code><span class="kw">with</span> client.schematic.<span class="fn">edit</span>(<span class="str">"myLib"</span>, <span class="str">"myCell"</span>) <span class="kw">as</span> sch:
-    sch.<span class="fn">add_instance</span>(<span class="str">"analogLib"</span>, <span class="str">"vdc"</span>, (0,0), <span class="str">"V0"</span>, params={<span class="str">"vdc"</span>: <span class="str">"0.9"</span>})
-    sch.<span class="fn">add_wire</span>([(0, 0), (0, 0.5)])
-    sch.<span class="fn">add_pin</span>(<span class="str">"VDD"</span>, <span class="str">"inputOutput"</span>, (0, 1.0))</code></pre>
+      <pre><code><span class="kw">from</span> virtuoso_bridge.virtuoso.schematic <span class="kw">import</span> (
+    schematic_create_inst_by_master_name <span class="kw">as</span> inst,
+    schematic_create_pin <span class="kw">as</span> pin,
+    schematic_label_instance_term <span class="kw">as</span> label,
+)
+
+<span class="kw">with</span> client.schematic.<span class="fn">edit</span>(<span class="str">"myLib"</span>, <span class="str">"myCell"</span>) <span class="kw">as</span> sch:
+    sch.<span class="fn">add</span>(inst(<span class="str">"analogLib"</span>, <span class="str">"vdc"</span>, <span class="str">"symbol"</span>, <span class="str">"V0"</span>, 0, 0, <span class="str">"R0"</span>))
+    sch.<span class="fn">add</span>(label(<span class="str">"V0"</span>, <span class="str">"PLUS"</span>, <span class="str">"VDD"</span>))
+    sch.<span class="fn">add</span>(pin(<span class="str">"VDD"</span>, 0, 1.0, <span class="str">"R0"</span>, direction=<span class="str">"inputOutput"</span>))
+    sch.<span class="fn">add_net_label_to_transistor</span>(<span class="str">"M0"</span>,
+        drain_net=<span class="str">"OUT"</span>, gate_net=<span class="str">"IN"</span>,
+        source_net=<span class="str">"VSS"</span>, body_net=<span class="str">"VSS"</span>)</code></pre>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>sch.add(skill_cmd)</code></td><td>Queue a SKILL command (from ops functions)</td></tr>
+        <tr><td><code>sch.add_net_label_to_transistor(...)</code></td><td>Label MOS D/G/S/B terminals</td></tr>
+      </table>
     </div>
 
     <div class="api-group">
@@ -160,26 +272,147 @@ result = sim.<span class="fn">run_simulation</span>(<span class="str">"tb_inv.sc
     </div>
 
     <div class="api-group">
-      <h3>SSHClient — independent SSH layer</h3>
+      <h3>ADE Maestro (Assembler)</h3>
+      <pre><code><span class="kw">from</span> virtuoso_bridge.virtuoso.maestro <span class="kw">import</span> (
+    snapshot, open_gui_session, close_gui_session,
+    run_and_wait, read_results, export_waveform,
+)
+
+<span class="cmt"># Snapshot the focused maestro window — no session arg needed.
+# Returns dict with raw_sections (list of (skill_probe, raw_output)
+# tuples — no Python parsing of SKILL alists).</span>
+d = <span class="fn">snapshot</span>(client)
+<span class="cmt"># Or also write the full disk dump (raw + filtered XMLs +
+# state_from_skill.txt + per-point run files via tar). Files
+# pulled are governed by snapshot_filter.yaml — edit to add/drop.</span>
+d = <span class="fn">snapshot</span>(client, output_root=<span class="str">"output/"</span>)
+<span class="cmt"># Pin a specific history instead of the auto-pick (mtime-first).</span>
+d = <span class="fn">snapshot</span>(client, output_root=<span class="str">"output/"</span>, history=<span class="str">"Interactive.160"</span>)
+
+<span class="cmt"># Open / run / collect — GUI mode is required for run_and_wait</span>
+session = <span class="fn">open_gui_session</span>(client, <span class="str">"myLib"</span>, <span class="str">"myTB"</span>)
+<span class="fn">run_and_wait</span>(client, session)  <span class="cmt"># non-blocking, SKILL callback + ssh polling</span>
+results = <span class="fn">read_results</span>(client, session, lib=<span class="str">"myLib"</span>, cell=<span class="str">"myTB"</span>)
+<span class="fn">export_waveform</span>(client, session, <span class="str">'dB20(mag(v("/OUT")))'</span>, <span class="str">"gain.txt"</span>)
+<span class="fn">close_gui_session</span>(client)</code></pre>
+    </div>
+
+    <div class="api-group">
+      <h3>SSHClient &mdash; independent SSH layer</h3>
       <pre><code><span class="kw">from</span> virtuoso_bridge <span class="kw">import</span> SSHClient, VirtuosoClient
 
-<span class="cmt"># Create tunnel independently</span>
+<span class="cmt"># Remote mode</span>
 tunnel = SSHClient.<span class="fn">from_env</span>()
 tunnel.<span class="fn">warm</span>()
-
-<span class="cmt"># Create bridge from tunnel</span>
 bridge = VirtuosoClient.<span class="fn">from_tunnel</span>(tunnel)
-bridge.<span class="fn">execute_skill</span>(<span class="str">"1+2"</span>)
 
-<span class="cmt"># Or local mode — no tunnel needed</span>
+<span class="cmt"># Local mode</span>
 bridge = VirtuosoClient.<span class="fn">local</span>(port=65432)</code></pre>
     </div>
+
+    <div class="api-group">
+      <h3>File transfer and shell</h3>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>upload_file(local, remote)</code></td><td>Upload a file to the remote machine</td></tr>
+        <tr><td><code>download_file(remote, local)</code></td><td>Download a file from the remote machine</td></tr>
+        <tr><td><code>run_shell_command(cmd)</code></td><td>Run a shell command on the remote host via SKILL csh()</td></tr>
+      </table>
+    </div>
+
+    <div class="api-group">
+      <h3>CLI commands</h3>
+      <table>
+        <tr><th>Command</th><th>Description</th></tr>
+        <tr><td><code>virtuoso-bridge init [user@host] [-J user@jump] [--force]</code></td><td>Write <code>~/.virtuoso-bridge/.env</code>; arguments fill host/user/jump, <code>--force</code> overwrites an existing file</td></tr>
+        <tr><td><code>virtuoso-bridge start</code></td><td>Start SSH tunnel + deploy daemon</td></tr>
+        <tr><td><code>virtuoso-bridge status</code></td><td>Check tunnel, daemon, hostname, Spectre license</td></tr>
+        <tr><td><code>virtuoso-bridge restart</code></td><td>Restart tunnel</td></tr>
+        <tr><td><code>virtuoso-bridge stop</code></td><td>Stop tunnel</td></tr>
+        <tr><td><code>virtuoso-bridge windows</code></td><td>List Virtuoso windows + focused session</td></tr>
+        <tr><td><code>virtuoso-bridge snapshot</code></td><td>Dump focused maestro's SKILL probe sections to stdout</td></tr>
+        <tr><td><code>virtuoso-bridge snapshot -o ROOT [--history NAME]</code></td><td>Full disk dump of the focused session to <code>ROOT/&lt;ts&gt;__&lt;lib&gt;__&lt;cell&gt;/</code>: raw + filtered setup XMLs, <code>state_from_skill.txt</code>, latest-run per-point files. <code>--history</code> pins a specific maestro history (e.g. <code>Interactive.160</code>); otherwise auto-picks by mtime. File whitelist lives in <code>virtuoso/maestro/snapshot_filter.yaml</code> — edit to reshape the dump (no code change).</td></tr>
+        <tr><td><code>virtuoso-bridge screenshot</code></td><td>Capture a Virtuoso window</td></tr>
+      </table>
+    </div>
+
+    <div class="api-group">
+      <h3>What <code>snapshot -o</code> pulls</h3>
+      <p>One command dumps the focused maestro session's setup <em>and</em> the latest run's per-point files to a timestamped folder:</p>
+      <pre><code><span class="cmt"># auto-pick newest history</span>
+<span class="cmd">virtuoso-bridge snapshot -o output</span>
+
+<span class="cmt"># or pin a specific history (e.g. side-by-side comparison of two runs)</span>
+<span class="cmd">virtuoso-bridge snapshot -o output --history Interactive.160</span></code></pre>
+      <p>Layout of the output directory:</p>
+      <pre><code>output/&lt;YYYYMMDD_HHMMSS&gt;__&lt;lib&gt;__&lt;cell&gt;/
+├── maestro.sdb, active.state                    <span class="cmt"># raw Cadence files</span>
+├── state_from_sdb.xml                           <span class="cmt"># sdb filtered (~10× smaller)</span>
+├── state_from_active_state.xml                  <span class="cmt"># active.state filtered</span>
+├── state_from_skill.txt                         <span class="cmt"># SKILL-probe setup summary</span>
+└── &lt;history&gt;/
+    ├── &lt;history&gt;.{log,rdb,msg.db}               <span class="cmt"># run-level (rdb/msg.db are SQLite)</span>
+    └── &lt;pt&gt;/&lt;tb&gt;/
+        ├── netlist/  → netlist, input.scs, qpInformation.ils, paramInfo.ils
+        └── psf/      → spectre.out, logFile, dcOp.dc, *.ac, *.tran, *.noise, ...</code></pre>
+      <p>Per-point <code>netlist/</code> keeps only the 4 files that describe the design (main SPICE netlist, testbench top-level, FOM/output-expression definitions, corner label). <code>psf/</code> keeps stdout + logs + non-binary analysis results.</p>
+      <p>File selection is governed by <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/src/virtuoso_bridge/virtuoso/maestro/snapshot_filter.yaml"><code>virtuoso/maestro/snapshot_filter.yaml</code></a> — every entry carries a per-file tag (<code>[KEEP]</code>, <code>[REDUNDANT]</code>, <code>[SCAFFOLDING]</code>, <code>[METADATA]</code>, <code>[DEBUG-ONLY]</code>, <code>[GUI-CONFIG]</code>, <code>[RARELY]</code>, <code>[NEVER]</code>). Uncomment a line to add a file, comment it to skip. No package reinstall needed; the YAML is reread on every snapshot call.</p>
+      <p>Deliberately not pulled, regardless of YAML: <code>*.raw</code> binary waveforms, <code>wavedb/</code>, and PDK info dumps (<code>modelParameter.info</code>, <code>primitives.info.*</code>). Read waveforms through <code>reader.runs.read_results</code> instead of copying the binaries.</p>
+    </div>
+  </div>
+
+  <!-- Examples -->
+  <div class="section">
+    <h2>Examples</h2>
+    <table>
+      <tr><th>Category</th><th>Example</th><th>Description</th></tr>
+      <tr><td rowspan="7">Basic</td><td><code>00_ciw_output_vs_return.py</code></td><td>Compare CIW print vs SKILL return value</td></tr>
+      <tr><td><code>01_execute_skill.py</code></td><td>Run SKILL expressions (Hello World)</td></tr>
+      <tr><td><code>02_ciw_print.py</code></td><td>Print to Virtuoso CIW</td></tr>
+      <tr><td><code>03_load_il.py</code></td><td>Load .il file into Virtuoso</td></tr>
+      <tr><td><code>04_list_library_cells.py</code></td><td>Enumerate libraries and cells</td></tr>
+      <tr><td><code>05_multiline_skill.py</code></td><td>Execute multi-line SKILL code</td></tr>
+      <tr><td><code>06_screenshot.py</code></td><td>Capture window screenshot and download</td></tr>
+      <tr><td rowspan="6">Layout</td><td><code>01_create_layout.py</code></td><td>Create layout with NMOS/PMOS/CFMOM instances</td></tr>
+      <tr><td><code>02_add_polygon.py</code></td><td>Add polygon shapes</td></tr>
+      <tr><td><code>03_add_via.py</code></td><td>Place vias</td></tr>
+      <tr><td><code>04_multilayer_routing.py</code></td><td>M2-M7 multi-layer routing</td></tr>
+      <tr><td><code>05_bus_routing.py</code></td><td>8-bit bus wiring</td></tr>
+      <tr><td><code>06_read_layout.py</code></td><td>Read back layout geometry</td></tr>
+      <tr><td rowspan="5">Schematic</td><td><code>01a_create_rc_stepwise.py</code></td><td>Create RC circuit step by step</td></tr>
+      <tr><td><code>01b_create_rc_load_skill.py</code></td><td>Create RC via .il script injection</td></tr>
+      <tr><td><code>02_read_connectivity.py</code></td><td>Read nets, pins, instances</td></tr>
+      <tr><td><code>03_read_instance_params.py</code></td><td>Read instance parameters</td></tr>
+      <tr><td><code>08_import_cdl_cap_array.py</code></td><td>Import CDL netlist via spiceIn</td></tr>
+      <tr><td rowspan="6">Maestro</td><td><code>01_read_focused_maestro.py</code></td><td>snapshot() of focused maestro</td></tr>
+      <tr><td><code>03_bg_open_read_close_maestro.py</code></td><td>Background open/close + snapshot</td></tr>
+      <tr><td><code>06a_rc_create.py</code></td><td>Create Maestro test for RC filter</td></tr>
+      <tr><td><code>06b_rc_simulate_and_read.py</code></td><td>Run simulation, read scalar results, export waveforms</td></tr>
+      <tr><td><code>07_gui_session_lifecycle.py</code></td><td>open_gui_session / close_gui_session lifecycle</td></tr>
+      <tr><td><code>09_snapshot_with_metrics.py</code></td><td>Full disk dump (snapshot -o ROOT) with timing metrics</td></tr>
+      <tr><td rowspan="4">Spectre</td><td><code>01_inverter_tran.py</code></td><td>CMOS inverter transient simulation</td></tr>
+      <tr><td><code>01_veriloga_adc_dac.py</code></td><td>4-bit ADC/DAC with Verilog-A</td></tr>
+      <tr><td><code>02_cap_dc_ac.py</code></td><td>RC filter DC+AC frequency response</td></tr>
+      <tr><td><code>04_strongarm_pss_pnoise.py</code></td><td>StrongArm comparator PSS+Pnoise</td></tr>
+    </table>
+  </div>
+
+  <!-- Citation -->
+  <div class="section">
+    <h2>Citation</h2>
+    <div class="citation">@article{zhang2025virtuosobridge,
+  title   = {Virtuoso-Bridge: An Agent-Native Bridge for Remote
+             Analog and Mixed-Signal Design Automation},
+  author  = {Zhang, Zhishuai and Li, Xintian
+             and Sun, Nan and Jie, Lu},
+  year    = {2025}
+}</div>
   </div>
 
   <div class="footer">
     <p>
-      <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite">GitHub</a> ·
-      MIT License ·
+      <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite">GitHub</a> &middot;
+      MIT License &middot;
       Tsinghua University
     </p>
   </div>

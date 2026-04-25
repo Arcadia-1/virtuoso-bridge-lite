@@ -7,8 +7,15 @@ build/
 .pytest_cache/
 output/
 logs/
+example_artifacts/
+tmp/
 skillbridge/
 arxiv/
+texput.log
+*.log
 optimization/
-cdl_gen/
-references/mae SKILL RAK (1).pdf
+reference/
+.vscode/
+.DS_Store
+.claude/
+spectre.out

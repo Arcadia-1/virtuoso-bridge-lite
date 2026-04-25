@@ -361,20 +361,19 @@ def layout_read_summary(
     escaped_view = escape_skill_string(view)
     escaped_view_type = escape_skill_string(resolved_view_type)
     return (
-        "prog((cv buf) "
+        "prog((cv buf bb) "
         f'cv = dbOpenCellViewByType("{escaped_lib}" "{escaped_cell}" "{escaped_view}" "{escaped_view_type}" "r") '
         f'unless(cv return(sprintf(nil "ERROR: cannot open %s/%s/{escaped_view}" "{escaped_lib}" "{escaped_cell}"))) '
         f'buf = sprintf(nil "Layout: %s/%s/{escaped_view}  (%d shapes  %d instances)\\n" "{escaped_lib}" "{escaped_cell}" length(cv~>shapes) length(cv~>instances)) '
         'foreach(shape cv~>shapes '
         'buf = strcat(buf sprintf(nil "  %s [%s %s]" shape~>objType car(shape~>lpp) cadr(shape~>lpp))) '
         'when(shape~>objType == "rect" '
-        'let((bb) '
         'bb = shape~>bBox '
-        'buf = strcat(buf sprintf(nil "  (%.3f %.3f)-(%.3f %.3f)" xCoord(car(bb)) yCoord(car(bb)) xCoord(cadr(bb)) yCoord(cadr(bb)))))) '
+        'buf = strcat(buf sprintf(nil "  (%.3f %.3f)-(%.3f %.3f)" xCoord(car(bb)) yCoord(car(bb)) xCoord(cadr(bb)) yCoord(cadr(bb))))) '
         'buf = strcat(buf "\\n")) '
         'foreach(inst cv~>instances '
         'buf = strcat(buf sprintf(nil "  inst: %s  [%s/%s]  @ (%.3f %.3f)\\n" inst~>name inst~>libName inst~>cellName xCoord(inst~>xy) yCoord(inst~>xy))) '
-        "return(buf))"
+        "return(buf)))"
     )
 
 def layout_read_geometry(

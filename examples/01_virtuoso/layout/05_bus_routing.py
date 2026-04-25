@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Add an 8-bit labeled bus route to the current layout view."""
+"""Add an 8-bit labeled bus route to the current layout view.
+
+Prerequisites:
+  - virtuoso-bridge service running (virtuoso-bridge start)
+  - A layout cellview must be open in Virtuoso
+
+Customize LAYERS, LABEL_LAYER and FONT below to match your PDK techfile.
+"""
 
 from __future__ import annotations
 
@@ -10,8 +17,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from _timing import format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
+from virtuoso_bridge.virtuoso.layout.ops import (
+    layout_create_path as path,
+    layout_create_label as label,
+)
 
+# ----------------------------------------------------------------------
+# Customize to match your PDK metal stack
+# ----------------------------------------------------------------------
+# Metal layer(s) for bus wires — must be defined in your PDK techfile
 LAYERS    = ["M4"]
+# ----------------------------------------------------------------------
+
 BUS_WIDTH = 8
 
 # Routing parameters
@@ -21,8 +38,17 @@ X_START    = 0.0
 X_END      = 5.0
 Y_BASE     = 2.0   # Y of bit 0 (CODE<0>); higher bits increment upward
 
+# ----------------------------------------------------------------------
+# Customize to match your PDK techfile
+# ----------------------------------------------------------------------
+# Layer/purpose for bus labels — must be defined in your PDK techfile
 LABEL_LAYER  = "M4"
 LABEL_HEIGHT = 0.1  # um
+
+# Available font names: "roman", "default", "times", "courier",
+# "helvetica", "symbol", etc.  "roman" is the safest cross-PDK choice.
+FONT = "roman"
+# ----------------------------------------------------------------------
 
 
 def main() -> int:
@@ -31,7 +57,7 @@ def main() -> int:
     elapsed, design = timed_call(client.get_current_design)
     print(f"[get_current_design] [{format_elapsed(elapsed)}]")
     lib, cell, _ = design
-    if not lib:
+    if not lib or not cell:
         print("No layout window open in Virtuoso.")
         return 1
 
@@ -45,16 +71,16 @@ def main() -> int:
 
                 # Multi-layer path on every layer at the same coordinate
                 for layer in LAYERS:
-                    layout.add_path(layer, "drawing", [(X_START, y), (X_END, y)], width=PATH_WIDTH)
+                    layout.add(path(layer, "drawing", [(X_START, y), (X_END, y)], width=PATH_WIDTH))
 
                 # Label at the left end
-                layout.add_label(
+                layout.add(label(
                     LABEL_LAYER, "pin",
-                    (X_START, y),
-                    text=f"CODE<{bit}>",
-                    justification="centerLeft",
-                    height=LABEL_HEIGHT,
-                )
+                    X_START, y,
+                    f"CODE<{bit}>",
+                    "centerLeft", "R0", FONT,
+                    LABEL_HEIGHT,
+                ))
 
     edit_elapsed, _ = timed_call(add_bus)
     print(f"[edit_layout] [{format_elapsed(edit_elapsed)}]")

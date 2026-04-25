@@ -1,0 +1,72 @@
+# CDF Parameter Filters
+# ---------------------
+# Controls which CDF parameters read_schematic() returns per device type.
+# Matched by lib/cell pattern (first match wins). Cell supports * wildcard.
+#
+# To customize: pass your own YAML file to read_schematic(param_filters="my.yaml")
+# To disable filtering: pass param_filters=None (returns all params)
+
+filters:
+  # --- TSMC 28nm PDK transistors ---
+  - match: {lib: "tsmcN28", cell: "nch_*"}
+    params: [model, w, l, fingers, m, multi, simM]
+  - match: {lib: "tsmcN28", cell: "pch_*"}
+    params: [model, w, l, fingers, m, multi, simM]
+
+  # --- TSMC 28nm PDK passive devices ---
+  - match: {lib: "tsmcN28", cell: "cfmom_*"}
+    params: [model, c, w, l, m, nr, lr, stm, spm]
+  - match: {lib: "tsmcN28", cell: "rnodwo_*"}
+    params: [model, r, w, l, m]
+  - match: {lib: "tsmcN28", cell: "rpodwo_*"}
+    params: [model, r, w, l, m]
+
+  # --- analogLib passive devices ---
+  - match: {lib: "analogLib", cell: "cap"}
+    params: [c, model, w, l, m, ic]
+  - match: {lib: "analogLib", cell: "res"}
+    params: [r, model, w, l, m]
+  - match: {lib: "analogLib", cell: "ind"}
+    params: [l, model, r, m]
+
+  # --- analogLib sources ---
+  - match: {lib: "analogLib", cell: "vsource"}
+    params: [vdc, srcType, freq, va, sinephase, sinedc]
+  - match: {lib: "analogLib", cell: "vdc"}
+    params: [vdc, srcType]
+  - match: {lib: "analogLib", cell: "isource"}
+    params: [idc, srcType, freq, ia]
+  - match: {lib: "analogLib", cell: "idc"}
+    params: [idc]
+  - match: {lib: "analogLib", cell: "vsin"}
+    params: [vdc, ampl, freq, sinephase]
+  - match: {lib: "analogLib", cell: "vpulse"}
+    params: [v1, v2, period, rise, fall, width, delay]
+  - match: {lib: "analogLib", cell: "vpwl"}
+    params: [fileName]
+  - match: {lib: "analogLib", cell: "isin"}
+    params: [idc, ampl, freq]
+  - match: {lib: "analogLib", cell: "ipulse"}
+    params: [i1, i2, period, rise, fall, width, delay]
+
+  # --- analogLib other ---
+  - match: {lib: "analogLib", cell: "diode"}
+    params: [model, area, pj, m]
+  - match: {lib: "analogLib", cell: "switch"}
+    params: [model, vt1, vh]
+  - match: {lib: "analogLib", cell: "vbit"}
+    params: [v0, v1, period, rise, fall, width, delay]
+  - match: {lib: "analogLib", cell: "gnd"}
+    params: []
+  - match: {lib: "analogLib", cell: "vdd"}
+    params: []
+  - match: {lib: "analogLib", cell: "cmdmprobe"}
+    params: []
+
+  # --- basic library (pins, noConn, etc.) ---
+  - match: {lib: "basic", cell: "*"}
+    params: []
+
+# When no rule matches: "all" returns every param (values truncated to 120 chars)
+# Change to a list like [model, m] to set a global default
+fallback: all

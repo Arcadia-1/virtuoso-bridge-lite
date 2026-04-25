@@ -3,32 +3,37 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/stargazers"><img src="https://img.shields.io/github/stars/Arcadia-1/virtuoso-bridge-lite?style=flat-square&color=f5c542&logo=github" alt="GitHub stars"/></a>
+  <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/network/members"><img src="https://img.shields.io/github/forks/Arcadia-1/virtuoso-bridge-lite?style=flat-square&color=f5c542" alt="GitHub forks"/></a>
+  <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/issues"><img src="https://img.shields.io/github/issues/Arcadia-1/virtuoso-bridge-lite?style=flat-square&color=3fb950" alt="Open Issues"/></a>
+  <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/commits/main"><img src="https://img.shields.io/github/last-commit/Arcadia-1/virtuoso-bridge-lite?style=flat-square&color=3fb950" alt="Last Commit"/></a>
+  <a href="https://virtuoso-bridge.tokenzhang.com"><img src="https://img.shields.io/badge/docs-website-blue" alt="Website"/></a>
+</p>
+
+<p align="center">
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.9%2B-blue.svg" alt="Python 3.9+"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"/></a>
-  <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite"><img src="https://img.shields.io/github/stars/Arcadia-1/virtuoso-bridge-lite?style=social" alt="GitHub stars"/></a>
-  <a href="https://virtuoso-bridge.tokenzhang.com"><img src="https://img.shields.io/badge/docs-website-blue" alt="Website"/></a>
-  <a href="https://claude.ai/code"><img src="https://img.shields.io/badge/AI%20Native-agent--driven%20development-blueviolet" alt="AI Native"/></a>
-</p> 
+  <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome"/></a>
+  <img src="https://img.shields.io/badge/AI%20Native-agent--driven-blueviolet" alt="AI Native"/>
+</p>
 
-Control Cadence Virtuoso from anywhere, locally or remotely. Verified across macOS, Windows, and Linux.
+A new infrastructure for **Agentic Analog and Mixed-Signal Design**. LLM Agents drive Cadence Virtuoso instances — locally or remotely — turning tedious handcrafting into automated design flows.
 
-### Why use this?
+### Why is this a "New Infrastructure"?
 
-**1. Three ways to program Virtuoso** — from raw SKILL to Pythonic APIs, your choice.
-- **Load entire `.il` files**: hot-load complex SKILL scripts into Virtuoso with one call, then invoke their functions from Python
-- **Execute any SKILL expression**: `client.execute_skill('dbOpenCellViewByType(...)')` for full Virtuoso API access
-- **Python APIs**: high-level wrappers for layout, schematic, and Spectre simulation when you don't want to write SKILL
+**1. Deep Virtuoso Integration** — Control across Schematic, Layout, Maestro, and Spectre.
+- **Flexible programming**: execute inline SKILL, load `.il` files, or use Python APIs
+- **Four design domains**: schematic editing, layout generation, simulation setup (Maestro), and standalone Spectre with PSF parsing
 
-**2. AI-native design** — Built for coding agents (Claude Code, Cursor, etc.) to drive.
-- CLI-first: agents control the bridge via `virtuoso-bridge start/status/restart`, no GUI needed
-- Ships with agent skill files (`skills/`) so the agent knows how to use the bridge immediately
-- Persistent SSH tunnel stays alive across calls for high-frequency agent interactions
-- All commands logged for full traceability
+**2. Scalable Architecture** — Multi-server, multi-session, built for distributed design clusters.
+- Multi-profile SSH: connect to N design servers, each with independent tunnel
+- Run parallel simulations across servers and accounts
+- Verified across macOS, Windows, and Linux
 
-**3. Batteries included** — 30+ runnable examples, ready to use out of the box.
-- Layout: polygon, via, multi-layer routing, bus wiring, read-back geometry
-- Schematic: create RC circuits, read connectivity, export CDL netlist
-- Spectre: transient, DC+AC frequency response, PSS+Pnoise (StrongArm comparator), veriloga
+**3. AI-Native Design** — Built for coding agents (Claude Code, Cursor, etc.) to drive Virtuoso.
+- CLI-first: `virtuoso-bridge start/status/restart`, no GUI needed
+- Ships with pre-defined agent skill files (`skills/`) — the agent knows how to use the bridge immediately
+- Optimized for high-frequency agent interactions with persistent SSH tunnels
 
 > **If you are an AI agent**, read [`AGENTS.md`](AGENTS.md) first and follow its setup checklist.
 
@@ -88,47 +93,74 @@ The divergence is in what's built on top: skillbridge stays thin — a Pythonic 
 ## Quick Start
 
 ```bash
-pip install -e .
-virtuoso-bridge init        # generates .env
-```
-
-Edit `.env`, fill in one variable:
-
-```dotenv
-VB_REMOTE_HOST=my-server    # SSH host alias from ~/.ssh/config
-```
-
-Then:
-
-```bash
-virtuoso-bridge start
+pip install -e .              # install
+virtuoso-bridge init user@host [-J user@jump-host]   # write ~/.virtuoso-bridge/.env in one shot
+                                                     # (no args: empty template — edit it yourself)
+virtuoso-bridge start         # start SSH tunnel
+virtuoso-bridge status        # verify connection
+virtuoso-bridge windows       # list all open Virtuoso windows
+virtuoso-bridge screenshot    # screenshot CIW (or: current, N)
 ```
 
 ```python
 from virtuoso_bridge import VirtuosoClient
-
 client = VirtuosoClient.from_env()
-result = client.execute_skill("1+2")
-print(result)  # VirtuosoResult(status=SUCCESS, output='3')
+client.execute_skill("1+2")  # VirtuosoResult(status=SUCCESS, output='3')
 ```
 
-Done.
+For detailed setup (jump hosts, multi-profile, local mode), see [`AGENTS.md`](AGENTS.md).
 
-### Prerequisites
+## Snapshot a maestro run
 
-1. **SSH**: `ssh my-server` must work in your terminal without a password prompt.
-2. **Virtuoso**: a Virtuoso process must be running on the remote (or local) machine.
+Pull the currently-focused maestro session's setup + latest-run artifacts to a local folder:
 
-### Jump host setup
-
-If you access Virtuoso through a bastion/jump host, set both hosts in `.env`:
-
-```dotenv
-VB_REMOTE_HOST=compute-host   # the machine running Virtuoso (NOT the jump host)
-VB_JUMP_HOST=jump-host        # the bastion you SSH through
+```bash
+virtuoso-bridge snapshot -o output                       # auto-picks newest history
+virtuoso-bridge snapshot -o output --history Interactive.160   # pin a specific history
 ```
 
-Common mistake: setting `VB_REMOTE_HOST` to the jump host. `VB_REMOTE_HOST` must be the machine where Virtuoso is actually running. Verify with `virtuoso-bridge status` — it checks the remote hostname matches.
+Output tree (one example):
+
+```
+output/20260422_142137__MyLib__myTB/
+├── maestro.sdb, active.state                    # raw Cadence files
+├── state_from_sdb.xml, state_from_active_state.xml  # filtered, high-signal
+├── state_from_skill.txt                         # SKILL-probe setup summary
+└── Interactive.N/
+    ├── Interactive.N.{log,rdb,msg.db}           # run-level (rdb = SQLite)
+    └── <pt>/<tb>/
+        ├── netlist/   → netlist, input.scs, qpInformation.ils, paramInfo.ils
+        └── psf/       → spectre.out, logFile, dcOp.dc, *.ac, *.tran, ...
+```
+
+Per-point `netlist/` keeps only the 4 files that actually describe the design (main SPICE netlist, testbench top level, FOM definitions, corner label). Psf keeps stdout + logs + non-binary analysis results. The full rule set — including what's commented out and why — lives in [`src/virtuoso_bridge/virtuoso/maestro/snapshot_filter.yaml`](src/virtuoso_bridge/virtuoso/maestro/snapshot_filter.yaml); edit the YAML (uncomment / comment lines) to add or drop files, no code change needed. Binary waveforms (`*.raw`, `wavedb/`) are never pulled — read them through `reader.runs.read_results` instead.
+
+## Exposing skills to your coding agent
+
+The `skills/` directory ships [Claude Code](https://claude.com/claude-code) skills
+(`virtuoso`, `spectre`, `optimizer`). They are **not** symlinked into the repo's
+`.claude/skills/` on purpose — repo-tracked symlinks break on Windows and hardcode
+one user's absolute paths. Instead, each user links them into their own
+`~/.claude/skills/` once after cloning:
+
+```bash
+# macOS / Linux
+mkdir -p ~/.claude/skills
+ln -s "$(pwd)/skills/virtuoso"  ~/.claude/skills/virtuoso
+ln -s "$(pwd)/skills/spectre"   ~/.claude/skills/spectre
+ln -s "$(pwd)/skills/optimizer" ~/.claude/skills/optimizer
+```
+
+```powershell
+# Windows (PowerShell, Developer Mode or elevated shell)
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\skills" | Out-Null
+New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.claude\skills\virtuoso"  -Target "$PWD\skills\virtuoso"
+New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.claude\skills\spectre"   -Target "$PWD\skills\spectre"
+New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.claude\skills\optimizer" -Target "$PWD\skills\optimizer"
+```
+
+Cursor and other agents that load skills from a user-level directory follow the
+same pattern — point their skills path at `skills/` in this repo.
 
 ## Architecture
 
@@ -136,40 +168,15 @@ Common mistake: setting `VB_REMOTE_HOST` to the jump host. `VB_REMOTE_HOST` must
   <img src="assets/arch.png" alt="Architecture" width="100%"/>
 </p>
 
-- **VirtuosoClient** — pure TCP SKILL client. Sends SKILL, gets results. No SSH awareness.
-- **SSHClient** — manages SSH tunnel + daemon deployment. Provides the `localhost:port` that VirtuosoClient connects to. Optional (not needed for local mode).
+- **VirtuosoClient** — pure TCP SKILL client. Sends SKILL as JSON, gets results. No SSH awareness.
+- **SpectreSimulator** — runs Spectre simulations remotely via SSH shell commands, transfers netlists and results via rsync.
+- **SSHClient** — maintains a persistent ControlMaster connection that multiplexes three channels: TCP port-forwarding (SKILL execution via the daemon), SSH shell commands (Spectre invocation), and rsync file transfer. Optional — bypassed in local mode.
 
-Fully decoupled: VirtuosoClient works with any TCP endpoint — SSH tunnel, VPN, direct LAN, or local.
+Fully decoupled: VirtuosoClient works with any TCP endpoint — SSH tunnel, VPN, direct LAN, or local. Multiple connection profiles are supported, each managing an independent tunnel to a separate design server.
 
 > Want to understand the raw mechanism? See [`core/`](core/) — the entire bridge distilled into 3 files (180 lines).
 
-### Local mode (no SSH)
-
-```python
-from virtuoso_bridge import VirtuosoClient
-
-bridge = VirtuosoClient.local(port=65432)
-bridge.execute_skill("1+2")
-```
-
-No tunnel, no `.env`, no SSH. Just load `core/ramic_bridge.il` in Virtuoso CIW and connect.
-
-## CLI
-
-```bash
-virtuoso-bridge init      # create .env template
-virtuoso-bridge start     # start SSH tunnel + deploy daemon
-virtuoso-bridge restart   # force-restart
-virtuoso-bridge status    # check connection + Spectre license
-```
-
-## Build & Test
-
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-pytest
-```
+> Want to use Virtuoso locally without SSH? See [Local mode](AGENTS.md#local-mode) in AGENTS.md.
 
 ## Citation
 
@@ -177,8 +184,7 @@ If you use virtuoso-bridge in academic work, please cite:
 
 ```bibtex
 @article{zhang2025virtuosobridge,
-  title   = {Virtuoso-Bridge: An Agent-Native Bridge for Harness Engineering
-             in Analog and Mixed-Signal Workflows},
+  title   = {Virtuoso-Bridge: An Agent-Native Bridge for Remote Analog and Mixed-Signal Design Automation},
   author  = {Zhang, Zhishuai and Li, Xintian and Sun, Nan and Jie, Lu},
   year    = {2025}
 }

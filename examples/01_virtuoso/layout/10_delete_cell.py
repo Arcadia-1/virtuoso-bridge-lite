@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from _timing import decode_skill, format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
+from virtuoso_bridge.virtuoso.layout.ops import layout_delete_cell
 
 
 def main() -> int:
@@ -18,7 +19,7 @@ def main() -> int:
     elapsed, design = timed_call(client.get_current_design)
     print(f"[get_current_design] [{format_elapsed(elapsed)}]")
     lib, cell, view = design
-    if not lib or view != "layout":
+    if not lib or not cell or view != "layout":
         print("No active layout window.")
         return 1
 
@@ -29,8 +30,10 @@ def main() -> int:
         errors = close_result.errors or ["close failed"]
         print(f"[close_current_cellview] failed: {errors[0]}")
 
-    delete_elapsed, result = timed_call(lambda: client.layout.delete_cell(lib, cell, timeout=30))
-    print(f"[layout.delete_cell] [{format_elapsed(delete_elapsed)}]")
+    delete_elapsed, result = timed_call(
+        lambda: client.execute_skill(layout_delete_cell(lib, cell), timeout=30)
+    )
+    print(f"[layout_delete_cell] [{format_elapsed(delete_elapsed)}]")
     print(decode_skill(result.output or ""))
     return 0
 

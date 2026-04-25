@@ -1,0 +1,73 @@
+Schematic : PLAYGROUND_LLM/rc_unit/schematic
+Instances : 5   Nets : 3   Pins : 3
+
+INSTANCE             LIB/CELL
+----------------------------------------------------
+C0                    analogLib/cap
+R0                    analogLib/res
+PIN2                  basic/iopin
+PIN1                  basic/iopin
+PIN0                  basic/iopin
+
+NET                  CONNECTIONS (inst.terminal)
+----------------------------------------------------
+IN                    R0.PLUS
+OUT                   R0.MINUS  C0.PLUS
+VSS                   C0.MINUS
+
+PIN                  DIRECTION
+------------------------------------
+VSS                   inputOutput
+OUT                   inputOutput
+IN                    inputOutput
+
+
+Schematic : PLAYGROUND_LLM/rc_cascade_2/schematic
+Instances : 5   Nets : 4   Pins : 3
+
+INSTANCE             LIB/CELL
+----------------------------------------------------
+X2                    PLAYGROUND_LLM/rc_unit
+X1                    PLAYGROUND_LLM/rc_unit
+PIN2                  basic/iopin
+PIN1                  basic/iopin
+PIN0                  basic/iopin
+
+NET                  CONNECTIONS (inst.terminal)
+----------------------------------------------------
+VIN                   X1.IN
+VOUT                  X2.OUT
+VSS                   X2.VSS  X1.VSS
+MID                   X2.IN  X1.OUT
+
+PIN                  DIRECTION
+------------------------------------
+VSS                   inputOutput
+VOUT                  inputOutput
+VIN                   inputOutput
+
+
+Schematic : PLAYGROUND_LLM/tb_rc_cascade/schematic
+Instances : 5   Nets : 3   Pins : 3
+
+INSTANCE             LIB/CELL
+----------------------------------------------------
+X_DUT                 PLAYGROUND_LLM/rc_cascade_2
+PIN2                  basic/iopin
+PIN1                  basic/iopin
+PIN0                  basic/iopin
+V1                    analogLib/vsin
+
+NET                  CONNECTIONS (inst.terminal)
+----------------------------------------------------
+VIN                   V1.PLUS  X_DUT.VIN
+VOUT                  X_DUT.VOUT
+VSS                   V1.MINUS  X_DUT.VSS
+
+PIN                  DIRECTION
+------------------------------------
+VSS                   inputOutput
+VOUT                  inputOutput
+VIN                   inputOutput
+
+

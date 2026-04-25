@@ -80,6 +80,7 @@ def parse_psf_ascii_directory(output_dir: Path) -> dict[str, Any]:
         "tran.tran.tran",
         "tran.tran",
     )
+    tran_found = False
     for candidate in tran_candidates:
         tran_file = output_dir / candidate
         if tran_file.exists():
@@ -91,7 +92,19 @@ def parse_psf_ascii_directory(output_dir: Path) -> dict[str, Any]:
                     tran_file.name,
                     len(result.data),
                 )
+            tran_found = True
             break
+    if not tran_found:
+        for tran_file in sorted(output_dir.glob("*.tran.tran")):
+            result = parse_spectre_psf_ascii(tran_file)
+            if result.data:
+                merged_data.update(result.data)
+                logger.debug(
+                    "Parsed transient data from %s: %d signals",
+                    tran_file.name,
+                    len(result.data),
+                )
+                break
 
     dc_candidates = ["dc.dc", "dcOp.dc", "spectre.dc"]
     dc_parsed = False
@@ -146,6 +159,7 @@ def parse_psf_ascii_directory(output_dir: Path) -> dict[str, Any]:
             break
 
     ac_candidates = ("ac.ac", "ac.ac.ac")
+    ac_found = False
     for candidate in ac_candidates:
         ac_file = output_dir / candidate
         if ac_file.exists():
@@ -158,7 +172,20 @@ def parse_psf_ascii_directory(output_dir: Path) -> dict[str, Any]:
                     ac_file.name,
                     len(result.data),
                 )
+            ac_found = True
             break
+    if not ac_found:
+        for ac_file in sorted(output_dir.glob("*.ac.ac")):
+            result = parse_spectre_psf_ascii(ac_file)
+            if result.data:
+                for key, val in result.data.items():
+                    merged_data[f"ac_{key}"] = val
+                logger.debug(
+                    "Parsed AC data from %s: %d signals",
+                    ac_file.name,
+                    len(result.data),
+                )
+                break
 
     for info_file in sorted(output_dir.rglob("*.info")):
         result = parse_spectre_psf_ascii(info_file)
@@ -251,7 +278,7 @@ def _parse_psf_swept_data(
     if not sweep_var:
         return {}
 
-    data: dict[str, list[float]] = {sweep_var: []}
+    data: dict[str, list[float | complex]] = {sweep_var: []}
     for name in trace_names:
         data[name] = []
 
@@ -262,14 +289,14 @@ def _parse_psf_swept_data(
         stripped = lines[i].strip()
         if not stripped or stripped == "END":
             break
-        # Complex value: "name" (real imag) → store magnitude
+        # Complex value: "name" (real imag) → store as Python complex
         m_complex = re.match(r'"([^"]+)"\s+\(\s*([-+0-9.eE]+)\s+([-+0-9.eE]+)\s*\)', stripped)
         if m_complex:
             sig_name = m_complex.group(1)
             try:
                 real = float(m_complex.group(2))
                 imag = float(m_complex.group(3))
-                value = (real**2 + imag**2) ** 0.5  # magnitude
+                value = complex(real, imag)
             except ValueError:
                 continue
             if sig_name in data:

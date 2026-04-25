@@ -13,7 +13,7 @@ def compose_skill_script(commands: Iterable[str], *, wrap_in_progn: bool = True)
         return normalized[0]
     if len(normalized) == 1 and normalized[0].startswith("progn("):
         return normalized[0]
-    body = " ".join(normalized)
+    body = "\n".join(normalized)
     if not wrap_in_progn:
         return body
     return f"progn({body})"

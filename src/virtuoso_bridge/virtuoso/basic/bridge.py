@@ -6,14 +6,14 @@ import errno
 import json
 import logging
 import os
+import re
 import socket
 import hashlib
 import time
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
+from virtuoso_bridge.env import load_vb_env
 from virtuoso_bridge.virtuoso.basic.composition import compose_skill_script
 from virtuoso_bridge.models import ExecutionStatus, VirtuosoInterface, VirtuosoResult
 from virtuoso_bridge.virtuoso.ops import (
@@ -102,29 +102,37 @@ class VirtuosoClient(VirtuosoInterface):
         *,
         timeout: int = 30,
         log_to_ciw: bool = True,
+        profile: str | None = None,
     ) -> "VirtuosoClient":
         """Create a VirtuosoClient from environment variables.
 
-        If an SSH tunnel is already running (via `virtuoso-bridge start`),
-        connects to its port. Otherwise creates a new SSHClient.
+        If *profile* is given (e.g. ``"gpu1"``), reads ``VB_REMOTE_HOST_gpu1``
+        etc.  If an SSH tunnel is already running (via ``virtuoso-bridge start``),
+        connects to its port.  Otherwise creates a new SSHClient.
         """
-        load_dotenv()
+        load_vb_env()
         from virtuoso_bridge.transport.tunnel import SSHClient
 
         # Check if tunnel is already running
-        if SSHClient.is_running():
-            state = SSHClient.read_state()
+        if SSHClient.is_running(profile):
+            state = SSHClient.read_state(profile)
+            if not state:
+                raise RuntimeError("Tunnel state file is missing or invalid.")
             port = state["port"]
-            # Create SSHClient for file transfer ops (reuses existing tunnel)
-            ssh = SSHClient.from_env(keep_remote_files=True)
+            ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
             return cls(host="127.0.0.1", port=port, timeout=timeout, tunnel=ssh, log_to_ciw=log_to_ciw)
 
         # No tunnel running — start one
-        remote_host = os.getenv("VB_REMOTE_HOST", "").strip()
+        suffix = f"_{profile}" if profile else ""
+        remote_host = os.getenv(f"VB_REMOTE_HOST{suffix}", "").strip()
         if not remote_host:
-            raise RuntimeError("VB_REMOTE_HOST must be set. Run: virtuoso-bridge init")
+            raise RuntimeError(
+                f"VB_REMOTE_HOST{suffix} must be set. "
+                "Use an explicit env file, create ./.env, or run `virtuoso-bridge init` "
+                "to create ~/.virtuoso-bridge/.env."
+            )
 
-        ssh = SSHClient.from_env(keep_remote_files=True)
+        ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
         return cls(host="127.0.0.1", port=ssh.port, timeout=timeout, tunnel=ssh, log_to_ciw=log_to_ciw)
 
     @classmethod
@@ -184,6 +192,13 @@ class VirtuosoClient(VirtuosoInterface):
         return self._tunnel is not None and getattr(self._tunnel, 'is_tunnel_alive', False)
 
     @property
+    def ssh_runner(self):
+        """The underlying SSHRunner, for sharing with SpectreSimulator."""
+        if self._tunnel is None:
+            return None
+        return getattr(self._tunnel, '_ssh_runner', None)
+
+    @property
     def log_to_ciw(self) -> bool:
         return self._log_to_ciw
 
@@ -196,6 +211,7 @@ class VirtuosoClient(VirtuosoInterface):
     def ensure_ready(self, timeout: int = 10) -> VirtuosoResult:
         """Ensure the daemon is reachable via TCP."""
         metadata: dict[str, Any] = {}
+        logger.info("ensure_ready: checking daemon at %s:%d", self._host, self._port)
 
         # If we have a tunnel, make sure it's up
         if self._tunnel is not None:
@@ -203,7 +219,10 @@ class VirtuosoClient(VirtuosoInterface):
                 self._tunnel.warm()
                 metadata["tunnel_alive"] = self.is_tunnel_alive
                 self._port = self._tunnel.port  # may have changed due to port auto-retry
+                logger.info("ensure_ready: tunnel alive=%s, port=%d",
+                            metadata["tunnel_alive"], self._port)
             except Exception as e:
+                logger.warning("ensure_ready: tunnel setup failed: %s", e)
                 return VirtuosoResult(
                     status=ExecutionStatus.ERROR,
                     errors=[f"Tunnel setup failed: {e}"],
@@ -219,9 +238,11 @@ class VirtuosoClient(VirtuosoInterface):
             errors.append("Daemon did not respond to ping (ensure load() in CIW)")
 
         if errors:
+            logger.warning("ensure_ready: %s", report["summary"])
             if self._tunnel and self._tunnel.setup_path and not report.get("daemon_responsive"):
                 print(f'\nPlease execute in Virtuoso CIW: load("{self._tunnel.setup_path}")\n')
             return VirtuosoResult(status=ExecutionStatus.ERROR, errors=errors, metadata=metadata)
+        logger.info("ensure_ready: %s", report["summary"])
         return VirtuosoResult(status=ExecutionStatus.SUCCESS, metadata=metadata)
 
     def warm_remote_session(self, timeout: int = 10) -> VirtuosoResult:
@@ -252,23 +273,34 @@ class VirtuosoClient(VirtuosoInterface):
         if self._has_jump_host:
             connect_deadline = start_time + _TUNNEL_CONNECT_GRACE_SECONDS
 
+        logger.debug("execute_skill %s:%d timeout=%d skill=%s",
+                      self._host, self._port, effective_timeout, skill_code[:120])
+
         try:
             while True:
                 try:
                     raw_response = self._execute_skill_once(skill_code, effective_timeout)
                     elapsed = time.monotonic() - start_time
-                    return self._parse_response(raw_response, elapsed)
+                    result = self._parse_response(raw_response, elapsed)
+                    logger.debug("execute_skill OK (%.3fs)", elapsed)
+                    return result
                 except ConnectionRefusedError:
                     if time.monotonic() >= connect_deadline:
                         raise
+                    logger.debug("Connection refused, retrying (deadline in %.1fs)",
+                                 connect_deadline - time.monotonic())
                     time.sleep(_TUNNEL_CONNECT_RETRY_DELAY)
                 except OSError as exc:
                     if not self._should_retry_tunnel_connect(exc, time.monotonic(), connect_deadline):
                         raise
+                    logger.debug("OSError %s, retrying (deadline in %.1fs)",
+                                 exc, connect_deadline - time.monotonic())
                     time.sleep(_TUNNEL_CONNECT_RETRY_DELAY)
 
         except socket.timeout:
             elapsed = time.monotonic() - start_time
+            logger.warning("Socket timeout connecting to %s:%d after %ds",
+                           self._host, self._port, effective_timeout)
             return VirtuosoResult(
                 status=ExecutionStatus.ERROR,
                 errors=[f"Socket timeout after {effective_timeout}s"],
@@ -276,6 +308,8 @@ class VirtuosoClient(VirtuosoInterface):
             )
         except ConnectionRefusedError:
             elapsed = time.monotonic() - start_time
+            logger.warning("Connection refused to %s:%d (no daemon?)",
+                           self._host, self._port)
             return VirtuosoResult(
                 status=ExecutionStatus.ERROR,
                 errors=[
@@ -286,6 +320,8 @@ class VirtuosoClient(VirtuosoInterface):
             )
         except OSError as exc:
             elapsed = time.monotonic() - start_time
+            logger.warning("Socket error connecting to %s:%d: %s",
+                           self._host, self._port, exc)
             return VirtuosoResult(
                 status=ExecutionStatus.ERROR,
                 errors=[f"Socket error: {exc}"],
@@ -299,6 +335,7 @@ class VirtuosoClient(VirtuosoInterface):
 
     def verify_tunnel(self, timeout: int = 5) -> dict[str, Any]:
         """Diagnose connectivity."""
+        logger.info("verify_tunnel: probing %s:%d (timeout=%ds)", self._host, self._port, timeout)
         report: dict[str, Any] = {
             "tunnel_process_alive": None,
             "tcp_reachable": False,
@@ -331,6 +368,10 @@ class VirtuosoClient(VirtuosoInterface):
         )
         parts.append("daemon: " + ("OK" if report["daemon_responsive"] else "NO RESPONSE"))
         report["summary"] = " | ".join(parts)
+        if result.errors:
+            logger.warning("verify_tunnel: %s errors=%s", report["summary"], result.errors)
+        else:
+            logger.info("verify_tunnel: %s", report["summary"])
         return report
 
     # -- cellview operations ------------------------------------------------
@@ -341,10 +382,16 @@ class VirtuosoClient(VirtuosoInterface):
         effective_timeout = timeout if timeout is not None else self._timeout
         actual_view = view or "layout"
         actual_view_type = view_type or default_view_type_for(actual_view)
-        skill = op_open_cell_view(lib, cell, actual_view, actual_view_type, mode)
+        skill = op_open_cell_view(
+            lib,
+            cell,
+            view=actual_view,
+            view_type=actual_view_type,
+            mode=mode,
+        )
         return self.execute_skill(skill, timeout=effective_timeout)
 
-    def open_window(self, lib: str, cell: str, *, view: str = "layout",
+    def open_window(self, lib: str, cell: str, *, view: str = "schematic",
                     view_type: str | None = None, timeout: int | None = None) -> VirtuosoResult:
         effective_timeout = timeout if timeout is not None else self._timeout
         skill = op_open_window(lib, cell, view=view, view_type=view_type)
@@ -361,7 +408,7 @@ class VirtuosoClient(VirtuosoInterface):
     def get_current_design(self, timeout: int | None = None) -> tuple[str | None, str | None, str | None]:
         effective_timeout = timeout if timeout is not None else self._timeout
         skill = (
-            "ddGetObjReadPath(dbGetCellViewDdId(geGetEditCellView())))"
+            "ddGetObjReadPath(dbGetCellViewDdId(geGetEditCellView()))"
         )
         result = self.execute_skill(skill, timeout=effective_timeout)
         if result.status != ExecutionStatus.SUCCESS:
@@ -374,6 +421,137 @@ class VirtuosoClient(VirtuosoInterface):
             return None, None, None
         return parts[-4], parts[-3], parts[-2]
 
+    # -- screenshot -------------------------------------------------------------
+
+    def list_windows(self, timeout: int | None = None) -> list[dict[str, str]]:
+        """Return a list of all open Virtuoso windows.
+
+        Each entry has keys: ``num`` and ``name`` (raw from ``hiGetWindowName``).
+        """
+        effective_timeout = timeout if timeout is not None else self._timeout
+        # Use "|" as delimiter — tab/newline get escaped in the SKILL→Python path.
+        # Guard against windows whose hiGetWindowName returns nil (e.g. some
+        # transient sub-forms).  Previously we wrapped with errset() but that
+        # only catches actual errors, not a nil-valued success — sprintf %s
+        # on nil then raised and blew away the entire accumulated result.
+        skill = r'''
+let((result winName ciwNum)
+  result = ""
+  ciwNum = -1
+  let((ciw)
+    ciw = hiGetCIWindow()
+    when(ciw
+      ciwNum = ciw~>windowNum
+      winName = hiGetWindowName(ciw)
+      when(stringp(winName)
+        result = strcat(result sprintf(nil "%d|%s;" ciwNum winName)))))
+  foreach(w hiGetWindowList()
+    when(w~>windowNum != ciwNum
+      let((nm) nm = hiGetWindowName(w)
+        when(stringp(nm)
+          result = strcat(result sprintf(nil "%d|%s;" w~>windowNum nm))))))
+  result)
+'''
+        r = self.execute_skill(skill, timeout=effective_timeout)
+        windows: list[dict[str, str]] = []
+        if r.status != ExecutionStatus.SUCCESS or not r.output:
+            return windows
+        raw = r.output.strip().strip('"')
+        # Decode SKILL octal escapes like \256 → ®
+        raw = re.sub(r'\\(\d{3})', lambda m: chr(int(m.group(1), 8)), raw)
+        for entry in raw.split(";"):
+            entry = entry.strip()
+            if not entry:
+                continue
+            parts = entry.split("|", 1)
+            if len(parts) < 2:
+                continue
+            windows.append({
+                "num": parts[0],
+                "name": parts[1],
+            })
+        return windows
+
+    def screenshot(
+        self,
+        output: str | Path | None = None,
+        *,
+        target: str | int = "ciw",
+        timeout: int | None = None,
+    ) -> VirtuosoResult:
+        """Take a screenshot of a Virtuoso window and download it locally.
+
+        Args:
+            output: Local path for the screenshot. Auto-generated if *None*.
+            target: ``"ciw"`` (default), ``"current"``, a view name like
+                ``"schematic"``/``"layout"``/``"maestro"``, or an integer
+                window number.
+        """
+        from virtuoso_bridge.transport.remote_paths import (
+            default_virtuoso_bridge_dir,
+            resolve_remote_username,
+        )
+
+        effective_timeout = timeout if timeout is not None else self._timeout
+
+        # Build SKILL expression that resolves the target window
+        if target == "ciw":
+            win_expr = "hiGetCIWindow()"
+        elif target == "current":
+            win_expr = "hiGetCurrentWindow()"
+        elif isinstance(target, int):
+            win_expr = (
+                f'let((found) foreach(w hiGetWindowList() '
+                f'when(w~>windowNum=={target} found=w)) found)'
+            )
+        else:
+            escaped_view = _escape_skill_string(str(target))
+            win_expr = (
+                f'let((found) foreach(w hiGetWindowList() '
+                f'when(w~>cellView && w~>cellView~>viewName=="{escaped_view}" found=w)) found)'
+            )
+
+        # Remote path
+        username = resolve_remote_username(
+            configured_user=self._tunnel._remote_user if self._tunnel else None,
+            runner=self._tunnel._ssh_runner if self._tunnel else None,
+        )
+        screenshot_dir = default_virtuoso_bridge_dir(username, "screenshots")
+        if self._tunnel and self._tunnel._ssh_runner:
+            self._tunnel._ssh_runner.run_command(f"mkdir -p {screenshot_dir}")
+
+        from datetime import datetime
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        label = str(target) if isinstance(target, int) else target
+        remote_path = f"{screenshot_dir}/{label}_{stamp}.png"
+        escaped_path = _escape_skill_string(remote_path)
+
+        skill = (
+            f'let((w) w={win_expr} '
+            f'if(w '
+            f'hiWindowSaveImage(?target w ?path "{escaped_path}" ?format "png" ?toplevel t) '
+            f'"error: window not found"))'
+        )
+        r = self.execute_skill(skill, timeout=effective_timeout)
+        if r.status != ExecutionStatus.SUCCESS:
+            return r
+        if (r.output or "").strip().strip('"') == "error: window not found":
+            return VirtuosoResult(
+                status=ExecutionStatus.ERROR,
+                errors=[f"Window not found: {target}"],
+                execution_time=r.execution_time,
+            )
+
+        # Download
+        filename = f"{label}_{stamp}.png"
+        if output is None:
+            output = Path(filename)
+        else:
+            output = Path(output)
+            if output.is_dir():
+                output = output / filename
+        return self.download_file(remote_path, output, timeout=effective_timeout)
+
     def ciw_print(self, message: str, timeout: int | None = None) -> VirtuosoResult:
         effective_timeout = timeout if timeout is not None else self._timeout
         escaped = _escape_skill_string(message)
@@ -382,6 +560,72 @@ class VirtuosoClient(VirtuosoInterface):
     def ciw_log(self, skill_code: str, timeout: int | None = None) -> VirtuosoResult:
         effective_timeout = timeout if timeout is not None else self._timeout
         return self.execute_skill(skill_code, timeout=effective_timeout)
+
+    def fetch(self, expr: str, fields: list[str], *,
+              timeout: int | None = None) -> list[dict]:
+        """Run a SKILL expression that returns a **list of objects** and
+        extract the given ``~>slot`` names from each element, all in a
+        single round-trip.
+
+        This is the batch alternative to per-attribute access.  Instead
+        of N round-trips::
+
+            # Slow — each attribute access is one network call.
+            sel = client.execute_skill("geGetSelSet()")   # "db:0x..."
+            for o in each_inst:                           # N × 3 calls
+                name     = client.execute_skill(f"{o}~>name")
+                cellName = client.execute_skill(f"{o}~>cellName")
+                objType  = client.execute_skill(f"{o}~>objType")
+
+        do a single call that pulls every field for every element::
+
+            objs = client.fetch("geGetSelSet()",
+                                ["objType", "cellName", "name"])
+            # [{"objType": "inst", "cellName": "nch_mac", "name": "M1"},
+            #  {"objType": "inst", "cellName": "pch_mac", "name": "M2"},
+            #  ...]
+            print(objs[0]["name"])
+
+        Values are decoded with SKILL s-expression rules: quoted
+        strings are unquoted/unescaped, ``nil`` → ``None``, ``t`` →
+        ``True``, nested lists → nested Python lists, and bare atoms
+        (numbers / symbols) are returned as their original string so
+        the caller can coerce as needed.
+
+        Use :meth:`fetch_one` for single-object expressions.
+        """
+        # Late import: the parser lives under maestro/reader but is
+        # pure and general.  Keeping the import local avoids
+        # constructing the wider maestro package at module load.
+        from virtuoso_bridge.virtuoso.maestro.reader._parse_skill import (
+            _parse_sexpr,
+        )
+        slots = " ".join(f"o~>{f}" for f in fields)
+        sk = f"mapcar(lambda((o) list({slots})) {expr})"
+        raw = self.execute_skill(sk, timeout=timeout).output or ""
+        parsed = _parse_sexpr(raw.strip())
+        if not isinstance(parsed, list):
+            return []
+        return [
+            dict(zip(fields, row))
+            for row in parsed
+            if isinstance(row, list)
+        ]
+
+    def fetch_one(self, expr: str, fields: list[str], *,
+                  timeout: int | None = None) -> dict:
+        """Single-object variant of :meth:`fetch`.  Wraps ``expr`` in
+        a one-element ``list(...)`` and returns the first dict (or an
+        empty dict if the expression yielded nothing).
+
+        Example::
+
+            cv = client.fetch_one("geGetEditCellView()",
+                                  ["libName", "cellName", "viewName"])
+            # {"libName": "PLAYGROUND", "cellName": "AMP", "viewName": "schematic"}
+        """
+        rows = self.fetch(f"list({expr})", fields, timeout=timeout)
+        return rows[0] if rows else {}
 
     def run_shell_command(self, cmd: str, timeout: int | None = None) -> VirtuosoResult:
         effective_timeout = timeout if timeout is not None else self._timeout
@@ -397,6 +641,22 @@ class VirtuosoClient(VirtuosoInterface):
                 execution_time=result.execution_time,
             )
         return result
+
+    # -- X11 dialog recovery (bypasses SKILL channel) ----------------------
+
+    def dismiss_dialog(self, display: str | None = None) -> list[dict]:
+        """Find and dismiss blocking GUI dialogs via X11.
+
+        Use when execute_skill() times out due to a modal dialog blocking CIW.
+        Works via direct SSH + X11, independent of the SKILL channel.
+        """
+        load_vb_env()
+        from virtuoso_bridge.virtuoso import x11
+        runner = self.ssh_runner
+        if runner is None:
+            raise RuntimeError("No SSH connection (tunnel not started?)")
+        user = runner.user or os.getenv("VB_REMOTE_USER", "")
+        return x11.dismiss_dialogs(runner, user, display)
 
     # -- file transfer (delegates to tunnel) --------------------------------
 
@@ -577,7 +837,9 @@ class VirtuosoClient(VirtuosoInterface):
     def _execute_skill_once(self, skill_code: str, timeout: int) -> str:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(timeout)
+            logger.debug("TCP connect %s:%d", self._host, self._port)
             s.connect((self._host, self._port))
+            logger.debug("TCP connected, sending %d-byte payload", len(skill_code))
             payload = json.dumps({"skill": skill_code, "timeout": timeout}).encode("utf-8")
             s.sendall(payload)
             s.shutdown(socket.SHUT_WR)
@@ -587,7 +849,9 @@ class VirtuosoClient(VirtuosoInterface):
                 if not chunk:
                     break
                 chunks.append(chunk)
-            return b"".join(chunks).decode("utf-8", errors="ignore")
+            raw = b"".join(chunks).decode("utf-8", errors="ignore")
+            logger.debug("TCP received %d bytes", len(raw))
+            return raw
 
     @staticmethod
     def _should_retry_tunnel_connect(exc: OSError, now: float, connect_deadline: float) -> bool:

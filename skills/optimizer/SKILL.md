@@ -1,77 +1,119 @@
 ---
 name: optimizer
-description: "Optimize circuit parameters by looping Spectre simulations. Default algorithm: TuRBO."
+description: "Black-box optimization of design parameters using TuRBO or scipy. TRIGGER when the user wants to optimize, tune, size, sweep, or explore a design space to meet specs. This includes circuit sizing (W/L, bias, passives), finding optimal operating points, minimizing power-delay or noise-power tradeoffs, or any task where multiple parameters need to be searched to hit a target. Also trigger when the user says things like 'find the best sizing', 'help me tune this', 'run an optimization', 'what values give me the best FOM', or 'sweep these parameters to meet spec'. Do NOT trigger for single-variable parametric sweeps or analytical calculations."
 ---
 
-# Circuit Optimizer Skill
+# Optimizer
 
-Optimize analog circuit parameters (transistor sizing, biasing, etc.) through automated Spectre simulation loops.
+## What this is
 
-## Pattern
+A black-box optimization framework. You give it:
+- A set of **parameters** with bounds (e.g. transistor widths, bias currents, resistor values)
+- An **evaluation function** that takes parameters and returns performance metrics
+- An **objective** that combines metrics into a single scalar to minimize
 
-```python
-import numpy as np
-from virtuoso_bridge.spectre.runner import SpectreSimulator
+The optimizer iteratively picks parameter values, evaluates them, and converges toward the optimum. It treats the evaluation as a black box — it doesn't need to know whether you're running Spectre, Maestro, a Python model, or anything else.
 
-sim = SpectreSimulator.from_env(work_dir="./opt_output", output_format="psfascii")
+## When to use
 
-# 1. Define parameters and bounds
-PARAMS = ["W_tail", "W_inp", "W_lat"]
-LB = np.array([0.5, 0.5, 0.5])
-UB = np.array([10., 10., 6.])
+- **Circuit sizing** — find W/L, bias currents, passive values that meet gain/BW/noise/power specs
+- **Design space exploration** — sweep a high-dimensional parameter space that's too large for manual tuning or parametric sweeps
+- **Multi-objective tradeoffs** — minimize power-delay product, noise-power FOM, etc.
+- **Any expensive black-box function** — the evaluation can be slow (seconds to minutes per point); TuRBO is sample-efficient
 
-# 2. Objective function: run Spectre, extract metric, return scalar
-def objective(x):
-    netlist = generate_netlist(x, PARAMS)  # write params into .scs template
-    result = sim.run_simulation(netlist, {})
-    if not result.ok:
-        return 1e6  # penalty for failed simulations
-    power = extract_power(result)
-    delay = extract_delay(result)
-    return power * delay  # minimize power-delay product
+## When NOT to use
 
-# 3. Run optimizer
-from turbo import Turbo1
-turbo = Turbo1(f=objective, lb=LB, ub=UB,
-               n_init=2*len(LB), max_evals=100, batch_size=1)
-turbo.optimize()
+- **Single-variable sweep** — just use a parametric sweep in Maestro or a for-loop
+- **Analytical solution exists** — if you can derive the optimum, don't search for it
+- **< 5 evaluations budget** — TuRBO needs at least `2 * n_params` initial samples
 
-# 4. Best result
-best_idx = turbo.fX.argmin()
-for name, val in zip(PARAMS, turbo.X[best_idx]):
-    print(f"  {name} = {val:.3f}")
-```
+## Algorithm choice
 
-## Netlist parameterization
-
-Use `@@PARAM@@` placeholders in a template netlist:
-
-```python
-def generate_netlist(x, param_names):
-    template = Path("tb_template.scs").read_text()
-    for name, val in zip(param_names, x):
-        template = template.replace(f"@@{name}@@", f"{val:.6g}")
-    out = Path("opt_output/tb_run.scs")
-    out.write_text(template)
-    return out
-```
-
-## Common objectives
-
-| Goal | Return value |
-|---|---|
-| Power-delay product | `power * delay` |
-| Noise-power FOM | `power * noise**2` |
-| Maximize gain-BW | `-(gain_db + 20*log10(bw))` |
-| With constraint | `obj + 1e3 * max(0, noise - 500e-6)**2` |
-
-Always return a scalar float. Return `1e6` on failure, never `nan`/`inf`.
+| Situation | Algorithm | Why |
+|-----------|-----------|-----|
+| ≤ 3 params, smooth | `scipy.optimize.minimize` | Fast, no GP overhead |
+| 3–20 params, noisy/expensive | TuRBO (`turbo.Turbo1`) | Sample-efficient Bayesian optimization with trust regions |
+| > 20 params | Consider random search + refinement | GP doesn't scale well beyond ~20D |
 
 ## Prerequisites
 
-```bash
-pip install torch gpytorch
-pip install -e TuRBO/    # local TuRBO repo
+- For TuRBO: `pip install torch gpytorch` and local TuRBO install (`pip install -e TuRBO/`)
+  - TuRBO (Trust Region Bayesian Optimization) comes from [uber-research/TuRBO](https://github.com/uber-research/TuRBO)
+- For scipy: included in standard Python scientific stack
+
+## Core pattern
+
+```python
+import numpy as np
+from turbo import Turbo1
+
+# 1. Define parameters and bounds
+PARAMS = ["W_tail", "W_inp", "R_load"]
+LB = np.array([0.5, 0.5, 100.])
+UB = np.array([10., 10., 5000.])
+
+# 2. Objective: params → scalar (minimize)
+def objective(x):
+    try:
+        result = evaluate(x, PARAMS)
+    except Exception:
+        return 1e6                     # penalty on failure, never nan/inf
+    return compute_metric(result)
+
+# 3. Run
+turbo = Turbo1(f=objective, lb=LB, ub=UB,
+               n_init=2*len(LB), max_evals=100, batch_size=1)
+turbo.optimize()
+best = turbo.X[turbo.fX.argmin()]
 ```
 
-Or use `scipy.optimize.minimize` for simpler cases — no GP overhead.
+## Evaluation backends
+
+The `evaluate()` function is the only part that changes between use cases:
+
+**Spectre netlist** — parameterize a `.scs` template and run remotely:
+```python
+from virtuoso_bridge.spectre.runner import SpectreSimulator
+sim = SpectreSimulator.from_env(work_dir="./opt", output_format="psfascii")
+
+def evaluate(x, params):
+    text = Path("tb_template.scs").read_text()
+    for name, val in zip(params, x):
+        text = text.replace(f"@@{name}@@", f"{val:.6g}")
+    Path("opt/tb.scs").write_text(text)
+    return sim.run_simulation(Path("opt/tb.scs"), {})
+```
+
+**Maestro** — set design variables and run an existing test via SKILL:
+```python
+from virtuoso_bridge import ramic_send
+
+def evaluate(x, params):
+    for name, val in zip(params, x):
+        ramic_send(f'maeSetDesignVar("{name}" {val:.6g})')
+    ramic_send('maeRunTest("myTest")')
+    gain = float(ramic_send('maeGetTestResult("myTest" "gain_db")'))
+    bw = float(ramic_send('maeGetTestResult("myTest" "bw_hz")'))
+    return {"gain": gain, "bw": bw}
+```
+
+**Any Python callable**:
+```python
+def evaluate(x, params):
+    return my_model.predict(dict(zip(params, x)))
+```
+
+## Objective design
+
+Return a **scalar float**. Return `1e6` on failure — never `nan` or `inf`, because these break the GP surrogate model and cause the optimizer to diverge.
+
+| Goal | Return |
+|------|--------|
+| Min power-delay | `power * delay` |
+| Max gain-bandwidth | `-(gain_db + 20*log10(bw))` |
+| With constraint | `obj + 1e3 * max(0, noise - spec)**2` |
+
+## Related skills
+
+- **spectre** — Spectre simulation runner, netlist syntax, result parsing
+- **virtuoso** — Maestro setup, schematic editing, design variable management

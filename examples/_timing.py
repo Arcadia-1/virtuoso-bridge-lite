@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import Callable
 from typing import TypeVar
@@ -25,12 +24,9 @@ def print_elapsed(label: str, seconds: float) -> None:
 
 
 def decode_skill(raw: str) -> str:
-    """Decode a SKILL string return value (quoted + escape sequences)."""
-    raw = (raw or "").strip()
-    try:
-        return json.loads(raw) if raw.startswith('"') else raw
-    except json.JSONDecodeError:
-        return raw
+    """Decode a SKILL string return value. Delegates to virtuoso_bridge."""
+    from virtuoso_bridge import decode_skill_output
+    return decode_skill_output(raw)
 
 
 def print_load_il(result: object) -> None:

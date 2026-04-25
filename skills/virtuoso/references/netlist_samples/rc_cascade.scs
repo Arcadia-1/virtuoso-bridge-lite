@@ -1,0 +1,23 @@
+// Library name: PLAYGROUND_LLM
+// Cell name: rc_unit
+// View name: schematic
+subckt rc_unit IN OUT VSS
+    C0 (OUT VSS) capacitor c=1e-12
+    R0 (IN OUT) resistor r=1000
+ends rc_unit
+// End of subcircuit definition.
+
+// Library name: PLAYGROUND_LLM
+// Cell name: rc_cascade_2
+// View name: schematic
+subckt rc_cascade_2 VIN VOUT VSS
+    X2 (MID VOUT VSS) rc_unit
+    X1 (VIN MID VSS) rc_unit
+ends rc_cascade_2
+// End of subcircuit definition.
+
+// Library name: PLAYGROUND_LLM
+// Cell name: tb_rc_cascade
+// View name: schematic
+X_DUT (VIN VOUT VSS) rc_cascade_2
+V1 (VIN VSS) vsource mag=1 type=sine

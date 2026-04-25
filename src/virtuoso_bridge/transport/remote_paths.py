@@ -7,6 +7,8 @@ import os
 import re
 from typing import TYPE_CHECKING
 
+from virtuoso_bridge.env import load_vb_env
+
 if TYPE_CHECKING:
     from virtuoso_bridge.transport.ssh import SSHRunner
 
@@ -14,6 +16,7 @@ REMOTE_SCRATCH_ROOT_ENV = "VB_REMOTE_SCRATCH_ROOT"
 
 def remote_scratch_root() -> str:
     """Base directory for remote scratch (default ``/tmp``)."""
+    load_vb_env()
     return os.environ.get(REMOTE_SCRATCH_ROOT_ENV, "/tmp").rstrip("/")
 
 def sanitize_username_for_path(username: str) -> str:

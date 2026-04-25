@@ -4,7 +4,6 @@
 import sys
 import socket
 import os
-import fcntl
 import json
 import signal
 import threading
@@ -12,9 +11,27 @@ import time
 import errno
 import traceback
 
-# Python 2.7 compatibility: try to import psutil, fallback to manual PID detection
 try:
-    import psutil
+    import fcntl as _fcntl
+except ImportError:
+    _fcntl = None
+
+_fcntl_fn = getattr(_fcntl, "fcntl", None)
+_f_getfl = getattr(_fcntl, "F_GETFL", 3)
+_f_setfl = getattr(_fcntl, "F_SETFL", 4)
+_o_nonblock = int(getattr(os, "O_NONBLOCK", 0))
+
+
+def _fcntl_or_die(*args):
+    if _fcntl_fn is None:
+        raise RuntimeError("fcntl is unavailable on this platform")
+    return _fcntl_fn(*args)
+
+# Python 2.7 compatibility: try to import psutil, fallback to manual PID detection
+psutil = None
+try:
+    import psutil as _psutil
+    psutil = _psutil
     PSUTIL_AVAILABLE = True
 except ImportError:
     PSUTIL_AVAILABLE = False
@@ -27,13 +44,14 @@ PORT = int(sys.argv[2])
 timeout_flag = False
 
 # Get Virtuoso's PID - this is the process we need to send signals to
-if PSUTIL_AVAILABLE:
+if PSUTIL_AVAILABLE and psutil is not None:
     # Use psutil if available
     current_process = psutil.Process()
     parent_process = current_process.parent()
+    grandparent_process = parent_process.parent() if parent_process else None
     # Python 2.7 compatibility: handle None case
-    if parent_process and parent_process.parent():
-        virtuoso_pid = parent_process.parent().pid
+    if grandparent_process:
+        virtuoso_pid = grandparent_process.pid
     else:
         virtuoso_pid = os.getppid()
 else:
@@ -64,16 +82,34 @@ else:
 # Set stdin to non-blocking mode for reading Virtuoso responses
 # Note: Only stdin needs to be non-blocking, stdout should remain blocking
 stdin_fd = sys.stdin.fileno()
-stdin_fl = fcntl.fcntl(stdin_fd, fcntl.F_GETFL)
-fcntl.fcntl(stdin_fd, fcntl.F_SETFL, stdin_fl | os.O_NONBLOCK)
+stdin_fl = _fcntl_or_die(stdin_fd, _f_getfl)
+_fcntl_or_die(stdin_fd, _f_setfl, stdin_fl | _o_nonblock)
 
 # Keep stdout blocking for reliable writes
 stdout_fd = sys.stdout.fileno()
-stdout_fl = fcntl.fcntl(stdout_fd, fcntl.F_GETFL)
-fcntl.fcntl(stdout_fd, fcntl.F_SETFL, stdout_fl & ~os.O_NONBLOCK)  # Ensure blocking
+stdout_fl = _fcntl_or_die(stdout_fd, _f_getfl)
+_fcntl_or_die(stdout_fd, _f_setfl, stdout_fl & ~_o_nonblock)  # Ensure blocking
 
 # Global watchdog timer reference
 watchdog_timer = None
+
+
+def _safe_sendall(conn, data):
+    try:
+        conn.sendall(data)
+    except socket.error:
+        pass
+
+
+def _safe_close_connection(conn):
+    try:
+        conn.shutdown(socket.SHUT_RDWR)
+    except socket.error:
+        pass
+    try:
+        conn.close()
+    except socket.error:
+        pass
 
 def watchdog_callback():
     """Watchdog callback function that sends SIGINT signal to Virtuoso process when timeout occurs."""
@@ -182,7 +218,24 @@ def handle_external_connection(conn, addr):
                 else:
                     break  # Other error, stop clearing
 
-        sys.stdout.write(skill_code)
+        # Multi-line SKILL: write to temp file and load() it.
+        # This preserves comments (;) which would break single-line flattening.
+        # We wrap the code so the return value is captured in a global variable,
+        # because load() itself only returns t, not the last expression's value.
+        tmp_il_path = None
+        if "\n" in skill_code or (hasattr(skill_code, 'decode') and b"\n" in skill_code):
+            import tempfile
+            fd, tmp_il_path = tempfile.mkstemp(suffix=".il", prefix="vb_eval_")
+            f = os.fdopen(fd, "w")
+            code_str = skill_code.decode("utf-8") if isinstance(skill_code, bytes) else skill_code
+            f.write("_vb_eval_result = progn(\n%s\n)\n" % code_str)
+            f.close()
+            escaped_path = tmp_il_path.replace("\\", "/")
+            send_code = 'load("%s") hiFlush() _vb_eval_result\n' % escaped_path
+        else:
+            send_code = 'let(((__vb_r %s)) hiFlush() __vb_r)\n' % skill_code
+
+        sys.stdout.write(send_code)
         sys.stdout.flush()
 
         # Start watchdog timer
@@ -202,32 +255,38 @@ def handle_external_connection(conn, addr):
 
         # Python 2.7 compatibility: handle returnData properly
         if isinstance(returnData, bytearray):
-            conn.sendall(str(returnData))
+            _safe_sendall(conn, str(returnData))
         elif hasattr(returnData, 'encode'):  # Check if it's unicode
-            conn.sendall(returnData.encode('utf-8'))
+            _safe_sendall(conn, returnData.encode('utf-8'))
         else:
-            conn.sendall(returnData)
+            _safe_sendall(conn, returnData)
+
+        # Clean up temp file if we used one
+        if tmp_il_path:
+            try:
+                os.unlink(tmp_il_path)
+            except OSError:
+                pass
 
     except ValueError as e:
         # Python 2.7 compatibility: handle JSON decode errors
         error_msg = "\x15JSONDecodeError: {0}".format(str(e))
         if hasattr(error_msg, 'encode'):  # Check if it's unicode
             error_msg = error_msg.encode('utf-8')
-        conn.sendall(error_msg)
+        _safe_sendall(conn, error_msg)
     except Exception as e:
         # Python 2.7 compatibility: except Exception, e syntax
         traceback.print_exc()
         error_msg = "\x15{0}".format(str(e))
         if hasattr(error_msg, 'encode'):  # Check if it's unicode
             error_msg = error_msg.encode('utf-8')
-        conn.sendall(error_msg)
+        _safe_sendall(conn, error_msg)
     finally:
         # Ensure watchdog timer is cleaned up
         timeout_flag = True
         if watchdog_timer:
             watchdog_timer.cancel()
-        conn.shutdown(socket.SHUT_RDWR)
-        conn.close()
+        _safe_close_connection(conn)
 
 def start_server():
     """Start the TCP server to accept client connections."""
@@ -252,7 +311,11 @@ def start_server():
         s.listen(1)
         while True:
             conn, addr = s.accept()
-            handle_external_connection(conn, addr)
+            try:
+                handle_external_connection(conn, addr)
+            except Exception:
+                traceback.print_exc()
+                _safe_close_connection(conn)
     finally:
         s.close()
 
