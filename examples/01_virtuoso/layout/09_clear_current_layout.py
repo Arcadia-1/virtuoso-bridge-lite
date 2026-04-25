@@ -16,6 +16,13 @@ from virtuoso_bridge.virtuoso.layout import clear_current_layout
 def main() -> int:
     client = VirtuosoClient.from_env()
 
+    elapsed, design = timed_call(client.get_current_design)
+    print(f"[get_current_design] [{format_elapsed(elapsed)}]")
+    lib, cell, view = design
+    if not lib or not cell or view != "layout":
+        print("Open a layout cellview in Virtuoso first.")
+        return 1
+
     elapsed, result = timed_call(
         lambda: client.execute_skill(clear_current_layout(), timeout=30)
     )
