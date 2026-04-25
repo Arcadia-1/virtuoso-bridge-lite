@@ -531,11 +531,15 @@ class SSHRunner:
 
     def _run_command_once(self, command: str, timeout: int | None = None) -> CommandResult:
         effective_timeout = timeout or self._timeout
-        # Pipe the command to `ssh host sh` via stdin so it always runs in sh
-        # regardless of the remote user's login shell (which may be csh).
+        # Pipe the command to `ssh host sh -l` via stdin so it always runs in
+        # a POSIX login shell regardless of the remote user's login shell
+        # (which may be csh).  Using -l (login) sources /etc/profile and
+        # ~/.profile, making tools like python3 visible via PATH.
         # Passing the command as an SSH argument would have the login shell
         # interpret it, breaking sh syntax (&&, ${VAR:-}, etc.) if login=csh.
-        cmd = self._build_ssh_base() + ["sh"]
+        # sh -l only reads sh-syntax profiles, never ~/.cshrc, so existing
+        # csh users are unaffected.
+        cmd = self._build_ssh_base() + ["sh", "-l"]
         self._print_cmd(cmd)
         logger.info("[server] %s", command)
         # Use bytes (text=False) to bypass Windows universal-newlines translation
@@ -869,7 +873,7 @@ class SSHRunner:
                 return
 
             self._close_persistent_shell_locked()
-            cmd = self._build_ssh_base() + ["sh", "-s"]
+            cmd = self._build_ssh_base() + ["sh", "-l", "-s"]
             logger.info("Starting persistent SSH shell: %s", " ".join(cmd))
             self._print_cmd(cmd)
             proc = subprocess.Popen(
