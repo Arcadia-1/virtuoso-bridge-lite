@@ -100,6 +100,7 @@ virtuoso-bridge start         # start SSH tunnel
 virtuoso-bridge status        # verify connection
 virtuoso-bridge windows       # list all open Virtuoso windows
 virtuoso-bridge screenshot    # screenshot CIW (or: current, N)
+virtuoso-bridge export-visio MyLib MyCell -o MyCell.vsdx  # Windows + Visio
 ```
 
 ```python
