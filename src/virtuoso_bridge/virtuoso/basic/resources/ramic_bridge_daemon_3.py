@@ -220,18 +220,34 @@ def start_server():
             raise
         s.listen(1)
         # Banner -- SKILL side parses this from stderr to populate
-        # RBLastPid / RBLastBind / RBLastHost for the monitor display.
-        # Format is frozen: "[RB-banner] pid=N bind=H:P host=NAME".
-        # ``host`` is the daemon machine's hostname (socket.gethostname),
-        # not the bind interface, so the GUI can show "thu-wei" rather
-        # than "0.0.0.0".
+        # RBLastPid / RBLastBind / RBLastHost / RBLastIP for the monitor
+        # display.  Format is frozen:
+        #   "[RB-banner] pid=N bind=H:P host=NAME ip=A.B.C.D"
         try:
             _hn = socket.gethostname() or "unknown"
         except Exception:
             _hn = "unknown"
+        # Best-effort outward-facing IPv4: ask the kernel which source
+        # IP it would pick for outbound traffic.  UDP connect() sends
+        # nothing on the wire, it just runs the route lookup so that
+        # getsockname() returns the chosen local address.  Bypasses
+        # /etc/hosts entries that map hostname to 127.0.0.1.
+        _ip = ""
+        try:
+            _probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                _probe.connect(("8.8.8.8", 80))
+                _ip = _probe.getsockname()[0]
+            finally:
+                _probe.close()
+        except Exception:
+            try:
+                _ip = socket.gethostbyname(socket.gethostname())
+            except Exception:
+                _ip = ""
         sys.stderr.write(
-            "[RB-banner] pid={pid} bind={host}:{port} host={hn}\n".format(
-                pid=os.getpid(), host=HOST, port=PORT, hn=_hn,
+            "[RB-banner] pid={pid} bind={host}:{port} host={hn} ip={ip}\n".format(
+                pid=os.getpid(), host=HOST, port=PORT, hn=_hn, ip=(_ip or "unknown"),
             )
         )
         sys.stderr.flush()

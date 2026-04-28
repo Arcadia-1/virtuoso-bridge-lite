@@ -310,15 +310,29 @@ def start_server():
 
         s.listen(1)
         # Banner -- SKILL side parses this from stderr to populate
-        # RBLastPid / RBLastBind / RBLastHost for the monitor display.
-        # Format is frozen: "[RB-banner] pid=N bind=H:P host=NAME".
+        # RBLastPid / RBLastBind / RBLastHost / RBLastIP for the monitor
+        # display.  Format is frozen:
+        #   "[RB-banner] pid=N bind=H:P host=NAME ip=A.B.C.D"
         try:
             _hn = socket.gethostname() or "unknown"
         except Exception:
             _hn = "unknown"
+        _ip = ""
+        try:
+            _probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                _probe.connect(("8.8.8.8", 80))
+                _ip = _probe.getsockname()[0]
+            finally:
+                _probe.close()
+        except Exception:
+            try:
+                _ip = socket.gethostbyname(socket.gethostname())
+            except Exception:
+                _ip = ""
         sys.stderr.write(
-            "[RB-banner] pid={0} bind={1}:{2} host={3}\n".format(
-                os.getpid(), HOST, PORT, _hn,
+            "[RB-banner] pid={0} bind={1}:{2} host={3} ip={4}\n".format(
+                os.getpid(), HOST, PORT, _hn, (_ip or "unknown"),
             )
         )
         sys.stderr.flush()

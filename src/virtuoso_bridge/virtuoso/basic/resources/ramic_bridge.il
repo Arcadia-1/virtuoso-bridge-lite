@@ -38,6 +38,7 @@ unless(boundp('RBStderrBuf) RBStderrBuf = "")
 unless(boundp('RBLastPid) RBLastPid = nil)
 unless(boundp('RBLastBind) RBLastBind = "")
 unless(boundp('RBLastHost) RBLastHost = "")
+unless(boundp('RBLastIP) RBLastIP = "")
 
 procedure(RBIpcDataHandler(ipcId data)
   ; Handler for successful data received from the Python daemon.
@@ -90,15 +91,23 @@ procedure(RBIpcErrHandler(ipcId data)
                 when(strlen(tok) > 5 && equal(substring(tok 1 5) "bind=")
                     RBLastBind = substring(tok 6))
                 when(strlen(tok) > 5 && equal(substring(tok 1 5) "host=")
-                    RBLastHost = substring(tok 6)))
+                    RBLastHost = substring(tok 6))
+                when(strlen(tok) > 3 && equal(substring(tok 1 3) "ip=")
+                    RBLastIP = substring(tok 4)))
             ; First banner of this daemon's lifetime --> announce
-            ; "ready" with the populated pid + host.  RBStart printed
+            ; "ready" with the populated identity.  RBStart printed
             ; only "launching" earlier; this is the authoritative
             ; startup ack and avoids the pid=nil race window.
             when(RBLastPid && !prevPid
-                printf("[RAMIC Bridge ipc=%L host=%s pid=%L] ready: bind=%s log=%s\n"
-                    ipcId RBLastHost RBLastPid RBLastBind
-                    if(RBDLog "/tmp/RB.log" "off"))))
+                printf("[RAMIC Bridge ipc=%L %s pid=%L] ready: bind=%s log=%s\n"
+                    ipcId
+                    sprintf(nil "%s (%s)" RBLastIP RBLastHost)
+                    RBLastPid RBLastBind
+                    if(RBDLog "/tmp/RB.log" "off")))
+            ; Banner is the canonical "daemon just identified itself"
+            ; event -- repaint the monitor so users don't have to hit
+            ; Refresh after a fresh start.
+            when(boundp('RBMonInstalled) errset(RBMRefresh())))
     )
 )
 
@@ -111,6 +120,9 @@ procedure(RBIpcFinishHandler(ipcId data)
     when(exitStatus != 0 && strlen(RBStderrBuf) > 0
         printf("[RAMIC Bridge stderr]\n%s\n" RBStderrBuf))
     RBStderrBuf = ""
+    ; Daemon is gone -- repaint the monitor so it shows Down without
+    ; the user having to click Refresh.
+    when(boundp('RBMonInstalled) errset(RBMRefresh()))
   )
 )
 
@@ -327,7 +339,11 @@ hiCreateAppForm(
 ; Menu Integration
 ; ============================================================================
 
-; Create RAMIC menu in Virtuoso's banner
+; Create RAMIC menu in Virtuoso's banner.  Note: menu and form are
+; built only once per session (gated by RBMonInstalled); reloading
+; ramic_bridge.il updates the procedure bodies but cannot add new
+; menu entries without restarting Virtuoso.  In the meantime the
+; functions are still callable from the CIW directly.
 ramicMenu = hiCreatePulldownMenu(
 	'ramicMenu
 	"RAMIC"
@@ -338,9 +354,14 @@ ramicMenu = hiCreatePulldownMenu(
 			?callback "hiDisplayForm(RBMonitor)"
 		)
 		hiCreateMenuItem(
-			?name 'RAMIC_PrintLines
-			?itemText "Print Empty Lines"
-			?callback "RBPrintEmptyLines()"
+			?name 'RAMIC_PrintLines5
+			?itemText "Print 5 Empty Lines"
+			?callback "RBPrintEmptyLines(5)"
+		)
+		hiCreateMenuItem(
+			?name 'RAMIC_PrintLines10
+			?itemText "Print 10 Empty Lines"
+			?callback "RBPrintEmptyLines(10)"
 		)
 	)
 )
@@ -368,17 +389,29 @@ procedure(RBMRefresh()
 				sprintf(nil "%s:%d"
 					if(RBLocal "127.0.0.1" "0.0.0.0")
 					RBPort))
-			hostStr = if(RBLastHost && strlen(RBLastHost) > 0
-				sprintf(nil "host=%s  " RBLastHost)
-				"")
+			; Identity column: prefer "IP (hostname)"; fall back to
+			; whatever we have if the banner was older / partial.
+			hostStr = cond(
+				((strlen(RBLastIP) > 0 && strlen(RBLastHost) > 0)
+					sprintf(nil "%s (%s)  " RBLastIP RBLastHost))
+				((strlen(RBLastIP) > 0)
+					sprintf(nil "%s  " RBLastIP))
+				((strlen(RBLastHost) > 0)
+					sprintf(nil "%s  " RBLastHost))
+				(t ""))
 			RBMonitor->RBMState->value = sprintf(nil
 				"RAMIC Bridge: Running   %sipc=%L  pid=%L  bind=%s"
 				hostStr RBIpc RBLastPid bind)
 		)
 	else
 		RBMonitor->RBMState->value = if(RBLastPid
-			sprintf(nil "RAMIC Bridge: Down   (last host=%s pid=%L port=%d)"
-				if(RBLastHost && strlen(RBLastHost) > 0 RBLastHost "?")
+			sprintf(nil "RAMIC Bridge: Down   (last %s pid=%L port=%d)"
+				cond(
+					((strlen(RBLastIP) > 0 && strlen(RBLastHost) > 0)
+						sprintf(nil "%s (%s)" RBLastIP RBLastHost))
+					((strlen(RBLastIP) > 0) RBLastIP)
+					((strlen(RBLastHost) > 0) RBLastHost)
+					(t "host=?"))
 				RBLastPid RBPort)
 			"RAMIC Bridge: Down")
 	)
@@ -414,8 +447,10 @@ procedure(RBMApply()
 	)
 )
 
-procedure(RBPrintEmptyLines()
-	printf("\n\n\n\n\n\n\n\n\n\n\n\n")
+procedure(RBPrintEmptyLines(@optional (n 10))
+    ; Push old CIW lines off-screen for a clean visual workspace.
+    ; Default 10; pass any positive integer.
+    for(i 1 n printf("\n"))
 )
 
 ; Auto-start the bridge when this file is loaded (no second daemon if already up)
