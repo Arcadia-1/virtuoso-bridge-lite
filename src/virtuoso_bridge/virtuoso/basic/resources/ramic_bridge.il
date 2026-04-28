@@ -266,7 +266,11 @@ progn(
 ; single-RBMState label is kept for back-compat (other code may set it
 ; out of habit) but no longer shown in the layout.
 ; ----------------------------------------------------------------------
-RBMState = hiCreateLabel(?name 'RBMState ?labelText "" ?justification CDS_JUSTIFY_LEFT)
+; Legacy single-line label kept for back-compat with code that still
+; sets RBMonitor->RBMState->value.  Not laid out in the new form.
+; Empty labelText would error out on hiCreateLabel ("required parameter"),
+; so seed with one space.
+RBMState = hiCreateLabel(?name 'RBMState ?labelText " " ?justification CDS_JUSTIFY_LEFT)
 
 RBMSecStatus = hiCreateLabel(
     ?name 'RBMSecStatus
@@ -281,17 +285,17 @@ errset(RBMStatusIcon->foreground = "ForestGreen")
 
 RBMHostLabel = hiCreateLabel(
     ?name 'RBMHostLabel
-    ?labelText ""
+    ?labelText " "
     ?justification CDS_JUSTIFY_LEFT)
 
 RBMConnLabel = hiCreateLabel(
     ?name 'RBMConnLabel
-    ?labelText ""
+    ?labelText " "
     ?justification CDS_JUSTIFY_LEFT)
 
 RBMStatsLabel = hiCreateLabel(
     ?name 'RBMStatsLabel
-    ?labelText ""
+    ?labelText " "
     ?justification CDS_JUSTIFY_LEFT)
 
 ; ----------------------------------------------------------------------
