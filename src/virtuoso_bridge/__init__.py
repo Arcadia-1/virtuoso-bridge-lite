@@ -1,5 +1,7 @@
 """virtuoso-bridge – Python bridge for executing SKILL in Cadence Virtuoso."""
 
+from __future__ import annotations
+
 from importlib.metadata import version as _pkg_version
 
 try:

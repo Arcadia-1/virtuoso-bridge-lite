@@ -250,6 +250,7 @@ virtuoso-bridge license         # check Spectre license availability
 virtuoso-bridge windows         # list all open Virtuoso windows + focused session
 virtuoso-bridge snapshot        # focused maestro: 4 SKILL probe sections to stdout
 virtuoso-bridge snapshot -o ROOT  # full disk dump (raw + filtered XMLs + per-point run files)
+virtuoso-bridge export-visio LIB CELL -o out.vsdx  # Windows + Visio/pywin32 schematic export
 virtuoso-bridge screenshot      # screenshot CIW (or: current, N)
 virtuoso-bridge dismiss-dialog  # dismiss blocking GUI dialogs via X11
 ```
