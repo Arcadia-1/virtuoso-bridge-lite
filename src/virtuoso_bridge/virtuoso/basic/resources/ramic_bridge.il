@@ -65,13 +65,26 @@ procedure(RBIpcErrHandler(ipcId data)
     when(strlen(RBStderrBuf) > 8192
         RBStderrBuf = substring(RBStderrBuf strlen(RBStderrBuf)-8191 8192))
     ; Parse the daemon's startup banner ("[RB-banner] pid=N bind=H:P")
-    ; out of stderr.  Cadence SKILL has no portable shell-output API;
-    ; ipcGetPid is unreliable across IC releases.  This banner is the
-    ; simplest authoritative source for the OS pid the SKILL side can
-    ; use to drive the monitor GUI.
-    when(pcreMatchp("\\[RB-banner\\] pid=([0-9]+) bind=([^ \t\n]+)" data)
-        RBLastPid = atoi(pcreSubstring(1))
-        RBLastBind = pcreSubstring(2))
+    ; from stderr.  Plain SKILL string ops only -- pcreSubstring is
+    ; not available on every IC6.1.x install, and SKILL-level ``index``
+    ; returns the matched suffix (not a position).  We tokenise on
+    ; whitespace and pluck the pid=/bind= tokens.
+    ;
+    ; Note: SKILL string-literal escapes (\t, \n) are not honoured
+    ; consistently across IC builds when used inside parseString's
+    ; separator argument -- on this IC6.1.8 install ``" \t\n"`` does
+    ; NOT split on newline.  We build the separator with explicit
+    ; char codes (TAB=9, LF=10) so behaviour is identical everywhere.
+    let((sep)
+        sep = strcat(" "
+                     buildString(list(intToChar(9)))
+                     buildString(list(intToChar(10))))
+        when(member("[RB-banner]" parseString(data sep))
+            foreach(tok parseString(data sep)
+                when(strlen(tok) > 4 && equal(substring(tok 1 4) "pid=")
+                    RBLastPid = atoi(substring(tok 5)))
+                when(strlen(tok) > 5 && equal(substring(tok 1 5) "bind=")
+                    RBLastBind = substring(tok 6)))))
 )
 
 procedure(RBIpcFinishHandler(ipcId data)
