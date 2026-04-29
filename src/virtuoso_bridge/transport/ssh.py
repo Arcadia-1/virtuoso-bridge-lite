@@ -360,6 +360,12 @@ class SSHRunner:
             "start_new_session": True,
             "stderr": subprocess.PIPE,
         }
+        # On Windows, suppress the console window the long-lived tunnel
+        # ssh.exe would otherwise pop up.  Detached + new process group
+        # so the tunnel survives the parent's exit.
+        popen_kwargs.update(_windows_no_window_kwargs(
+            detached=True, new_process_group=True
+        ))
         proc = subprocess.Popen(cmd, **popen_kwargs)
 
         jh_settle = max(settle, 3.0) if self._jump_host else settle
@@ -405,7 +411,10 @@ class SSHRunner:
             else:
                 cmd.append(self._host)
             try:
-                subprocess.run(cmd, capture_output=True, timeout=5)
+                subprocess.run(
+                    cmd, capture_output=True, timeout=5,
+                    **_windows_no_window_kwargs(),
+                )
                 logger.info("ControlMaster exited via -O exit")
             except (subprocess.TimeoutExpired, OSError):
                 pass
