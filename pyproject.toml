@@ -13,6 +13,12 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[project.optional-dependencies]
+# Schematic → Visio export (`virtuoso-bridge export-visio`).  Drives
+# Microsoft Visio via COM, Windows-only.  The pure model layer in
+# `virtuoso/visio.py` has no extra deps and stays importable everywhere.
+visio = ["pywin32; sys_platform == 'win32'"]
+
 [project.scripts]
 virtuoso-bridge = "virtuoso_bridge.cli:main"
 

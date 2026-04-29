@@ -11,6 +11,31 @@ import time
 import errno
 import traceback
 
+# Counters surfaced to the SKILL monitor via stderr [RB-stat] lines.
+# Throttled to ~1 Hz so heavy traffic doesn't flood stderr.
+_RB_START_T = time.time()
+_RB_CALLS = 0
+_RB_ERRORS = 0
+_RB_LAST_STAT_T = 0.0
+
+
+def _emit_stat(force=False):
+    global _RB_LAST_STAT_T
+    now = time.time()
+    if not force and now - _RB_LAST_STAT_T < 1.0:
+        return
+    _RB_LAST_STAT_T = now
+    try:
+        sys.stderr.write(
+            "[RB-stat] count={0} errors={1} uptime={2}\n".format(
+                _RB_CALLS, _RB_ERRORS, int(now - _RB_START_T)
+            )
+        )
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+
 try:
     import fcntl as _fcntl
 except ImportError:
@@ -261,6 +286,20 @@ def handle_external_connection(conn, addr):
         else:
             _safe_sendall(conn, returnData)
 
+        # Stats: count this call and tag as error if SKILL sent NAK
+        # (0x15) or the response is empty/malformed.  Throttled emit
+        # below pushes the totals to SKILL via stderr.
+        global _RB_CALLS, _RB_ERRORS
+        _RB_CALLS += 1
+        _first = returnData[:1] if returnData else b""
+        if isinstance(_first, str):
+            _is_ok = (_first == "\x02")
+        else:
+            _is_ok = (_first == b"\x02")
+        if not _is_ok:
+            _RB_ERRORS += 1
+        _emit_stat()
+
         # Clean up temp file if we used one
         if tmp_il_path:
             try:
@@ -309,6 +348,33 @@ def start_server():
                 raise
 
         s.listen(1)
+        # Banner -- SKILL side parses this from stderr to populate
+        # RBLastPid / RBLastBind / RBLastHost / RBLastIP for the monitor
+        # display.  Format is frozen:
+        #   "[RB-banner] pid=N bind=H:P host=NAME ip=A.B.C.D"
+        try:
+            _hn = socket.gethostname() or "unknown"
+        except Exception:
+            _hn = "unknown"
+        _ip = ""
+        try:
+            _probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                _probe.connect(("8.8.8.8", 80))
+                _ip = _probe.getsockname()[0]
+            finally:
+                _probe.close()
+        except Exception:
+            try:
+                _ip = socket.gethostbyname(socket.gethostname())
+            except Exception:
+                _ip = ""
+        sys.stderr.write(
+            "[RB-banner] pid={0} bind={1}:{2} host={3} ip={4}\n".format(
+                os.getpid(), HOST, PORT, _hn, (_ip or "unknown"),
+            )
+        )
+        sys.stderr.flush()
         while True:
             conn, addr = s.accept()
             try:

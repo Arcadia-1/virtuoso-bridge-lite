@@ -162,8 +162,8 @@
 <span class="cmt"># 4. Start the bridge</span>
 <span class="cmd">virtuoso-bridge start</span>
 
-<span class="cmt"># 5. Load SKILL in Virtuoso CIW</span>
-<span class="cmt"># load("/path/to/virtuoso-bridge-lite/core/ramic_bridge.il")</span>
+<span class="cmt"># 5. Load SKILL in Virtuoso CIW (path printed by `virtuoso-bridge start`)</span>
+<span class="cmt"># load("/tmp/virtuoso_bridge_&lt;user&gt;/virtuoso_bridge/virtuoso_setup.il")</span>
 
 <span class="cmt"># 6. Verify</span>
 <span class="cmd">virtuoso-bridge status</span></code></pre>
@@ -196,7 +196,7 @@ VB_REMOTE_USER_worker1=user2</code></pre>
 
 bridge = VirtuosoClient.<span class="fn">local</span>(port=65432)
 bridge.<span class="fn">execute_skill</span>(<span class="str">"1+2"</span>)</code></pre>
-    <p style="color:var(--muted);font-size:0.9rem">No tunnel, no <code>.env</code>, no SSH. Just load <code>core/ramic_bridge.il</code> in Virtuoso CIW and connect.</p>
+    <p style="color:var(--muted);font-size:0.9rem">Set <code>VB_REMOTE_HOST=localhost</code> and run <code>virtuoso-bridge start</code> — it skips the SSH tunnel, deploys the bridge files locally, and prints the <code>load(...)</code> line for the CIW.</p>
   </div>
 
   <!-- API Reference -->

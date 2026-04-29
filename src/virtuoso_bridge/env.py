@@ -42,9 +42,19 @@ def resolve_env_path(explicit: str | Path | None = None, *, cwd: Path | None = N
             raise FileNotFoundError(f".env file not found: {env_path}")
         return env_path
 
-    cwd_env = base_cwd / ".env"
-    if cwd_env.is_file():
-        return cwd_env
+    # Walk cwd upward and pick the first .env that looks like a VB config
+    # (contains VB_REMOTE_HOST or VB_LOCAL_PORT).  Skips unrelated .env files
+    # belonging to other projects between the user's cwd and the VB workspace.
+    for parent in [base_cwd, *base_cwd.parents]:
+        candidate = parent / ".env"
+        if not candidate.is_file():
+            continue
+        try:
+            text = candidate.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if "VB_REMOTE_HOST" in text or "VB_LOCAL_PORT" in text:
+            return candidate
 
     user_env = default_user_env_path()
     if user_env.is_file():

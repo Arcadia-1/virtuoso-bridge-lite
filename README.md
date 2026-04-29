@@ -55,7 +55,7 @@ A new infrastructure for **Agentic Analog and Mixed-Signal Design**. LLM Agents 
 **In short:** Both projects are built on the same Cadence SKILL IPC facility, using the same core mechanism: `ipcBeginProcess` + `evalstring` + `ipcWriteProcess`. Here are the core lines from each:
 
 <details>
-<summary><b>virtuoso-bridge-lite</b> — <code>core/ramic_bridge.il</code></summary>
+<summary><b>virtuoso-bridge-lite</b> — <code>src/virtuoso_bridge/virtuoso/basic/resources/ramic_bridge.il</code></summary>
 
 ```skill
 RBIpc = ipcBeginProcess(
@@ -100,6 +100,9 @@ virtuoso-bridge start         # start SSH tunnel
 virtuoso-bridge status        # verify connection
 virtuoso-bridge windows       # list all open Virtuoso windows
 virtuoso-bridge screenshot    # screenshot CIW (or: current, N)
+virtuoso-bridge export-visio MyLib MyCell -o MyCell.vsdx  # Windows + Visio
+                                                          # (NMOS/PMOS bulk pin `B` is dropped by default;
+                                                          #  add --include-body-pins to draw bulk nets too)
 ```
 
 ```python

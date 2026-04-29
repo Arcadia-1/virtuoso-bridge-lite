@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Clear routing shapes from the current layout while keeping instances."""
+"""Read a lightweight summary of shapes and instances from the current layout cell.
+
+Prerequisites:
+  - virtuoso-bridge service running (virtuoso-bridge start)
+  - A layout cellview must be open in Virtuoso
+"""
 
 from __future__ import annotations
 
@@ -10,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from _timing import decode_skill, format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
-from virtuoso_bridge.virtuoso.layout.ops import layout_clear_routing
+from virtuoso_bridge.virtuoso.layout.ops import layout_read_summary
 
 
 def main() -> int:
@@ -23,11 +28,17 @@ def main() -> int:
         print("Open a layout cellview in Virtuoso first.")
         return 1
 
-    elapsed, result = timed_call(
-        lambda: client.execute_skill(layout_clear_routing(), timeout=30)
+    read_elapsed, result = timed_call(
+        lambda: client.execute_skill(layout_read_summary(lib, cell), timeout=30)
     )
-    print(f"[layout_clear_routing] [{format_elapsed(elapsed)}]")
-    print(decode_skill(result.output or ""))
+    print(f"[layout_read_summary] [{format_elapsed(read_elapsed)}]")
+
+    output = decode_skill(result.output or "")
+    if output.startswith("ERROR"):
+        print(output)
+        return 1
+
+    print(output)
     return 0
 
 

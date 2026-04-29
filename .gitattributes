@@ -1,0 +1,6 @@
+# Visio stencils — binary, never diff/merge as text
+*.vss   binary
+*.vsdx  binary
+
+# PSF binary waveforms (handy if anyone ever commits one by accident)
+*.raw   binary

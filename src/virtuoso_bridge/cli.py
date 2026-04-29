@@ -68,8 +68,16 @@ def _generate_env_template(
     return text
 
 
+_PRINTED_ENV_PATH: Path | None = None
+
+
 def _load_cli_env() -> Path | None:
-    return load_vb_env()
+    global _PRINTED_ENV_PATH
+    env_path = load_vb_env()
+    if env_path is not None and env_path != _PRINTED_ENV_PATH:
+        print(f"using .env: {env_path}")
+        _PRINTED_ENV_PATH = env_path
+    return env_path
 
 
 def _fmt(seconds: float) -> str:
@@ -656,6 +664,18 @@ _SNAPSHOT_OPTS: dict = {
     "history":     None,
 }
 
+_EXPORT_VISIO_OPTS: dict = {
+    "lib":               None,
+    "cell":              None,
+    "output":            None,
+    "stencil":           None,
+    "scale":             1.0,
+    "exclude_nets":      [],
+    "exclude_pins":      ["B"],
+    "include_body_pins": False,
+    "hidden":            False,
+}
+
 
 def cli_windows() -> int:
     """List all open Virtuoso windows.
@@ -820,6 +840,49 @@ def _print_maestro_brief(d: dict) -> None:
         print(text, end="")
 
 
+def cli_export_visio() -> int:
+    """Export a schematic to Microsoft Visio."""
+    _load_cli_env()
+    from virtuoso_bridge import VirtuosoClient
+    from virtuoso_bridge.virtuoso.visio import export_schematic_to_visio
+
+    opts = _EXPORT_VISIO_OPTS
+    client = VirtuosoClient.from_env(profile=_get_cli_profile())
+    lib = opts["lib"]
+    cell = opts["cell"]
+    if not lib or not cell:
+        lib, cell, _ = client.get_current_design()
+        if not lib or not cell:
+            print("Usage: virtuoso-bridge export-visio LIB CELL [-o output.vsdx]")
+            print("       or open a schematic in Virtuoso first.")
+            return 1
+
+    exclude_pins = [] if opts["include_body_pins"] else opts["exclude_pins"]
+    output = opts["output"] or f"{lib}_{cell}.vsdx"
+    try:
+        model = export_schematic_to_visio(
+            client,
+            lib,
+            cell,
+            output_path=output,
+            stencil_path=opts["stencil"],
+            visible=not opts["hidden"],
+            scale=opts["scale"],
+            exclude_nets=opts["exclude_nets"],
+            exclude_pins=exclude_pins,
+        )
+    except RuntimeError as exc:
+        print(f"Error: {exc}")
+        return 1
+
+    print(
+        f"Exported {lib}/{cell}/schematic: "
+        f"{len(model.instances)} instances, {len(model.nets)} routed nets"
+    )
+    print(str(output))
+    return 0
+
+
 def cli_screenshot() -> int:
     """Take a screenshot of a Virtuoso window."""
     _load_cli_env()
@@ -919,6 +982,34 @@ def build_parser() -> argparse.ArgumentParser:
     sp_snap.add_argument("--env", default=None,
                          help="Explicit .env file path (highest priority)")
 
+    sp_visio = subparsers.add_parser(
+        "export-visio",
+        help="Export a schematic to Microsoft Visio (Windows + pywin32)")
+    sp_visio.add_argument("lib", nargs="?", default=None,
+                          help="Virtuoso library name")
+    sp_visio.add_argument("cell", nargs="?", default=None,
+                          help="Virtuoso cell name")
+    sp_visio.add_argument("-o", "--output", default=None,
+                          help="Output .vsdx/.vsd file path")
+    sp_visio.add_argument("--stencil", default=None,
+                          help="Visio stencil (.vss/.vssx); defaults to circuit.vss")
+    sp_visio.add_argument("--scale", type=float, default=1.0,
+                          help="Scale factor applied to Virtuoso coordinates")
+    sp_visio.add_argument("--exclude-net", dest="exclude_nets",
+                          action="append", default=[],
+                          help="Net name to skip while routing (repeatable)")
+    sp_visio.add_argument("--exclude-pin", dest="exclude_pins",
+                          action="append", default=["B"],
+                          help="Pin name to skip while routing (default: B; repeatable)")
+    sp_visio.add_argument("--include-body-pins", action="store_true",
+                          help="Do not skip MOS body pins")
+    sp_visio.add_argument("--hidden", action="store_true",
+                          help="Run Visio hidden while exporting")
+    sp_visio.add_argument("-p", "--profile", default=None,
+                          help="Connection profile")
+    sp_visio.add_argument("--env", default=None,
+                          help="Explicit .env file path (highest priority)")
+
     return parser
 
 
@@ -958,6 +1049,7 @@ def main(argv: list[str] | None = None) -> int:
         "screenshot": cli_screenshot,
         "windows": cli_windows,
         "snapshot": cli_snapshot,
+        "export-visio": cli_export_visio,
     }
     # Pass profile to commands that support it
     profile = getattr(args, "profile", None)
@@ -972,6 +1064,11 @@ def main(argv: list[str] | None = None) -> int:
             v = getattr(args, k, None)
             if v is not None:
                 _SNAPSHOT_OPTS[k] = v
+    if args.command == "export-visio":
+        for k in _EXPORT_VISIO_OPTS:
+            v = getattr(args, k, None)
+            if v is not None:
+                _EXPORT_VISIO_OPTS[k] = v
     return dispatch[args.command]()
 
 

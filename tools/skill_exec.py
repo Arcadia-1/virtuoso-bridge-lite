@@ -19,7 +19,7 @@ import json
 import argparse
 import os
 
-# IPC protocol markers — must match core/ramic_daemon.py
+# IPC protocol markers — must match src/virtuoso_bridge/virtuoso/basic/resources/ramic_bridge_daemon_3.py
 STX = b'\x02'  # start-of-result (success)
 NAK = b'\x15'  # start-of-result (error)
 

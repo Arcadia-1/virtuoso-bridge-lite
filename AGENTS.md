@@ -7,7 +7,7 @@ Control Cadence Virtuoso via Python — remotely over SSH or locally on the same
 | Mode | When | Setup |
 |---|---|---|
 | **Remote** | Virtuoso on a server, you work locally | Set `VB_REMOTE_HOST` in `.env`, run `virtuoso-bridge start` |
-| **Local** | Virtuoso on your own machine | Load `core/ramic_bridge.il` in CIW, use `VirtuosoClient.local()` |
+| **Local** | Virtuoso on your own machine | Set `VB_REMOTE_HOST=localhost`, run `virtuoso-bridge start`, load the path it prints into CIW |
 
 ## Prerequisites
 
@@ -65,9 +65,18 @@ virtuoso-bridge start
 
 **4. Load SKILL in Virtuoso CIW**
 
+`virtuoso-bridge start` deploys the SKILL bridge files to a per-user
+temp dir on the remote host and prints the exact `load(...)` line you
+need to paste into the CIW (the path includes your username, so it is
+collision-free across users on a shared machine):
+
 ```
-load("/path/to/virtuoso-bridge-lite/core/ramic_bridge.il")
+load("/tmp/virtuoso_bridge_<user>/virtuoso_bridge/virtuoso_setup.il")
 ```
+
+(Run `virtuoso-bridge status` again at any time to re-print this line.
+Add it to your remote `~/.cdsinit` to auto-load on every Virtuoso
+startup.)
 
 **5. Verify**
 
@@ -157,7 +166,11 @@ Your machine  ──SSH──►  Jump host (bastion)  ──SSH──►  Compu
 
 ### Local mode
 
-No tunnel, no `.env`, no SSH. Just load `core/ramic_bridge.il` in Virtuoso CIW and connect directly.
+Same flow as remote, but with `VB_REMOTE_HOST=localhost` (or `127.0.0.1`):
+`virtuoso-bridge start` notices it's local, skips the SSH tunnel, and
+deploys the SKILL bridge files to `/tmp/virtuoso_bridge_<user>/`.  Paste
+the `load(...)` line it prints into your CIW once, then connect from
+Python:
 
 ```python
 from virtuoso_bridge import VirtuosoClient
@@ -250,6 +263,10 @@ virtuoso-bridge license         # check Spectre license availability
 virtuoso-bridge windows         # list all open Virtuoso windows + focused session
 virtuoso-bridge snapshot        # focused maestro: 4 SKILL probe sections to stdout
 virtuoso-bridge snapshot -o ROOT  # full disk dump (raw + filtered XMLs + per-point run files)
+virtuoso-bridge export-visio LIB CELL -o out.vsdx  # Windows + Visio/pywin32 schematic export
+                                                   #   pip install -e .[visio]   to pull pywin32
+                                                   #   --include-body-pins       to draw NMOS/PMOS bulk (B) nets
+                                                   #   --stencil PATH            override circuit.vss location
 virtuoso-bridge screenshot      # screenshot CIW (or: current, N)
 virtuoso-bridge dismiss-dialog  # dismiss blocking GUI dialogs via X11
 ```
