@@ -31,6 +31,8 @@ import os
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 WORK_DIR = Path(__file__).resolve().parent / "output" / "spectre_inv"
 
 import matplotlib
@@ -42,7 +44,7 @@ from virtuoso_bridge.spectre.runner import SpectreSimulator, spectre_mode_args
 
 matplotlib.use("Agg")
 
-NETLIST = Path(__file__).resolve().parent / "assets" / "spectre_inv_tb.scs"
+NETLIST = Path(__file__).resolve().parent / "assets" / "inv_tb" / "spectre_inv_tb.scs"
 RUN_NETLIST = WORK_DIR / "spectre_inv_tb_run.scs"
 PLOT_PATH = WORK_DIR / "inv_waveforms.png"
 CSV_PATH = WORK_DIR / "inv_waveforms.csv"
