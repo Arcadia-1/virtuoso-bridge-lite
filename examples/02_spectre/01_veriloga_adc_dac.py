@@ -3,9 +3,9 @@
 
 Usage::
 
-    python examples/02_spectre/02_veriloga_adc_dac.py
-    python examples/02_spectre/02_veriloga_adc_dac.py --case sine
-    python examples/02_spectre/02_veriloga_adc_dac.py --case ramp
+    python examples/02_spectre/01_veriloga_adc_dac.py
+    python examples/02_spectre/01_veriloga_adc_dac.py --case sine
+    python examples/02_spectre/01_veriloga_adc_dac.py --case ramp
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _result_io import print_result_counts, print_timing_summary, save_summary_json, save_waveforms_csv
 from virtuoso_bridge.spectre.runner import spectre_mode_args
