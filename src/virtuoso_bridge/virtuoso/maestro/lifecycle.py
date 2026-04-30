@@ -222,7 +222,8 @@ let((result)
 # GUI session (required for simulation)
 # ---------------------------------------------------------------------------
 
-def open_gui_session(client: VirtuosoClient, lib: str, cell: str) -> str:
+def open_gui_session(client: VirtuosoClient, lib: str, cell: str,
+                     *, timeout: int = 60) -> str:
     """Open maestro in GUI mode, ready for simulation. Returns session string.
 
     Handles all edge cases safely:
@@ -230,6 +231,11 @@ def open_gui_session(client: VirtuosoClient, lib: str, cell: str) -> str:
     2. If an Editing GUI session exists for this cell, reuses it
     3. If a Reading GUI session exists, closes it (discards changes)
     4. Opens fresh GUI + maeMakeEditable if needed
+
+    `timeout` (default 60s) bounds the deOpenCellView SKILL call.
+    The previous hard-coded 10s was below the P50 of cold maestro opens
+    we observed (15-30s for fresh views, longer when results are being
+    indexed) and surfaced as a "Socket timeout after 10s" RuntimeError.
 
     Returns the session string (e.g. "fnxSession3").
     """
@@ -264,7 +270,7 @@ def open_gui_session(client: VirtuosoClient, lib: str, cell: str) -> str:
     logger.info("Opening GUI (editable): %s/%s/maestro", lib, cell)
     r = client.execute_skill(
         f'deOpenCellView("{lib}" "{cell}" "maestro" "maestro" nil "a")',
-        timeout=10)
+        timeout=timeout)
     if r.errors or not r.output or r.output.strip() in ("nil", ""):
         raise RuntimeError(f"deOpenCellView failed for {lib}/{cell}/maestro: {r.errors}")
 

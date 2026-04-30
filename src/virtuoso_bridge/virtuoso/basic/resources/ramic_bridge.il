@@ -53,9 +53,16 @@ procedure(RBIpcDataHandler(ipcId data)
   ; "\n" is flushed immediately.  Without "\n", output stays in the buffer
   ; until the next newline or explicit flush.  This differs from typing
   ; directly in CIW, where the interactive loop flushes after every command.
+  ;
+  ; We wrap data in (progn ...) so multi-statement payloads run all the
+  ; way through.  Bare evalstring() parses ONE form and silently drops
+  ; the rest -- callers who paste multi-statement SKILL would see only
+  ; the first form take effect.  The progn wrap is a no-op for
+  ; single-form input and returns the last form's value for multi-form
+  ; input, matching what every Python caller already expects.
   let((result)
     when(RBEcho printf("[RAMIC Bridge (%L)] receive:%L\n" ipcId data))
-    if(errset(result=evalstring(data)) then
+    if(errset(result=evalstring(strcat("(progn " data ")"))) then
 	    ; Success: Send response with STX (0x02) start marker and RS (0x1E) end marker
 	    ipcWriteProcess(ipcId sprintf(nil "%c%L%c" intToChar(2) result intToChar(30)))
 		when(RBEcho printf("[RAMIC Bridge (%L)] return:%L\n" ipcId result))
