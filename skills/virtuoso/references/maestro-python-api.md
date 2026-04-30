@@ -45,15 +45,22 @@ See **[simulation-flow.md](simulation-flow.md)** for the complete 8-step guide (
 | `open_session(client, lib, cell) -> str` | `maeOpenSetup` | Background open, returns session string |
 | `close_session(client, session)` | `maeCloseSession` | Background close |
 | `find_open_session(client) -> str \| None` | `maeGetSessions` + `maeGetSetup` | Find first active session with valid test |
-| `open_gui_session(client, lib, cell) -> str` | `deOpenCellView` + `maeMakeEditable` | GUI open (required for simulation) |
-| `close_gui_session(client)` | `hiCloseWindow` | GUI close |
-| `purge_maestro_cellviews(client)` | `dbPurgeCellView` | Clean stale internal locks before opening |
+| `open_gui_session(client, lib, cell, *, timeout=60) -> str` | `deOpenCellView` + `maeMakeEditable` | GUI open (required for simulation) |
+| `close_gui_session(client, session, save=True, *, timeout=60)` | `hiCloseWindow` (+ `maeMakeEditable`/`dbPurge` as needed) | GUI close |
+| `purge_maestro_cellviews(client, *, timeout=60)` | `dbPurgeCellView` | Clean stale internal locks before opening |
 
 ```python
 session = open_session(client, "PLAYGROUND_AMP", "TB_AMP_5T_D2S_DC_AC")
 # ... do work ...
 close_session(client, session)
 ```
+
+**`timeout` kwarg** (`open_gui_session` / `close_gui_session` /
+`purge_maestro_cellviews`): bounds each blocking SKILL call in the
+helper. Default 60s — generous enough for cold maestro view opens
+(P50 15-30s on busy servers) and the close-path's `dbPurge`. Pass a
+larger value (e.g. `timeout=120`) on heavily loaded systems; pass a
+smaller one only if you have your own retry/cancel logic.
 
 ## Read — `snapshot()` (single entry)
 

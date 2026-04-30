@@ -78,7 +78,7 @@ def _send_x11_alt_n(runner) -> None:
 # Cellview memory management
 # ---------------------------------------------------------------------------
 
-def _purge_maestro_cellviews(client: VirtuosoClient) -> None:
+def _purge_maestro_cellviews(client: VirtuosoClient, *, timeout: int = 60) -> None:
     """Purge all maestro cellviews from Virtuoso's virtual memory.
 
     After hiCloseWindow + maeCloseSession, the cellview may still be
@@ -89,7 +89,7 @@ def _purge_maestro_cellviews(client: VirtuosoClient) -> None:
 foreach(cv dbGetOpenCellViews()
   when(cv~>viewName == "maestro"
     errset(dbPurge(cv))))
-''', timeout=10)
+''', timeout=timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +283,7 @@ def open_gui_session(client: VirtuosoClient, lib: str, cell: str,
 
 
 def close_gui_session(client: VirtuosoClient, session: str,
-                      save: bool = True) -> None:
+                      save: bool = True, *, timeout: int = 60) -> None:
     """Close a GUI maestro session safely.
 
     Checks window state before closing:
@@ -298,6 +298,10 @@ def close_gui_session(client: VirtuosoClient, session: str,
     Args:
         save: if True and session has unsaved changes, attempt to
               save before closing. If False, always discard changes.
+        timeout: budget (seconds) for each blocking SKILL call in the
+              close path (maeMakeEditable, hiCloseWindow, dbPurge).
+              Default 60s; previously hard-coded 10-15s, which was
+              below P50 of slow operations on a busy session.
     """
     windows = _get_session_windows(client)
     target_window = None
@@ -326,7 +330,7 @@ def close_gui_session(client: VirtuosoClient, session: str,
             if not other_editing:
                 # No conflict — promote to editable, save, close
                 logger.info("Promoting Reading* session %s to editable for save", session)
-                r = client.execute_skill('maeMakeEditable()', timeout=10)
+                r = client.execute_skill('maeMakeEditable()', timeout=timeout)
                 if not r.errors:
                     client.execute_skill(f'maeSaveSetup(?session "{session}")')
                 else:
@@ -335,17 +339,18 @@ def close_gui_session(client: VirtuosoClient, session: str,
                 # Another session holds edit lock — must discard
                 logger.info("Reading* session %s has conflicts, discarding changes", session)
 
-    _close_gui_window(client, target_window, windows)
+    _close_gui_window(client, target_window, windows, timeout=timeout)
 
     # Purge cellview from memory to release internal edit lock.
     # Without this, deOpenCellView("a") on another cell may fail with
     # ASSEMBLER-8127 even after hiCloseWindow + maeCloseSession.
-    _purge_maestro_cellviews(client)
+    _purge_maestro_cellviews(client, timeout=timeout)
     logger.info("Closed GUI session: %s", session)
 
 
 def _close_gui_window(client: VirtuosoClient, window_info: dict,
-                      all_windows: list[dict] | None = None) -> None:
+                      all_windows: list[dict] | None = None,
+                      *, timeout: int = 60) -> None:
     """Close a GUI window, handling save dialogs safely.
 
     If the window has unsaved changes (*), hiCloseWindow pops a save
@@ -380,7 +385,7 @@ let((w)
   foreach(win hiGetWindowList()
     when(win~>windowNum == {wnum} w = win))
   when(w hiCloseWindow(w)))
-''', timeout=15)
+''', timeout=timeout)
 
     if dismiss_thread is not None:
         dismiss_thread.join(timeout=10)
