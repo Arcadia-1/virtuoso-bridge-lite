@@ -248,6 +248,15 @@ Load on demand — each contains detailed API docs and edge-case guidance:
 - `05_gui_session_lifecycle.py` — GUI session lifecycle integration test (open/close edge cases)
 - `06a_rc_create.py` — create RC schematic + Maestro setup (cell name auto-timestamped)
 - `06b_rc_simulate_and_read.py` — run simulation in background, read results, export waveforms
+- `07_ensure_maestro_view.py` — bootstrap a missing maestro cellview (`maeOpenSetup` + `maeSaveSetup`) before `open_gui_session`
+- `08_set_simulator_mode.py` — switch between APS / Spectre X (LX/MX/AX/VX/CX) / Spectre FX via `asiSetHighPerformanceOptionVal`
+- `09_export_sweep_subpoints.py` — pull per-sweep-point waveforms via OCEAN `openResults(<abs path>)` (works around `maeOpenResults` rejecting `Interactive.N/M`)
+
+### `examples/01_virtuoso/veriloga/`
+- `import_veriloga.py` — turn a local `.va` file into a Cadence Verilog-A cellview via the 5-step IC618 path: placeholder schematic → symbol → veriloga skeleton → upload .va → reparse.  This example covers the **file/cellview interface only** — the `.va` contents are out of scope; `sample.va` is a trivial placeholder.
+
+### `examples/01_virtuoso/diagnostics/`
+- `sniff_cdslck.py` — walk a library tree and report `.cdslck` lock-file owners.  Authoritative when SKILL-side session enumeration disagrees with on-disk reality.
 
 ### `examples/01_virtuoso/digital_import/`
 Hand off Genus/Innovus P&R products into a Virtuoso library.  All three scripts wrap standalone Cadence batch tools (`strmin` / `ihdl`) via SKILL `system()` — no GUI forms, no manual bootstrap.  See that folder's `README.md` for prerequisites, PDK-portability notes, and full CLI reference.

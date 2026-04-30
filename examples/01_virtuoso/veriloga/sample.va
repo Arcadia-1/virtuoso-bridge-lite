@@ -1,0 +1,19 @@
+// sample.va — minimal Verilog-A behavioural module
+//
+// Two terminals (in, out); analog block ties them through a unity gain.
+// This is intentionally trivial — the goal of this example is to
+// demonstrate the *file/cellview interface*, not Verilog-A authoring.
+// Replace this file with whatever .va you actually want imported and
+// rerun ``import_veriloga.py``.
+
+`include "constants.vams"
+`include "disciplines.vams"
+
+module sample (in, out);
+    inout in, out;
+    electrical in, out;
+
+    analog begin
+        V(out) <+ V(in);
+    end
+endmodule
