@@ -1,28 +1,11 @@
-import socket
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.prebuilt import ToolNode, tools_condition
 
+from virtuoso_bridge import VirtuosoClient, decode_skill_output
 
-def run_skill(skill_code: str, host: str = "127.0.0.1", port: int = 12345) -> str:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.connect((host, port))
-        s.sendall(skill_code.encode("utf-8"))
-        s.shutdown(socket.SHUT_WR)
-        data = b""
-        while True:
-            chunk = s.recv(4096)
-            if not chunk:
-                break
-            data += chunk
-    if not data:
-        raise RuntimeError("No response from Virtuoso daemon")
-    prefix = data[0]
-    payload = data[1:].decode("utf-8", errors="replace")
-    if prefix == 0x15:
-        raise RuntimeError(f"SKILL error: {payload}")
-    return payload
+client = VirtuosoClient.local(port=65432)
 
 
 def add(a: int, b: int) -> int:
@@ -32,8 +15,8 @@ def add(a: int, b: int) -> int:
         a: first int
         b: second int
     """
-    result = run_skill(f"plus({a} {b})")
-    return int(result)
+    result = client.execute_skill(f"plus({a} {b})")
+    return int(decode_skill_output(result.output))
 
 
 llm = ChatOpenAI(model="gpt-4o")
