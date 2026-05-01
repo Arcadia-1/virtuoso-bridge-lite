@@ -57,8 +57,15 @@ RBStop()
 
 ## Run Examples
 
+> **⚠️ WARNING — Demo only.**
+> This project is under active development and is not production-ready.
+> Do **not** run these scripts on real projects. They may overwrite, corrupt,
+> or permanently delete your Virtuoso cells and layout data.
+
 ```bash
 source langgraph-env/bin/activate
 python hello_virtuoso.py
 python example/router.py
+python example/agent_place_demo.py
+python example/agent_place_demo.py --debug
 ```
