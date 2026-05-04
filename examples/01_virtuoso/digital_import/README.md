@@ -55,6 +55,22 @@ python import_gds.py /path/to/foo.route_tapeout.gds \
        --ref-libs   /path/to/ref_libs_dir
 ```
 
+Alternative — if the project's ``cds.lib`` already DEFINEs every
+referenced lib (std cell, IO, SRAM macro, etc.), use the ``--use-cds-lib``
+shortcut to skip maintaining a separate ``ref`` file:
+
+```
+python import_gds.py /path/to/foo.route_tapeout.gds \
+       --target-lib  DIG_OUTPUT \
+       --tech-lib    tsmcN28 \
+       --use-cds-lib
+```
+
+This passes ``-refLibList XST_CDS_LIB`` to ``strmin``, a magic literal
+that tells the tool to consult the cds.lib of its current working
+directory instead of a flat ref file.  Mutually exclusive with
+``--ref-libs``.
+
 After completion the script prints ``instances=N shapes=M bbox=...`` for
 the new ``layout`` view as a sanity check.
 

@@ -12,6 +12,15 @@ Prerequisites
   ``cds.lib``.  ``strmin`` creates the cellview directories but does
   not amend ``cds.lib``.
 
+Reference libraries (pick one)
+------------------------------
+* ``--ref-libs <file>`` — point at a plain text file listing referenced
+  lib names, one per line.  Lab convention is ``<workdir>/ref``.
+* ``--use-cds-lib`` — shortcut for strmin's magic ``-refLibList
+  XST_CDS_LIB``: use every lib defined in the cds.lib resolved from
+  Virtuoso's cwd.  Convenient when the project's cds.lib is already
+  curated; avoids maintaining a separate ``ref`` file.
+
 The script prints instance/shape counts of the new layout cellview as a
 sanity check after import.
 """
@@ -46,10 +55,19 @@ def main() -> int:
         "--tech-lib", default="tsmcN28",
         help="OA library that supplies the tech file (default: tsmcN28)",
     )
-    parser.add_argument(
+    refgrp = parser.add_mutually_exclusive_group()
+    refgrp.add_argument(
         "--ref-libs", default=None,
-        help="Reference-library path passed to -refLibList (e.g. a directory "
-             "containing pre-imported standard-cell libs)",
+        help="File path passed to strmin -refLibList — a plain text file "
+             "with one referenced lib name per line (e.g. tcbn28hpcplus..., "
+             "tphn28hpcpgv18...).  Mutually exclusive with --use-cds-lib.",
+    )
+    refgrp.add_argument(
+        "--use-cds-lib", action="store_true",
+        help="Shortcut for `-refLibList XST_CDS_LIB`: tell strmin to use "
+             "EVERY lib defined in the cds.lib of its current working "
+             "directory as a reference.  Convenient when the project's "
+             "cds.lib is already curated.  Mutually exclusive with --ref-libs.",
     )
     parser.add_argument(
         "--cell", default=None,
@@ -80,7 +98,12 @@ def main() -> int:
         "-attachTechFileOfLib", shlex.quote(args.tech_lib),
         "-logFile",            "strmIn.log",
     ]
-    if args.ref_libs:
+    if args.use_cds_lib:
+        # XST_CDS_LIB is a magic literal that strmin understands as
+        # "use every lib defined in the cds.lib resolved from cwd".
+        # Not a path — must NOT be shell-quoted as a filename.
+        parts += ["-refLibList", "XST_CDS_LIB"]
+    elif args.ref_libs:
         parts += ["-refLibList", shlex.quote(args.ref_libs)]
     parts.append("-replaceBusBitChar")
     cmd = " ".join(parts)
