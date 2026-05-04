@@ -13,6 +13,7 @@ from virtuoso_bridge.virtuoso.schematic.ops import (
     schematic_create_pin_at_instance_term,
     schematic_create_wire_between_instance_terms,
     schematic_label_instance_term,
+    schematic_label_instance_term_offset,
     schematic_create_wire,
     schematic_create_wire_label,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "schematic_create_wire",
     "schematic_create_wire_label",
     "schematic_label_instance_term",
+    "schematic_label_instance_term_offset",
     "schematic_create_pin",
     "schematic_create_pin_at_instance_term",
     "schematic_create_wire_between_instance_terms",
