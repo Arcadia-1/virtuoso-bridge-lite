@@ -263,13 +263,22 @@ def _first_nonnil_string(val: str) -> str:
 
 def _fetch_mtimes_via_shell(client: VirtuosoClient, remote_dir: str,
                              ) -> list[tuple[str, int]]:
-    """``find -printf`` → ``[(basename, unix_mtime), ...]`` via one
-    ssh round-trip.  Returns ``[]`` on any failure (caller falls back
-    to natural-sort-by-name)."""
+    """``find -printf`` (remote) or ``Path.stat`` (local) →
+    ``[(basename, unix_mtime), ...]``.  Returns ``[]`` on any failure
+    (caller falls back to natural-sort-by-name)."""
     import re as _re
     runner = getattr(getattr(client, "_tunnel", None), "_ssh_runner", None)
     if runner is None:
-        return []
+        # Local mode: Virtuoso shares the filesystem; iterate directly.
+        from pathlib import Path as _Path
+        try:
+            d = _Path(remote_dir)
+            if not d.is_dir():
+                return []
+            return [(p.name, int(p.stat().st_mtime))
+                    for p in d.iterdir() if p.is_file()]
+        except OSError:
+            return []
     # %T@ prints unix mtime as a float; %f is basename. '\n' between
     # rows, ' ' between fields.
     cmd = (f"find {remote_dir} -maxdepth 1 -type f "

@@ -19,28 +19,68 @@ logger = logging.getLogger(__name__)
 # X11 key sending (for dismissing dialogs that block SKILL)
 # ---------------------------------------------------------------------------
 
+def _x11_run(runner, cmd: str, timeout: int = 5):
+    """Run a shell command via SSH if *runner* is given, else locally.
+
+    Returned object exposes ``.returncode`` / ``.stdout`` / ``.stderr``
+    in both branches so callers can be agnostic.
+    """
+    if runner is not None:
+        return runner.run_command(cmd, timeout=timeout)
+    import subprocess
+    from types import SimpleNamespace
+    try:
+        r = subprocess.run(
+            ["sh", "-c", cmd],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return SimpleNamespace(returncode=124, stdout="", stderr="timeout")
+    except FileNotFoundError:
+        # No /bin/sh — Windows local mode for example.  X11 isn't usable
+        # anyway in that environment; surface a no-op rather than crash.
+        return SimpleNamespace(returncode=127, stdout="", stderr="no shell")
+    return SimpleNamespace(
+        returncode=r.returncode,
+        stdout=r.stdout or "",
+        stderr=r.stderr or "",
+    )
+
+
 def _detect_virtuoso_display(runner) -> str:
-    """Detect the DISPLAY used by the Virtuoso process."""
+    """Detect the DISPLAY used by the Virtuoso process.
+
+    Order: ``$VB_DISPLAY`` → ``/proc/<virtuoso_pid>/environ`` → in local
+    mode, the caller's own ``$DISPLAY`` (last resort: same X server as
+    the script's terminal).
+    """
     import os
     display = os.getenv("VB_DISPLAY", "")
     if display:
         return display
-    r = runner.run_command(
+    r = _x11_run(
+        runner,
         'strings /proc/$(pgrep -u $(whoami) -f "64bit/virtuoso" | head -1)/environ 2>/dev/null '
         '| grep ^DISPLAY= | head -1',
-        timeout=5)
+        timeout=5,
+    )
     display = (r.stdout or "").strip().replace("DISPLAY=", "")
+    if not display and runner is None:
+        # Local mode last-resort: assume Virtuoso shares this terminal's
+        # X server.  Same-host, same-user runs typically do.
+        display = os.getenv("DISPLAY", "")
     if not display:
         logger.warning("Cannot detect DISPLAY for X11 key sending")
     return display
 
 
 def _send_x11_key(runner, keysym: int) -> None:
-    """Send a single keypress to the Virtuoso X11 display via SSH."""
+    """Send a single keypress to the Virtuoso X11 display."""
     display = _detect_virtuoso_display(runner)
     if not display:
         return
-    runner.run_command(
+    _x11_run(
+        runner,
         f'DISPLAY={display} python2.7 -c "'
         f'import ctypes,ctypes.util;'
         f'xlib=ctypes.cdll.LoadLibrary(ctypes.util.find_library(chr(88)+chr(49)+chr(49)));'
@@ -50,7 +90,8 @@ def _send_x11_key(runner, keysym: int) -> None:
         f'xtst.XTestFakeKeyEvent(dpy,kc,True,0);'
         f'xtst.XTestFakeKeyEvent(dpy,kc,False,0);'
         f'xlib.XFlush(dpy);xlib.XCloseDisplay(dpy)"',
-        timeout=5)
+        timeout=5,
+    )
 
 
 def _send_x11_alt_n(runner) -> None:
@@ -58,7 +99,8 @@ def _send_x11_alt_n(runner) -> None:
     display = _detect_virtuoso_display(runner)
     if not display:
         return
-    runner.run_command(
+    _x11_run(
+        runner,
         f'DISPLAY={display} python2.7 -c "'
         f'import ctypes,ctypes.util;'
         f'xlib=ctypes.cdll.LoadLibrary(ctypes.util.find_library(chr(88)+chr(49)+chr(49)));'
@@ -71,7 +113,8 @@ def _send_x11_alt_n(runner) -> None:
         f'xtst.XTestFakeKeyEvent(dpy,kn,False,0);'
         f'xtst.XTestFakeKeyEvent(dpy,ka,False,0);'
         f'xlib.XFlush(dpy);xlib.XCloseDisplay(dpy)"',
-        timeout=5)
+        timeout=5,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -367,18 +410,20 @@ def _close_gui_window(client: VirtuosoClient, window_info: dict,
 
     dismiss_thread = None
     if will_pop_dialog:
+        # runner is None in local mode; _send_x11_alt_n handles both
+        # SSH and local subprocess paths internally.
         runner = client.ssh_runner
-        if runner is not None:
-            def _dismiss_save_dialog():
-                """Send Alt+N after a short delay to dismiss save dialog."""
-                _time.sleep(0.5)
-                # Alt+N selects "No" (Don't Save) on save confirmation dialogs.
-                # Escape only cancels the dialog without closing the window.
-                _send_x11_alt_n(runner)
 
-            dismiss_thread = threading.Thread(target=_dismiss_save_dialog, daemon=True)
-            dismiss_thread.start()
-            logger.info("Started dismiss thread for modified window %d", wnum)
+        def _dismiss_save_dialog():
+            """Send Alt+N after a short delay to dismiss save dialog."""
+            _time.sleep(0.5)
+            # Alt+N selects "No" (Don't Save) on save confirmation dialogs.
+            # Escape only cancels the dialog without closing the window.
+            _send_x11_alt_n(runner)
+
+        dismiss_thread = threading.Thread(target=_dismiss_save_dialog, daemon=True)
+        dismiss_thread.start()
+        logger.info("Started dismiss thread for modified window %d", wnum)
 
     client.execute_skill(f'''
 let((w)
