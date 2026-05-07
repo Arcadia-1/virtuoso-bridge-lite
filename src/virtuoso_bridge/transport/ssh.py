@@ -733,7 +733,41 @@ class SSHRunner:
 
         for remote_dir, entries in by_remote_dir.items():
             remote_dir_q = shlex.quote(remote_dir)
-            remote_cmd = f"mkdir -p {remote_dir_q} && tar xf - -C {remote_dir_q}"
+
+            # tar entry names are local basenames; for each entry whose
+            # remote basename differs, append a post-extract mv.  Use
+            # uuid-tagged temp names as a two-phase staging area so that
+            # one entry's local name colliding with another's remote name
+            # doesn't cause data to clobber data during the rename chain
+            # (issue #71 follow-up).
+            rename_pairs: list[tuple[str, str]] = []
+            for local_path, remote_path in entries:
+                local_basename = local_path.name
+                remote_basename = Path(remote_path).name
+                if remote_basename and remote_basename != local_basename:
+                    rename_pairs.append(
+                        (local_basename, remote_path.replace("\\", "/"))
+                    )
+
+            cmd_parts = [
+                f"mkdir -p {remote_dir_q}",
+                f"tar xf - -C {remote_dir_q}",
+            ]
+            if rename_pairs:
+                token = uuid.uuid4().hex[:8]
+                for i, (extracted, _) in enumerate(rename_pairs):
+                    tmp = f".vbatch-{token}-{i}"
+                    cmd_parts.append(
+                        f"mv {remote_dir_q}/{shlex.quote(extracted)} "
+                        f"{remote_dir_q}/{shlex.quote(tmp)}"
+                    )
+                for i, (_, target) in enumerate(rename_pairs):
+                    tmp = f".vbatch-{token}-{i}"
+                    cmd_parts.append(
+                        f"mv {remote_dir_q}/{shlex.quote(tmp)} "
+                        f"{shlex.quote(target)}"
+                    )
+            remote_cmd = " && ".join(cmd_parts)
             ssh_cmd = self._build_ssh_base() + [remote_cmd]
 
             tar_cmd = [self._tar_cmd, "cf", "-"]
@@ -951,7 +985,20 @@ class SSHRunner:
     ) -> CommandResult:
         remote_dir = str(Path(remote_path).parent).replace("\\", "/")
         remote_dir_q = shlex.quote(remote_dir)
-        remote_cmd = f"mkdir -p {remote_dir_q} && tar xf - -C {remote_dir_q}"
+        local_basename = local_path.name
+        remote_basename = Path(remote_path).name
+        if remote_basename and remote_basename != local_basename:
+            # tar entry name is local_basename, so naive extract lands at
+            # <remote_dir>/<local_basename>; mv to honor the caller's
+            # requested remote_path basename (issue #71).
+            remote_path_unix = remote_path.replace("\\", "/")
+            remote_cmd = (
+                f"mkdir -p {remote_dir_q} && tar xf - -C {remote_dir_q} && "
+                f"mv {remote_dir_q}/{shlex.quote(local_basename)} "
+                f"{shlex.quote(remote_path_unix)}"
+            )
+        else:
+            remote_cmd = f"mkdir -p {remote_dir_q} && tar xf - -C {remote_dir_q}"
         tar_cmd = [self._tar_cmd, "cf", "-", "-C",
                    str(local_path.parent).replace("\\", "/"), local_path.name]
         logger.debug("Uploading via tar pipe %s -> %s:%s", local_path, self._host, remote_path)
