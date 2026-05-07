@@ -14,6 +14,9 @@ SKILL alists verbatim) / ``state_from_sdb.xml`` (YAML-filtered sdb) /
 
 from __future__ import annotations
 
+import fnmatch
+import shutil
+import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -191,14 +194,13 @@ def _dump_run_artifacts(client: VirtuosoClient, snap_dir: Path, *,
         return
     runner = client.ssh_runner
     if runner is None:
-        # Local mode: this function does a remote `find | tar` + `scp`
-        # round-trip to pull per-point artifacts.  A local-fs equivalent
-        # is feasible but not yet implemented; skip rather than crash.
-        import sys as _sys
-        print(
-            "[warn] _dump_run_artifacts: snapshot skipped — local mode "
-            "not yet supported (see issue tracker for status).",
-            file=_sys.stderr,
+        # Local mode: lib_path / scratch_root are local fs paths since
+        # Virtuoso ran on this host; dispatch to the pathlib-based helper
+        # that mirrors the remote `find | tar | scp` flow.
+        _dump_run_artifacts_local(
+            snap_dir, history=history, lib_path=lib_path,
+            scratch_root=scratch_root, lib=lib, cell=cell, view=view,
+            include_results=include_results,
         )
         return
     maestro_dir = f"{lib_path}/{cell}/{view}/results/maestro"
@@ -318,6 +320,85 @@ def _dump_run_artifacts(client: VirtuosoClient, snap_dir: Path, *,
         except OSError:
             pass
         runner.run_command(f"rm -f {remote_tar}", timeout=10)
+
+
+def _dump_run_artifacts_local(snap_dir: Path, *,
+                               history: str, lib_path: str, scratch_root: str,
+                               lib: str, cell: str, view: str,
+                               include_results: bool = True) -> None:
+    """Local-fs equivalent of :func:`_dump_run_artifacts`.
+
+    Mirrors the remote ``find | tar | scp`` per-point + maestro-extras
+    selection using ``pathlib`` walks and ``shutil.copy2``.  ``find
+    -name`` glob semantics are preserved via ``fnmatch.fnmatchcase`` —
+    same patterns the remote path consumes from
+    ``snapshot_filter.yaml``.
+
+    Symlinks (Cadence per-point ``netlist/`` is largely symlinks into
+    ``psf/.../netlist/``) are followed: ``Path.is_file()`` and
+    ``shutil.copy2`` both deref by default, producing plain files at
+    the destination — same end state as the remote ``tar -h`` route.
+    """
+    hist_root = (Path(scratch_root) / lib / cell / view
+                 / "results" / "maestro" / history)
+    if not hist_root.exists():
+        return
+
+    hist_dir = snap_dir / history
+    hist_dir.mkdir(parents=True, exist_ok=True)
+
+    netlist_patterns = _per_point_list("netlist", _DEFAULT_NETLIST_FILES)
+    psf_patterns = (_per_point_list("psf", _DEFAULT_PSF_FILES)
+                    if include_results else ())
+
+    def _matches(name: str, patterns) -> bool:
+        return any(fnmatch.fnmatchcase(name, p) for p in patterns)
+
+    # Per-point walk.  Mirrors `find ... -path '*/netlist/*' -name <pat>`
+    # and `... -path '*/psf/*' -name <pat>` from the remote version.
+    for path in hist_root.rglob("*"):
+        try:
+            if not path.is_file():
+                continue
+        except OSError:
+            continue
+        try:
+            rel = path.relative_to(hist_root)
+        except ValueError:
+            continue
+        parts = rel.parts
+        if "netlist" in parts and _matches(path.name, netlist_patterns):
+            target = hist_dir / rel
+        elif "psf" in parts and _matches(path.name, psf_patterns):
+            target = hist_dir / rel
+        else:
+            continue
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
+        except (OSError, PermissionError) as exc:
+            print(f"[warn] snapshot: skip {rel} ({exc})", file=sys.stderr)
+
+    # Maestro-level extras: <history>.log always; .rdb / .msg.db when
+    # include_results.  Same fallback chain as the remote tar:
+    # lib_path first, then scratch_root — first hit wins.
+    maestro_dirs = [
+        Path(lib_path) / cell / view / "results" / "maestro",
+        Path(scratch_root) / lib / cell / view / "results" / "maestro",
+    ]
+    extras = [f"{history}.log"]
+    if include_results:
+        extras += [f"{history}.rdb", f"{history}.msg.db"]
+    for fname in extras:
+        for d in maestro_dirs:
+            src = d / fname
+            if src.exists():
+                try:
+                    shutil.copy2(src, hist_dir / fname)
+                except (OSError, PermissionError) as exc:
+                    print(f"[warn] snapshot: skip {fname} ({exc})",
+                          file=sys.stderr)
+                break
 
 
 def _dump_to_dir(client: VirtuosoClient, *, bundle: dict, lib: str, cell: str,
