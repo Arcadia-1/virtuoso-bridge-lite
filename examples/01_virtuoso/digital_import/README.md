@@ -55,21 +55,21 @@ python import_gds.py /path/to/foo.route_tapeout.gds \
        --ref-libs   /path/to/ref_libs_dir
 ```
 
-Alternative — if the project's ``cds.lib`` already DEFINEs every
-referenced lib (std cell, IO, SRAM macro, etc.), use the ``--use-cds-lib``
-shortcut to skip maintaining a separate ``ref`` file:
+**Prefer ``--ref-libs`` by default.**  Listing referenced libs
+explicitly keeps the import scope visible in source control and easy
+to audit when something binds to the wrong cell.
 
-```
-python import_gds.py /path/to/foo.route_tapeout.gds \
-       --target-lib  DIG_OUTPUT \
-       --tech-lib    tsmcN28 \
-       --use-cds-lib
-```
-
-This passes ``-refLibList XST_CDS_LIB`` to ``strmin``, a magic literal
-that tells the tool to consult the cds.lib of its current working
-directory instead of a flat ref file.  Mutually exclusive with
-``--ref-libs``.
+There is also a ``--use-cds-lib`` shortcut that passes
+``-refLibList XST_CDS_LIB`` to ``strmin`` — a magic literal telling
+strmin to treat **every** lib defined in the work dir's ``cds.lib``
+(including those pulled in by ``INCLUDE`` chains) as a reference.
+Convenient but **unsafe** in most real projects: a ``cds.lib`` that
+carries a PDK, multiple IPs, or stale historical libraries will
+typically have two libs sharing a cell name, and strmin will silently
+bind to the wrong one — the import succeeds, the misbinding only
+surfaces later in LVS or simulation.  Use it only when the work dir's
+``cds.lib`` is strictly curated to exactly the libs you want as
+references.
 
 After completion the script prints ``instances=N shapes=M bbox=...`` for
 the new ``layout`` view as a sanity check.

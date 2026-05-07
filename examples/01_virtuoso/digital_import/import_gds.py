@@ -12,14 +12,16 @@ Prerequisites
   ``cds.lib``.  ``strmin`` creates the cellview directories but does
   not amend ``cds.lib``.
 
-Reference libraries (pick one)
-------------------------------
-* ``--ref-libs <file>`` — point at a plain text file listing referenced
-  lib names, one per line.  Lab convention is ``<workdir>/ref``.
+Reference libraries
+-------------------
+* ``--ref-libs <file>`` (recommended) — plain text file listing the
+  referenced lib names, one per line.  Lab convention is
+  ``<workdir>/ref``.  Keeps import scope explicit and auditable.
 * ``--use-cds-lib`` — shortcut for strmin's magic ``-refLibList
-  XST_CDS_LIB``: use every lib defined in the cds.lib resolved from
-  Virtuoso's cwd.  Convenient when the project's cds.lib is already
-  curated; avoids maintaining a separate ``ref`` file.
+  XST_CDS_LIB``: refs **every** lib in the work dir's cds.lib
+  (including ``INCLUDE`` chains).  Unsafe unless the cds.lib is
+  strictly curated — same-name cells across PDK / IP / historical
+  libs will silently bind to the wrong one.
 
 The script prints instance/shape counts of the new layout cellview as a
 sanity check after import.
@@ -58,16 +60,19 @@ def main() -> int:
     refgrp = parser.add_mutually_exclusive_group()
     refgrp.add_argument(
         "--ref-libs", default=None,
-        help="File path passed to strmin -refLibList — a plain text file "
-             "with one referenced lib name per line (e.g. tcbn28hpcplus..., "
-             "tphn28hpcpgv18...).  Mutually exclusive with --use-cds-lib.",
+        help="(recommended) File path passed to strmin -refLibList — a "
+             "plain text file with one referenced lib name per line "
+             "(e.g. tcbn28hpcplus..., tphn28hpcpgv18...).  Mutually "
+             "exclusive with --use-cds-lib.",
     )
     refgrp.add_argument(
         "--use-cds-lib", action="store_true",
-        help="Shortcut for `-refLibList XST_CDS_LIB`: tell strmin to use "
-             "EVERY lib defined in the cds.lib of its current working "
-             "directory as a reference.  Convenient when the project's "
-             "cds.lib is already curated.  Mutually exclusive with --ref-libs.",
+        help="UNSAFE shortcut for `-refLibList XST_CDS_LIB`: refs every "
+             "lib in the work dir's cds.lib (incl. INCLUDE chains).  "
+             "Risk: same-name cells across PDK / IP / old project libs "
+             "will silently bind to the wrong one.  Use only with a "
+             "strictly curated cds.lib; prefer --ref-libs.  Mutually "
+             "exclusive with --ref-libs.",
     )
     parser.add_argument(
         "--cell", default=None,
