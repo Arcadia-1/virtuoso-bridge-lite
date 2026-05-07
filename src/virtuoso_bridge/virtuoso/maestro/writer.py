@@ -346,35 +346,52 @@ def run_simulation(client: VirtuosoClient, *, session: str = "",
     return _q(client, parts)
 
 
+def _remove_marker(runner, marker: str) -> None:
+    """Delete the marker file in either local or remote mode."""
+    if runner is None:
+        from pathlib import Path as _Path
+        try:
+            _Path(marker).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+    else:
+        runner.run_command(f"rm -f {marker}", timeout=10)
+
+
 def _wait_until_done(client: VirtuosoClient, marker: str,
                       timeout: int = 600) -> str:
     """Internal: poll the marker file written by run_and_wait's SKILL callback.
 
     Cadence-side ``maeRunSimulation(?callback ...)`` registers a SKILL
     callback that ``echo``s ``done`` to ``marker`` when the run finishes.
-    This function ``ssh cat``s that marker every 2 s on the SSH channel,
-    keeping the SKILL channel free for other work (dialog dismissal,
-    screenshots, ...).
+    Local mode reads the file directly via stdlib; remote mode ``ssh
+    cat``s it every 2 s on the SSH channel, keeping the SKILL channel
+    free for other work (dialog dismissal, screenshots, ...).
 
     Not public — call :func:`run_and_wait` instead, which sets up the
     callback + marker and calls this helper.
     """
     import time as _time
+    from pathlib import Path as _Path
 
     runner = client.ssh_runner
-    if runner is None:
-        raise RuntimeError("No SSH connection (tunnel not started?)")
-
-    runner = client.ssh_runner
-    if runner is None:
-        raise RuntimeError("No SSH connection (tunnel not started?)")
 
     deadline = _time.monotonic() + timeout
     while _time.monotonic() < deadline:
-        r = runner.run_command(f"cat {marker} 2>/dev/null", timeout=10)
-        if r.returncode == 0 and r.stdout.strip():
-            runner.run_command(f"rm -f {marker}", timeout=10)
-            return r.stdout.strip()
+        if runner is None:
+            mp = _Path(marker)
+            if mp.exists():
+                content = mp.read_text().strip()
+                if content:
+                    _remove_marker(runner, marker)
+                    return content
+        else:
+            r = runner.run_command(f"cat {marker} 2>/dev/null", timeout=10)
+            if r.returncode == 0 and r.stdout.strip():
+                _remove_marker(runner, marker)
+                return r.stdout.strip()
         _time.sleep(2)
 
     raise TimeoutError(f"Simulation did not finish within {timeout}s")
@@ -466,13 +483,13 @@ def run_and_wait(client: VirtuosoClient, *, session: str = "",
     """
     import uuid
 
+    # runner is None in local mode (Virtuoso on the same host); _remove_marker
+    # and _wait_until_done both handle that case via local fs operations.
     runner = client.ssh_runner
-    if runner is None:
-        raise RuntimeError("No SSH connection (tunnel not started?)")
 
     nonce = uuid.uuid4().hex[:8]
     marker = f"/tmp/vb_sim_done_{nonce}"
-    runner.run_command(f"rm -f {marker}", timeout=10)
+    _remove_marker(runner, marker)
 
     # Define callback that writes marker file when simulation finishes.
     # Use system("echo ... > file") instead of outfile/fprintf to avoid
@@ -500,7 +517,7 @@ procedure(_vb_sim_done_{nonce}(session runID)
             history_name = _strip_skill_atom(history)
 
         if not history_name or history_name == "nil":
-            runner.run_command(f"rm -f {marker}", timeout=10)
+            _remove_marker(runner, marker)
             test = info.get("test", "") or "<unknown>"
             analyses = info.get("enabled_analyses", "") or "<unknown>"
             explorer = info.get("is_explorer_window", "unknown")

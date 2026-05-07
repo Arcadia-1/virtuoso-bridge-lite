@@ -189,7 +189,18 @@ def _dump_run_artifacts(client: VirtuosoClient, snap_dir: Path, *,
     """
     if not (history and lib_path and scratch_root):
         return
-    runner = client._tunnel._ssh_runner
+    runner = client.ssh_runner
+    if runner is None:
+        # Local mode: this function does a remote `find | tar` + `scp`
+        # round-trip to pull per-point artifacts.  A local-fs equivalent
+        # is feasible but not yet implemented; skip rather than crash.
+        import sys as _sys
+        print(
+            "[warn] _dump_run_artifacts: snapshot skipped — local mode "
+            "not yet supported (see issue tracker for status).",
+            file=_sys.stderr,
+        )
+        return
     maestro_dir = f"{lib_path}/{cell}/{view}/results/maestro"
     log_remote = f"{maestro_dir}/{history}.log"
     hist_remote = (f"{scratch_root}/{lib}/{cell}/{view}"
