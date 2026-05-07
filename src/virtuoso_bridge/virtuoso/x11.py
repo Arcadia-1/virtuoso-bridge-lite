@@ -30,9 +30,36 @@ def _get_display(display: str | None) -> str | None:
     return os.getenv("VB_DISPLAY") or None
 
 
-def _detect_remote_python(runner: SSHRunner) -> str:
-    """Find a Python 3 interpreter on the remote host."""
-    r = runner.run_command(
+def _run(runner: SSHRunner | None, cmd: str, timeout: int):
+    """Dispatch a shell command via SSH or local subprocess.
+
+    Returns an object exposing ``.returncode`` / ``.stdout`` / ``.stderr``
+    so the call sites can be agnostic to mode.
+    """
+    if runner is not None:
+        return runner.run_command(cmd, timeout=timeout)
+    import subprocess
+    from types import SimpleNamespace
+    try:
+        r = subprocess.run(
+            ["sh", "-c", cmd],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return SimpleNamespace(returncode=124, stdout="", stderr="timeout")
+    except FileNotFoundError:
+        return SimpleNamespace(returncode=127, stdout="", stderr="no shell")
+    return SimpleNamespace(
+        returncode=r.returncode,
+        stdout=r.stdout or "",
+        stderr=r.stderr or "",
+    )
+
+
+def _detect_remote_python(runner: SSHRunner | None) -> str:
+    """Find a Python 3 interpreter (remote host or local)."""
+    r = _run(
+        runner,
         'python3 --version 2>/dev/null && echo "CMD:python3" || '
         '(python --version 2>&1 | grep -q "Python 3" && echo "CMD:python") || '
         'echo "CMD:NONE"',
@@ -44,8 +71,15 @@ def _detect_remote_python(runner: SSHRunner) -> str:
     return "python3"  # fallback, will fail with clear error
 
 
-def _ensure_helper(runner: SSHRunner, user: str) -> str:
-    """Upload the helper script if not already present."""
+def _ensure_helper(runner: SSHRunner | None, user: str) -> str:
+    """Resolve the path to the helper script.
+
+    Remote: upload to ``/tmp/virtuoso_bridge_<user>/`` if not already there.
+    Local: the helper file is part of the installed package — return its
+    on-disk path directly, no copy needed.
+    """
+    if runner is None:
+        return str(_HELPER_SCRIPT)
     remote_path = f"/tmp/virtuoso_bridge_{user}/x11_dismiss_dialog.py"
     remote_dir = str(Path(remote_path).parent)
     runner.run_command(f"mkdir -p {remote_dir}")
@@ -54,11 +88,11 @@ def _ensure_helper(runner: SSHRunner, user: str) -> str:
 
 
 def find_dialogs(
-    runner: SSHRunner,
+    runner: SSHRunner | None,
     user: str,
     display: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Find blocking dialog windows on the remote X11 display.
+    """Find blocking dialog windows on the X11 display.
 
     Returns list of dicts: [{"window_id", "title", "x", "y", "w", "h"}, ...]
     """
@@ -69,12 +103,12 @@ def find_dialogs(
     cmd = f"{py} {script}"
     if resolved:
         cmd += f" {resolved}"
-    result = runner.run_command(cmd, timeout=15)
+    result = _run(runner, cmd, timeout=15)
     return _parse_output(result.stdout)
 
 
 def dismiss_dialogs(
-    runner: SSHRunner,
+    runner: SSHRunner | None,
     user: str,
     display: str | None = None,
 ) -> list[dict[str, Any]]:
@@ -95,7 +129,7 @@ def dismiss_dialogs(
     cmd = f"{env_prefix}{py} {script} --dismiss"
     if resolved:
         cmd += f" {resolved}"
-    result = runner.run_command(cmd, timeout=15)
+    result = _run(runner, cmd, timeout=15)
     return _parse_output(result.stdout)
 
 

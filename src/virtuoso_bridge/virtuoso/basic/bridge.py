@@ -654,8 +654,13 @@ let((result winName ciwNum)
         from virtuoso_bridge.virtuoso import x11
         runner = self.ssh_runner
         if runner is None:
-            raise RuntimeError("No SSH connection (tunnel not started?)")
-        user = runner.user or os.getenv("VB_REMOTE_USER", "")
+            # Local mode: x11.dismiss_dialogs accepts runner=None and runs
+            # the helper as a local subprocess.  user is only used to
+            # namespace the remote /tmp helper copy; in local mode it is
+            # unused but kept for API symmetry.
+            user = os.getenv("USER", "") or os.getenv("USERNAME", "") or "local"
+        else:
+            user = runner.user or os.getenv("VB_REMOTE_USER", "")
         return x11.dismiss_dialogs(runner, user, display)
 
     # -- file transfer (delegates to tunnel) --------------------------------
