@@ -18,6 +18,8 @@ dependencies = [
 # Microsoft Visio via COM, Windows-only.  The pure model layer in
 # `virtuoso/visio.py` has no extra deps and stays importable everywhere.
 visio = ["pywin32; sys_platform == 'win32'"]
+# Test runner.  Install with `pip install -e .[dev]` then `pytest`.
+dev = ["pytest>=7.0"]
 
 [project.scripts]
 virtuoso-bridge = "virtuoso_bridge.cli:main"
@@ -29,3 +31,8 @@ where = ["src"]
 "virtuoso_bridge.resources" = [".env_template"]
 "virtuoso_bridge.virtuoso.basic.resources" = ["*.il", "*.py"]
 "virtuoso_bridge.virtuoso.maestro" = ["*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
