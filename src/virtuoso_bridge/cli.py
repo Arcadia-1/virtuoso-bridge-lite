@@ -634,42 +634,50 @@ def _make_ssh_runner() -> tuple["SSHRunner", str]:
 def cli_load(*, file: str, timeout: int = 60, quiet: bool = False) -> int:
     """Execute a SKILL .il file in the running Virtuoso session.
 
-    The daemon already wraps multi-line SKILL into a temp file + load()
-    + capture-last-expression dance internally (see
-    ``ramic_bridge_daemon_3.py``), so we just hand it the file content
-    as a single ``execute_skill`` call.  No upload step needed even in
-    SSH mode.
+    Equivalent to ``load("<file>")`` typed in the CIW: SKILL reads the
+    original file directly, so error messages keep the **original file
+    path + line numbers** (no temp-wrapper pollution).  In SSH mode
+    the file is uploaded first; in local mode the path is forwarded
+    as-is.  Both paths land in :meth:`VirtuosoClient.load_il`.
 
-    Returns: 0 on success, 1 on SKILL-side error, 2 on missing file.
+    Output: the full ``VirtuosoResult`` serialised as JSON on stdout
+    (status, output, errors, warnings, execution_time, metadata).
+    Designed for VS Code tasks / code-runner / wrapper scripts to
+    consume without re-parsing terminal text.  ``--quiet`` suppresses
+    the JSON; only the exit code remains.
+
+    Returns: 0 on SUCCESS, 1 on SKILL-side error, 2 on missing local
+    file.
     """
+    import json
     import sys
     from pathlib import Path
-    from virtuoso_bridge import VirtuosoClient
 
-    # Check file before loading env -- missing/empty file is a frequent
-    # user-side typo; failing fast avoids the "using .env: ..." print
-    # before the actual error.
+    import virtuoso_bridge as _vb_pkg
+    from virtuoso_bridge.models import ExecutionStatus
+
+    # Missing file is a common user typo (often from VS Code tasks
+    # passing an unsaved/renamed buffer).  Fail fast before loading env
+    # so the error message isn't preceded by a "using .env: ..." line.
     p = Path(file)
     if not p.is_file():
         print(f"ERROR: file not found: {p}", file=sys.stderr)
         return 2
-    skill_code = p.read_text(encoding="utf-8")
-    if not skill_code.strip():
-        print(f"ERROR: file is empty: {p}", file=sys.stderr)
-        return 2
 
     _load_cli_env()
-    client = VirtuosoClient.from_env(profile=_get_cli_profile())
-    result = client.execute_skill(skill_code, timeout=timeout)
+    client = _vb_pkg.VirtuosoClient.from_env(profile=_get_cli_profile())
+    result = client.load_il(p, timeout=timeout)
 
-    if result.errors:
-        for err in result.errors:
-            print(f"SKILL error: {err}", file=sys.stderr)
-        return 1
+    if not quiet:
+        # Stable contract: dump the VirtuosoResult exactly as the model
+        # defines it.  Consumers (VS Code task output, scripts) should
+        # rely on these field names rather than scraping prose.
+        print(json.dumps(
+            result.model_dump(mode="json"),
+            indent=2, ensure_ascii=False, default=str,
+        ))
 
-    if not quiet and result.output:
-        print(result.output)
-    return 0
+    return 0 if result.status == ExecutionStatus.SUCCESS else 1
 
 
 def cli_dismiss_dialog() -> int:
@@ -984,10 +992,13 @@ def build_parser() -> argparse.ArgumentParser:
         "load",
         help="Execute a SKILL .il file in the running Virtuoso session",
         description=(
-            "Reads the file's contents and runs them as a single SKILL "
-            "block in the daemon's CIW; prints the value of the last "
-            "expression on stdout, errors on stderr.  Useful as a 'Run "
-            "File' target from VSCode (.vscode/tasks.json):\n"
+            "Equivalent to typing `load(\"<file>\")` in the CIW.  SKILL\n"
+            "reads the original file, so any error keeps the original\n"
+            "file path + line number (no temp-wrapper pollution).  In\n"
+            "SSH mode the file is uploaded automatically.\n\n"
+            "Output: full VirtuosoResult as JSON on stdout (status,\n"
+            "output, errors, warnings, execution_time, metadata).\n\n"
+            "VSCode .vscode/tasks.json snippet:\n"
             '  { "label": "Load SKILL", "type": "shell",\n'
             '    "command": "virtuoso-bridge load \\"${file}\\"" }'
         ),
@@ -1001,7 +1012,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp_load.add_argument("--timeout", type=int, default=60,
                          help="SKILL execution timeout in seconds (default: 60)")
     sp_load.add_argument("--quiet", action="store_true",
-                         help="Suppress printing the SKILL return value")
+                         help="Suppress JSON output; only the exit code is reported")
 
     sp_dismiss = subparsers.add_parser(
         "dismiss-dialog", help="Find and dismiss blocking Virtuoso GUI dialogs")
