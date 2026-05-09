@@ -16,7 +16,10 @@ from typing import Any, NamedTuple
 
 from virtuoso_bridge.env import load_vb_env
 from virtuoso_bridge.models import ExecutionStatus, SimulationResult
-from virtuoso_bridge.spectre.parsers import parse_psf_ascii_directory
+from virtuoso_bridge.spectre.parsers import (
+    parse_psf_ascii_directory,
+    parse_sweep_psf_directory,
+)
 from virtuoso_bridge.transport.tunnel import _is_localhost
 from virtuoso_bridge.transport.remote_paths import (
     default_remote_spectre_work_dir,
@@ -410,14 +413,22 @@ def _build_simulation_result(
         status = ExecutionStatus.SUCCESS
 
     data: dict[str, Any] = {}
+    sweep_data: dict[int, dict[str, Any]] = {}
     if output_dir and output_dir.exists() and output_format == "psfascii":
         data = parse_psf_ascii_directory(output_dir)
+        sweep_data = parse_sweep_psf_directory(output_dir)
 
     metadata: dict[str, Any] = {
         "returncode": run_result.returncode,
         "output_dir": str(output_dir) if output_dir and output_dir.exists() else None,
         "output_files": output_files,
     }
+    if sweep_data:
+        # Per-point sweep results live in metadata to keep `data` flat
+        # for the common single-point caller.  Sweep-aware consumers
+        # check `result.metadata.get("sweep_points")` -- shape is
+        # `{point_index: {signal_name: [values]}, ...}`.
+        metadata["sweep_points"] = sweep_data
     if extra_metadata:
         metadata.update(extra_metadata)
 

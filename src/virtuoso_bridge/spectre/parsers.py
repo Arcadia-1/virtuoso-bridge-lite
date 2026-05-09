@@ -210,8 +210,24 @@ def parse_sweep_psf_directory(output_dir: Path) -> dict[int, dict[str, Any]]:
        ``<raw>/sw1-001_tran.tran.tran``
        ...
 
-    Returns ``{point_index: {signal: values}}`` where point_index starts at 1.
-    Returns empty dict if no sweep subdirectories found.
+    Returns ``{point_index: {signal: values}}`` where point_index starts
+    at 1.  Returns empty dict if no sweep layout is recognised — caller
+    should then fall back to :func:`parse_psf_ascii_directory` for
+    single-point output.
+
+    Note: this function is wired into :class:`SpectreSimulator` already —
+    sweep results surface via ``result.metadata["sweep_points"]``.
+    Direct callers only need this entry point when reading raw output
+    dirs outside the simulator class.
+
+    Example::
+
+        >>> from virtuoso_bridge.spectre.parsers import parse_sweep_psf_directory
+        >>> sweep = parse_sweep_psf_directory(Path("/tmp/sim/raw"))
+        >>> if sweep:
+        ...     for pt_idx, signals in sorted(sweep.items()):
+        ...         vout_final = signals["v_out"][-1]
+        ...         print(f"point {pt_idx}: v_out(t_end) = {vout_final}")
     """
     scan_root = _spectre_psf_scan_root(output_dir)
     sweep_data: dict[int, dict[str, Any]] = {}
@@ -410,6 +426,12 @@ def _parse_psf_swept_data(
 
     # Pass 2: Step-interpolate — build time vector and per-signal vectors.
     # Each time-step boundary resets which signals to record at that step.
+    # Signals not yet seen at a snapshot point use NaN, not 0.0 — a real
+    # 0V reading and a "this signal hasn't appeared yet in the stream"
+    # state are otherwise indistinguishable to consumers.
+    import math as _math
+    _MISSING = _math.nan
+
     time_values: list[float | complex] = []
     # Current value of each signal (carry-forward / step-interpolation)
     signal_state: dict[str, float | complex] = {}
@@ -423,7 +445,7 @@ def _parse_psf_swept_data(
             # Time-step boundary: snapshot all signals at the previous step
             if time_values:
                 for name in trace_names:
-                    signal_series[name].append(signal_state.get(name, 0.0))
+                    signal_series[name].append(signal_state.get(name, _MISSING))
             time_values.append(value)  # type: ignore[arg-type]
         else:
             signal_state[key] = value  # type: ignore[assignment]
@@ -431,7 +453,7 @@ def _parse_psf_swept_data(
     # Snapshot at the last time step
     if time_values:
         for name in trace_names:
-            signal_series[name].append(signal_state.get(name, 0.0))
+            signal_series[name].append(signal_state.get(name, _MISSING))
 
     data: dict[str, list[float | complex]] = {sweep_var: time_values}
     data.update(signal_series)
