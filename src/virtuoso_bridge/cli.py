@@ -631,6 +631,47 @@ def _make_ssh_runner() -> tuple["SSHRunner", str]:
                      jump_host=jump_host, jump_user=jump_user), remote_user
 
 
+def cli_load(*, file: str, timeout: int = 60, quiet: bool = False) -> int:
+    """Execute a SKILL .il file in the running Virtuoso session.
+
+    The daemon already wraps multi-line SKILL into a temp file + load()
+    + capture-last-expression dance internally (see
+    ``ramic_bridge_daemon_3.py``), so we just hand it the file content
+    as a single ``execute_skill`` call.  No upload step needed even in
+    SSH mode.
+
+    Returns: 0 on success, 1 on SKILL-side error, 2 on missing file.
+    """
+    import sys
+    from pathlib import Path
+    from virtuoso_bridge import VirtuosoClient
+
+    # Check file before loading env -- missing/empty file is a frequent
+    # user-side typo; failing fast avoids the "using .env: ..." print
+    # before the actual error.
+    p = Path(file)
+    if not p.is_file():
+        print(f"ERROR: file not found: {p}", file=sys.stderr)
+        return 2
+    skill_code = p.read_text(encoding="utf-8")
+    if not skill_code.strip():
+        print(f"ERROR: file is empty: {p}", file=sys.stderr)
+        return 2
+
+    _load_cli_env()
+    client = VirtuosoClient.from_env(profile=_get_cli_profile())
+    result = client.execute_skill(skill_code, timeout=timeout)
+
+    if result.errors:
+        for err in result.errors:
+            print(f"SKILL error: {err}", file=sys.stderr)
+        return 1
+
+    if not quiet and result.output:
+        print(result.output)
+    return 0
+
+
 def cli_dismiss_dialog() -> int:
     """Find and dismiss blocking Virtuoso GUI dialogs via X11."""
     _load_cli_env()
@@ -939,6 +980,29 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Connection profile (reads VB_*_<profile> env vars)")
         sp.add_argument("--env", default=None,
                         help="Explicit .env file path (highest priority)")
+    sp_load = subparsers.add_parser(
+        "load",
+        help="Execute a SKILL .il file in the running Virtuoso session",
+        description=(
+            "Reads the file's contents and runs them as a single SKILL "
+            "block in the daemon's CIW; prints the value of the last "
+            "expression on stdout, errors on stderr.  Useful as a 'Run "
+            "File' target from VSCode (.vscode/tasks.json):\n"
+            '  { "label": "Load SKILL", "type": "shell",\n'
+            '    "command": "virtuoso-bridge load \\"${file}\\"" }'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sp_load.add_argument("file", help="Path to the .il file to execute")
+    sp_load.add_argument("-p", "--profile", default=None,
+                         help="Connection profile (reads VB_*_<profile> env vars)")
+    sp_load.add_argument("--env", default=None,
+                         help="Explicit .env file path (highest priority)")
+    sp_load.add_argument("--timeout", type=int, default=60,
+                         help="SKILL execution timeout in seconds (default: 60)")
+    sp_load.add_argument("--quiet", action="store_true",
+                         help="Suppress printing the SKILL return value")
+
     sp_dismiss = subparsers.add_parser(
         "dismiss-dialog", help="Find and dismiss blocking Virtuoso GUI dialogs")
     sp_dismiss.add_argument("-p", "--profile", default=None,
@@ -1045,6 +1109,11 @@ def main(argv: list[str] | None = None) -> int:
         "restart": cli_restart,
         "status": cli_status,
         "license": cli_license,
+        "load": lambda: cli_load(
+            file=getattr(args, "file"),
+            timeout=getattr(args, "timeout", 60),
+            quiet=getattr(args, "quiet", False),
+        ),
         "dismiss-dialog": cli_dismiss_dialog,
         "screenshot": cli_screenshot,
         "windows": cli_windows,
