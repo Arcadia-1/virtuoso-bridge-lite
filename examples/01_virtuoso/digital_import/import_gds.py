@@ -114,6 +114,41 @@ def main() -> int:
             f"or call ddUpdateLibList() first."
         )
 
+    # 1b. strmin runs in Virtuoso's cwd and resolves the GDS path / refLibList
+    #     file relative to that cwd — NOT to the caller's pwd.  If the user
+    #     pointed at a local file, auto-upload it to the Virtuoso workdir
+    #     and rewrite the arg to the basename.  Without this, the 2026-05-14
+    #     trap returns silently after 600s with strmIn.log saying
+    #     `XSTRM-13: Failed to open input Stream file 'foo.gds'`.
+    r = client.execute_skill('getWorkingDir()')
+    workdir = (r.output or "").strip()
+    if workdir.startswith('"') and workdir.endswith('"'):
+        workdir = workdir[1:-1]
+    workdir = workdir.replace('\\"', '"').replace('\\\\', '\\')
+
+    def _stage(label: str, local_path: str) -> str:
+        """If local_path exists on the caller's filesystem, upload it to
+        Virtuoso's workdir and return the basename.  Absolute remote paths
+        (`/home/...`) and paths that don't exist locally are left untouched
+        — the caller may legitimately be pointing at an already-remote file
+        whose path the local FS can't see."""
+        if not local_path:
+            return local_path
+        p = Path(local_path)
+        if not p.exists():
+            return local_path
+        remote = f"{workdir}/{p.name}"
+        print(f"[stage] {label}: uploading {p} -> {remote}")
+        rr = client.upload_file(str(p), remote)
+        if getattr(rr, "status", None) is not None and str(rr.status).endswith("ERROR"):
+            sys.exit(f"ERROR: failed to upload {label} {p} to {remote}: "
+                     f"{getattr(rr, 'errors', None)}")
+        return p.name
+
+    args.gds = _stage("GDS", args.gds)
+    if args.ref_libs:
+        args.ref_libs = _stage("ref_libs", args.ref_libs)
+
     # 2. Compose the strmin command line.  Use shlex.quote so paths with
     #    spaces or odd chars survive the trip through SKILL's system().
     parts = [
@@ -162,6 +197,29 @@ def main() -> int:
         f"     nil)) "
     )
 
+    # strmin always writes `strmIn.log` to Virtuoso's cwd.  Watch it
+    # alongside the cellview poll — when strmin hits a fatal error
+    # (XSTRM-13 missing input, XSTRM-11 bad refLibList, GDS parse
+    # error, etc.) it dies in seconds AND writes
+    # `INFO (XSTRM-273): Translation failed.` to the log.  Without
+    # this, the script polled for the cellview that would never
+    # appear for the full 600s — 10 minutes of pointless wall-clock
+    # observed 2026-05-14.
+    log_path = f"{workdir}/strmIn.log"
+
+    def _scan_strmin_log() -> str | None:
+        """Return a fail-reason string if strmIn.log shows a terminal
+        failure; otherwise None.  Cheap — runs one shell tail per poll."""
+        rr = client.run_shell_command(f"tail -n 200 {log_path}")
+        body = (rr.output or "")
+        if "XSTRM-273" in body and "Translation failed" in body:
+            # extract the first explicit ERROR line for the user
+            for ln in body.splitlines():
+                if "ERROR" in ln and "XSTRM" in ln:
+                    return ln.strip()
+            return "Translation failed (see strmIn.log for details)"
+        return None
+
     timeout_s = 600
     poll_interval = 3
     deadline = time.time() + timeout_s
@@ -174,6 +232,13 @@ def main() -> int:
         if out.startswith("instances="):
             print(f"[OK] {args.target_lib}/{cell}/layout: {out}")
             return 0
+        # Fast-fail on strmin-side failure (don't burn the full timeout).
+        fail = _scan_strmin_log()
+        if fail:
+            sys.exit(
+                f"strmin: {fail}\n"
+                f"  Full log: {log_path}"
+            )
         now = time.time()
         if now >= deadline:
             sys.exit(

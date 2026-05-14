@@ -241,6 +241,7 @@ If `spectre` is already on PATH in the remote user's default shell (e.g., via `~
 - **`csh()` returns `t`/`nil`**, not command output. Use `client.download_file()` (SSH/SCP) for remote file operations.
 - **`procedurep()` returns `nil` for compiled/built-in functions.** Don't use it to check if `mae*` functions exist.
 - **Remote files stay remote.** Functions like `maeCreateNetlistForCorner` write to the remote filesystem. Use `client.download_file()` to retrieve them.
+- **`system()` rc is unreliable** for tools that fork-and-write to a log (strmin, ihdl, sometimes spectre). A wrapper that polls for the expected artifact (cellview, file, log line) MUST also tail the tool's own log for terminal-failure markers on every poll iteration — otherwise a `strmin` that died in 2 seconds with `XSTRM-273: Translation failed` makes the wrapper sleep for its full timeout (10 min observed 2026-05-14 on `examples/01_virtuoso/digital_import/import_gds.py`). Dual-defense template: (1) before invoking the tool, stage any local file args to the tool's cwd via `client.upload_file()` so file-not-found can't happen, and (2) in the poll loop, `tail -n 200 <tool.log>` for the tool's "translation failed / OPEN_FAILED / ERROR" sentinel and fast-exit with that line.
 
 ## How to configure PDK paths
 

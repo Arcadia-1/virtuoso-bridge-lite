@@ -159,6 +159,22 @@ def main() -> int:
     if not workdir:
         sys.exit("ERROR: could not determine Virtuoso working directory")
 
+    # 2b. ihdl runs in Virtuoso's workdir and resolves the verilog path
+    #     relative to that cwd — NOT to the caller's pwd.  If the user
+    #     pointed at a local file, upload it to workdir and rewrite the
+    #     arg to the basename.  Without this, ihdl will hit OPEN_FAILED /
+    #     no-such-file and the symptom is buried in verilogIn.batch.log.
+    from pathlib import Path as _Path
+    _vp = _Path(args.verilog)
+    if _vp.exists():
+        _remote = f"{workdir}/{_vp.name}"
+        print(f"[stage] verilog: uploading {_vp} -> {_remote}")
+        _rr = client.upload_file(str(_vp), _remote)
+        if getattr(_rr, "status", None) is not None and str(_rr.status).endswith("ERROR"):
+            sys.exit(f"ERROR: failed to upload verilog {_vp} to {_remote}: "
+                     f"{getattr(_rr, 'errors', None)}")
+        args.verilog = _vp.name
+
     # 3. Compose ihdl_parameter content.
     param_content = PARAM_TEMPLATE.format(
         target_lib=args.target_lib,
