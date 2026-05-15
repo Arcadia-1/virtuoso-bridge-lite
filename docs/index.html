@@ -175,6 +175,17 @@ client = VirtuosoClient.<span class="fn">from_env</span>()
 result = client.<span class="fn">execute_skill</span>(<span class="str">"1+2"</span>)
 <span class="fn">print</span>(result)  <span class="cmt"># VirtuosoResult(status=SUCCESS, output='3')</span></code></pre>
 
+    <pre><code><span class="cmt"># &mdash; or skip Python entirely: run SKILL straight from the shell &mdash;</span>
+
+<span class="cmt"># Inline one-liner (full VirtuosoResult JSON on stdout)</span>
+<span class="cmd">virtuoso-bridge eval</span> <span class="str">'getCurrentTime()'</span>
+
+<span class="cmt"># Pipe in via stdin to dodge shell quoting on complex expressions</span>
+<span class="cmd">echo</span> <span class="str">'mapcar(lambda((l) l~&gt;name) ddGetLibList())'</span> | <span class="cmd">virtuoso-bridge eval --stdin</span>
+
+<span class="cmt"># Run a full SKILL script file (uploads automatically in SSH mode)</span>
+<span class="cmd">virtuoso-bridge load</span> my_script.il</code></pre>
+
     <h3>Jump host setup</h3>
     <pre><code><span class="cmt"># In .env &mdash; VB_REMOTE_HOST is where Virtuoso runs, NOT the jump host</span>
 VB_REMOTE_HOST=compute-host
@@ -333,6 +344,11 @@ bridge = VirtuosoClient.<span class="fn">local</span>(port=65432)</code></pre>
         <tr><td><code>virtuoso-bridge snapshot</code></td><td>Dump focused maestro's SKILL probe sections to stdout</td></tr>
         <tr><td><code>virtuoso-bridge snapshot -o ROOT [--history NAME]</code></td><td>Full disk dump of the focused session to <code>ROOT/&lt;ts&gt;__&lt;lib&gt;__&lt;cell&gt;/</code>: raw + filtered setup XMLs, <code>state_from_skill.txt</code>, latest-run per-point files. <code>--history</code> pins a specific maestro history (e.g. <code>Interactive.160</code>); otherwise auto-picks by mtime. File whitelist lives in <code>virtuoso/maestro/snapshot_filter.yaml</code> — edit to reshape the dump (no code change).</td></tr>
         <tr><td><code>virtuoso-bridge screenshot</code></td><td>Capture a Virtuoso window</td></tr>
+        <tr><td><code>virtuoso-bridge load FILE.il</code> <span style="display:inline-block;padding:1px 6px;margin-left:4px;background:var(--blue);color:#fff;font-size:0.7rem;border-radius:3px;font-weight:600;letter-spacing:0.5px">NEW</span></td><td>Run a <code>.il</code> file in the live Virtuoso session — uploads the file in SSH mode and emits the full <code>VirtuosoResult</code> as JSON on stdout. Errors keep the original file/line (no temp-wrapper noise), so it pairs cleanly with VS Code <code>tasks.json</code> for one-keystroke SKILL iteration.</td></tr>
+        <tr><td><code>virtuoso-bridge eval 'EXPR'</code> &nbsp;/&nbsp; <code>eval --stdin</code> <span style="display:inline-block;padding:1px 6px;margin-left:4px;background:var(--blue);color:#fff;font-size:0.7rem;border-radius:3px;font-weight:600;letter-spacing:0.5px">NEW</span></td><td>One-liner / heredoc companion to <code>load</code>. Multi-statement input is auto-wrapped in <code>progn(...)</code>; <code>--stdin</code> sidesteps shell quoting for snippets with embedded quotes/parens.</td></tr>
+        <tr><td><code>virtuoso-bridge dismiss-dialog</code></td><td>X11 rescue path — finds blocking Virtuoso GUI dialogs and presses Enter <em>outside the SKILL channel</em>. The one command that still works when CIW is deadlocked on a modal dialog (SpecifyHistory, "Run dir exists", ASSEMBLER-8127, etc.).</td></tr>
+        <tr><td><code>virtuoso-bridge license</code></td><td>Check Spectre license availability on the remote.</td></tr>
+        <tr><td><code>virtuoso-bridge export-visio LIB CELL -o OUT.vsdx</code></td><td>Windows + pywin32 path: render a Virtuoso schematic into Microsoft Visio. Defaults skip the MOS body pin <code>B</code>; <code>--include-body-pins</code> keeps it, <code>--exclude-net</code>/<code>--exclude-pin</code> repeatable for finer filtering.</td></tr>
       </table>
     </div>
 
