@@ -65,6 +65,8 @@
     .footer { text-align: center; padding: 48px 0 32px; color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--border); }
     .footer a { color: var(--blue); text-decoration: none; }
     .footer a:hover { text-decoration: underline; }
+    .traffic-stats { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 18px; margin-top: 12px; color: var(--muted); }
+    .traffic-stats strong { color: var(--text); font-weight: 700; }
 
     .note { background: var(--card); border-left: 3px solid var(--blue); border-radius: 4px; padding: 12px 16px; margin: 16px 0; font-size: 0.9rem; color: var(--muted); }
     .note strong { color: var(--text); }
@@ -437,8 +439,25 @@ bridge = VirtuosoClient.<span class="fn">local</span>(port=65432)</code></pre>
       MIT License &middot;
       Tsinghua University
     </p>
+    <div class="traffic-stats" aria-label="Traffic statistics">
+      <span>Site PV <strong id="busuanzi_site_pv">...</strong></span>
+      <span>Site UV <strong id="busuanzi_site_uv">...</strong></span>
+      <span>Page PV <strong id="busuanzi_page_pv">...</strong></span>
+    </div>
   </div>
 
 </div>
+<script>
+  (function () {
+    var host = window.location.hostname;
+    if (!host || host === "localhost" || host === "127.0.0.1" || host === "::1") {
+      return;
+    }
+    var script = document.createElement("script");
+    script.src = "https://api.busuanzi.cc/static/3.6.9/busuanzi.min.js";
+    script.defer = true;
+    document.body.appendChild(script);
+  }());
+</script>
 </body>
 </html>
