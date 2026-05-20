@@ -28,12 +28,7 @@ import sys
 import uuid
 
 from virtuoso_bridge import VirtuosoClient
-from virtuoso_bridge.virtuoso.ops import escape_skill_string
-
-
-def _q(s: str) -> str:
-    """Wrap a Python string as a SKILL string literal."""
-    return f'"{escape_skill_string(s)}"'
+from virtuoso_bridge.virtuoso.ops import q as _q
 
 
 # Cadence batch parameter file (key := value).  Field semantics taken from

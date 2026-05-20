@@ -8,6 +8,15 @@ def escape_skill_string(value: str) -> str:
     """Escape a Python string for use inside a SKILL string literal."""
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
+def q(value: str) -> str:
+    """Wrap a Python string as a SKILL string literal (escaped + quoted).
+
+    Shorthand for ``f'"{escape_skill_string(value)}"'`` — useful when
+    composing SKILL expressions from Python f-strings, where the
+    quote-then-escape pattern would otherwise be duplicated everywhere.
+    """
+    return f'"{escape_skill_string(value)}"'
+
 def default_view_type_for(view: str) -> str:
     """Map a logical Virtuoso view name to the expected viewType."""
     normalized = (view or "").strip().lower()

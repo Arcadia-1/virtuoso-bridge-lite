@@ -39,7 +39,7 @@ import sys
 from pathlib import Path
 
 from virtuoso_bridge import VirtuosoClient
-from virtuoso_bridge.virtuoso.ops import escape_skill_string
+from virtuoso_bridge.virtuoso.ops import q as _q
 
 
 SIDE_TO_ORIENT = {
@@ -48,10 +48,6 @@ SIDE_TO_ORIENT = {
     "Left":   "R180",
     "Right":  "R0",
 }
-
-
-def _q(s: str) -> str:
-    return f'"{escape_skill_string(s)}"'
 
 
 def parse_floorplan_pin_sides(fp_tcl_path: str) -> dict[str, str]:

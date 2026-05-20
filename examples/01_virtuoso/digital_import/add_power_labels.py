@@ -31,11 +31,7 @@ import argparse
 import sys
 
 from virtuoso_bridge import VirtuosoClient
-from virtuoso_bridge.virtuoso.ops import escape_skill_string
-
-
-def _q(s: str) -> str:
-    return f'"{escape_skill_string(s)}"'
+from virtuoso_bridge.virtuoso.ops import q as _q
 
 
 # Single-shot SKILL: find ref instance, read master pin y, transform to
