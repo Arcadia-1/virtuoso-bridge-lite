@@ -16,10 +16,18 @@ What it does automatically:
   • Uses tech-lib tsmcN28 and stdcell ref tcbn28hpcplusbwp12t30p140
   • Skips SRAM pre-import if the cell already exists in `sram` lib
 
-Lab paths are fixed for thu-wei.  For a different setup, edit the constants.
+Lab paths default to thu-wei's standard locations.  Override per-user
+via env vars without editing this file:
+
+  VB_DIG_SYN_ROOT  - directory containing <top>/apr/PNR_SIGNOFF/RESULTS/...
+  VB_SRAM_ROOT     - directory containing <sram_cell>_180a/GDSII/...
+
+PDK lib names (TECH_LIB, STDCELL_LIB) and ihdl power/ground net names
+are stable across users — edit them in place if your PDK differs.
 """
 
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -27,14 +35,17 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
-# Lab-fixed defaults — edit here, not via CLI flags.
+# Lab-fixed defaults — override the two ROOTs via env vars so different
+# users / lab setups don't have to fork this file.  The PDK lib names
+# (TECH_LIB, STDCELL_LIB) and ihdl net names (POWER_NET, GROUND_NET) are
+# stable across users — edit in place if your PDK differs.
 TECH_LIB     = "tsmcN28"
 STDCELL_LIB  = "tcbn28hpcplusbwp12t30p140"
 SRAM_LIB     = "sram"
 POWER_NET    = "VDDD"   # ihdl iron rule: must NOT collide with RTL VDD/VSS
 GROUND_NET   = "VSSS"
-DIG_SYN_ROOT = "/home/zhangz/TSMC28N/DIG_SYN_AI"
-SRAM_ROOT    = "/home/zhangz/TSMC28N/SRAM/tsn28hpcpd127spsram_20120200_180a"
+DIG_SYN_ROOT = os.environ.get("VB_DIG_SYN_ROOT", "/home/zhangz/TSMC28N/DIG_SYN_AI")
+SRAM_ROOT    = os.environ.get("VB_SRAM_ROOT",    "/home/zhangz/TSMC28N/SRAM/tsn28hpcpd127spsram_20120200_180a")
 
 
 def run(name: str, argv: list[str]) -> None:
