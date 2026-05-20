@@ -115,10 +115,12 @@ def main() -> int:
         help="Ground-net name in the schematic (default: VSSS)",
     )
     parser.add_argument(
-        "--structural-views", default="schematic",
+        "--structural-views", default="schematic_and_functional",
         choices=sorted(STRUCTURAL_VIEWS.keys()),
-        help="What views to create for structural modules "
-             "(default: schematic; pass schematic_and_functional for both)",
+        help="What views to create for structural modules.  Default: "
+             "schematic_and_functional (some Cadence versions, asked for "
+             "'schematic only' via value=1, emit functional instead of "
+             "schematic; asking for both is robust across versions).",
     )
     parser.add_argument(
         "--import-lib-cells", action="store_true",
@@ -128,7 +130,9 @@ def main() -> int:
     parser.add_argument(
         "--cell", default=None,
         help="Override the top cell to verify after import "
-             "(default: Verilog filename stem with any '_import' suffix removed)",
+             "(default: Verilog filename split on first '.', with any "
+             "'_import' suffix then removed — handles foo.v, foo_import.v, "
+             "and PnR-style foo.ipg_import_elc.v / foo.route_tapeout.v)",
     )
     args = parser.parse_args()
 
@@ -223,7 +227,7 @@ def main() -> int:
     client.execute_skill("ddUpdateLibList()")
 
     # 7. Verify imported views + schematic content.
-    cell = args.cell or os.path.basename(args.verilog).rsplit(".", 1)[0]
+    cell = args.cell or os.path.basename(args.verilog).split(".", 1)[0]
     if cell.endswith("_import"):
         cell = cell[: -len("_import")]
 
@@ -233,16 +237,24 @@ def main() -> int:
     )
     print(f"[OK] {args.target_lib}/{cell}/views: {r.output}")
 
+    # ihdl emits either `schematic` or `functional` depending on the
+    # Cadence version's interpretation of structural_views.  Try the
+    # requested schematic view first, fall back to functional so the
+    # final OK line reports whichever view actually got populated.
     sk_sch = (
-        f"let((cv) "
-        f"  cv=dbOpenCellViewByType({_q(args.target_lib)} {_q(cell)} {_q(args.schematic_view)} nil \"r\") "
+        f"let((cv view) "
+        f"  view = {_q(args.schematic_view)} "
+        f"  cv = dbOpenCellViewByType({_q(args.target_lib)} {_q(cell)} view nil \"r\") "
+        f"  when(null(cv) "
+        f"    view = \"functional\" "
+        f"    cv = dbOpenCellViewByType({_q(args.target_lib)} {_q(cell)} view nil \"r\")) "
         f"  if(cv "
-        f"     sprintf(nil \"instances=%d nets=%d terms=%d\" "
-        f"             length(cv~>instances) length(cv~>nets) length(cv~>terminals)) "
-        f"     \"OPEN_FAILED\")) "
+        f"     sprintf(nil \"%s instances=%d nets=%d terms=%d\" "
+        f"             view length(cv~>instances) length(cv~>nets) length(cv~>terminals)) "
+        f"     \"OPEN_FAILED (neither schematic nor functional)\")) "
     )
     r = client.execute_skill(sk_sch)
-    print(f"[OK] {args.target_lib}/{cell}/{args.schematic_view}: {r.output}")
+    print(f"[OK] {args.target_lib}/{cell}: {r.output}")
     return 0
 
 
