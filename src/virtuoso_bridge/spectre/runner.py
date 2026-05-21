@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from virtuoso_bridge.env import load_vb_env
+from virtuoso_bridge.profile import resolve_profile
 from virtuoso_bridge.models import ExecutionStatus, SimulationResult
 from virtuoso_bridge.spectre.parsers import (
     parse_psf_ascii_directory,
@@ -466,6 +467,7 @@ class SpectreSimulator:
         ssh_runner: SSHRunner | None = None,
         profile: str | None = None,
     ) -> None:
+        profile = resolve_profile(profile)
         load_vb_env()
         self._spectre_cmd = spectre_cmd
         self._spectre_args = list(spectre_args or [])
@@ -521,6 +523,7 @@ class SpectreSimulator:
         ControlMaster).  Raises RuntimeError if no remote connection is
         available.
         """
+        profile = resolve_profile(profile)
         load_vb_env()
         # Check if we should run locally
         suffix = f"_{profile}" if profile else ""

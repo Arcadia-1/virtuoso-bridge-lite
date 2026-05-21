@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from virtuoso_bridge.env import load_vb_env
+from virtuoso_bridge.profile import resolve_profile
 from virtuoso_bridge.virtuoso.basic.composition import compose_skill_script
 from virtuoso_bridge.models import ExecutionStatus, VirtuosoInterface, VirtuosoResult
 from virtuoso_bridge.virtuoso.ops import (
@@ -107,9 +108,12 @@ class VirtuosoClient(VirtuosoInterface):
         """Create a VirtuosoClient from environment variables.
 
         If *profile* is given (e.g. ``"gpu1"``), reads ``VB_REMOTE_HOST_gpu1``
-        etc.  If an SSH tunnel is already running (via ``virtuoso-bridge start``),
-        connects to its port.  Otherwise creates a new SSHClient.
+        etc.  Otherwise resolves a profile binding before falling back to the
+        default unsuffixed variables.  If an SSH tunnel is already running (via
+        ``virtuoso-bridge start``), connects to its port.  Otherwise creates a
+        new SSHClient.
         """
+        profile = resolve_profile(profile)
         load_vb_env()
         from virtuoso_bridge.transport.tunnel import SSHClient
 

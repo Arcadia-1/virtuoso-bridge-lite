@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from virtuoso_bridge.env import load_vb_env, resolve_env_path
+from virtuoso_bridge.profile import resolve_profile
 from virtuoso_bridge.transport.remote_paths import default_virtuoso_bridge_dir, resolve_remote_username
 from virtuoso_bridge.transport.ssh import SSHRunner, CommandResult
 
@@ -179,8 +180,10 @@ class SSHClient:
         """Create from VB_* environment variables.
 
         If *profile* is given (e.g. ``"gpu1"``), reads ``VB_REMOTE_HOST_gpu1``
-        etc.  Otherwise reads the default unsuffixed variables.
+        etc.  Otherwise resolves a profile binding before falling back to the
+        default unsuffixed variables.
         """
+        profile = resolve_profile(profile)
         load_vb_env()
 
         suffix = f"_{profile}" if profile else ""

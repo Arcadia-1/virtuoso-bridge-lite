@@ -80,6 +80,49 @@ def _load_cli_env() -> Path | None:
     return env_path
 
 
+def cli_profile(*, action: str, profile: str | None = None) -> int:
+    """Inspect or edit profile bindings."""
+    from virtuoso_bridge.profile import (
+        bind_venv_profile,
+        clear_venv_profile,
+        read_venv_profile,
+        resolve_profile_info,
+    )
+
+    if action == "bind":
+        if profile is None:
+            print("profile bind requires a profile name")
+            return 2
+        try:
+            path = bind_venv_profile(profile)
+        except Exception as exc:
+            print(f"profile bind failed: {exc}")
+            return 1
+        print(f"Bound current virtualenv to profile {profile!r}")
+        print(f"  {path}")
+        return 0
+
+    if action == "clear":
+        try:
+            path = clear_venv_profile()
+        except Exception as exc:
+            print(f"profile clear failed: {exc}")
+            return 1
+        print("Cleared current virtualenv profile binding")
+        print(f"  {path}")
+        return 0
+
+    info = resolve_profile_info()
+    venv_path, venv_profile = read_venv_profile()
+    print(f"resolved profile : {info.profile or '(default)'}")
+    print(f"source           : {info.source}")
+    if info.path:
+        print(f"source path      : {info.path}")
+    print(f"venv binding     : {venv_profile or '(none)'}")
+    print(f"venv path        : {venv_path or '(no active virtualenv)'}")
+    return 0
+
+
 def _fmt(seconds: float) -> str:
     return f"{seconds:.3f}s"
 
@@ -1046,6 +1089,27 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Connection profile (reads VB_*_<profile> env vars)")
         sp.add_argument("--env", default=None,
                         help="Explicit .env file path (highest priority)")
+        if name == "start":
+            sp.add_argument("--bind-venv", action="store_true",
+                            help="Bind the active virtualenv to this -p profile before starting")
+
+    sp_profile = subparsers.add_parser("profile", help="Show or edit profile bindings")
+    profile_sub = sp_profile.add_subparsers(dest="profile_action", required=True)
+    sp_profile_show = profile_sub.add_parser("show", help="Show resolved profile")
+    sp_profile_show.add_argument("--env", default=None,
+                                 help="Explicit .env file path (highest priority)")
+    sp_profile_bind = profile_sub.add_parser("bind", help="Bind current virtualenv to a profile")
+    sp_profile_bind.add_argument("profile", help="Profile name to bind")
+    sp_profile_bind.add_argument("--venv", action="store_true",
+                                 help="Bind the current virtualenv (the only supported scope)")
+    sp_profile_bind.add_argument("--env", default=None,
+                                 help="Explicit .env file path (highest priority)")
+    sp_profile_clear = profile_sub.add_parser("clear", help="Clear current virtualenv profile binding")
+    sp_profile_clear.add_argument("--venv", action="store_true",
+                                  help="Clear the current virtualenv binding (the only supported scope)")
+    sp_profile_clear.add_argument("--env", default=None,
+                                  help="Explicit .env file path (highest priority)")
+
     sp_load = subparsers.add_parser(
         "load",
         help="Execute a SKILL .il file in the running Virtuoso session",
@@ -1200,11 +1264,30 @@ def main(argv: list[str] | None = None) -> int:
     _make_stdio_safe()
     parser = build_parser()
     args = parser.parse_args(argv)
+    _CLI_PROFILE[0] = None
+    set_runtime_env_file(getattr(args, "env", None))
+    if getattr(args, "bind_venv", False):
+        profile_arg = getattr(args, "profile", None)
+        if not profile_arg:
+            parser.error("--bind-venv requires -p/--profile")
+        from virtuoso_bridge.profile import bind_venv_profile
+        try:
+            bind_venv_profile(profile_arg)
+        except Exception as exc:
+            parser.error(str(exc))
+    from virtuoso_bridge.profile import resolve_profile
+    profile = resolve_profile(getattr(args, "profile", None))
+    if profile is not None:
+        _CLI_PROFILE[0] = profile
     dispatch = {
         "init": lambda: cli_init(
             remote=getattr(args, "remote", None),
             jump=getattr(args, "jump", None),
             force=getattr(args, "force", False),
+        ),
+        "profile": lambda: cli_profile(
+            action=getattr(args, "profile_action"),
+            profile=getattr(args, "profile", None),
         ),
         "start": cli_start,
         "stop": cli_stop,
@@ -1228,11 +1311,6 @@ def main(argv: list[str] | None = None) -> int:
         "snapshot": cli_snapshot,
         "export-visio": cli_export_visio,
     }
-    # Pass profile to commands that support it
-    profile = getattr(args, "profile", None)
-    if profile is not None:
-        _CLI_PROFILE[0] = profile
-    set_runtime_env_file(getattr(args, "env", None))
     screenshot_target = getattr(args, "target", None)
     if screenshot_target is not None:
         _SCREENSHOT_TARGET[0] = screenshot_target

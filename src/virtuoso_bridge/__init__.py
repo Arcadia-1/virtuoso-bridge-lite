@@ -19,6 +19,7 @@ from virtuoso_bridge.models import (
 )
 from virtuoso_bridge.spectre.runner import SpectreSimulator
 from virtuoso_bridge.wrappers import SanitizingClient
+from virtuoso_bridge.profile import resolve_profile, resolve_profile_info
 
 def decode_skill_output(raw: str | None) -> str:
     """Decode raw SKILL output: strip outer quotes, unescape \\\\n and \\\\"."""
@@ -35,5 +36,7 @@ __all__ = [
     "ExecutionStatus",
     "SkillResult",
     "SimulationResult",
+    "resolve_profile",
+    "resolve_profile_info",
     "decode_skill_output",
 ]

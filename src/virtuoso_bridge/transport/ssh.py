@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from virtuoso_bridge.env import load_vb_env
+from virtuoso_bridge.profile import resolve_profile
 
 logger = logging.getLogger(__name__)
 
@@ -97,8 +98,10 @@ def remote_ssh_env_from_os(profile: str | None = None) -> RemoteSshEnv:
     """Read remote SSH target from environment variables.
 
     If *profile* is given (e.g. ``"gpu1"``), reads ``VB_REMOTE_HOST_GPU1``
-    etc.  Otherwise reads the default unsuffixed variables.
+    etc.  Otherwise resolves a profile binding before falling back to the
+    default unsuffixed variables.
     """
+    profile = resolve_profile(profile)
     load_vb_env()
     suffix = f"_{profile}" if profile else ""
 
