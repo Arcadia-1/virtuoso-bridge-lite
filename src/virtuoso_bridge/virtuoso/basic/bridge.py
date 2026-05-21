@@ -817,13 +817,17 @@ let((result winName ciwNum)
         p = Path(path)
         if self._tunnel is not None and p.is_file():
             from virtuoso_bridge.transport.remote_paths import default_virtuoso_bridge_dir, resolve_remote_username
+            from virtuoso_bridge.transport.tunnel import _profiled_bridge_leaf
             work_dir = self._tunnel.remote_work_dir
             if not work_dir:
                 remote_username = resolve_remote_username(
                     configured_user=getattr(self._tunnel, '_remote_user', None),
                     runner=self._tunnel.ssh_runner,
                 )
-                work_dir = default_virtuoso_bridge_dir(remote_username, "virtuoso_bridge")
+                work_dir = default_virtuoso_bridge_dir(
+                    remote_username,
+                    _profiled_bridge_leaf(getattr(self._tunnel, '_profile', None)),
+                )
             remote_dir = work_dir.rstrip("/")
             remote_path = f"{remote_dir}/{p.name}"
             content = p.read_bytes()
