@@ -241,7 +241,14 @@ def close_session(client: VirtuosoClient, session: str) -> None:
 
 
 def find_open_session(client: VirtuosoClient) -> str | None:
-    """Find the first active session with a valid test. Returns session string or None."""
+    """Find the first active session with a valid test. Returns session string or None.
+
+    "Valid test" means ``maeGetSetup`` returns non-nil for the session,
+    i.e. the maestro view has at least one test configured.  Callers
+    looking for "the session of the cell I just opened" — including
+    empty maestro views — should use :func:`_find_session_for_cell`
+    instead.
+    """
     raw = client.execute_skill('''
 let((result)
   result = nil
@@ -258,6 +265,23 @@ let((result)
     session = raw.strip('"')
     if session and session != "nil":
         return session
+    return None
+
+
+def _find_session_for_cell(client: VirtuosoClient, lib: str, cell: str
+                           ) -> str | None:
+    """Return the GUI session string whose ADE window is for ``lib``/``cell``.
+
+    Unlike :func:`find_open_session`, this does not require the maestro
+    to contain any tests — useful right after ``deOpenCellView`` opens
+    a fresh / empty view.  Matches by window title, which contains
+    both the library and cell names for ADE Assembler / Explorer.
+
+    Returns ``None`` if no matching window is found.
+    """
+    for w in _get_session_windows(client):
+        if lib in w["title"] and cell in w["title"]:
+            return w["session"]
     return None
 
 
@@ -317,10 +341,16 @@ def open_gui_session(client: VirtuosoClient, lib: str, cell: str,
     if r.errors or not r.output or r.output.strip() in ("nil", ""):
         raise RuntimeError(f"deOpenCellView failed for {lib}/{cell}/maestro: {r.errors}")
 
-    # Find the new session
-    session = find_open_session(client)
+    # Find the new session by matching the cell we just opened.  Do not
+    # use find_open_session here — it filters on maeGetSetup, so a fresh
+    # / empty maestro (no tests yet) is invisible to it and would surface
+    # as a misleading "No session found after opening GUI".
+    session = _find_session_for_cell(client, lib, cell)
     if not session:
-        raise RuntimeError("No session found after opening GUI")
+        raise RuntimeError(
+            f"No ADE window for {lib}/{cell} after deOpenCellView — "
+            "the call returned but no matching window appeared; check "
+            f"that {cell!r} actually has a 'maestro' view in library {lib!r}")
     logger.info("Opened GUI session: %s", session)
     return session
 
