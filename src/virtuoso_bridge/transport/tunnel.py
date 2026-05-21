@@ -111,6 +111,18 @@ def _update_env_file(key: str, value: str) -> bool:
     return False
 
 
+def _profiled_bridge_leaf(profile: str | None) -> str:
+    """Remote bridge directory leaf for a connection profile."""
+    if not profile:
+        return "virtuoso_bridge"
+    safe = re.sub(r"[^a-zA-Z0-9._-]", "_", profile.strip())[:64]
+    return f"virtuoso_bridge_{safe or 'profile'}"
+
+
+def _profiled_env_key(base: str, profile: str | None) -> str:
+    return f"{base}_{profile}" if profile else base
+
+
 # ---------------------------------------------------------------------------
 # SSHClient
 # ---------------------------------------------------------------------------
@@ -312,7 +324,10 @@ class SSHClient:
             configured_user=self._remote_user,
             runner=runner,
         )
-        self._remote_work_dir = default_virtuoso_bridge_dir(remote_username, "virtuoso_bridge")
+        self._remote_work_dir = default_virtuoso_bridge_dir(
+            remote_username,
+            _profiled_bridge_leaf(self._profile),
+        )
 
         remote_daemon = f"{self._remote_work_dir}/{daemon_filename}"
         remote_il = f"{self._remote_work_dir}/ramic_bridge.il"
@@ -421,7 +436,7 @@ class SSHClient:
                     logger.info("Local port %d was busy, using port %d", self._local_port, local_port)
                     print(f"[port] {self._local_port} busy, auto-switched to {local_port}", flush=True)
                     self._local_port = local_port
-                    _update_env_file("VB_LOCAL_PORT", str(local_port))
+                    _update_env_file(_profiled_env_key("VB_LOCAL_PORT", self._profile), str(local_port))
                 logger.info(
                     "SSH tunnel established (PID %d): localhost:%d -> %s:localhost:%d",
                     proc.pid, local_port, self._remote_host, self._port,

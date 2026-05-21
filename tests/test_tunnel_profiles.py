@@ -1,0 +1,83 @@
+from __future__ import annotations
+
+from virtuoso_bridge.transport.ssh import CommandResult
+from virtuoso_bridge.transport.tunnel import (
+    SSHClient,
+    _profiled_bridge_leaf,
+    _profiled_env_key,
+)
+from virtuoso_bridge import cli
+
+
+class _FakeRunner:
+    def __init__(self) -> None:
+        self.commands: list[str] = []
+        self.uploads: dict[str, str] = {}
+
+    def run_command(self, command: str, timeout=None) -> CommandResult:
+        self.commands.append(command)
+        return CommandResult(returncode=0, stdout="", stderr="")
+
+    def upload_text(self, text: str, remote_path: str, timeout=None) -> CommandResult:
+        self.uploads[remote_path] = text
+        return CommandResult(returncode=0, stdout="", stderr="")
+
+
+def test_profiled_bridge_leaf_preserves_default_path() -> None:
+    assert _profiled_bridge_leaf(None) == "virtuoso_bridge"
+
+
+def test_profiled_bridge_leaf_adds_profile_suffix() -> None:
+    assert _profiled_bridge_leaf("t28_digital") == "virtuoso_bridge_t28_digital"
+    assert _profiled_bridge_leaf("t28/io") == "virtuoso_bridge_t28_io"
+
+
+def test_profiled_env_key_preserves_default_and_suffixes_profiles() -> None:
+    assert _profiled_env_key("VB_LOCAL_PORT", None) == "VB_LOCAL_PORT"
+    assert _profiled_env_key("VB_LOCAL_PORT", "t180_io") == "VB_LOCAL_PORT_t180_io"
+
+
+def test_remote_setup_path_and_port_are_profile_scoped(monkeypatch) -> None:
+    fake = _FakeRunner()
+    client = SSHClient(
+        remote_host="thu-wei",
+        remote_user="designer",
+        port=65263,
+        profile="t28_digital",
+    )
+    client._ssh_runner = fake
+    monkeypatch.setattr(client, "_detect_remote_python", lambda: ("python3", 3, 11))
+
+    client.ensure_remote_setup()
+
+    assert client.remote_work_dir == "/tmp/virtuoso_bridge_designer/virtuoso_bridge_t28_digital"
+    setup_path = "/tmp/virtuoso_bridge_designer/virtuoso_bridge_t28_digital/virtuoso_setup.il"
+    setup = fake.uploads[setup_path]
+    assert 'setShellEnvVar("RB_PORT" "65263")' in setup
+    assert '/tmp/virtuoso_bridge_designer/virtuoso_bridge_t28_digital/ramic_bridge.il' in setup
+
+
+def test_status_infers_profile_scoped_setup_path(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli, "_load_cli_env", lambda: None)
+    monkeypatch.setattr(cli, "_CLI_PROFILE", ["t28_io"])
+    monkeypatch.setenv("VB_REMOTE_HOST_t28_io", "thu-wei")
+    monkeypatch.setenv("VB_REMOTE_USER_t28_io", "designer")
+
+    class _FakeSSHClient:
+        @staticmethod
+        def read_state(profile=None):
+            return None
+
+        @staticmethod
+        def is_running(profile=None):
+            return False
+
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHClient", _FakeSSHClient)
+
+    rc = cli._print_status()
+
+    assert rc == 1
+    assert (
+        'load("/tmp/virtuoso_bridge_designer/virtuoso_bridge_t28_io/virtuoso_setup.il")'
+        in capsys.readouterr().out
+    )

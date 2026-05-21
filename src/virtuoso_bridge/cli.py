@@ -290,7 +290,7 @@ def _print_load_hint(setup_path: str) -> None:
 def _print_status() -> int:
     _load_cli_env()
     profile = _get_cli_profile()
-    from virtuoso_bridge.transport.tunnel import SSHClient, _is_localhost
+    from virtuoso_bridge.transport.tunnel import SSHClient, _is_localhost, _profiled_bridge_leaf
     from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
 
     state = SSHClient.read_state(profile)
@@ -316,7 +316,7 @@ def _print_status() -> int:
                 user = getpass.getuser()
             except Exception:
                 return None
-        return f"/tmp/virtuoso_bridge_{user}/virtuoso_bridge/virtuoso_setup.il"
+        return f"/tmp/virtuoso_bridge_{user}/{_profiled_bridge_leaf(profile)}/virtuoso_setup.il"
 
     if is_local:
         print(f"\n[mode] local (no SSH tunnel)")
