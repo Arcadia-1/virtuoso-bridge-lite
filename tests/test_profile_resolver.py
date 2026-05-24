@@ -18,6 +18,8 @@ from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
 def _isolate_profile_env(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.delenv("VB_PROFILE", raising=False)
     monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setattr(sys, "prefix", str(tmp_path / "base-python"))
+    monkeypatch.setattr(sys, "base_prefix", str(tmp_path / "base-python"))
     monkeypatch.setattr(
         "virtuoso_bridge.profile.default_user_env_path",
         lambda: tmp_path / "missing-user.env",

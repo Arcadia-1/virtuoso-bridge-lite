@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from virtuoso_bridge.env import load_vb_env
+from virtuoso_bridge.transport.remote_paths import default_virtuoso_bridge_dir, resolve_client_id
 from virtuoso_bridge.transport.ssh import SSHRunner
 
 logger = logging.getLogger(__name__)
@@ -74,14 +75,14 @@ def _detect_remote_python(runner: SSHRunner | None) -> str:
 def _ensure_helper(runner: SSHRunner | None, user: str) -> str:
     """Resolve the path to the helper script.
 
-    Remote: upload to ``/tmp/virtuoso_bridge_<user>/`` if not already there.
+    Remote: upload under the client-scoped bridge scratch directory.
     Local: the helper file is part of the installed package — return its
     on-disk path directly, no copy needed.
     """
     if runner is None:
         return str(_HELPER_SCRIPT)
-    remote_path = f"/tmp/virtuoso_bridge_{user}/x11_dismiss_dialog.py"
-    remote_dir = str(Path(remote_path).parent)
+    remote_dir = default_virtuoso_bridge_dir(user, "x11", resolve_client_id())
+    remote_path = f"{remote_dir}/x11_dismiss_dialog.py"
     runner.run_command(f"mkdir -p {remote_dir}")
     runner.upload(_HELPER_SCRIPT, remote_path)
     return remote_path

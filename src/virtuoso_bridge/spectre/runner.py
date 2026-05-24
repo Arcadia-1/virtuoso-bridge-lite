@@ -24,6 +24,7 @@ from virtuoso_bridge.spectre.parsers import (
 from virtuoso_bridge.transport.tunnel import _is_localhost
 from virtuoso_bridge.transport.remote_paths import (
     default_remote_spectre_work_dir,
+    resolve_client_id,
     resolve_remote_username,
 )
 from virtuoso_bridge.transport.ssh import SSHRunner, RemoteTaskResult, run_remote_task, remote_ssh_env_from_os
@@ -821,7 +822,10 @@ class SpectreSimulator:
                 configured_user=self._remote_user or runner.user,
                 runner=runner,
             )
-            self._remote_work_dir = default_remote_spectre_work_dir(username)
+            self._remote_work_dir = default_remote_spectre_work_dir(
+                username,
+                resolve_client_id(self._profile),
+            )
             logger.info("Remote work dir: %s", self._remote_work_dir)
         if self._remote_work_dir is None:
             return SimulationResult(

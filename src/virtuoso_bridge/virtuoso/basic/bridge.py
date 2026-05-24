@@ -520,7 +520,10 @@ let((result winName ciwNum)
             configured_user=self._tunnel._remote_user if self._tunnel else None,
             runner=self._tunnel._ssh_runner if self._tunnel else None,
         )
-        screenshot_dir = default_virtuoso_bridge_dir(username, "screenshots")
+        from virtuoso_bridge.transport.remote_paths import resolve_client_id
+
+        client_id = resolve_client_id(getattr(self._tunnel, '_profile', None)) if self._tunnel else None
+        screenshot_dir = default_virtuoso_bridge_dir(username, "screenshots", client_id)
         if self._tunnel and self._tunnel._ssh_runner:
             self._tunnel._ssh_runner.run_command(f"mkdir -p {screenshot_dir}")
 
@@ -820,7 +823,11 @@ let((result winName ciwNum)
         """Return (remote_path, uploaded) where uploaded=False means cache hit."""
         p = Path(path)
         if self._tunnel is not None and p.is_file():
-            from virtuoso_bridge.transport.remote_paths import default_virtuoso_bridge_dir, resolve_remote_username
+            from virtuoso_bridge.transport.remote_paths import (
+                default_virtuoso_bridge_dir,
+                resolve_client_id,
+                resolve_remote_username,
+            )
             from virtuoso_bridge.transport.tunnel import _profiled_bridge_leaf
             work_dir = self._tunnel.remote_work_dir
             if not work_dir:
@@ -831,6 +838,7 @@ let((result winName ciwNum)
                 work_dir = default_virtuoso_bridge_dir(
                     remote_username,
                     _profiled_bridge_leaf(getattr(self._tunnel, '_profile', None)),
+                    resolve_client_id(getattr(self._tunnel, '_profile', None)),
                 )
             remote_dir = work_dir.rstrip("/")
             remote_path = f"{remote_dir}/{p.name}"

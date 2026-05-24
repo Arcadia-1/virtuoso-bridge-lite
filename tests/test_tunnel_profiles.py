@@ -38,6 +38,10 @@ def test_profiled_env_key_preserves_default_and_suffixes_profiles() -> None:
 
 
 def test_remote_setup_path_and_port_are_profile_scoped(monkeypatch) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
+    monkeypatch.delenv("VB_REMOTE_SCRATCH_ROOT", raising=False)
+    monkeypatch.delenv("VB_CLIENT_ID_t28_digital", raising=False)
+    monkeypatch.setenv("VB_CLIENT_ID", "90590")
     fake = _FakeRunner()
     client = SSHClient(
         remote_host="thu-wei",
@@ -50,15 +54,19 @@ def test_remote_setup_path_and_port_are_profile_scoped(monkeypatch) -> None:
 
     client.ensure_remote_setup()
 
-    assert client.remote_work_dir == "/tmp/virtuoso_bridge_designer/virtuoso_bridge_t28_digital"
-    setup_path = "/tmp/virtuoso_bridge_designer/virtuoso_bridge_t28_digital/virtuoso_setup.il"
+    assert client.remote_work_dir == "/tmp/virtuoso_bridge_designer/90590/virtuoso_bridge_t28_digital"
+    setup_path = "/tmp/virtuoso_bridge_designer/90590/virtuoso_bridge_t28_digital/virtuoso_setup.il"
     setup = fake.uploads[setup_path]
     assert 'setShellEnvVar("RB_PORT" "65263")' in setup
-    assert '/tmp/virtuoso_bridge_designer/virtuoso_bridge_t28_digital/ramic_bridge.il' in setup
+    assert '/tmp/virtuoso_bridge_designer/90590/virtuoso_bridge_t28_digital/ramic_bridge.il' in setup
 
 
 def test_status_infers_profile_scoped_setup_path(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli, "_load_cli_env", lambda: None)
+    monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
+    monkeypatch.delenv("VB_REMOTE_SCRATCH_ROOT", raising=False)
+    monkeypatch.delenv("VB_CLIENT_ID_t28_io", raising=False)
+    monkeypatch.setenv("VB_CLIENT_ID", "90590")
     monkeypatch.setattr(cli, "_CLI_PROFILE", ["t28_io"])
     monkeypatch.setenv("VB_REMOTE_HOST_t28_io", "thu-wei")
     monkeypatch.setenv("VB_REMOTE_USER_t28_io", "designer")
@@ -78,6 +86,6 @@ def test_status_infers_profile_scoped_setup_path(monkeypatch, capsys) -> None:
 
     assert rc == 1
     assert (
-        'load("/tmp/virtuoso_bridge_designer/virtuoso_bridge_t28_io/virtuoso_setup.il")'
+        'load("/tmp/virtuoso_bridge_designer/90590/virtuoso_bridge_t28_io/virtuoso_setup.il")'
         in capsys.readouterr().out
     )

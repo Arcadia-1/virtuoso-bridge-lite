@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from virtuoso_bridge import VirtuosoClient
 from virtuoso_bridge.transport.remote_paths import (
     default_virtuoso_bridge_dir,
+    resolve_client_id,
     resolve_remote_username,
 )
 
@@ -137,7 +138,11 @@ def main() -> int:
         configured_user=client._tunnel._remote_user,
         runner=client._tunnel._ssh_runner,
     )
-    remote_tmp = default_virtuoso_bridge_dir(username, "cap_array")
+    remote_tmp = default_virtuoso_bridge_dir(
+        username,
+        "cap_array",
+        resolve_client_id(getattr(client._tunnel, "_profile", None)) if client._tunnel else None,
+    )
 
     # 1. Write CDL and devmap locally, upload via bridge
     cdl_path = f"{remote_tmp}/cap_array_4b.cdl"

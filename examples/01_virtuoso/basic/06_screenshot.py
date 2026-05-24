@@ -22,6 +22,7 @@ from _timing import decode_skill, format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
 from virtuoso_bridge.transport.remote_paths import (
     default_virtuoso_bridge_dir,
+    resolve_client_id,
     resolve_remote_username,
 )
 from virtuoso_bridge.virtuoso.ops import escape_skill_string
@@ -50,7 +51,11 @@ def main() -> int:
         configured_user=client._tunnel._remote_user,
         runner=client._tunnel._ssh_runner,
     )
-    screenshot_dir = default_virtuoso_bridge_dir(username, "screenshots")
+    screenshot_dir = default_virtuoso_bridge_dir(
+        username,
+        "screenshots",
+        resolve_client_id(getattr(client._tunnel, "_profile", None)) if client._tunnel else None,
+    )
     remote_path = f"{screenshot_dir}/{cell}_{stamp}.png"
     # Create directory via SSH (not SKILL csh) so it exists on the SSH-accessible filesystem
     mkdir_result = client._tunnel._ssh_runner.run_command(f"mkdir -p {screenshot_dir}")

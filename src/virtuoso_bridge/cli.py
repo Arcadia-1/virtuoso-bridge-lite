@@ -352,6 +352,11 @@ def _print_status() -> int:
 
     # Infer setup_path from user config when state is unavailable
     def _infer_setup_path() -> str | None:
+        from virtuoso_bridge.transport.remote_paths import (
+            default_virtuoso_bridge_dir,
+            resolve_client_id,
+        )
+
         user = configured_user
         if not user:
             import getpass
@@ -359,7 +364,12 @@ def _print_status() -> int:
                 user = getpass.getuser()
             except Exception:
                 return None
-        return f"/tmp/virtuoso_bridge_{user}/{_profiled_bridge_leaf(profile)}/virtuoso_setup.il"
+        work_dir = default_virtuoso_bridge_dir(
+            user,
+            _profiled_bridge_leaf(profile),
+            resolve_client_id(profile),
+        )
+        return f"{work_dir}/virtuoso_setup.il"
 
     if is_local:
         print(f"\n[mode] local (no SSH tunnel)")

@@ -21,7 +21,11 @@ from typing import Any
 
 from virtuoso_bridge.env import load_vb_env, resolve_env_path
 from virtuoso_bridge.profile import resolve_profile
-from virtuoso_bridge.transport.remote_paths import default_virtuoso_bridge_dir, resolve_remote_username
+from virtuoso_bridge.transport.remote_paths import (
+    default_virtuoso_bridge_dir,
+    resolve_client_id,
+    resolve_remote_username,
+)
 from virtuoso_bridge.transport.ssh import SSHRunner, CommandResult
 
 logger = logging.getLogger(__name__)
@@ -330,6 +334,7 @@ class SSHClient:
         self._remote_work_dir = default_virtuoso_bridge_dir(
             remote_username,
             _profiled_bridge_leaf(self._profile),
+            resolve_client_id(self._profile),
         )
 
         remote_daemon = f"{self._remote_work_dir}/{daemon_filename}"

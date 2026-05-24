@@ -65,13 +65,15 @@ virtuoso-bridge start
 
 **4. Load SKILL in Virtuoso CIW**
 
-`virtuoso-bridge start` deploys the SKILL bridge files to a per-user
-temp dir on the remote host and prints the exact `load(...)` line you
-need to paste into the CIW (the path includes your username, so it is
-collision-free across users on a shared machine):
+`virtuoso-bridge start` deploys the SKILL bridge files to a per-remote-user,
+per-local-client temp dir on the remote host and prints the exact `load(...)`
+line you need to paste into the CIW. The client segment defaults to the local
+account running bridge (for example `90590` on Windows) and can be overridden
+with `VB_CLIENT_ID` or `VB_CLIENT_ID_<profile>`, so it is collision-free across
+users and across local machines sharing the same remote scratch root:
 
 ```
-load("/tmp/virtuoso_bridge_<user>/virtuoso_bridge/virtuoso_setup.il")
+load("/tmp/virtuoso_bridge_<remote_user>/<client_id>/virtuoso_bridge/virtuoso_setup.il")
 ```
 
 (Run `virtuoso-bridge status` again at any time to re-print this line.
@@ -168,9 +170,8 @@ Your machine  ──SSH──►  Jump host (bastion)  ──SSH──►  Compu
 
 Same flow as remote, but with `VB_REMOTE_HOST=localhost` (or `127.0.0.1`):
 `virtuoso-bridge start` notices it's local, skips the SSH tunnel, and
-deploys the SKILL bridge files to `/tmp/virtuoso_bridge_<user>/`.  Paste
-the `load(...)` line it prints into your CIW once, then connect from
-Python:
+deploys the SKILL bridge files under the local bridge cache.  Paste the
+`load(...)` line it prints into your CIW once, then connect from Python:
 
 ```python
 from virtuoso_bridge import VirtuosoClient
