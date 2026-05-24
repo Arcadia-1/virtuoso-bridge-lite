@@ -797,7 +797,7 @@ def cli_dismiss_dialog() -> int:
     from virtuoso_bridge.virtuoso import x11
     runner, user = _make_ssh_runner()
 
-    dialogs = x11.dismiss_dialogs(runner, user)
+    dialogs = x11.dismiss_dialogs(runner, user, profile=_get_cli_profile())
     if not dialogs:
         print("No dialog windows found.")
         return 0

@@ -668,7 +668,8 @@ let((result winName ciwNum)
             user = os.getenv("USER", "") or os.getenv("USERNAME", "") or "local"
         else:
             user = runner.user or os.getenv("VB_REMOTE_USER", "")
-        return x11.dismiss_dialogs(runner, user, display)
+        profile = getattr(self._tunnel, "_profile", None) if self._tunnel else None
+        return x11.dismiss_dialogs(runner, user, display, profile=profile)
 
     # -- file transfer (delegates to tunnel) --------------------------------
 

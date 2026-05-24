@@ -72,7 +72,11 @@ def _detect_remote_python(runner: SSHRunner | None) -> str:
     return "python3"  # fallback, will fail with clear error
 
 
-def _ensure_helper(runner: SSHRunner | None, user: str) -> str:
+def _ensure_helper(
+    runner: SSHRunner | None,
+    user: str,
+    profile: str | None = None,
+) -> str:
     """Resolve the path to the helper script.
 
     Remote: upload under the client-scoped bridge scratch directory.
@@ -81,7 +85,7 @@ def _ensure_helper(runner: SSHRunner | None, user: str) -> str:
     """
     if runner is None:
         return str(_HELPER_SCRIPT)
-    remote_dir = default_virtuoso_bridge_dir(user, "x11", resolve_client_id())
+    remote_dir = default_virtuoso_bridge_dir(user, "x11", resolve_client_id(profile))
     remote_path = f"{remote_dir}/x11_dismiss_dialog.py"
     runner.run_command(f"mkdir -p {remote_dir}")
     runner.upload(_HELPER_SCRIPT, remote_path)
@@ -92,13 +96,14 @@ def find_dialogs(
     runner: SSHRunner | None,
     user: str,
     display: str | None = None,
+    profile: str | None = None,
 ) -> list[dict[str, Any]]:
     """Find blocking dialog windows on the X11 display.
 
     Returns list of dicts: [{"window_id", "title", "x", "y", "w", "h"}, ...]
     """
     load_vb_env()
-    script = _ensure_helper(runner, user)
+    script = _ensure_helper(runner, user, profile)
     py = _detect_remote_python(runner)
     resolved = _get_display(display)
     cmd = f"{py} {script}"
@@ -112,13 +117,14 @@ def dismiss_dialogs(
     runner: SSHRunner | None,
     user: str,
     display: str | None = None,
+    profile: str | None = None,
 ) -> list[dict[str, Any]]:
     """Find and dismiss all blocking dialog windows.
 
     Returns list of result dicts (found dialogs + dismissal results).
     """
     load_vb_env()
-    script = _ensure_helper(runner, user)
+    script = _ensure_helper(runner, user, profile)
     py = _detect_remote_python(runner)
     resolved = _get_display(display)
     env_prefix = ""
