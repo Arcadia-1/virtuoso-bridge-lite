@@ -56,11 +56,22 @@ Spectre.
 
 ## Quick Start
 
-```bash
+Create a workspace directory, clone the bridge inside it, and keep the virtual
+environment next to the bridge checkout. Editable installs (`-e`) must point at
+the directory that contains `pyproject.toml`; running `uv pip install -e .`
+from an empty workspace such as `E:\bridge-demo` will fail with "does not
+appear to be a Python project".
+
+```powershell
+# 0. Create a workspace and get the source
+mkdir E:\bridge-demo
+cd E:\bridge-demo
+git clone https://github.com/Arcadia-1/virtuoso-bridge-lite.git
+
 # 1. Install in a virtual environment
 uv venv .venv
-source .venv/bin/activate
-uv pip install -e .
+.\.venv\Scripts\Activate.ps1
+uv pip install -e .\virtuoso-bridge-lite
 
 # 2. Create ~/.virtuoso-bridge/.env
 virtuoso-bridge init user@host [-J user@jump-host]
@@ -69,6 +80,25 @@ virtuoso-bridge init user@host [-J user@jump-host]
 # 3. Start and verify
 virtuoso-bridge start          # starts tunnel and prints the CIW load(...) line
 virtuoso-bridge status         # tunnel + Virtuoso daemon + Spectre availability
+```
+
+On Linux/macOS, use the same directory layout with POSIX paths:
+
+```bash
+mkdir bridge-demo
+cd bridge-demo
+git clone https://github.com/Arcadia-1/virtuoso-bridge-lite.git
+uv venv .venv
+source .venv/bin/activate
+uv pip install -e ./virtuoso-bridge-lite
+```
+
+If you already have a checkout in the workspace, install it from the workspace
+root:
+
+```powershell
+cd E:\bridge-demo
+uv pip install -e .\virtuoso-bridge-lite
 ```
 
 ```python
