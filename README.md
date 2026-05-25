@@ -59,12 +59,11 @@ Spectre.
 ```bash
 # 0. Get the source
 git clone https://github.com/Arcadia-1/virtuoso-bridge-lite.git
-cd virtuoso-bridge-lite
 
 # 1. Install in a virtual environment
 uv venv .venv
 source .venv/bin/activate
-uv pip install -e .
+uv pip install -e ./virtuoso-bridge-lite
 
 # 2. Create ~/.virtuoso-bridge/.env
 virtuoso-bridge init user@host [-J user@jump-host]
