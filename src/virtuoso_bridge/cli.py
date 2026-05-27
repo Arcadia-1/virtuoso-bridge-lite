@@ -877,7 +877,7 @@ def cli_find(*, query: str | None, mode: str, limit: int, json_output: bool) -> 
     from virtuoso_bridge import VirtuosoClient
     from virtuoso_bridge.virtuoso.skill_finder import SKILLFinder
 
-    client = VirtuosoClient.from_env()
+    client = VirtuosoClient.from_env(profile=_get_cli_profile())
 
     if not query:
         print("Error: query argument required for 'skill-find'", file=sys.stderr)
@@ -907,7 +907,7 @@ def cli_skill_info(*, func_name: str, json_output: bool) -> int:
     _load_cli_env()
     from virtuoso_bridge import VirtuosoClient
 
-    client = VirtuosoClient.from_env()
+    client = VirtuosoClient.from_env(profile=_get_cli_profile())
     result = client.get_skill_more_info(func_name)
 
     if json_output:
@@ -1462,7 +1462,7 @@ def main(argv: list[str] | None = None) -> int:
             query=getattr(args, "query", None),
             mode=getattr(args, "mode", "fuzzy"),
             limit=getattr(args, "limit", 50),
-            json_output=getattr(args, "json_output", False),
+            json_output=getattr(args, "json", False),
         ),
         "skill-info": lambda: cli_skill_info(
             func_name=getattr(args, "func_name", None) or "",

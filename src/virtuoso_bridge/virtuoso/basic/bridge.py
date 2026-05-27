@@ -202,6 +202,16 @@ class VirtuosoClient(VirtuosoInterface):
             return None
         return getattr(self._tunnel, '_ssh_runner', None)
 
+    def _skill_finder_cache_host(self) -> str:
+        """Stable cache segment for SKILL Finder data."""
+        if self._tunnel is None:
+            return "local"
+        return (
+            getattr(self._tunnel, "remote_host", None)
+            or getattr(self._tunnel, "_remote_host", None)
+            or "local"
+        )
+
     @property
     def log_to_ciw(self) -> bool:
         return self._log_to_ciw
@@ -819,25 +829,21 @@ let((result winName ciwNum)
             cache_path = _Path(cache_dir).expanduser().resolve()
         else:
             cache_root = _Path.home() / ".cache" / "virtuoso_bridge" / "skill_finder"
-            host = getattr(self._tunnel, "_host", None) if self._tunnel else "local"
-            cache_path = cache_root / (host or "local")
+            cache_path = cache_root / self._skill_finder_cache_host()
 
         # Discover SKILL Finder root
+        runner = self.ssh_runner
         if source_dir:
             finder_root = _Path(source_dir)
             doc_root = finder_root.parent.parent
-        elif self._tunnel is not None:
-            runner = self.ssh_runner
-            if runner is None:
-                logger.warning("find_skill: no SSH runner available")
-                return []
+        elif runner is not None:
             profile = getattr(self._tunnel, "_profile", None) if self._tunnel else None
             finder = SKILLFinder()
             finder_root = finder.discover(remote_runner=runner, profile=profile)
             if finder_root is None:
                 logger.warning(
                     "find_skill: could not locate doc/finder/SKILL on %s",
-                    getattr(self._tunnel, "_host", "remote"),
+                    self._skill_finder_cache_host(),
                 )
                 return []
             # Download .fnd files if cache is stale
@@ -945,24 +951,20 @@ let((result winName ciwNum)
             cache_path = _Path(cache_dir).expanduser().resolve()
         else:
             cache_root = _Path.home() / ".cache" / "virtuoso_bridge" / "skill_finder"
-            host = getattr(self._tunnel, "_host", None) if self._tunnel else "local"
-            cache_path = cache_root / (host or "local")
+            cache_path = cache_root / self._skill_finder_cache_host()
 
         # Determine doc root
+        runner = self.ssh_runner
         if source_dir:
             doc_root = _Path(source_dir)
-        elif self._tunnel is not None:
-            runner = self.ssh_runner
-            if runner is None:
-                logger.warning("get_skill_more_info: no SSH runner available")
-                return None
+        elif runner is not None:
             profile = getattr(self._tunnel, "_profile", None) if self._tunnel else None
             finder = SKILLFinder()
             finder_root = finder.discover(remote_runner=runner, profile=profile)
             if finder_root is None:
                 logger.warning(
                     "get_skill_more_info: could not locate doc/finder/SKILL on %s",
-                    getattr(self._tunnel, "_host", "remote"),
+                    self._skill_finder_cache_host(),
                 )
                 return None
             doc_root = finder_root.parent.parent
@@ -980,8 +982,7 @@ let((result winName ciwNum)
         tgf_marker = mi_cache / ".source_dir"
 
         # Remote: download .tgf and needed HTML files
-        if self._tunnel is not None:
-            runner = self.ssh_runner
+        if runner is not None:
             tgf_remote_path = str(doc_root / "api_more_info" / "api_more_info.tgf")
             tgf_local_path = mi_cache / "api_more_info.tgf"
 
