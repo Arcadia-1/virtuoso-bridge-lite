@@ -1020,8 +1020,15 @@ let((result winName ciwNum)
 
             # Parse .tgf to find which HTML files are needed for this function
             entries = parse_tgf_index(tgf_local_path)
-            key = func_name.lower()
-            entry = entries.get(key)
+            entry = entries.get(func_name.lower())
+            if entry is None:
+                # OCEAN/ViVA_SKILL functions are indexed with a suffix
+                # (e.g. ocnPrint_OCEAN).  Try appending known suffixes so that
+                # ``skill-info ocnPrint`` finds ocnPrint_OCEAN automatically.
+                for suffix in ("_ocean", "_viva_skill"):
+                    entry = entries.get(func_name.lower() + suffix)
+                    if entry is not None:
+                        break
             if entry is None:
                 return None
 
@@ -1087,8 +1094,12 @@ let((result winName ciwNum)
             # Local mode
             tgf_path = doc_root / "api_more_info" / "api_more_info.tgf"
             entries = parse_tgf_index(tgf_path)
-            key = func_name.lower()
-            entry = entries.get(key)
+            entry = entries.get(func_name.lower())
+            if entry is None:
+                for suffix in ("_OCEAN", "_ViVA_SKILL"):
+                    entry = entries.get(func_name.lower() + suffix)
+                    if entry is not None:
+                        break
             if entry is None:
                 return None
 
