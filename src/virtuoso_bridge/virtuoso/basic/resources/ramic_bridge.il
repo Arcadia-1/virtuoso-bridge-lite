@@ -20,6 +20,8 @@ RBPort = if(getShellEnvVar("RB_PORT") then
             else
                 65432
             )                                                                      ; TCP port for client connections
+RBProfile = if(getShellEnvVar("RB_PROFILE") then getShellEnvVar("RB_PROFILE") else "")
+RBNonce = if(getShellEnvVar("RB_DAEMON_NONCE") then getShellEnvVar("RB_DAEMON_NONCE") else "")
 RBLocal = nil                                                                      ; Local-only connections (127.0.0.1 vs 0.0.0.0)
 RBEcho = nil                                                                     ; Echo bridging messages for debugging
 RBDLog = nil                                                                     ; Enable daemon logging to /tmp/RB.log
@@ -45,6 +47,18 @@ unless(boundp('RBLastIP) RBLastIP = "")
 unless(boundp('RBStatCount) RBStatCount = 0)
 unless(boundp('RBStatErrors) RBStatErrors = 0)
 unless(boundp('RBStatUptime) RBStatUptime = 0)
+
+procedure(RBIdentity()
+    sprintf(nil "user=%s\nhome=%s\npwd=%s\nworkdir=%s\ncds_lib=%s\nprofile=%s\nport=%d\nnonce=%s\nhost=%s"
+        if(getShellEnvVar("USER") getShellEnvVar("USER") "")
+        if(getShellEnvVar("HOME") getShellEnvVar("HOME") "")
+        if(getShellEnvVar("PWD") getShellEnvVar("PWD") "")
+        getWorkingDir()
+        if(getShellEnvVar("CDS_LIB") getShellEnvVar("CDS_LIB") "")
+        RBProfile
+        RBPort
+        RBNonce
+        getHostName()))
 
 procedure(RBIpcDataHandler(ipcId data)
   ; Handler for successful data received from the Python daemon.

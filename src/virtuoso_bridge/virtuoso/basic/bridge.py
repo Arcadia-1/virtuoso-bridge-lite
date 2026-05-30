@@ -124,7 +124,9 @@ class VirtuosoClient(VirtuosoInterface):
                 raise RuntimeError("Tunnel state file is missing or invalid.")
             port = state["port"]
             ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
-            return cls(host="127.0.0.1", port=port, timeout=timeout, tunnel=ssh, log_to_ciw=log_to_ciw)
+            client = cls(host="127.0.0.1", port=port, timeout=timeout, tunnel=ssh, log_to_ciw=log_to_ciw)
+            client._raise_identity_mismatch_if_reachable(profile=profile, state=state, timeout=min(timeout, 5))
+            return client
 
         # No tunnel running — start one
         suffix = f"_{profile}" if profile else ""
@@ -137,7 +139,10 @@ class VirtuosoClient(VirtuosoInterface):
             )
 
         ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
-        return cls(host="127.0.0.1", port=ssh.port, timeout=timeout, tunnel=ssh, log_to_ciw=log_to_ciw)
+        client = cls(host="127.0.0.1", port=ssh.port, timeout=timeout, tunnel=ssh, log_to_ciw=log_to_ciw)
+        state = SSHClient.read_state(profile)
+        client._raise_identity_mismatch_if_reachable(profile=profile, state=state, timeout=min(timeout, 5))
+        return client
 
     @classmethod
     def local(
@@ -274,6 +279,35 @@ class VirtuosoClient(VirtuosoInterface):
             return VirtuosoResult(
                 status=ExecutionStatus.ERROR,
                 errors=[str(e)],
+            )
+
+    def _raise_identity_mismatch_if_reachable(
+        self,
+        *,
+        profile: str | None,
+        state: dict[str, Any] | None,
+        timeout: int = 5,
+    ) -> None:
+        """Fail fast when a reachable daemon belongs to another profile/user."""
+        from virtuoso_bridge.daemon_identity import verify_daemon_identity
+
+        try:
+            check = verify_daemon_identity(
+                self,
+                profile=profile,
+                state=state,
+                timeout=timeout,
+            )
+        except Exception:
+            # No reachable daemon yet. The eventual SKILL call will report the
+            # connection problem; identity enforcement applies once it answers.
+            return
+        if not check.ok:
+            details = "; ".join(check.errors)
+            raise RuntimeError(
+                "Virtuoso daemon identity mismatch: "
+                f"{details}. If this cross-user/session connection is intentional, "
+                "set VB_ALLOW_DAEMON_IDENTITY_MISMATCH=1."
             )
 
     # -- SKILL execution ----------------------------------------------------

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from virtuoso_bridge.models import ExecutionStatus, VirtuosoResult
 from virtuoso_bridge.transport.ssh import CommandResult
 from virtuoso_bridge.transport.tunnel import (
     SSHClient,
@@ -49,6 +50,7 @@ def test_remote_setup_path_and_port_are_profile_scoped(monkeypatch) -> None:
         port=65263,
         profile="t28_digital",
     )
+    client._daemon_nonce = "nonce1234"
     client._ssh_runner = fake
     monkeypatch.setattr(client, "_detect_remote_python", lambda: ("python3", 3, 11))
 
@@ -58,6 +60,9 @@ def test_remote_setup_path_and_port_are_profile_scoped(monkeypatch) -> None:
     setup_path = "/tmp/virtuoso_bridge_designer/90590/virtuoso_bridge_t28_digital/virtuoso_setup.il"
     setup = fake.uploads[setup_path]
     assert 'setShellEnvVar("RB_PORT" "65263")' in setup
+    assert 'setShellEnvVar("RB_PROFILE" "t28_digital")' in setup
+    assert 'setShellEnvVar("RB_DAEMON_NONCE" "nonce1234")' in setup
+    assert "profile=t28_digital port=65263 nonce=nonce1234" in setup
     assert '/tmp/virtuoso_bridge_designer/90590/virtuoso_bridge_t28_digital/ramic_bridge.il' in setup
 
 
@@ -128,3 +133,64 @@ def test_status_no_response_prints_stale_daemon_hint(monkeypatch, capsys) -> Non
     assert "load() did not replace the existing daemon" in out
     assert "RBStop()" in out
     assert "RBStopAll()" in out
+
+
+def test_status_fails_on_daemon_user_mismatch(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli, "_load_cli_env", lambda: None)
+    monkeypatch.setattr(cli, "_print_spectre_status", lambda profile, suffix: None)
+    monkeypatch.setattr(cli, "_CLI_PROFILE", ["t28_io"])
+    monkeypatch.setenv("VB_REMOTE_HOST_t28_io", "thu-wei")
+    monkeypatch.setenv("VB_REMOTE_USER_t28_io", "designer")
+
+    class _FakeSSHClient:
+        @staticmethod
+        def read_state(profile=None):
+            return {
+                "port": 65271,
+                "remote_port": 65264,
+                "remote_user": "designer",
+                "profile": "t28_io",
+                "daemon_nonce": "expectednonce",
+                "setup_path": "/tmp/virtuoso_setup.il",
+            }
+
+        @staticmethod
+        def is_running(profile=None):
+            return True
+
+    class _FakeVirtuosoClient:
+        def __init__(self, host, port, timeout):
+            pass
+
+        def test_connection(self, timeout=5):
+            return True
+
+        def execute_skill(self, expr, timeout=5):
+            values = {
+                'getShellEnvVar("USER")': "other_user",
+                'getShellEnvVar("HOME")': "/home/other_user",
+                'getShellEnvVar("PWD")': "/home/other_user/TSMC28",
+                "getWorkingDir()": "/home/other_user/TSMC28",
+                'getShellEnvVar("CDS_LIB")': "/home/other_user/TSMC28/cds.lib",
+                'getShellEnvVar("RB_PROFILE")': "t28_io",
+                'getShellEnvVar("RB_PORT")': "65264",
+                'getShellEnvVar("RB_DAEMON_NONCE")': "expectednonce",
+                "getHostName()": "thu-wei",
+                "getCurrentTime()": "now",
+                "getVersion()": "ICADVM",
+            }
+            return VirtuosoResult(
+                status=ExecutionStatus.SUCCESS,
+                output=values.get(expr, ""),
+            )
+
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHClient", _FakeSSHClient)
+    monkeypatch.setattr("virtuoso_bridge.virtuoso.basic.bridge.VirtuosoClient", _FakeVirtuosoClient)
+
+    rc = cli._print_status()
+
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "[daemon identity] FAILED" in out
+    assert "other_user" in out
+    assert "designer" in out
