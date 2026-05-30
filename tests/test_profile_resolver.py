@@ -3,7 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
+import pytest
+
 from virtuoso_bridge import cli
+from virtuoso_bridge.models import ExecutionStatus, VirtuosoResult
 from virtuoso_bridge.profile import (
     bind_venv_profile,
     clear_venv_profile,
@@ -165,6 +168,64 @@ def test_virtuoso_client_from_env_uses_resolved_profile(monkeypatch, tmp_path) -
         ("read_state", "t28_digital"),
         ("from_env", "t28_digital"),
     ]
+
+
+def test_virtuoso_client_from_env_rejects_cross_user_daemon(monkeypatch, tmp_path) -> None:
+    _isolate_profile_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("VB_REMOTE_HOST_t28_io", "thu-wei")
+    monkeypatch.setenv("VB_REMOTE_USER_t28_io", "designer")
+    monkeypatch.delenv("VB_ALLOW_CROSS_USER_DAEMON", raising=False)
+    monkeypatch.setattr("virtuoso_bridge.virtuoso.basic.bridge.load_vb_env", lambda: None)
+
+    class _FakeSSHClient:
+        @staticmethod
+        def is_running(profile=None):
+            return True
+
+        @staticmethod
+        def read_state(profile=None):
+            return {"port": 65271}
+
+        @classmethod
+        def from_env(cls, keep_remote_files=True, profile=None):
+            return cls()
+
+    def fake_execute_skill(self, expr, timeout=None):
+        assert expr == 'getShellEnvVar("USER")'
+        return VirtuosoResult(status=ExecutionStatus.SUCCESS, output="other_user")
+
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHClient", _FakeSSHClient)
+    monkeypatch.setattr(VirtuosoClient, "execute_skill", fake_execute_skill)
+
+    with pytest.raises(RuntimeError, match="daemon Unix user"):
+        VirtuosoClient.from_env(profile="t28_io")
+
+
+def test_virtuoso_client_from_env_allows_cross_user_override(monkeypatch, tmp_path) -> None:
+    _isolate_profile_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("VB_REMOTE_HOST_t28_io", "thu-wei")
+    monkeypatch.setenv("VB_REMOTE_USER_t28_io", "designer")
+    monkeypatch.setenv("VB_ALLOW_CROSS_USER_DAEMON", "1")
+    monkeypatch.setattr("virtuoso_bridge.virtuoso.basic.bridge.load_vb_env", lambda: None)
+
+    class _FakeSSHClient:
+        @staticmethod
+        def is_running(profile=None):
+            return True
+
+        @staticmethod
+        def read_state(profile=None):
+            return {"port": 65271}
+
+        @classmethod
+        def from_env(cls, keep_remote_files=True, profile=None):
+            return cls()
+
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHClient", _FakeSSHClient)
+
+    client = VirtuosoClient.from_env(profile="t28_io")
+
+    assert client.port == 65271
 
 
 def test_spectre_simulator_direct_constructor_uses_resolved_profile(monkeypatch, tmp_path) -> None:

@@ -45,6 +45,7 @@ def _patch_cli_client(monkeypatch):
 
     monkeypatch.setattr(virtuoso_bridge, "VirtuosoClient", _FakeVirtuosoClient)
     monkeypatch.setattr("virtuoso_bridge.cli._load_cli_env", lambda: None)
+    monkeypatch.setattr("virtuoso_bridge.profile.resolve_profile", lambda explicit=None: explicit)
     return fake, seen_profiles
 
 

@@ -124,7 +124,9 @@ class VirtuosoClient(VirtuosoInterface):
                 raise RuntimeError("Tunnel state file is missing or invalid.")
             port = state["port"]
             ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
-            return cls(host="127.0.0.1", port=port, timeout=timeout, tunnel=ssh, log_to_ciw=log_to_ciw)
+            client = cls(host="127.0.0.1", port=port, timeout=timeout, tunnel=ssh, log_to_ciw=log_to_ciw)
+            client._reject_cross_user_daemon_if_reachable(profile=profile, timeout=min(timeout, 5))
+            return client
 
         # No tunnel running — start one
         suffix = f"_{profile}" if profile else ""
@@ -137,7 +139,9 @@ class VirtuosoClient(VirtuosoInterface):
             )
 
         ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
-        return cls(host="127.0.0.1", port=ssh.port, timeout=timeout, tunnel=ssh, log_to_ciw=log_to_ciw)
+        client = cls(host="127.0.0.1", port=ssh.port, timeout=timeout, tunnel=ssh, log_to_ciw=log_to_ciw)
+        client._reject_cross_user_daemon_if_reachable(profile=profile, timeout=min(timeout, 5))
+        return client
 
     @classmethod
     def local(
@@ -274,6 +278,24 @@ class VirtuosoClient(VirtuosoInterface):
             return VirtuosoResult(
                 status=ExecutionStatus.ERROR,
                 errors=[str(e)],
+            )
+
+    def _reject_cross_user_daemon_if_reachable(
+        self,
+        *,
+        profile: str | None,
+        timeout: int = 5,
+    ) -> None:
+        from virtuoso_bridge.daemon_guard import OVERRIDE_ENV, check_daemon_user
+
+        try:
+            check = check_daemon_user(self, profile=profile, timeout=timeout)
+        except Exception:
+            return
+        if not check.ok:
+            raise RuntimeError(
+                f"Virtuoso daemon identity mismatch: {check.error}. "
+                f"Set {OVERRIDE_ENV}=1 only if this cross-user connection is intentional."
             )
 
     # -- SKILL execution ----------------------------------------------------
