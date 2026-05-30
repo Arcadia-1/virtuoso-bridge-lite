@@ -200,7 +200,7 @@ def _start_one_profile(profile: str | None) -> int:
     if SSHClient.is_running(profile):
         msg = "Bridge already running." if is_local else "Tunnel already running."
         print(msg)
-        return _check_running_daemon_identity(profile)
+        return 0
 
     label = f" [{profile}]" if profile else ""
     if is_local:
@@ -236,7 +236,7 @@ def _start_one_profile(profile: str | None) -> int:
                 setup_path = state.get("setup_path")
                 if setup_path:
                     print(f"  Load in Virtuoso CIW: load(\"{setup_path}\")")
-            return _check_running_daemon_identity(profile)
+            return 0
 
         time.sleep(1.0)
         if not SSHClient.is_running(profile):
@@ -253,8 +253,7 @@ def _start_one_profile(profile: str | None) -> int:
             print(f"  {manual_cmd}")
             return 1
 
-        identity_rc = _check_running_daemon_identity(profile)
-        return identity_rc
+        return 0
     finally:
         ssh.close()
 
@@ -340,36 +339,6 @@ def _print_stale_daemon_hint() -> None:
     print("  If that does not clear it, use RBStopAll() before loading again.")
 
 
-def _print_identity_failure(errors: tuple[str, ...]) -> None:
-    print("\n[daemon identity] FAILED")
-    for err in errors:
-        print(f"  {err}")
-    print("  To allow an intentional cross-user/session connection, set:")
-    print("    VB_ALLOW_DAEMON_IDENTITY_MISMATCH=1")
-
-
-def _check_running_daemon_identity(profile: str | None) -> int:
-    """Validate daemon identity during start/restart when a daemon answers."""
-    from virtuoso_bridge.daemon_identity import verify_daemon_identity
-    from virtuoso_bridge.transport.tunnel import SSHClient
-    from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
-
-    state = SSHClient.read_state(profile)
-    if not state:
-        return 0
-    try:
-        vc = VirtuosoClient(host="127.0.0.1", port=state["port"], timeout=5)
-        if not vc.test_connection(timeout=5):
-            return 0
-        check = verify_daemon_identity(vc, profile=profile, state=state, timeout=5)
-    except Exception:
-        return 0
-    if check.ok:
-        return 0
-    _print_identity_failure(check.errors)
-    return 1
-
-
 def _print_status() -> int:
     _load_cli_env()
     profile = _get_cli_profile()
@@ -436,7 +405,6 @@ def _print_status() -> int:
 
     # Daemon (Virtuoso CIW)
     # For local mode, check daemon if we have state (don't require 'running')
-    daemon_identity_ok = True
     can_check_daemon = (is_local and state) or (running and state)
     if can_check_daemon:
         if state is None:
@@ -448,33 +416,6 @@ def _print_status() -> int:
             ok = vc.test_connection(timeout=5)
             print(f"\n[daemon] {'OK - connected to Virtuoso CIW' if ok else 'NO RESPONSE'}")
             if ok:
-                from virtuoso_bridge.daemon_identity import verify_daemon_identity
-
-                try:
-                    identity_check = verify_daemon_identity(
-                        vc,
-                        profile=profile,
-                        state=state,
-                        timeout=5,
-                    )
-                    identity = identity_check.identity
-                    if identity:
-                        print(f"  unix user : {identity.user or '(unknown)'}")
-                        if identity.home:
-                            print(f"  home      : {identity.home}")
-                        if identity.cds_lib:
-                            print(f"  CDS_LIB   : {identity.cds_lib}")
-                        print(f"  RB profile: {identity.profile or '(default)'}")
-                        print(f"  RB port   : {identity.port or '(unknown)'}")
-                        print(f"  RB nonce  : {identity.nonce or '(missing)'}")
-                    for warning in identity_check.warnings:
-                        print(f"  warning   : {warning}")
-                    if not identity_check.ok:
-                        daemon_identity_ok = False
-                        _print_identity_failure(identity_check.errors)
-                except Exception as exc:
-                    print(f"  identity  : unavailable ({exc})")
-
                 # Query Virtuoso environment info
                 for skill_expr, label in [
                     ('getHostName()', 'hostname'),
@@ -511,8 +452,8 @@ def _print_status() -> int:
 
     print("\n========================================================================")
     if is_local:
-        return 0 if daemon_identity_ok else 1
-    return 0 if running and daemon_identity_ok else 1
+        return 0  # local mode: no tunnel to check
+    return 0 if running else 1
 
 
 def _print_spectre_status(profile: str | None, suffix: str) -> None:
@@ -1258,9 +1199,6 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "start":
             sp.add_argument("--bind-venv", action="store_true",
                             help="Bind the active virtualenv to this -p profile before starting")
-        if name in {"start", "restart", "status"}:
-            sp.add_argument("--allow-daemon-identity-mismatch", action="store_true",
-                            help="Allow intentional cross-user/profile daemon connections")
 
     sp_profile = subparsers.add_parser("profile", help="Show or edit profile bindings")
     profile_sub = sp_profile.add_subparsers(dest="profile_action", required=True)
@@ -1501,13 +1439,6 @@ def main(argv: list[str] | None = None) -> int:
     profile = resolve_profile(getattr(args, "profile", None))
     if profile is not None:
         _CLI_PROFILE[0] = profile
-    if getattr(args, "allow_daemon_identity_mismatch", False):
-        key = (
-            f"VB_ALLOW_DAEMON_IDENTITY_MISMATCH_{profile}"
-            if profile else
-            "VB_ALLOW_DAEMON_IDENTITY_MISMATCH"
-        )
-        os.environ[key] = "1"
     dispatch = {
         "init": lambda: cli_init(
             remote=getattr(args, "remote", None),

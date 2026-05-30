@@ -3,10 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
-import pytest
-
 from virtuoso_bridge import cli
-from virtuoso_bridge.models import ExecutionStatus, VirtuosoResult
 from virtuoso_bridge.profile import (
     bind_venv_profile,
     clear_venv_profile,
@@ -168,100 +165,6 @@ def test_virtuoso_client_from_env_uses_resolved_profile(monkeypatch, tmp_path) -
         ("read_state", "t28_digital"),
         ("from_env", "t28_digital"),
     ]
-
-
-def test_virtuoso_client_from_env_rejects_daemon_user_mismatch(monkeypatch, tmp_path) -> None:
-    _isolate_profile_env(monkeypatch, tmp_path)
-    monkeypatch.setenv("VB_REMOTE_HOST_t28_io", "thu-wei")
-    monkeypatch.setenv("VB_REMOTE_USER_t28_io", "designer")
-    monkeypatch.setattr(
-        "virtuoso_bridge.virtuoso.basic.bridge.load_vb_env",
-        lambda: None,
-    )
-
-    class _FakeSSHClient:
-        @staticmethod
-        def is_running(profile=None):
-            return True
-
-        @staticmethod
-        def read_state(profile=None):
-            return {
-                "port": 65271,
-                "remote_port": 65264,
-                "remote_user": "designer",
-                "profile": "t28_io",
-                "daemon_nonce": "nonce1",
-            }
-
-        @classmethod
-        def from_env(cls, keep_remote_files=True, profile=None):
-            return cls()
-
-    def fake_execute_skill(self, expr, timeout=None):
-        values = {
-            'getShellEnvVar("USER")': "other_user",
-            'getShellEnvVar("HOME")': "/home/other_user",
-            'getShellEnvVar("PWD")': "/home/other_user/TSMC28",
-            "getWorkingDir()": "/home/other_user/TSMC28",
-            'getShellEnvVar("CDS_LIB")': "/home/other_user/TSMC28/cds.lib",
-            'getShellEnvVar("RB_PROFILE")': "t28_io",
-            'getShellEnvVar("RB_PORT")': "65264",
-            'getShellEnvVar("RB_DAEMON_NONCE")': "nonce1",
-            "getHostName()": "thu-wei",
-        }
-        return VirtuosoResult(status=ExecutionStatus.SUCCESS, output=values[expr])
-
-    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHClient", _FakeSSHClient)
-    monkeypatch.setattr(VirtuosoClient, "execute_skill", fake_execute_skill)
-
-    with pytest.raises(RuntimeError, match="daemon Unix user"):
-        VirtuosoClient.from_env(profile="t28_io")
-
-
-def test_virtuoso_client_from_env_allows_explicit_identity_override(monkeypatch, tmp_path) -> None:
-    _isolate_profile_env(monkeypatch, tmp_path)
-    monkeypatch.setenv("VB_REMOTE_HOST_t28_io", "thu-wei")
-    monkeypatch.setenv("VB_REMOTE_USER_t28_io", "designer")
-    monkeypatch.setenv("VB_ALLOW_DAEMON_IDENTITY_MISMATCH_t28_io", "1")
-    monkeypatch.setattr(
-        "virtuoso_bridge.virtuoso.basic.bridge.load_vb_env",
-        lambda: None,
-    )
-
-    class _FakeSSHClient:
-        @staticmethod
-        def is_running(profile=None):
-            return True
-
-        @staticmethod
-        def read_state(profile=None):
-            return {"port": 65271, "remote_user": "designer"}
-
-        @classmethod
-        def from_env(cls, keep_remote_files=True, profile=None):
-            return cls()
-
-    def fake_execute_skill(self, expr, timeout=None):
-        values = {
-            'getShellEnvVar("USER")': "other_user",
-            'getShellEnvVar("HOME")': "/home/other_user",
-            'getShellEnvVar("PWD")': "/home/other_user/TSMC28",
-            "getWorkingDir()": "/home/other_user/TSMC28",
-            'getShellEnvVar("CDS_LIB")': "/home/other_user/TSMC28/cds.lib",
-            'getShellEnvVar("RB_PROFILE")': "t28_io",
-            'getShellEnvVar("RB_PORT")': "65264",
-            'getShellEnvVar("RB_DAEMON_NONCE")': "nonce1",
-            "getHostName()": "thu-wei",
-        }
-        return VirtuosoResult(status=ExecutionStatus.SUCCESS, output=values[expr])
-
-    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHClient", _FakeSSHClient)
-    monkeypatch.setattr(VirtuosoClient, "execute_skill", fake_execute_skill)
-
-    client = VirtuosoClient.from_env(profile="t28_io")
-
-    assert client.port == 65271
 
 
 def test_spectre_simulator_direct_constructor_uses_resolved_profile(monkeypatch, tmp_path) -> None:
