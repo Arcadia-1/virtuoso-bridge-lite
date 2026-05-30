@@ -330,6 +330,15 @@ def _print_load_hint(setup_path: str) -> None:
     print(f"    load(\"{setup_path}\")")
 
 
+def _print_stale_daemon_hint() -> None:
+    """Print recovery guidance for a CIW daemon left from another setup."""
+    print("\n  If CIW says \"already running\", load() did not replace the existing daemon.")
+    print("  To switch profile/port, run in CIW:")
+    print("    RBStop()")
+    print("    load(\".../virtuoso_setup.il\")")
+    print("  If that does not clear it, use RBStopAll() before loading again.")
+
+
 def _print_status() -> int:
     _load_cli_env()
     profile = _get_cli_profile()
@@ -429,6 +438,7 @@ def _print_status() -> int:
                 )
             if not ok and setup_path:
                 _print_load_hint(setup_path)
+                _print_stale_daemon_hint()
         except Exception as e:
             print(f"\n[daemon] error: {e}")
     elif not is_local and not running:

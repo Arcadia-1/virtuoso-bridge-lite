@@ -178,8 +178,11 @@ procedure(RBStart()
         RBStatUptime = 0)
 
     if(boundp('RBIpc) && ipcIsAliveProcess(RBIpc) then
-        printf("[RAMIC Bridge ipc=%L pid=%L port=%d] already running\n"
-            RBIpc RBLastPid RBPort)
+        printf("[RAMIC Bridge ipc=%L pid=%L running_bind=%s] already running; load() does not replace a running daemon; current config port=%d\n"
+            RBIpc RBLastPid
+            if(RBLastBind && strlen(RBLastBind) > 0 RBLastBind "unknown")
+            RBPort)
+        printf("[RAMIC Bridge] To switch profile/port: run RBStop() or RBStopAll(), then load setup again.\n")
     else
         ; Clear leftover banner state so the new daemon's banner is
         ; recognised as the first-of-its-lifetime by RBIpcErrHandler.

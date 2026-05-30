@@ -80,6 +80,10 @@ load("/tmp/virtuoso_bridge_<remote_user>/<client_id>/virtuoso_bridge/virtuoso_se
 Add it to your remote `~/.cdsinit` to auto-load on every Virtuoso
 startup.)
 
+Loading the setup file does not replace an already-running daemon in the same
+CIW; stop the old daemon with `RBStop()` or `RBStopAll()` before loading another
+profile or port.
+
 **5. Verify**
 
 ```bash

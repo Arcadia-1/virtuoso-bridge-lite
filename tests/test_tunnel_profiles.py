@@ -89,3 +89,42 @@ def test_status_infers_profile_scoped_setup_path(monkeypatch, capsys) -> None:
         'load("/tmp/virtuoso_bridge_designer/90590/virtuoso_bridge_t28_io/virtuoso_setup.il")'
         in capsys.readouterr().out
     )
+
+
+def test_status_no_response_prints_stale_daemon_hint(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli, "_load_cli_env", lambda: None)
+    monkeypatch.setattr(cli, "_print_spectre_status", lambda profile, suffix: None)
+    monkeypatch.setattr(cli, "_CLI_PROFILE", ["t28_io"])
+    monkeypatch.setenv("VB_REMOTE_HOST_t28_io", "thu-wei")
+    monkeypatch.setenv("VB_REMOTE_USER_t28_io", "designer")
+
+    class _FakeSSHClient:
+        @staticmethod
+        def read_state(profile=None):
+            return {
+                "port": 65271,
+                "setup_path": "/tmp/virtuoso_bridge_designer/virtuoso_bridge_t28_io/virtuoso_setup.il",
+            }
+
+        @staticmethod
+        def is_running(profile=None):
+            return True
+
+    class _FakeVirtuosoClient:
+        def __init__(self, host, port, timeout):
+            pass
+
+        def test_connection(self, timeout=5):
+            return False
+
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHClient", _FakeSSHClient)
+    monkeypatch.setattr("virtuoso_bridge.virtuoso.basic.bridge.VirtuosoClient", _FakeVirtuosoClient)
+
+    rc = cli._print_status()
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "[daemon] NO RESPONSE" in out
+    assert "load() did not replace the existing daemon" in out
+    assert "RBStop()" in out
+    assert "RBStopAll()" in out
