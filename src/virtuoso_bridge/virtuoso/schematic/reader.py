@@ -22,6 +22,7 @@ preserved below for backward compatibility.
 from __future__ import annotations
 
 import fnmatch
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +30,17 @@ import yaml
 
 from virtuoso_bridge import VirtuosoClient, decode_skill_output
 
+logger = logging.getLogger(__name__)
+
 _DEFAULT_FILTERS_PATH = Path(__file__).parent / "cdf_param_filters.yaml"
+
+# Default SKILL-call timeout in seconds.  60s -- the prior hardcoded
+# value -- silently truncates real-world cells: a 181-instance /
+# 21k-CDF-param schematic from issue #99 took 73s, after which the
+# bridge daemon SIGINTs Virtuoso and the reader returns an empty dict
+# with no warning.  5 minutes covers the kind of cells reported there
+# while still bounding hangs.
+_DEFAULT_TIMEOUT_S = 300
 
 
 # =======================================================================
@@ -135,6 +146,7 @@ def read_schematic(
     *,
     include_positions: bool = False,
     param_filters: str | Path | None = _DEFAULT_FILTERS_PATH,
+    timeout: int = _DEFAULT_TIMEOUT_S,
 ) -> dict:
     """Read a schematic in one SKILL call.
 
@@ -147,6 +159,9 @@ def read_schematic(
         param_filters: path to a YAML filter config.  Default uses the
             built-in cdf_param_filters.yaml.  Pass None to return all
             CDF params unfiltered.
+        timeout: SKILL call timeout in seconds.  Default 300s; bump for
+            very large schematics with many CDF-rich instances.  Issue
+            #99: the prior 60s default silently truncated a real cell.
 
     Returns:
         dict with keys: instances, nets, pins, notes.
@@ -154,6 +169,12 @@ def read_schematic(
         Each instance dict carries ``nlAction`` only when set — typically
         ``"ignore"`` when the designer shift+deleted the instance in the
         schematic editor to exclude it from netlisting.  Absent key = normal.
+
+        When the SKILL bridge fails (timeout, IPC error, cv = nil) the
+        result is the same empty-shape dict, but a ``logging.WARNING``
+        is emitted that names the failure mode and the lib/cell.  Issue
+        #99: prior versions silently returned the same empty dict for
+        both a genuinely empty cellview and a failed read.
     """
     if lib and cell:
         cv_expr = f'dbOpenCellViewByType("{lib}" "{cell}" "schematic" "schematic" "r")'
@@ -165,8 +186,46 @@ def read_schematic(
     # Notes are always included
     skill = skill.replace("{notes_section}", _NOTES_SECTION_EXPR)
 
-    r = client.execute_skill(skill, timeout=60)
+    r = client.execute_skill(skill, timeout=timeout)
     raw = decode_skill_output(r.output)
+
+    # Issue #99: surface SKILL-side failures that would otherwise look
+    # like a genuinely-empty schematic.  Three failure shapes to guard:
+    #   1. r.errors set  -> daemon-level error (timeout / IPC / parse).
+    #   2. raw == "ERROR" -> our own `unless(cv return("ERROR"))` prelude
+    #      fired, meaning dbOpenCellViewByType returned nil (lib not on
+    #      path, view locked for edit, strict viewType mismatch, ...).
+    #   3. raw empty with no error -> shouldn't normally happen; warn.
+    where = f"{lib}/{cell}" if (lib and cell) else "<edit cellview>"
+    if r.errors:
+        is_timeout = any("timeout" in str(e).lower() for e in r.errors)
+        if is_timeout:
+            logger.warning(
+                "read_schematic(%s) timed out after %ds; SKILL was killed "
+                "mid-execution and the result will be empty.  Increase "
+                "timeout=N to allow more time (issue #99).  errors=%r",
+                where, timeout, r.errors,
+            )
+        else:
+            logger.warning(
+                "read_schematic(%s) bridge returned errors; result will "
+                "be empty.  errors=%r (issue #99)",
+                where, r.errors,
+            )
+    elif raw.strip() == "ERROR":
+        logger.warning(
+            "read_schematic(%s) could not open the cellview: SKILL "
+            "prelude reported cv = nil.  Check lib path / viewType / "
+            "edit-locks (issue #99).",
+            where,
+        )
+    elif not raw.strip():
+        logger.warning(
+            "read_schematic(%s) got an empty response from the bridge "
+            "with no reported error -- possible IPC truncation "
+            "(issue #99).",
+            where,
+        )
 
     # Load filter config
     filter_config = None
