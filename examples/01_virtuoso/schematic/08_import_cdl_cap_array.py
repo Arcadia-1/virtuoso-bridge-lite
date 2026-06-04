@@ -182,15 +182,36 @@ cd {work_dir}
         return 1
     print("[spiceIn] OK")
 
-    # 3. Generate symbol for cap_unit
+    # ------------------------------------------------------------------
+    # Verify both expected cells actually landed in the DB.  spiceIn's
+    # stdout prints "successfully imported" per recognised subckt, so
+    # "in output" only proves that AT LEAST ONE imported -- a CDL with
+    # bus ports like `.SUBCKT cap_array_4b TOP BOT<3:0>` can silently
+    # be skipped while cap_unit succeeds, leaving the message intact
+    # and the array cell missing.  Ask the DB directly.
+    # ------------------------------------------------------------------
     client.execute_skill("ddUpdateLibList()")
+    expected = ("cap_unit", "cap_array_4b")
+    missing: list[str] = []
+    for cell in expected:
+        r = client.execute_skill(f'ddGetObj("{lib}" "{cell}")~>views~>name')
+        present = r.output and r.output.strip() not in ("nil", "", '""')
+        print(f"[verify] {cell}: {r.output}")
+        if not present:
+            missing.append(cell)
+    if missing:
+        print()
+        print(f"[spiceIn] FAILED: expected cells not created: {missing}")
+        print("--- spiceIn output ---")
+        print(output)
+        return 1
+
+    # 3. Generate symbol for cap_unit
     client.execute_skill(f'schPinListToSymbol("{lib}" "cap_unit" "symbol" schSchemToPinList("{lib}" "cap_unit" "schematic"))')
     r = client.execute_skill(f'ddGetObj("{lib}" "cap_unit")~>views~>name')
     print(f"[symbol] cap_unit: {r.output}")
 
     # 4. Open
-    r = client.execute_skill(f'ddGetObj("{lib}" "cap_array_4b")~>views~>name')
-    print(f"[verify] cap_array_4b: {r.output}")
     client.open_window(lib, "cap_array_4b", view="schematic")
     print("[done] Opened cap_array_4b")
 
