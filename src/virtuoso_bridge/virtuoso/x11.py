@@ -58,18 +58,23 @@ def _run(runner: SSHRunner | None, cmd: str, timeout: int):
 
 
 def _detect_remote_python(runner: SSHRunner | None) -> str:
-    """Find a Python 3 interpreter (remote host or local)."""
+    """Find a Python interpreter (remote host or local).
+
+    The X11 helper is intentionally Python 2/3 compatible because older EDA
+    hosts often only provide Python 2.7.
+    """
     r = _run(
         runner,
         'python3 --version 2>/dev/null && echo "CMD:python3" || '
-        '(python --version 2>&1 | grep -q "Python 3" && echo "CMD:python") || '
+        '(python --version 2>&1 | grep -q "Python" && echo "CMD:python") || '
+        '(python2 --version 2>&1 | grep -q "Python" && echo "CMD:python2") || '
         'echo "CMD:NONE"',
         timeout=10,
     )
     for line in (r.stdout or "").splitlines():
         if line.strip().startswith("CMD:") and line.strip() != "CMD:NONE":
             return line.strip()[4:]
-    return "python3"  # fallback, will fail with clear error
+    return "python3"  # fallback; callers surface stderr/returncode as an error
 
 
 def _ensure_helper(
@@ -110,7 +115,7 @@ def find_dialogs(
     if resolved:
         cmd += f" {resolved}"
     result = _run(runner, cmd, timeout=15)
-    return _parse_output(result.stdout)
+    return _parse_result(result)
 
 
 def list_windows(
@@ -128,7 +133,7 @@ def list_windows(
     if resolved:
         cmd += f" {resolved}"
     result = _run(runner, cmd, timeout=15)
-    return _parse_output(result.stdout)
+    return _parse_result(result)
 
 
 def dismiss_window(
@@ -152,7 +157,7 @@ def dismiss_window(
     if resolved:
         cmd += f" {resolved}"
     result = _run(runner, cmd, timeout=15)
-    return _parse_output(result.stdout)
+    return _parse_result(result)
 
 
 def dismiss_dialogs(
@@ -179,7 +184,25 @@ def dismiss_dialogs(
     if resolved:
         cmd += f" {resolved}"
     result = _run(runner, cmd, timeout=15)
-    return _parse_output(result.stdout)
+    return _parse_result(result)
+
+
+def _parse_result(result) -> list[dict[str, Any]]:
+    """Parse helper output and surface command failures as structured errors."""
+    parsed = _parse_output(result.stdout)
+    if parsed:
+        return parsed
+
+    returncode = getattr(result, "returncode", 0)
+    stderr = (getattr(result, "stderr", "") or "").strip()
+    if returncode:
+        return [{
+            "error": stderr or f"x11 helper command failed with return code {returncode}",
+            "returncode": returncode,
+        }]
+    if stderr:
+        return [{"error": stderr}]
+    return []
 
 
 def _parse_output(stdout: str) -> list[dict[str, Any]]:

@@ -21,6 +21,11 @@ import subprocess
 import sys
 import time
 
+try:
+    string_types = (basestring,)
+except NameError:
+    string_types = (str,)
+
 VIRTUOSO_WM_CLASSES = ["virtuoso", "libManager"]
 KNOWN_MODAL_ACTIONS = {
     "ade explorer update and run": "enter",
@@ -554,7 +559,7 @@ def main():
             print(json.dumps({"error": "cannot detect DISPLAY"}))
             sys.exit(2)
         xauth = x11_env.get("XAUTHORITY")
-        if isinstance(xauth, str) and xauth:
+        if isinstance(xauth, string_types) and xauth:
             os.environ["XAUTHORITY"] = xauth
 
     if dismiss_target:
