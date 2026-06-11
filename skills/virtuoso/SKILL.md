@@ -73,8 +73,11 @@ All `virtuoso-bridge` CLI commands and Python scripts must run inside the activa
 3. **If status is `degraded`** — the user must load the setup script in Virtuoso CIW (the `start` output tells them exactly what to run).
 4. **`virtuoso-bridge status`** — verify everything is `healthy` before proceeding.
 5. **`virtuoso-bridge windows`** — list all open Virtuoso windows (num + name).
-6. **`virtuoso-bridge screenshot [ciw|current|N] [-o DIR|FILE]`** — screenshot a window. Default target is CIW; default output is the user artifact screenshots directory.
-7. **`virtuoso-bridge snapshot -o <dir>`** — dump the currently-focused maestro window to `<dir>/<YYYYMMDD_HHMMSS>__<lib>__<cell>/` (state XMLs, SKILL probe output, per-point netlist + PSF results, `.rdb`). This is the default way to capture Maestro state — no Python required. Use the Python API (below) only inside a multi-step pipeline.
+6. **`virtuoso-bridge eval 'EXPR'`** — run a one-line SKILL expression from the shell and print the full `VirtuosoResult` JSON.
+7. **`virtuoso-bridge eval --stdin`** — run multi-line SKILL from stdin; the CLI auto-wraps multiple forms in `progn(...)` and returns the last form.
+8. **`virtuoso-bridge load FILE.il`** — run a `.il` file in the live Virtuoso session; uploads the file automatically in SSH mode.
+9. **`virtuoso-bridge screenshot [ciw|current|N] [-o DIR|FILE]`** — screenshot a window. Default target is CIW; default output is the user artifact screenshots directory.
+10. **`virtuoso-bridge snapshot -o <dir>`** — dump the currently-focused maestro window to `<dir>/<YYYYMMDD_HHMMSS>__<lib>__<cell>/` (state XMLs, SKILL probe output, per-point netlist + PSF results, `.rdb`). This is the default way to capture Maestro state — no Python required. Use the Python API (below) only inside a multi-step pipeline.
 
 ### Then
 
@@ -82,6 +85,33 @@ All `virtuoso-bridge` CLI commands and Python scripts must run inside the activa
 - **Open the window**: `client.open_window(lib, cell, view="layout")` so the user sees what you're doing.
 
 ## Client basics
+
+### Direct CLI SKILL execution
+
+For quick checks and one-off SKILL files, prefer the CLI over writing a Python
+wrapper. It uses the same bridge connection and avoids shell/Python/SKILL
+triple-quoting problems.
+
+```bash
+# One-line expression -- full VirtuosoResult JSON on stdout
+virtuoso-bridge eval 'getCurrentTime()'
+
+# Multi-line SKILL -- auto-wrapped in progn when needed
+virtuoso-bridge eval --stdin <<'EOF'
+let((libs)
+  libs = mapcar(lambda((l) l~>name) ddGetLibList())
+  printf("found %d libraries\n" length(libs))
+  libs)
+EOF
+
+# Whole .il file -- uploaded automatically in SSH mode
+virtuoso-bridge load my_script.il
+```
+
+Use Python only when the SKILL call is one step in a larger scripted workflow
+or when you need structured high-level APIs such as schematic/layout editors.
+
+### Python client
 
 ```python
 from virtuoso_bridge import VirtuosoClient

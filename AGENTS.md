@@ -235,7 +235,8 @@ If `spectre` is already on PATH in the remote user's default shell (e.g., via `~
 
 ## Key conventions
 
-- All SKILL execution goes through `VirtuosoClient`. Never SSH and run SKILL manually.
+- SKILL execution goes through the bridge (`VirtuosoClient` in Python, or
+  `virtuoso-bridge eval/load` from the CLI). Never SSH and run SKILL manually.
 - Layout/schematic editing: `client.layout.edit()` / `client.schematic.edit()` context managers.
 - Spectre simulation: `SpectreSimulator.from_env()`. See "How Spectre is located" above.
 - `core/` is the minimal reference implementation (3 source files, ~285 lines). Use the installed package for real work.
