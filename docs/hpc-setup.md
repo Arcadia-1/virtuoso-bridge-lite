@@ -163,10 +163,31 @@ The daemon runs `python` (stripping `LD_LIBRARY_PATH`/`LD_PRELOAD` so Cadence li
 don't shadow it). If plain `python` isn't on PATH in Virtuoso's env, set
 `RB_PYTHON_PATH` before launching Virtuoso, e.g. `setenv RB_PYTHON_PATH python3`.
 
-**Spectre — point the bridge at a csh init file.** Spectre is invoked over SSH via
-`csh -c 'source $VB_CADENCE_CSHRC; spectre …'`, so `VB_CADENCE_CSHRC` must be a
-**csh-syntax** file that initializes Lmod and loads the tools. Create one on the
-remote host:
+**Spectre — declare your modules (recommended).** Spectre is invoked over SSH in
+a fresh csh subshell that has no modules loaded, so the bridge needs to know
+which to load. The simplest path is to list them in `.env` — no remote file
+needed:
+
+```dotenv
+VB_LMOD_MODULES=cadence/<ver> spectre/<ver>
+# Only if Lmod's csh init is not at the default /usr/share/lmod/lmod/init/csh:
+# VB_LMOD_INIT=/path/to/lmod/init/csh
+```
+
+Before every probe, license check, and real run the bridge sources
+`$VB_LMOD_INIT` and loads your modules via Lmod's backend in csh. (It calls
+`$LMOD_CMD` directly rather than the `module` alias — in a single `csh -c`,
+aliases from a sourced file aren't active on the same parse line, so `module
+load` would fail with *"module: Command not found"*; `$LMOD_CMD` is a plain
+variable and works inline.) `VB_LMOD_INIT` matters because that init is what
+defines `$LMOD_CMD`; the bridge guards the source so a wrong/absent path is
+harmless when the site already defines Lmod (e.g. via `/etc/csh.cshrc`).
+Per-profile suffixes work, e.g. `VB_LMOD_MODULES_worker1`. Verify with
+`virtuoso-bridge license` / `virtuoso-bridge status` → `[spectre] OK`.
+
+**Alternative — point the bridge at a csh init file.** If you'd rather keep the
+setup in a remote file (or your tools use a real `.cshrc` instead of Lmod), set
+`VB_CADENCE_CSHRC` to a **csh-syntax** file the bridge will `source`:
 
 ```csh
 # ~/cadence-env.csh   (csh syntax — sourced in a csh subshell)
@@ -174,19 +195,12 @@ source /usr/share/lmod/lmod/init/csh    # defines `module` for csh; adjust path
 module load cadence/<ver> spectre/<ver>
 ```
 
-Then point the bridge at it (per-profile suffixes work too, e.g.
-`VB_CADENCE_CSHRC_worker1`):
-
 ```dotenv
 VB_CADENCE_CSHRC=/home/<you>/cadence-env.csh
 ```
 
-The `source .../init/csh` line matters: in a bare `csh -c`, Lmod's `module`
-command isn't defined unless the init is sourced (some sites do this in
-`/etc/csh.cshrc`, in which case you can drop the line — but keeping it is safe).
-Verify with `virtuoso-bridge license` / `virtuoso-bridge status` → `[spectre] OK`.
-If your tools use a real `.cshrc` instead of Lmod, just point `VB_CADENCE_CSHRC`
-straight at that.
+`VB_LMOD_MODULES` and `VB_CADENCE_CSHRC` compose — modules load first, then the
+cshrc sources — so you can mix them if needed.
 
 ## Using it from Claude Code
 
@@ -215,5 +229,5 @@ SKILL always goes **through** the bridge (`client.execute_skill` /
 | Connects to wrong host | `VB_REMOTE_HOST` = the node running Virtuoso; `VB_JUMP_HOST` = the gateway. Don't set remote host to the gateway. |
 | "Connection refused" on the SSH hop | You used a raw IP instead of the alias, so it tried port 22 — use the `~/.ssh/config` alias so your custom `Port` is applied. |
 | 15–30 s stalls on connect | Usually GSSAPI/Kerberos or a slow gateway; the bridge already disables GSSAPI and allows longer jump-host settle time, so first connects are just slow, not broken. |
-| Spectre `NOT FOUND` | Independent from the SKILL bridge. Point `VB_CADENCE_CSHRC` at a csh init file that `module load`s the tools (see "Lmod modules" above). |
+| Spectre `NOT FOUND` | Independent from the SKILL bridge. Set `VB_LMOD_MODULES` to the module(s) that put spectre on PATH (or point `VB_CADENCE_CSHRC` at a csh init file that `module load`s them) — see "Lmod modules" above. |
 | Daemon won't start / wrong Python | The daemon inherits Virtuoso's env — `module load` **before** launching Virtuoso, and set `RB_PYTHON_PATH` if plain `python` isn't on its PATH. Daemon *selection* also needs a `python3` in a bare SSH shell. |

@@ -70,6 +70,70 @@ def _resolve_spectre_invocation(
     parts = shlex.split(spectre_cmd) if spectre_cmd.strip() else ["spectre"]
     return parts[0], parts[1:]
 
+
+def _env_first(name: str, suffix: str = "") -> str:
+    """Read env var *name* with an optional profile *suffix*, falling back to
+    the unsuffixed name.  Returns "" when neither is set."""
+    if suffix:
+        val = os.environ.get(f"{name}{suffix}", "").strip()
+        if val:
+            return val
+    return os.environ.get(name, "").strip()
+
+
+# Default location of Lmod's csh init script.  Sourcing it defines the
+# `module` command inside a bare, non-interactive `csh -c` (which does not
+# inherit an interactive shell's module setup).  Override with VB_LMOD_INIT
+# when your site installs Lmod elsewhere; the `source` is guarded so a wrong
+# path is harmless when `module` is already defined (e.g. via /etc/csh.cshrc).
+DEFAULT_LMOD_INIT_CSH = "/usr/share/lmod/lmod/init/csh"
+
+
+def cadence_env_setup_csh(suffix: str = "") -> str:
+    """Build a ``;``-joined csh prelude that establishes the Cadence/Spectre
+    environment in a fresh, non-interactive remote shell.
+
+    Spectre is invoked over SSH as ``csh -c '<prelude>; spectre …'``, so this
+    prelude is the single place that teaches every code path (status probe,
+    license check, and real runs) how to make the tools reachable.  It layers,
+    in order (each optional, later layers win):
+
+    1. **Lmod modules** — ``VB_LMOD_MODULES`` (space/comma-separated module
+       names) loaded after sourcing ``VB_LMOD_INIT`` (default
+       :data:`DEFAULT_LMOD_INIT_CSH`).  This is the HPC/module-file path.
+    2. ``VB_CADENCE_CSHRC`` — a csh file to ``source``.
+    3. ``VB_MENTOR_CSHRC`` — a csh file to ``source``.
+
+    All variables honor the optional profile *suffix* (e.g.
+    ``VB_LMOD_MODULES_worker1``) with a fallback to the unsuffixed name.
+    Returns ``""`` when nothing is configured.
+    """
+    lines: list[str] = []
+    modules = _env_first("VB_LMOD_MODULES", suffix)
+    if modules:
+        names = " ".join(
+            shlex.quote(m) for m in shlex.split(modules.replace(",", " "))
+        )
+        if names:
+            init = _env_first("VB_LMOD_INIT", suffix) or DEFAULT_LMOD_INIT_CSH
+            qinit = shlex.quote(init)
+            # Source Lmod's csh init to define $LMOD_CMD, then load via the
+            # Lmod backend directly rather than the `module` alias.  In a
+            # single `csh -c`, aliases defined by a sourced file are NOT
+            # active for words on the same parse line (classic csh gotcha),
+            # so `module load` would fail with "module: Command not found".
+            # `$LMOD_CMD` is a plain variable, resolved at run time, so
+            # `eval \`$LMOD_CMD csh load …\`` works inline.  The $?LMOD_CMD
+            # guard degrades gracefully when the site pre-defines Lmod (e.g.
+            # via /etc/csh.cshrc) and the init file is absent.
+            lines.append(f"if ( -f {qinit} ) source {qinit}")
+            lines.append(f"if ( $?LMOD_CMD ) eval `$LMOD_CMD csh load {names}`")
+    for var in ("VB_CADENCE_CSHRC", "VB_MENTOR_CSHRC"):
+        cshrc = _env_first(var, suffix)
+        if cshrc:
+            lines.append(f"source {shlex.quote(cshrc)}")
+    return "; ".join(lines)
+
 def spectre_mode_args(mode: str) -> list[str]:
     """Return standard Spectre CLI arguments for a named simulation mode."""
     key = mode.strip().lower()
@@ -203,6 +267,7 @@ def _run_spectre_remote(
     output_format: str | None = "psfascii",
     timeout: int = 600,
     keep_remote_files: bool = False,
+    profile: str | None = None,
 ) -> _SpectreRunResult:
     """Run Spectre on a remote host: upload netlist, run, download results."""
     run_id = uuid.uuid4().hex[:8]
@@ -230,14 +295,11 @@ def _run_spectre_remote(
     print(f"[Command] {spectre_command}")
     print("[Exec] Remote simulation running...")
 
-    # Source Cadence/Mentor cshrc in csh, then exec spectre — one command, no wrapper file
-    _cadence_val = os.environ.get("VB_CADENCE_CSHRC", "").strip()
-    _mentor_val = os.environ.get("VB_MENTOR_CSHRC", "").strip()
-    source_lines: list[str] = []
-    for cshrc in (_cadence_val, _mentor_val):
-        if cshrc:
-            source_lines.append(f"source {shlex.quote(cshrc)}")
-    csh_body = "; ".join(source_lines) if source_lines else ":"
+    # Establish the Cadence env in csh (Lmod modules and/or cshrc files), then
+    # exec spectre — one command, no wrapper file.  ":" is csh's no-op when
+    # nothing is configured (spectre already on PATH).
+    suffix = f"_{profile}" if profile else ""
+    csh_body = cadence_env_setup_csh(suffix) or ":"
     # Export HOSTNAME & LD_LIBRARY_PATH so csh inherits them (.cshrc may reference $HOSTNAME)
     env_setup = (
         'HOSTNAME=`hostname 2>/dev/null || echo localhost`; export HOSTNAME && '
@@ -740,28 +802,30 @@ class SpectreSimulator:
         runner = self._get_ssh_runner()
 
         suffix = f"_{self._profile}" if self._profile else ""
-        spectre_bin = (
-            os.environ.get(f"VB_SPECTRE_BIN{suffix}", "").strip()
-            or os.environ.get("VB_SPECTRE_BIN", "").strip()
-        )
+        spectre_bin = _env_first("VB_SPECTRE_BIN", suffix)
+
+        # Import the Cadence env from a csh sub-shell (Lmod modules and/or
+        # cshrc files) into this bash check, so `which spectre`/licensing see
+        # the same PATH and license vars a real run would.  Runs even when
+        # VB_SPECTRE_BIN is set, since modules also provide runtime libs.
+        setup = cadence_env_setup_csh(suffix)
+        if setup:
+            csh_arg = shlex.quote(f"{setup}; env")
+            env_setup = (
+                'HOSTNAME=`hostname 2>/dev/null || echo localhost`; export HOSTNAME && '
+                'export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" && '
+                f'eval "$(csh -c {csh_arg} 2>/dev/null '
+                f"| grep -E '^(PATH|LD_LIBRARY_PATH|LM_LICENSE_FILE|CDS_LIC_FILE|CDS)=' "
+                f"| sed 's/^/export /')\" 2>/dev/null; "
+            )
+        else:
+            env_setup = ""
 
         if spectre_bin:
             quoted_bin = shlex.quote(spectre_bin)
-            env_setup = ""
             path_expr = spectre_bin
             ver_cmd = f"{quoted_bin} -V"
         else:
-            cadence_cshrc = shlex.quote(
-                os.environ.get(f"VB_CADENCE_CSHRC{suffix}", "")
-                or os.environ.get("VB_CADENCE_CSHRC", "")
-            )
-            env_setup = (
-                'HOSTNAME=`hostname 2>/dev/null || echo localhost`; export HOSTNAME && '
-                f'export VB_CADENCE_CSHRC={cadence_cshrc} && '
-                f'eval "$(csh -c \'source {cadence_cshrc}; env\' 2>/dev/null '
-                f'| grep -E \"^(PATH|LM_LICENSE_FILE|CDS)=\" '
-                f'| sed \'s/^/export /\')" 2>/dev/null; '
-            )
             path_expr = "$(which spectre 2>/dev/null || echo NOTFOUND)"
             ver_cmd = "spectre -V"
 
@@ -868,6 +932,7 @@ class SpectreSimulator:
             output_format=self._output_format,
             timeout=self._timeout,
             keep_remote_files=self._keep_remote_files,
+            profile=self._profile,
         )
         if not run_result.success:
             return SimulationResult(
