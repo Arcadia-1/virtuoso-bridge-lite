@@ -35,8 +35,13 @@ quickstart.
   ```bash
   ssh -J <jump-alias> <remote-alias> echo ok      # must print ok, no prompt
   ```
-- **A running Virtuoso with a CIW** on the compute node (typically via VNC/X). The
-  bridge attaches to an existing session; it does not launch Virtuoso.
+- **A running Virtuoso with a CIW** on the compute node (typically via VNC/X),
+  launched by you *after* `module load` (see "Lmod modules" below). The bridge
+  attaches to an existing session; it does not launch Virtuoso.
+- **A `python3` visible in a plain (non-login) SSH shell** on the compute node —
+  the bridge probes `ssh <node> python3 --version` to pick the right daemon. If
+  Python only appears after a `module load`, add that load to your shell rc, or
+  set `RB_PYTHON_PATH` (below).
 - **This repo installed locally:**
   ```bash
   uv venv .venv && source .venv/bin/activate
@@ -137,6 +142,52 @@ job, either:
 (If your site allows Virtuoso on the login node, Scenario B is simplest — but many
 sites forbid EDA on login nodes.)
 
+## Lmod modules (fresh-shell environment)
+
+Every command the bridge runs over SSH is a **fresh, non-interactive shell** — no
+`module load` is active in it. But the two services need Cadence env in different
+ways, so this splits cleanly:
+
+**SKILL / Virtuoso — handled by you at launch, not by the bridge.** The daemon is
+spawned by `ipcBeginProcess` *inside the running CIW* (`ramic_bridge.il`), so it
+inherits whatever environment Virtuoso has. Load your modules **before** starting
+Virtuoso in the interactive job and everything downstream inherits it:
+
+```bash
+# in your interactive/VNC job on the allocated node:
+module load cadence/<ver>          # your site's Virtuoso module
+virtuoso &                          # CIW now has the full Cadence env
+```
+
+The daemon runs `python` (stripping `LD_LIBRARY_PATH`/`LD_PRELOAD` so Cadence libs
+don't shadow it). If plain `python` isn't on PATH in Virtuoso's env, set
+`RB_PYTHON_PATH` before launching Virtuoso, e.g. `setenv RB_PYTHON_PATH python3`.
+
+**Spectre — point the bridge at a csh init file.** Spectre is invoked over SSH via
+`csh -c 'source $VB_CADENCE_CSHRC; spectre …'`, so `VB_CADENCE_CSHRC` must be a
+**csh-syntax** file that initializes Lmod and loads the tools. Create one on the
+remote host:
+
+```csh
+# ~/cadence-env.csh   (csh syntax — sourced in a csh subshell)
+source /usr/share/lmod/lmod/init/csh    # defines `module` for csh; adjust path
+module load cadence/<ver> spectre/<ver>
+```
+
+Then point the bridge at it (per-profile suffixes work too, e.g.
+`VB_CADENCE_CSHRC_worker1`):
+
+```dotenv
+VB_CADENCE_CSHRC=/home/<you>/cadence-env.csh
+```
+
+The `source .../init/csh` line matters: in a bare `csh -c`, Lmod's `module`
+command isn't defined unless the init is sourced (some sites do this in
+`/etc/csh.cshrc`, in which case you can drop the line — but keeping it is safe).
+Verify with `virtuoso-bridge license` / `virtuoso-bridge status` → `[spectre] OK`.
+If your tools use a real `.cshrc` instead of Lmod, just point `VB_CADENCE_CSHRC`
+straight at that.
+
 ## Using it from Claude Code
 
 Run Claude Code on your laptop **inside this repo**. Once `status` is green, the
@@ -164,4 +215,5 @@ SKILL always goes **through** the bridge (`client.execute_skill` /
 | Connects to wrong host | `VB_REMOTE_HOST` = the node running Virtuoso; `VB_JUMP_HOST` = the gateway. Don't set remote host to the gateway. |
 | "Connection refused" on the SSH hop | You used a raw IP instead of the alias, so it tried port 22 — use the `~/.ssh/config` alias so your custom `Port` is applied. |
 | 15–30 s stalls on connect | Usually GSSAPI/Kerberos or a slow gateway; the bridge already disables GSSAPI and allows longer jump-host settle time, so first connects are just slow, not broken. |
-| Spectre `NOT FOUND` | Independent from the SKILL bridge. Set `VB_CADENCE_CSHRC` if `spectre` isn't on the remote `PATH` (see `AGENTS.md` → "How Spectre is located"). |
+| Spectre `NOT FOUND` | Independent from the SKILL bridge. Point `VB_CADENCE_CSHRC` at a csh init file that `module load`s the tools (see "Lmod modules" above). |
+| Daemon won't start / wrong Python | The daemon inherits Virtuoso's env — `module load` **before** launching Virtuoso, and set `RB_PYTHON_PATH` if plain `python` isn't on its PATH. Daemon *selection* also needs a `python3` in a bare SSH shell. |
