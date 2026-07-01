@@ -19,3 +19,6 @@ reference/
 .DS_Store
 .claude/
 spectre.out
+
+# Fork-monitoring reports (scripts/monitor_forks.sh output)
+fork-reports/
