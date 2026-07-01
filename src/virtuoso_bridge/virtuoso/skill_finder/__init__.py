@@ -20,7 +20,6 @@ Usage (remote mode, via VirtuosoClient)::
 from __future__ import annotations
 
 import enum
-import os
 import re
 import shlex
 from dataclasses import dataclass, field
@@ -111,32 +110,39 @@ class SKILLFinder:
     def _discover_remote(self, runner, profile: str | None) -> Path | None:
         """Find SKILL Finder root on a remote server via SSH.
 
-        Strategy: source VB_CADENCE_CSHRC to load Cadence environment, then
-        use ``which virtuoso`` to locate the binary, then walk up its parent
-        directories to find ``doc/finder/SKILL``.
+        Strategy: establish the Cadence environment (Lmod modules and/or
+        cshrc files, via cadence_env_setup_csh), then use ``which virtuoso``
+        to locate the binary, then walk up its parent directories to find
+        ``doc/finder/SKILL``.
         """
-        # 1. Source cshrc in csh to load Cadence env, then find virtuoso.
-        # If VB_CADENCE_CSHRC is empty the source command is a no-op (silent
-        # failure), which is fine — we still run ``which virtuoso`` afterwards.
+        # 1. Establish Cadence env, then find virtuoso.  Same detection shape
+        # as the spectre probe (cli._print_spectre_status): a bash fast path
+        # for when virtuoso is already on PATH, falling back to a csh shell
+        # that loads modules / sources cshrc.  csh module chatter goes to
+        # stderr and is discarded (2>/dev/null).
+        from virtuoso_bridge.spectre.runner import cadence_env_setup_csh
+
         suffix = f"_{profile}" if profile else ""
-        cadence_cshrc = os.environ.get(
-            f"VB_CADENCE_CSHRC{suffix}", ""
-        ) or os.environ.get("VB_CADENCE_CSHRC", "")
-        quoted_cshrc = shlex.quote(cadence_cshrc)
-
-        find_virtuoso_script = (
-            'HOSTNAME=`hostname 2>/dev/null || echo localhost`; '
-            'export HOSTNAME; '
-            f'eval "$(csh -c \'source {quoted_cshrc}; env\' 2>/dev/null '
-            f'| grep -E "^(PATH|LM_LICENSE_FILE|CDS)=" '
-            f'| sed \'s/^/export /\')" 2>/dev/null; '
-            'which virtuoso 2>/dev/null || echo NOTFOUND'
-        )
+        setup = cadence_env_setup_csh(suffix)
+        fast = "which virtuoso 2>/dev/null"
+        if setup:
+            csh_inner = f"{setup}; which virtuoso"
+            slow = f"csh -f -c {shlex.quote(csh_inner)} 2>/dev/null"
+            combined = f"{{ {fast}; }} || {{ {slow}; }}"
+        else:
+            combined = fast
+        find_virtuoso_script = f"bash -l -c {shlex.quote(combined)}"
         r = runner.run_command(find_virtuoso_script, timeout=30)
-        if r.returncode != 0 or "NOTFOUND" in r.stdout:
-            return None
 
-        virtuoso_path = r.stdout.strip()
+        virtuoso_path = ""
+        for line in (r.stdout or "").splitlines():
+            line = line.strip()
+            # Ignore any stray chatter; accept only a real virtuoso path.
+            if line.endswith("/virtuoso") or line == "virtuoso":
+                virtuoso_path = line
+                break
+        if not virtuoso_path:
+            return None
 
         # 2. Walk up from virtuoso to find doc/finder/SKILL.
         walk_script = (

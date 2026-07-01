@@ -565,40 +565,42 @@ def _print_spectre_status(profile: str | None, suffix: str) -> None:
         #
         #   (A) fast path: spectre already on PATH (bash-shell login,
         #       or ssh server configured with Cadence env baked in)
-        #   (B) slow path: source VB_CADENCE_CSHRC inside csh, re-check
+        #   (B) slow path: establish the Cadence env in csh (Lmod modules
+        #       and/or cshrc files, see cadence_env_setup_csh), re-check
         #
-        # Older revisions issued these as two separate SSH calls. On
-        # congested jump hosts / Windows without ControlMaster, each
-        # SSH is a fresh TCP + sshd fork, doubling the risk of banner-
-        # exchange timeouts that manifested as spurious "NOT FOUND".
-        # Bash parses ``A || B | C`` as ``A || (B | C)`` so the
-        # ``head -5`` only applies to the csh fallback — same semantics
-        # as before, one round-trip instead of two.
-        cadence_cshrc = (
-            os.getenv(f"VB_CADENCE_CSHRC{suffix}", "").strip()
-            or os.getenv("VB_CADENCE_CSHRC", "").strip()
+        # Fused into one SSH round-trip (``{ A } || { B }``) — on congested
+        # jump hosts each extra SSH is a fresh TCP + sshd fork, doubling the
+        # risk of banner-exchange timeouts that look like spurious NOT FOUND.
+        #
+        # Both branches print the resolved path on a ``VB_SPECTRE_PATH=`` marker
+        # line rather than relying on line position.  Loading a bundled Lmod
+        # meta-module emits many ``Loading module …`` chatter lines (and one
+        # ``Loading module cadence/spectre/…`` that would false-match a bare
+        # "/"+"spectre" scan), so a marker is the only robust anchor.
+        from virtuoso_bridge.spectre.runner import cadence_env_setup_csh
+        setup = cadence_env_setup_csh(suffix)
+        fast = (
+            'sp=`which spectre 2>/dev/null`; '
+            '[ -n "$sp" ] && { printf "VB_SPECTRE_PATH=%s\\n" "$sp"; '
+            'spectre -V 2>&1 | head -1; }'
         )
-        fast = "which spectre 2>/dev/null && spectre -V 2>&1 | head -1"
-        if cadence_cshrc:
+        if setup:
             # Keep csh script out of bash's view — ``!`` / backticks /
-            # ``$?VAR`` must reach csh verbatim.
-            #
-            # Seed HOSTNAME/LD_LIBRARY_PATH with non-empty placeholders:
-            # some site cshrc files do ``setenv LD_LIBRARY_PATH
-            # ${MMSIM_HOME}/tools/lib:$LD_LIBRARY_PATH`` and csh aborts
-            # partway through when ``$LD_LIBRARY_PATH`` is undefined —
-            # leaving PATH unpatched so ``which spectre`` returns
-            # nothing.  An empty string (``""``) was found insufficient
-            # in practice; ``blank`` is a harmless throwaway that the
-            # subsequent concat safely overwrites.
+            # ``$?VAR`` must reach csh verbatim.  Seed HOSTNAME/LD_LIBRARY_PATH
+            # with non-empty placeholders: some site cshrc files do ``setenv
+            # LD_LIBRARY_PATH ${MMSIM_HOME}/tools/lib:$LD_LIBRARY_PATH`` and csh
+            # aborts when ``$LD_LIBRARY_PATH`` is undefined; ``blank`` is a
+            # harmless throwaway the subsequent concat overwrites.  csh module
+            # chatter goes to stderr and is merged (2>&1) but ignored by the
+            # marker parser below.
             csh_script = (
                 'setenv HOSTNAME `hostname`; '
                 'setenv LD_LIBRARY_PATH blank; '
-                f'source {cadence_cshrc}; '
-                'which spectre; '
+                f'{setup}; '
+                'printf "VB_SPECTRE_PATH=%s\\n" "`which spectre`"; '
                 'spectre -V'
             )
-            slow = f"csh -f -c {shlex.quote(csh_script)} 2>&1 | head -5"
+            slow = f"csh -f -c {shlex.quote(csh_script)} 2>&1"
             combined = f"{{ {fast}; }} || {{ {slow}; }}"
         else:
             combined = fast
@@ -611,10 +613,12 @@ def _print_spectre_status(profile: str | None, suffix: str) -> None:
         version = None
         for line in stdout.splitlines():
             line = line.strip()
-            if line.startswith("@(#)$CDS:"):
+            if line.startswith("VB_SPECTRE_PATH="):
+                candidate = line.split("=", 1)[1].strip()
+                if candidate and "/" in candidate:
+                    spectre_path = candidate
+            elif line.startswith("@(#)$CDS:"):
                 version = line
-            elif "/" in line and "spectre" in line.lower():
-                spectre_path = line
 
         if spectre_path:
             print("[spectre] OK")
@@ -679,10 +683,15 @@ def cli_license() -> int:
     _load_cli_env()
     profile = _get_cli_profile()
     suffix = f"_{profile}" if profile else ""
-    cadence_cshrc = os.getenv(f"VB_CADENCE_CSHRC{suffix}", "").strip() or os.getenv("VB_CADENCE_CSHRC", "").strip()
-    if not cadence_cshrc:
-        print("VB_CADENCE_CSHRC is not set.")
-        return 1
+    # The license check works with any way of locating spectre: an explicit
+    # VB_SPECTRE_BIN, an Lmod module set (VB_LMOD_MODULES), a sourced cshrc
+    # (VB_CADENCE_CSHRC/VB_MENTOR_CSHRC), or spectre already on PATH.  Only warn
+    # when nothing is configured — check_license still tries a bare PATH lookup.
+    from virtuoso_bridge.spectre.runner import cadence_env_setup_csh
+    spectre_bin = os.getenv(f"VB_SPECTRE_BIN{suffix}", "").strip() or os.getenv("VB_SPECTRE_BIN", "").strip()
+    if not spectre_bin and not cadence_env_setup_csh(suffix):
+        print("No spectre env configured (VB_SPECTRE_BIN / VB_LMOD_MODULES / "
+              "VB_CADENCE_CSHRC) — trying spectre on the remote PATH.")
 
     from virtuoso_bridge.transport.tunnel import SSHClient
     if not SSHClient.is_running(profile):

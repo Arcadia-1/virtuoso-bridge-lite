@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import socket
 import sys
@@ -288,6 +289,27 @@ class SSHClient:
             '(python2.7 --version 2>&1 && echo "CMD:python2.7") || '
             'echo "CMD:NONE"'
         )
+        # $CDSHOME is set by the Cadence env (Lmod module files / cshrc) but NOT
+        # by a bare SSH shell, so on module-based sites the preferred Cadence
+        # python is invisible here and detection falls back to system python3.
+        # Import ONLY $CDSHOME (via the same csh prelude as spectre) so the
+        # Cadence-bundled python — which is self-contained (rpath) and so
+        # survives the daemon's `env -u LD_LIBRARY_PATH` launch — is chosen as
+        # an absolute path.  We deliberately do NOT import PATH or
+        # LD_LIBRARY_PATH: a module-python whose libpython lives on
+        # LD_LIBRARY_PATH (e.g. oss/python) would load here but then die at
+        # daemon launch, and importing its PATH could shadow the system-python3
+        # fallback with that unusable interpreter.
+        from virtuoso_bridge.spectre.runner import cadence_env_setup_csh
+        suffix = f"_{self._profile}" if self._profile else ""
+        setup = cadence_env_setup_csh(suffix)
+        if setup:
+            csh_arg = shlex.quote(f"{setup}; env")
+            detect_cmd = (
+                f'eval "$(csh -c {csh_arg} 2>/dev/null '
+                "| grep -E '^CDSHOME=' | sed 's/^/export /')\" 2>/dev/null; "
+                + detect_cmd
+            )
         runner = self._require_runner()
         result = runner.run_command(detect_cmd)
         output = result.stdout.strip()
