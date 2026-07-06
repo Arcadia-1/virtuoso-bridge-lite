@@ -65,6 +65,25 @@ wrapper.
 
 ## MOS Parameters
 
+Before the first MOS instance in every curated transistor-level netlist file
+or section, add a short comment that states the terminal order used by the
+device lines. Prefer this exact wording for Spectre decks:
+
+```spectre
+// MOS terminal order: D G S B (drain gate source bulk/body)
+```
+
+For SPICE-style decks where leading `*` comments are expected, use:
+
+```spice
+* MOS terminal order: D G S B (drain gate source bulk/body)
+```
+
+Repeat the comment at the beginning of each separately shared DUT, wrapper,
+or transistor-level snippet. Do not rely on readers remembering the convention
+from another file; ambiguous MOS terminal order slows review and causes
+avoidable interpretation mistakes.
+
 Do not strip MOS layout/extraction parameters by default. Keeping them is the
 conservative choice because layout-derived parameters can change performance.
 Use a stripped reference only when the goal is context density, agent editing,
@@ -319,12 +338,14 @@ landed in the run deck.
 4. Build semantic rename maps from ports, probes, labels, graph structure, and
    operating-point evidence.
 5. Split files into `dut/`, `tb/`, `runs/`, and optional `va/`.
-6. Preserve MOS tails by default; create a stripped variant only when explicitly
+6. Add a MOS terminal-order comment at the top of every transistor-level
+   curated netlist file or snippet.
+7. Preserve MOS tails by default; create a stripped variant only when explicitly
    useful and validate the performance delta.
-7. Consolidate passives only when allowed by artifact type and model semantics.
-8. Record unresolved semantic questions as review notes.
-9. Record semantic groups if later sizing or optimization is likely.
-10. Run checker, syntax/smoke validation, and metric comparison as appropriate.
+8. Consolidate passives only when allowed by artifact type and model semantics.
+9. Record unresolved semantic questions as review notes.
+10. Record semantic groups if later sizing or optimization is likely.
+11. Run checker, syntax/smoke validation, and metric comparison as appropriate.
 
 ## Example
 
@@ -337,6 +358,7 @@ M21 (VO1P VINPN VBN VSS) nch_ulvt_mac l=30n w=2u multi=1 nf=8 sd=100n ad=1e-13 a
 Clean reference line:
 
 ```spectre
+// MOS terminal order: D G S B (drain gate source bulk/body)
 mn_input_vinp_stage1 (vo1_p vinp_n vbias_n VSS) nch_ulvt_mac l=30n w=2u multi=1 nf=8
 ```
 

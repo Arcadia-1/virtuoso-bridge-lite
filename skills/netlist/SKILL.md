@@ -51,6 +51,9 @@ should not be used as the main cleanup mechanism.
 - Split reusable artifacts into DUT, testbench, and run decks. A clean DUT file
   should not contain supplies, clocks, sweeps, saves, probes, or analysis
   statements.
+- At the top of every curated netlist file or section containing MOS devices,
+  add an explicit terminal-order comment, for example:
+  `// MOS terminal order: D G S B (drain gate source bulk/body)`.
 - Replace random names (`net1`, `_net23`, `N_*`, numeric mesh nodes, `I42`,
   `M0`) with semantic names where the circuit meaning is known. If meaning is
   unknown, leave a short review note instead of guessing.
