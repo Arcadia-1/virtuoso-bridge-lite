@@ -97,6 +97,56 @@ def schematic_create_wire_label(
         f'"{escape_skill_string(style)}" {height:g} nil)'
     )
 
+
+_NET_STUB_DIR_OFFSETS = {
+    "up": (0.0, 1.0),
+    "down": (0.0, -1.0),
+    "left": (-1.0, 0.0),
+    "right": (1.0, 0.0),
+}
+
+
+def schematic_create_net_stub(
+    net_name: str,
+    x: float,
+    y: float,
+    *,
+    direction: str = "right",
+    length: float = 0.5,
+    cv_expr: str = "cv",
+    route_style: str = "route",
+    route_mode: str = "full",
+    justification: str = "centerCenter",
+    rotation: str | None = None,
+    style: str = "stick",
+    height: float = 0.0625,
+) -> str:
+    """Build SKILL to draw a short named net stub.
+
+    This is the generic version of the common schematic pattern: draw a small
+    wire segment and attach a wire label to it so matching labels connect
+    electrically without long crossing wires.
+    """
+    if direction not in _NET_STUB_DIR_OFFSETS:
+        raise ValueError(
+            f"direction must be one of {sorted(_NET_STUB_DIR_OFFSETS)}, got {direction!r}"
+        )
+    if length <= 0:
+        raise ValueError("length must be positive")
+    dx, dy = _NET_STUB_DIR_OFFSETS[direction]
+    end_x = x + dx * length
+    end_y = y + dy * length
+    label_x = (x + end_x) / 2.0
+    label_y = (y + end_y) / 2.0
+    label_rotation = rotation or ("R90" if direction in {"up", "down"} else "R0")
+    return (
+        "progn("
+        f"{schematic_create_wire([(x, y), (end_x, end_y)], cv_expr=cv_expr, route_style=route_style, route_mode=route_mode)} "
+        f"{schematic_create_wire_label(label_x, label_y, net_name, justification, label_rotation, cv_expr=cv_expr, style=style, height=height)}"
+        ")"
+    )
+
+
 def schematic_create_net_expression(
     net_name: str,
     net_expression: str,
