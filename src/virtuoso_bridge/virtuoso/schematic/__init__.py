@@ -22,9 +22,12 @@ from virtuoso_bridge.virtuoso.schematic.ops import (
     schematic_set_netset_property,
 )
 from virtuoso_bridge.virtuoso.schematic.netlist import (
+    NetlistImportResult,
     SchematicNetlistExportResult,
+    classify_netlist_import_log,
     export_schematic_netlist,
     import_netlist_schematic,
+    parse_netlist_import_output,
     schematic_export_netlist_skill,
     schematic_import_netlist_skill,
 )
@@ -95,4 +98,7 @@ __all__ = [
     "export_schematic_netlist",
     "schematic_import_netlist_skill",
     "import_netlist_schematic",
+    "NetlistImportResult",
+    "parse_netlist_import_output",
+    "classify_netlist_import_log",
 ]

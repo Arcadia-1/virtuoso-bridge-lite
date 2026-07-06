@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import uuid
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, TypedDict
 
@@ -353,3 +355,80 @@ def import_netlist_schematic(
         run_dir=run_dir,
     )
     return client.execute_skill(skill, timeout=timeout)
+
+
+@dataclass(frozen=True)
+class NetlistImportResult:
+    """Structured summary of a netlist-to-schematic import attempt."""
+
+    status: str
+    lib: str | None = None
+    cell: str | None = None
+    param_file: str | None = None
+    spicein_log_file: str | None = None
+    conn2sch_log_file: str | None = None
+    reason: str | None = None
+    netlist_file: str | None = None
+    netlist_view: str | None = None
+    schematic_view: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        """Whether the import completed successfully."""
+        return self.status == "imported"
+
+
+def parse_netlist_import_output(output: str) -> NetlistImportResult:
+    """Parse common netlist import return payloads into a structured result."""
+    stripped = output.strip()
+    if not stripped:
+        return NetlistImportResult(status="unknown", reason="empty output")
+
+    if stripped.startswith("{"):
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            return NetlistImportResult(status="unknown", reason=f"invalid json: {exc}")
+        return NetlistImportResult(
+            status=str(payload.get("status", "unknown")),
+            lib=payload.get("libName"),
+            cell=payload.get("cellName"),
+            param_file=payload.get("paramFile"),
+            spicein_log_file=payload.get("spiceInLogFile"),
+            conn2sch_log_file=payload.get("conn2schLogFile"),
+            reason=payload.get("reason"),
+            netlist_file=payload.get("netlistFile"),
+            netlist_view=payload.get("netlistView"),
+            schematic_view=payload.get("schematicView"),
+        )
+
+    values = [_unescape_skill_string(value) for value in re.findall(r'"((?:[^"\\]|\\.)*)"', stripped)]
+    if values and values[0] == "imported":
+        return NetlistImportResult(
+            status="imported",
+            lib=values[1] if len(values) > 1 else None,
+            cell=values[2] if len(values) > 2 else None,
+            param_file=values[3] if len(values) > 3 else None,
+            spicein_log_file=values[4] if len(values) > 4 else None,
+            conn2sch_log_file=values[5] if len(values) > 5 else None,
+        )
+    return NetlistImportResult(status="unknown", reason=stripped)
+
+
+def classify_netlist_import_log(text: str) -> list[str]:
+    """Classify common Spice In / conn2sch log failures."""
+    lowered = text.lower()
+    reasons: list[str] = []
+    if any(marker in lowered for marker in ("unable to find master", "master cell", "devmap", "device mapping")):
+        reasons.append("missing master or device mapping")
+    if any(marker in lowered for marker in ("cannot open include", "can't open include", "no such file", "source netlist")):
+        reasons.append("missing include or source netlist")
+    if any(marker in lowered for marker in ("pin count", "terminal count", "pin mismatch")):
+        reasons.append("pin mismatch")
+    if "syntax error" in lowered or "parse error" in lowered:
+        reasons.append("netlist syntax error")
+    return reasons
+
+
+def _unescape_skill_string(value: str) -> str:
+    return value.replace(r"\"", '"').replace(r"\\", "\\")
