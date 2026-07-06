@@ -27,6 +27,7 @@ from virtuoso_bridge.virtuoso.ops import (
 )
 from virtuoso_bridge.virtuoso.layout import LayoutOps
 from virtuoso_bridge.virtuoso.schematic import SchematicOps
+from virtuoso_bridge.virtuoso.symbol import SymbolOps
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,7 @@ class VirtuosoClient(VirtuosoInterface):
         self._log_to_ciw = log_to_ciw
         self.layout = LayoutOps(self)
         self.schematic = SchematicOps(self)
+        self.symbol = SymbolOps(self)
         self._il_upload_cache: dict[str, tuple[str, str]] = {}
         # For connect retry when jump host adds latency
         self._has_jump_host = (

@@ -12,8 +12,9 @@ Usage:
 
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
+from virtuoso_bridge.virtuoso.editor import ensure_operation_response
 from virtuoso_bridge.virtuoso.ops import (
     close_current_cellview,
     save_current_cellview,
@@ -24,21 +25,6 @@ from virtuoso_bridge.virtuoso.layout.ops import (
 
 if TYPE_CHECKING:
     from virtuoso_bridge import VirtuosoClient
-
-
-def _ensure_operation_response(response: Any, *, context: str) -> None:
-    from virtuoso_bridge.models import ExecutionStatus, VirtuosoResult
-    if isinstance(response, VirtuosoResult):
-        if response.status != ExecutionStatus.SUCCESS:
-            errors = response.errors or ["unknown failure"]
-            raise RuntimeError(f"{context} failed: {errors[0]}")
-        return
-    if not response.get("ok", False):
-        raise RuntimeError(f"{context} failed: {response.get('error', 'request failed')}")
-    result = response.get("result", {})
-    if result.get("status") != "success":
-        errors = result.get("errors") or [result.get("status", "unknown failure")]
-        raise RuntimeError(f"{context} failed: {errors[0]}")
 
 
 class LayoutEditor:
@@ -81,4 +67,4 @@ class LayoutEditor:
         if exc_type is None:
             self.commands.append(save_current_cellview())
             response = self.client.execute_operations(self.commands, timeout=self.timeout)
-            _ensure_operation_response(response, context="layout edit")
+            ensure_operation_response(response, context="layout edit")

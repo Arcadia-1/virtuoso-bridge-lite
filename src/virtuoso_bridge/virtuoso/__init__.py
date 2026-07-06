@@ -3,6 +3,7 @@
 Subpackages:
   basic      – VirtuosoClient (SKILL execution over TCP)
   schematic  – SKILL builders for schematic editing
+  symbol     – SKILL builders for symbol editing
   layout     – SKILL builders for layout editing
   maestro    – ADE Assembler / Explorer setup + simulation reading
 
