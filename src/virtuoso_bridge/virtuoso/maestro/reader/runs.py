@@ -226,12 +226,17 @@ def _parse_detail_csv(text: str, *, history: str) -> dict:
     points: list[dict] = []
     current: dict | None = None
     tests_seen: set[str] = set()
+    no_point_detail = False
 
     reader = csv.reader(text.splitlines())
     for row in reader:
         if not row or not any(c.strip() for c in row):
             continue
         first = (row[0] or "").strip()
+        header = [c.strip() for c in row[:6]]
+        if header == ["Test", "Output", "Nominal", "Spec", "Weight", "Pass/Fail"]:
+            no_point_detail = True
+            continue
         if first.startswith("Parameters:"):
             # Start a new point.  Parse "Parameters: K1=V1, K2=V2, ..."
             params_text = first[len("Parameters:"):].strip()
@@ -246,7 +251,31 @@ def _parse_detail_csv(text: str, *, history: str) -> dict:
             points.append(current)
             continue
         # Skip header / non-data rows
-        if first in ("", "Point") or not first.isdigit():
+        if first in ("", "Point", "Test"):
+            if first == "Point":
+                no_point_detail = False
+            continue
+        if not first.isdigit():
+            if not no_point_detail:
+                continue
+            # Single-point runs in some Cadence versions omit the Point
+            # column and export rows as:
+            #   Test,Output,Nominal,Spec,Weight,Pass/Fail
+            cols = row + [""] * (6 - len(row))
+            test_n, name, value, spec, weight, pass_fail = cols[:6]
+            if not name.strip():
+                continue
+            if current is None:
+                current = {"point": 1, "parameters": {}, "outputs": {}}
+                points.append(current)
+            if test_n:
+                tests_seen.add(test_n.strip())
+            current["outputs"][name.strip()] = {
+                "value":     value.strip(),
+                "spec":      spec.strip(),
+                "weight":    weight.strip(),
+                "pass_fail": pass_fail.strip(),
+            }
             continue
         # Data row: point, test, output, nominal, spec, weight, pass_fail
         if current is None:

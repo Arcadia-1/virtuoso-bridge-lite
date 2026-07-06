@@ -42,6 +42,16 @@ SAMPLE_CSV = (
     "2,inv_test,Delay_ps,9.8,< 15p,1,passed\n"
 )
 
+SINGLE_POINT_CSV = (
+    ",Parameter,Nominal,,,\n"
+    "Title,Detail Results,,,,\n"
+    "\n"
+    "Test,Output,Nominal,Spec,Weight,Pass/Fail\n"
+    "TRAN,IN,,,,\n"
+    "TRAN,OUT,,,,\n"
+    "TRAN,out_max,822.7e-3,< 1,1,passed\n"
+)
+
 
 def test_parse_detail_csv_multi_point():
     out = _parse_detail_csv(SAMPLE_CSV, history="Interactive.7")
@@ -62,6 +72,22 @@ def test_parse_detail_csv_empty_input():
     assert out["points"] == []
     assert out["outputs"] == []
     assert out["tests"] == []
+
+
+def test_parse_detail_csv_single_point_without_point_column():
+    out = _parse_detail_csv(SINGLE_POINT_CSV, history="Interactive.0")
+    assert out["history"] == "Interactive.0"
+    assert out["tests"] == ["TRAN"]
+    assert len(out["points"]) == 1
+    assert out["points"][0]["parameters"] == {}
+    assert "Detail Results" not in out["points"][0]["outputs"]
+    assert out["points"][0]["outputs"]["out_max"] == {
+        "value": "822.7e-3",
+        "spec": "< 1",
+        "weight": "1",
+        "pass_fail": "passed",
+    }
+    assert len(out["outputs"]) == 3
 
 
 class _FakeSkillResult:
