@@ -1,6 +1,6 @@
 ---
 name: netlist
-description: "Semantic cleanup and curation of Spectre/SPICE transistor netlists for analog review or reusable reference circuits. Use when Codex needs to understand generated ADE/PEX netlists, split DUT/testbench/run decks, remove layout-derived MOS tail parameters by reasoning, rename random nodes/instances into semantic names, or prepare clean comparator/opamp/SAR reference netlists. Scripts in this skill are checkers only, not primary cleanup engines."
+description: "Semantic cleanup and curation of Spectre/SPICE transistor netlists for analog review or reusable reference circuits. Use when Codex needs to understand generated ADE/PEX netlists, split DUT/testbench/run decks, optionally strip layout-derived MOS tail parameters by reasoning, rename random nodes/instances into semantic names, or prepare clean comparator/opamp/SAR reference netlists. Scripts in this skill are checkers only, not primary cleanup engines."
 ---
 
 # Netlist Semantic Cleanup
@@ -41,12 +41,13 @@ should not be used as the main cleanup mechanism.
 
 ## Rules
 
-- Keep MOS topology and real drawn geometry: model, terminals, `l`, `w`, `nf`,
-  `fingers`, `m`, and `multi` by default.
-- Remove layout side-effect tails from curated reference netlists: `ad/as`,
-  `pd/ps`, `nrd/nrs`, `sa/sb/sca/scb`, `sp*`, DFM, stress, proximity, and
-  extraction-only parameters unless the task explicitly asks for
-  geometry-preserving post-layout modeling.
+- Preserve MOS instance parameters by default when numerical behavior matters.
+  Removing layout side-effect tails is an explicit stripped-reference choice,
+  not the default.
+- If a stripped reference is requested, it may remove `ad/as`, `pd/ps`,
+  `nrd/nrs`, `sa/sb/sca/scb`, `sp*`, DFM, stress, proximity, and extraction
+  parameters, but expect performance differences and validate against the
+  full-parameter or raw deck.
 - Split reusable artifacts into DUT, testbench, and run decks. A clean DUT file
   should not contain supplies, clocks, sweeps, saves, probes, or analysis
   statements.
