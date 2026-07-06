@@ -24,7 +24,9 @@ from virtuoso_bridge.virtuoso.schematic.ops import (
 from virtuoso_bridge.virtuoso.schematic.netlist import (
     SchematicNetlistExportResult,
     export_schematic_netlist,
+    import_netlist_schematic,
     schematic_export_netlist_skill,
+    schematic_import_netlist_skill,
 )
 
 if TYPE_CHECKING:
@@ -91,4 +93,6 @@ __all__ = [
     "SchematicNetlistExportResult",
     "schematic_export_netlist_skill",
     "export_schematic_netlist",
+    "schematic_import_netlist_skill",
+    "import_netlist_schematic",
 ]

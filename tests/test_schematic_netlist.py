@@ -7,6 +7,8 @@ import pytest
 from virtuoso_bridge.virtuoso.schematic import (
     SchematicOps,
     export_schematic_netlist,
+    import_netlist_schematic,
+    schematic_import_netlist_skill,
     schematic_export_netlist_skill,
 )
 
@@ -144,6 +146,67 @@ def test_schematic_ops_export_netlist_delegates_to_client(tmp_path) -> None:
     assert local_path.name.startswith(".tb_inv_netlist.tmp-")
     assert timeout == 75
     assert recursive is True
+
+
+def test_schematic_import_netlist_skill_uses_spicein_and_conn2sch() -> None:
+    skill = schematic_import_netlist_skill(
+        "demoLib",
+        "nand2",
+        "/tmp/nand2.scs",
+        run_dir="/tmp/import-nand2",
+        ref_libs=["analogLib", "basic"],
+        overwrite=True,
+    )
+
+    assert 'vbParamFile = strcat("/tmp/import-nand2" "/spiceIn.il")' in skill
+    assert 'fprintf(vbOut "  \'language %L\\n" "Spectre")' in skill
+    assert 'fprintf(vbOut "  \'netlistFile %L\\n" "/tmp/nand2.scs")' in skill
+    assert 'fprintf(vbOut "  \'refLibList %L\\n" "analogLib basic")' in skill
+    assert 'fprintf(vbOut "  \'overwriteCells %L\\n" "all")' in skill
+    assert 'system(strcat("cd " vbRunDir " && spiceIn -param " vbParamFile' in skill
+    assert 'conn2Sch("demoLib" "nand2" "netlist" ?destLibName "demoLib"' in skill
+    assert 'conn2sch -lib demoLib -cell nand2 -view netlist -destlib demoLib -destview schematic' in skill
+    assert 'list("imported" "demoLib" "nand2" vbParamFile vbSpiceInLog vbConn2SchLog)' in skill
+    assert "smic12sf" not in skill
+    assert "sinomos" not in skill
+
+
+def test_schematic_import_netlist_skill_rejects_same_target_views() -> None:
+    skill = schematic_import_netlist_skill(
+        "demoLib",
+        "nand2",
+        "/tmp/nand2.scs",
+        netlist_view="schematic",
+        schematic_view="schematic",
+    )
+
+    assert 'when("netlist" == "schematic"' not in skill
+    assert 'when("schematic" == "schematic" error("netlist and schematic views must differ"))' in skill
+
+
+def test_import_netlist_schematic_executes_generated_skill() -> None:
+    class Client:
+        skill: str | None = None
+        timeout: int | None = None
+
+        def execute_skill(self, skill: str, *, timeout: int):
+            self.skill = skill
+            self.timeout = timeout
+            return {"status": "success", "output": '("imported" "demoLib" "nand2")'}
+
+    client = Client()
+    result = import_netlist_schematic(
+        client,
+        "demoLib",
+        "nand2",
+        "/tmp/nand2.scs",
+        timeout=90,
+    )
+
+    assert result == {"status": "success", "output": '("imported" "demoLib" "nand2")'}
+    assert client.timeout == 90
+    assert client.skill is not None
+    assert 'fprintf(vbOut "  \'outputViewName %L\\n" "netlist")' in client.skill
 
 
 def test_export_schematic_netlist_replaces_existing_output_directory(tmp_path) -> None:
