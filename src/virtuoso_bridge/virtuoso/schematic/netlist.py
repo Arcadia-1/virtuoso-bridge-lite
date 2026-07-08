@@ -267,34 +267,55 @@ def schematic_import_netlist_skill(
     temp_schematic_view = f"__vb_import_{uuid.uuid4().hex}" if overwrite else schematic_view
     escaped_temp_schematic_view = escape_skill_string(temp_schematic_view)
 
+    if not overwrite:
+        return (
+            "let((vbSchematicObj vbNetlistObj vbConnOk vbDestViewName) "
+            f'when("{escaped_netlist_view}" == "{escaped_schematic_view}" '
+            'error("netlist and schematic views must differ")) '
+            f'vbSchematicObj = ddGetObj("{escaped_lib}" "{escaped_cell}" "{escaped_schematic_view}") '
+            "when(vbSchematicObj "
+            'ddReleaseObj(vbSchematicObj) error("target schematic exists")) '
+            f'vbDestViewName = "{escaped_temp_schematic_view}" '
+            f'vbNetlistObj = ddGetObj("{escaped_lib}" "{escaped_cell}" "{escaped_netlist_view}") '
+            'unless(vbNetlistObj error("source netlist view not found")) '
+            "unless(isCallable('conn2Sch) error(\"conn2Sch API unavailable\")) "
+            f'vbConnOk = errset(conn2Sch("{escaped_lib}" "{escaped_cell}" "{escaped_netlist_view}" '
+            f'?destLibName "{escaped_lib}" ?destCellName "{escaped_cell}" '
+            '?destViewName vbDestViewName ?block t) nil) '
+            'unless(vbConnOk && car(vbConnOk) error("conn2Sch failed")) '
+            f'list("imported" "{escaped_lib}" "{escaped_cell}" "{escaped_param_file}" '
+            f'"{escaped_spicein_log}"))'
+        )
+
     return (
         "let((vbSchematicObj vbNetlistObj vbTempObj vbTempCv vbConnOk vbCopyOk vbDestViewName) "
         f'when("{escaped_netlist_view}" == "{escaped_schematic_view}" '
         'error("netlist and schematic views must differ")) '
         f'vbSchematicObj = ddGetObj("{escaped_lib}" "{escaped_cell}" "{escaped_schematic_view}") '
         "when(vbSchematicObj "
-        f'if({_skill_bool(overwrite)} then ddReleaseObj(vbSchematicObj) '
-        'else ddReleaseObj(vbSchematicObj) error("target schematic exists"))) '
+        "ddReleaseObj(vbSchematicObj)) "
         f'vbDestViewName = "{escaped_temp_schematic_view}" '
-        f'when({_skill_bool(overwrite)} '
         f'vbTempObj = ddGetObj("{escaped_lib}" "{escaped_cell}" vbDestViewName) '
-        'when(vbTempObj unless(ddDeleteObj(vbTempObj) error("temporary schematic delete failed")))) '
+        'when(vbTempObj unless(ddDeleteObj(vbTempObj) error("temporary schematic delete failed"))) '
         f'vbNetlistObj = ddGetObj("{escaped_lib}" "{escaped_cell}" "{escaped_netlist_view}") '
         'unless(vbNetlistObj error("source netlist view not found")) '
         "unless(isCallable('conn2Sch) error(\"conn2Sch API unavailable\")) "
+        "unwindProtect("
+        "progn("
         f'vbConnOk = errset(conn2Sch("{escaped_lib}" "{escaped_cell}" "{escaped_netlist_view}" '
         f'?destLibName "{escaped_lib}" ?destCellName "{escaped_cell}" '
         '?destViewName vbDestViewName ?block t) nil) '
         'unless(vbConnOk && car(vbConnOk) error("conn2Sch failed")) '
-        f'when({_skill_bool(overwrite)} '
         "unless(isCallable('dbCopyCellView) error(\"dbCopyCellView API unavailable\")) "
         f'vbTempCv = dbOpenCellViewByType("{escaped_lib}" "{escaped_cell}" vbDestViewName "schematic" "r") '
         'unless(vbTempCv error("temporary schematic open failed")) '
         f'vbCopyOk = dbCopyCellView(vbTempCv "{escaped_lib}" "{escaped_cell}" "{escaped_schematic_view}" nil nil t) '
-        "when(isCallable('dbClose) dbClose(vbTempCv)) "
         'unless(vbCopyOk error("target schematic copy failed")) '
+        ") "
+        "progn("
+        "when(vbTempCv when(isCallable('dbClose) dbClose(vbTempCv)) vbTempCv = nil) "
         f'vbTempObj = ddGetObj("{escaped_lib}" "{escaped_cell}" vbDestViewName) '
-        'when(vbTempObj unless(ddDeleteObj(vbTempObj) error("temporary schematic cleanup failed")))) '
+        "when(vbTempObj errset(ddDeleteObj(vbTempObj) nil)))) "
         f'list("imported" "{escaped_lib}" "{escaped_cell}" "{escaped_param_file}" '
         f'"{escaped_spicein_log}"))'
     )
@@ -383,7 +404,9 @@ def import_netlist_schematic(
         param_file=paths["param_file"],
         spicein_log_file=paths["spicein_log_file"],
     )
-    return client.execute_skill(skill, timeout=timeout)
+    result = client.execute_skill(skill, timeout=timeout)
+    _require_result_ok(result, "netlist import conversion failed")
+    return result
 
 
 @dataclass(frozen=True)
@@ -527,8 +550,8 @@ def _run_spicein_local(
 ) -> dict[str, str]:
     run_path = Path(run_dir).expanduser().resolve()
     run_path.mkdir(parents=True, exist_ok=True)
-    netlist_path = _local_input_path(netlist_file)
-    dev_map_path = "" if dev_map_file is None else _local_input_path(dev_map_file)
+    netlist_path = _local_input_path(netlist_file, run_path)
+    dev_map_path = "" if dev_map_file is None else _local_input_path(dev_map_file, run_path)
     paths = _import_paths(str(run_path))
     _write_spicein_stage(
         run_path / "spiceIn.il",
@@ -584,9 +607,28 @@ def _run_spicein_remote(
     mkdir_result = runner.run_command(f"mkdir -p {shlex.quote(run_dir_text)}", timeout=timeout)
     _require_command_ok(mkdir_result, "cannot create netlist import run directory")
     paths = _import_paths(run_dir_text)
-    remote_netlist_file = _stage_remote_input(client, runner, netlist_file, run_dir_text, timeout=timeout)
+    inputs_dir = _input_stage_dir(run_dir_text)
+    mkdir_inputs_result = runner.run_command(f"mkdir -p {shlex.quote(inputs_dir)}", timeout=timeout)
+    _require_command_ok(mkdir_inputs_result, "cannot create netlist import input directory")
+    remote_netlist_file = _stage_remote_input(
+        client,
+        runner,
+        netlist_file,
+        inputs_dir,
+        role="netlist",
+        timeout=timeout,
+    )
     remote_dev_map_file = (
-        "" if dev_map_file is None else _stage_remote_input(client, runner, dev_map_file, run_dir_text, timeout=timeout)
+        ""
+        if dev_map_file is None
+        else _stage_remote_input(
+            client,
+            runner,
+            dev_map_file,
+            inputs_dir,
+            role="devmap",
+            timeout=timeout,
+        )
     )
     with tempfile.TemporaryDirectory(prefix="vb-netlist-import-") as stage:
         stage_path = Path(stage)
@@ -623,6 +665,10 @@ def _import_paths(run_dir: str) -> dict[str, str]:
         "spicein_log_file": f"{base}/spiceIn.log",
         "spicein_stdout_file": f"{base}/spiceIn.stdout",
     }
+
+
+def _input_stage_dir(run_dir: str) -> str:
+    return f"{run_dir.rstrip('/')}/inputs"
 
 
 def _resolve_import_run_dir(run_dir: str | Path | None, lib: str, cell: str) -> str:
@@ -716,24 +762,50 @@ def _staged_cds_lib_text(context: dict[str, str]) -> str:
     return f"INCLUDE {work_dir}/cds.lib\n" if work_dir else ""
 
 
-def _local_input_path(path: str | Path) -> str:
+def _local_input_path(path: str | Path, run_path: Path) -> str:
     candidate = Path(path).expanduser()
-    if candidate.exists():
-        return str(candidate.resolve())
-    return str(path)
+    if not candidate.is_file():
+        raise RuntimeError(f"local input file not found: {path}")
+    resolved = candidate.resolve()
+    if resolved in _local_control_paths(run_path):
+        raise RuntimeError(f"local input file conflicts with netlist import control file: {path}")
+    return str(resolved)
 
 
-def _stage_remote_input(client: Any, runner: Any, path: str | Path, run_dir: str, *, timeout: int) -> str:
+def _local_control_paths(run_path: Path) -> set[Path]:
+    return {
+        (run_path / "spiceIn.il").resolve(),
+        (run_path / "cds.lib").resolve(),
+        (run_path / "spiceIn.log").resolve(),
+        (run_path / "spiceIn.stdout").resolve(),
+    }
+
+
+def _stage_remote_input(
+    client: Any,
+    runner: Any,
+    path: str | Path,
+    inputs_dir: str,
+    *,
+    role: str,
+    timeout: int,
+) -> str:
     candidate = Path(path).expanduser()
     if not candidate.is_file():
         remote_path = str(path)
+        if not PurePosixPath(remote_path).is_absolute():
+            raise RuntimeError(f"remote input file must be absolute: {remote_path}")
         result = runner.run_command(f"test -f {shlex.quote(remote_path)}", timeout=timeout)
         if getattr(result, "returncode", 1) != 0:
             raise RuntimeError(f"remote input file not found: {remote_path}")
         return remote_path
-    remote_path = f"{run_dir.rstrip('/')}/{candidate.name}"
+    remote_path = f"{inputs_dir.rstrip('/')}/{_staged_input_name(role, candidate.name)}"
     _upload_required(client, candidate, remote_path, timeout=timeout)
     return remote_path
+
+
+def _staged_input_name(role: str, source_name: str) -> str:
+    return f"{_safe_path_segment(role)}_{_safe_path_segment(source_name)}"
 
 
 def _upload_required(client: Any, local_path: Path, remote_path: str, *, timeout: int) -> None:
