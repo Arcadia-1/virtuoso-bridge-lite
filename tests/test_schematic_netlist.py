@@ -361,7 +361,8 @@ def test_import_netlist_schematic_uses_unique_default_run_dirs(monkeypatch, tmp_
     assert len(run_dirs) == 2
     assert run_dirs[0] != run_dirs[1]
     assert all(path.name.startswith("virtuoso_bridge_netlist_import_demoLib_nand2_") for path in run_dirs)
-    assert all(str(path).startswith("/tmp/") for path in run_dirs)
+    tmp_root = Path("/tmp").resolve()
+    assert all(path.resolve().is_relative_to(tmp_root) for path in run_dirs)
 
 
 def test_import_netlist_schematic_uploads_inputs_and_runs_remote_shell(tmp_path) -> None:
