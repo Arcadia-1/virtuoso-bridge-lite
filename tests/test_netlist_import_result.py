@@ -24,6 +24,17 @@ def test_parse_netlist_import_output_from_skill_list() -> None:
     assert result.ok is True
 
 
+def test_parse_netlist_import_output_decodes_skill_string_escapes() -> None:
+    result = parse_netlist_import_output(
+        r'("imported" "demo\"Lib" "nand\\2" "/run/a\tb/spiceIn.il")'
+    )
+
+    assert result.status == "imported"
+    assert result.lib == 'demo"Lib'
+    assert result.cell == "nand\\2"
+    assert result.param_file == "/run/a\tb/spiceIn.il"
+
+
 def test_parse_netlist_import_output_from_json_error() -> None:
     result = parse_netlist_import_output(
         '{"status":"error","reason":"spicein_failed","libName":"demoLib",'

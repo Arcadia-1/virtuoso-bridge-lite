@@ -76,6 +76,43 @@ class SchematicOps:
             timeout=timeout,
         )
 
+    def import_netlist(
+        self,
+        lib: str,
+        cell: str,
+        netlist_file: str | Path,
+        *,
+        language: str = "Spectre",
+        sim_name: str = "spectre",
+        output_sim_name: str = "spectre",
+        ref_libs: list[str] | tuple[str, ...] = ("analogLib", "basic"),
+        netlist_view: str = "netlist",
+        schematic_view: str = "schematic",
+        overwrite: bool = False,
+        dev_map_file: str | Path | None = None,
+        run_dir: str | Path = "/tmp/virtuoso_bridge_netlist_import",
+        timeout: int = 300,
+    ) -> Any:
+        """Import a netlist package through ``spiceIn`` and convert to schematic."""
+        from virtuoso_bridge.virtuoso.schematic import netlist as schematic_netlist_module
+
+        return schematic_netlist_module.import_netlist_schematic(
+            self._owner,
+            lib,
+            cell,
+            netlist_file,
+            language=language,
+            sim_name=sim_name,
+            output_sim_name=output_sim_name,
+            ref_libs=ref_libs,
+            netlist_view=netlist_view,
+            schematic_view=schematic_view,
+            overwrite=overwrite,
+            dev_map_file=dev_map_file,
+            run_dir=run_dir,
+            timeout=timeout,
+        )
+
 
 __all__ = [
     "SchematicOps",

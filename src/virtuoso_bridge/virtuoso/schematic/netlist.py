@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
 import shutil
+import subprocess
+import tempfile
 import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -12,6 +16,7 @@ from typing import Any, TypedDict
 
 from virtuoso_bridge.models import ExecutionStatus
 from virtuoso_bridge.virtuoso.ops import escape_skill_string
+from virtuoso_bridge.virtuoso.skill_output import parse_sexpr
 
 _SKILL_SYMBOL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -69,6 +74,13 @@ def _set_result_output(result: Any, output: str) -> Any:
     except Exception:
         pass
     return result
+
+
+def _require_result_ok(result: Any, default_error: str) -> None:
+    if _result_ok(result):
+        return
+    errors = "; ".join(_result_errors(result)) or default_error
+    raise RuntimeError(errors)
 
 
 def _decode_skill_string(raw: str) -> str:
@@ -233,99 +245,46 @@ def export_schematic_netlist(
 def schematic_import_netlist_skill(
     lib: str,
     cell: str,
-    netlist_file: str | Path,
     *,
-    language: str = "Spectre",
-    sim_name: str = "spectre",
-    output_sim_name: str = "spectre",
-    ref_libs: list[str] | tuple[str, ...] = ("analogLib", "basic"),
     netlist_view: str = "netlist",
     schematic_view: str = "schematic",
     overwrite: bool = False,
-    dev_map_file: str | Path | None = None,
-    run_dir: str | Path = "/tmp/virtuoso_bridge_netlist_import",
+    param_file: str | Path = "",
+    spicein_log_file: str | Path = "",
+    conn2sch_log_file: str | Path = "",
 ) -> str:
-    """Build SKILL to import a netlist and convert it to a schematic view.
+    """Build SKILL to convert an imported netlist view into a schematic view.
 
-    The generated flow uses Cadence Spice In to create an intermediate
-    netlist view, then converts that connectivity view into a schematic using
-    ``conn2Sch`` when available, with the ``conn2sch`` command as fallback.
+    External tools such as ``spiceIn`` are intentionally not invoked here:
+    they can start their own Virtuoso process and should be run from the
+    Python/shell side.  This SKILL only touches the live DFII database.
     """
     escaped_lib = escape_skill_string(lib)
     escaped_cell = escape_skill_string(cell)
-    escaped_netlist_file = escape_skill_string(str(netlist_file))
-    escaped_language = escape_skill_string(language)
-    escaped_sim_name = escape_skill_string(sim_name)
-    escaped_output_sim_name = escape_skill_string(output_sim_name)
-    escaped_ref_libs = escape_skill_string(" ".join(ref_libs))
     escaped_netlist_view = escape_skill_string(netlist_view)
     escaped_schematic_view = escape_skill_string(schematic_view)
-    escaped_dev_map = escape_skill_string("" if dev_map_file is None else str(dev_map_file))
-    escaped_run_dir = escape_skill_string(str(run_dir))
-    overwrite_cells = "all" if overwrite else "none"
+    escaped_param_file = escape_skill_string(str(param_file))
+    escaped_spicein_log = escape_skill_string(str(spicein_log_file))
+    escaped_conn2sch_log = escape_skill_string(str(conn2sch_log_file))
 
     return (
-        "let((vbRunDir vbParamFile vbRunCdsLib vbWorkCdsLib vbSpiceInLog vbSpiceInStdout vbConn2SchLog "
-        "vbOut vbSchematicObj vbNetlistObj vbSpiceOk vbConnOk) "
+        "let((vbSchematicObj vbNetlistObj vbConnOk) "
         f'when("{escaped_netlist_view}" == "{escaped_schematic_view}" '
         'error("netlist and schematic views must differ")) '
-        f'vbRunDir = "{escaped_run_dir}" '
-        "unless(isDir(vbRunDir) || createDirHier(vbRunDir) error(\"cannot create run directory\")) "
-        f'vbParamFile = strcat("{escaped_run_dir}" "/spiceIn.il") '
-        f'vbRunCdsLib = strcat("{escaped_run_dir}" "/cds.lib") '
-        'vbWorkCdsLib = strcat(getWorkingDir() "/cds.lib") '
-        f'vbSpiceInLog = strcat("{escaped_run_dir}" "/spiceIn.log") '
-        f'vbSpiceInStdout = strcat("{escaped_run_dir}" "/spiceIn.stdout") '
-        f'vbConn2SchLog = strcat("{escaped_run_dir}" "/conn2sch.stdout") '
         f'vbSchematicObj = ddGetObj("{escaped_lib}" "{escaped_cell}" "{escaped_schematic_view}") '
         "when(vbSchematicObj "
         f'if({_skill_bool(overwrite)} then '
         'unless(ddDeleteObj(vbSchematicObj) error("target schematic delete failed")) '
         'else ddReleaseObj(vbSchematicObj) error("target schematic exists"))) '
         f'vbNetlistObj = ddGetObj("{escaped_lib}" "{escaped_cell}" "{escaped_netlist_view}") '
-        "when(vbNetlistObj "
-        f'if({_skill_bool(overwrite)} then '
-        'unless(ddDeleteObj(vbNetlistObj) error("target netlist delete failed")) '
-        'else ddReleaseObj(vbNetlistObj) error("target netlist exists"))) '
-        "vbOut = outfile(vbParamFile \"w\") "
-        'unless(vbOut error("cannot open spiceIn parameter file")) '
-        'fprintf(vbOut "spiceInParams = list(nil\\n") '
-        f"fprintf(vbOut \"  'language %L\\n\" \"{escaped_language}\") "
-        f"fprintf(vbOut \"  'netlistFile %L\\n\" \"{escaped_netlist_file}\") "
-        f"fprintf(vbOut \"  'importSubList %L\\n\" \"{escaped_cell}\") "
-        f"fprintf(vbOut \"  'outputLib %L\\n\" \"{escaped_lib}\") "
-        f"fprintf(vbOut \"  'refLibList %L\\n\" \"{escaped_ref_libs}\") "
-        f"fprintf(vbOut \"  'outputViewName %L\\n\" \"{escaped_netlist_view}\") "
-        "fprintf(vbOut \"  'outputViewType %L\\n\" \"netlist\") "
-        f"fprintf(vbOut \"  'simName %L\\n\" \"{escaped_sim_name}\") "
-        f"fprintf(vbOut \"  'outputSimName %L\\n\" \"{escaped_output_sim_name}\") "
-        f"fprintf(vbOut \"  'overwriteCells %L\\n\" \"{overwrite_cells}\") "
-        f"fprintf(vbOut \"  'devMapFile %L\\n\" \"{escaped_dev_map}\") "
-        "fprintf(vbOut \"  'masterCellForGnd %L\\n\" \"gnd\") "
-        "fprintf(vbOut \"  'logFile %L\\n\" vbSpiceInLog) "
-        'fprintf(vbOut ")\\n") '
-        "close(vbOut) "
-        "when(isFile(vbWorkCdsLib) "
-        "vbOut = outfile(vbRunCdsLib \"w\") "
-        'unless(vbOut error("cannot open run-dir cds.lib")) '
-        'fprintf(vbOut "INCLUDE %s\\n" vbWorkCdsLib) '
-        "close(vbOut)) "
-        "unless(isCallable('system) error(\"system API unavailable\")) "
-        "vbSpiceOk = system(strcat(\"cd \" vbRunDir \" && spiceIn -param \" vbParamFile "
-        "\" > \" vbSpiceInStdout \" 2>&1\")) "
-        "unless(or(vbSpiceOk == 0 vbSpiceOk == t) error(\"spiceIn failed\")) "
-        "vbConnOk = nil "
-        "when(isCallable('conn2Sch) "
+        'unless(vbNetlistObj error("source netlist view not found")) '
+        "unless(isCallable('conn2Sch) error(\"conn2Sch API unavailable\")) "
         f'vbConnOk = errset(conn2Sch("{escaped_lib}" "{escaped_cell}" "{escaped_netlist_view}" '
         f'?destLibName "{escaped_lib}" ?destCellName "{escaped_cell}" '
-        f'?destViewName "{escaped_schematic_view}" ?block t) nil)) '
-        "unless(vbConnOk && car(vbConnOk) "
-        "vbConnOk = system(strcat(\"cd \" vbRunDir "
-        f'" && conn2sch -lib {escaped_lib} -cell {escaped_cell} -view {escaped_netlist_view} '
-        f'-destlib {escaped_lib} -destview {escaped_schematic_view}" '
-        '" > " vbConn2SchLog " 2>&1")) '
-        'unless(or(vbConnOk == 0 vbConnOk == t) error("conn2sch failed"))) '
-        f'list("imported" "{escaped_lib}" "{escaped_cell}" vbParamFile vbSpiceInLog vbConn2SchLog))'
+        f'?destViewName "{escaped_schematic_view}" ?block t) nil) '
+        'unless(vbConnOk && car(vbConnOk) error("conn2Sch failed")) '
+        f'list("imported" "{escaped_lib}" "{escaped_cell}" "{escaped_param_file}" '
+        f'"{escaped_spicein_log}" "{escaped_conn2sch_log}"))'
     )
 
 
@@ -346,20 +305,71 @@ def import_netlist_schematic(
     run_dir: str | Path = "/tmp/virtuoso_bridge_netlist_import",
     timeout: int = 300,
 ) -> Any:
-    """Import a netlist into a schematic view by executing generated SKILL."""
+    """Import a netlist into a schematic view through shell ``spiceIn`` + SKILL.
+
+    ``spiceIn`` is run outside the CIW SKILL channel, matching the project
+    guidance for Cadence tools that may launch their own Virtuoso process.
+    The live SKILL bridge is used for environment discovery, preflight checks,
+    and the final ``conn2Sch`` database conversion.
+    """
+    context = _netlist_import_context(client, timeout=timeout)
+    preflight = client.execute_skill(
+        _schematic_import_preflight_skill(
+            lib,
+            cell,
+            netlist_view=netlist_view,
+            schematic_view=schematic_view,
+            overwrite=overwrite,
+        ),
+        timeout=timeout,
+    )
+    _require_result_ok(preflight, "netlist import preflight failed")
+
+    runner = getattr(client, "ssh_runner", None)
+    if runner is None:
+        paths = _run_spicein_local(
+            context,
+            lib,
+            cell,
+            netlist_file,
+            language=language,
+            sim_name=sim_name,
+            output_sim_name=output_sim_name,
+            ref_libs=ref_libs,
+            netlist_view=netlist_view,
+            overwrite=overwrite,
+            dev_map_file=dev_map_file,
+            run_dir=run_dir,
+            timeout=timeout,
+        )
+    else:
+        paths = _run_spicein_remote(
+            client,
+            runner,
+            context,
+            lib,
+            cell,
+            netlist_file,
+            language=language,
+            sim_name=sim_name,
+            output_sim_name=output_sim_name,
+            ref_libs=ref_libs,
+            netlist_view=netlist_view,
+            overwrite=overwrite,
+            dev_map_file=dev_map_file,
+            run_dir=run_dir,
+            timeout=timeout,
+        )
+
     skill = schematic_import_netlist_skill(
         lib,
         cell,
-        netlist_file,
-        language=language,
-        sim_name=sim_name,
-        output_sim_name=output_sim_name,
-        ref_libs=ref_libs,
         netlist_view=netlist_view,
         schematic_view=schematic_view,
         overwrite=overwrite,
-        dev_map_file=dev_map_file,
-        run_dir=run_dir,
+        param_file=paths["param_file"],
+        spicein_log_file=paths["spicein_log_file"],
+        conn2sch_log_file=paths["conn2sch_log_file"],
     )
     return client.execute_skill(skill, timeout=timeout)
 
@@ -409,8 +419,9 @@ def parse_netlist_import_output(output: str) -> NetlistImportResult:
             schematic_view=payload.get("schematicView"),
         )
 
-    values = [_unescape_skill_string(value) for value in re.findall(r'"((?:[^"\\]|\\.)*)"', stripped)]
-    if values and values[0] == "imported":
+    parsed = parse_sexpr(stripped)
+    if isinstance(parsed, list) and parsed and parsed[0] == "imported":
+        values = ["" if value is None else str(value) for value in parsed]
         return NetlistImportResult(
             status="imported",
             lib=values[1] if len(values) > 1 else None,
@@ -437,5 +448,337 @@ def classify_netlist_import_log(text: str) -> list[str]:
     return reasons
 
 
-def _unescape_skill_string(value: str) -> str:
-    return value.replace(r"\"", '"').replace(r"\\", "\\")
+def _schematic_import_preflight_skill(
+    lib: str,
+    cell: str,
+    *,
+    netlist_view: str,
+    schematic_view: str,
+    overwrite: bool,
+) -> str:
+    escaped_lib = escape_skill_string(lib)
+    escaped_cell = escape_skill_string(cell)
+    escaped_netlist_view = escape_skill_string(netlist_view)
+    escaped_schematic_view = escape_skill_string(schematic_view)
+    return (
+        "let((vbSchematicObj vbNetlistObj) "
+        f'when("{escaped_netlist_view}" == "{escaped_schematic_view}" '
+        'error("netlist and schematic views must differ")) '
+        f'vbSchematicObj = ddGetObj("{escaped_lib}" "{escaped_cell}" "{escaped_schematic_view}") '
+        "when(vbSchematicObj "
+        f'if({_skill_bool(overwrite)} then ddReleaseObj(vbSchematicObj) '
+        'else ddReleaseObj(vbSchematicObj) error("target schematic exists"))) '
+        f'vbNetlistObj = ddGetObj("{escaped_lib}" "{escaped_cell}" "{escaped_netlist_view}") '
+        "when(vbNetlistObj "
+        f'if({_skill_bool(overwrite)} then ddReleaseObj(vbNetlistObj) '
+        'else ddReleaseObj(vbNetlistObj) error("target netlist exists"))) '
+        "t)"
+    )
+
+
+def _netlist_import_context_skill() -> str:
+    return (
+        'list(getWorkingDir() getShellEnvVar("PATH") getShellEnvVar("LD_LIBRARY_PATH") '
+        'getShellEnvVar("LM_LICENSE_FILE") getShellEnvVar("CDS_LIC_FILE") cdsGetInstPath())'
+    )
+
+
+def _netlist_import_context(client: Any, *, timeout: int) -> dict[str, str]:
+    result = client.execute_skill(_netlist_import_context_skill(), timeout=timeout)
+    _require_result_ok(result, "netlist import environment discovery failed")
+    parsed = parse_sexpr(_result_output(result))
+    if not isinstance(parsed, list) or len(parsed) < 6:
+        raise RuntimeError(f"unexpected netlist import context: {_result_output(result)}")
+    keys = ["work_dir", "path", "ld_library_path", "lm_license_file", "cds_lic_file", "cds_inst_dir"]
+    return {key: _context_value(value) for key, value in zip(keys, parsed)}
+
+
+def _context_value(value: Any) -> str:
+    return "" if value is None else str(value)
+
+
+def _run_spicein_local(
+    context: dict[str, str],
+    lib: str,
+    cell: str,
+    netlist_file: str | Path,
+    *,
+    language: str,
+    sim_name: str,
+    output_sim_name: str,
+    ref_libs: list[str] | tuple[str, ...],
+    netlist_view: str,
+    overwrite: bool,
+    dev_map_file: str | Path | None,
+    run_dir: str | Path,
+    timeout: int,
+) -> dict[str, str]:
+    run_path = Path(run_dir).expanduser().resolve()
+    run_path.mkdir(parents=True, exist_ok=True)
+    netlist_path = _local_input_path(netlist_file)
+    dev_map_path = "" if dev_map_file is None else _local_input_path(dev_map_file)
+    paths = _import_paths(str(run_path))
+    _write_spicein_stage(
+        run_path / "spiceIn.il",
+        run_path / "cds.lib",
+        context,
+        lib,
+        cell,
+        netlist_path,
+        language=language,
+        sim_name=sim_name,
+        output_sim_name=output_sim_name,
+        ref_libs=ref_libs,
+        netlist_view=netlist_view,
+        overwrite=overwrite,
+        dev_map_file=dev_map_path,
+        spicein_log_file=paths["spicein_log_file"],
+    )
+    command = [_spicein_executable(context), "-param", paths["param_file"]]
+    result = subprocess.run(
+        command,
+        cwd=run_path,
+        env=_local_spicein_env(context),
+        timeout=timeout,
+        capture_output=True,
+        text=True,
+    )
+    stdout_file = run_path / "spiceIn.stdout"
+    stdout_file.write_text((result.stdout or "") + (result.stderr or ""), encoding="utf-8")
+    if result.returncode != 0:
+        raise RuntimeError(_spicein_failure_message(result.returncode, result.stdout, result.stderr))
+    return paths
+
+
+def _run_spicein_remote(
+    client: Any,
+    runner: Any,
+    context: dict[str, str],
+    lib: str,
+    cell: str,
+    netlist_file: str | Path,
+    *,
+    language: str,
+    sim_name: str,
+    output_sim_name: str,
+    ref_libs: list[str] | tuple[str, ...],
+    netlist_view: str,
+    overwrite: bool,
+    dev_map_file: str | Path | None,
+    run_dir: str | Path,
+    timeout: int,
+) -> dict[str, str]:
+    run_dir_text = str(run_dir)
+    mkdir_result = runner.run_command(f"mkdir -p {shlex.quote(run_dir_text)}", timeout=timeout)
+    _require_command_ok(mkdir_result, "cannot create netlist import run directory")
+    paths = _import_paths(run_dir_text)
+    remote_netlist_file = _stage_remote_input(client, netlist_file, run_dir_text, timeout=timeout)
+    remote_dev_map_file = (
+        "" if dev_map_file is None else _stage_remote_input(client, dev_map_file, run_dir_text, timeout=timeout)
+    )
+    with tempfile.TemporaryDirectory(prefix="vb-netlist-import-") as stage:
+        stage_path = Path(stage)
+        param_file = stage_path / "spiceIn.il"
+        cds_lib = stage_path / "cds.lib"
+        _write_spicein_stage(
+            param_file,
+            cds_lib,
+            context,
+            lib,
+            cell,
+            remote_netlist_file,
+            language=language,
+            sim_name=sim_name,
+            output_sim_name=output_sim_name,
+            ref_libs=ref_libs,
+            netlist_view=netlist_view,
+            overwrite=overwrite,
+            dev_map_file=remote_dev_map_file,
+            spicein_log_file=paths["spicein_log_file"],
+        )
+        _upload_required(client, param_file, paths["param_file"], timeout=timeout)
+        _upload_required(client, cds_lib, f"{run_dir_text.rstrip('/')}/cds.lib", timeout=timeout)
+    script = _remote_spicein_script(context, run_dir_text, paths["param_file"], paths["spicein_stdout_file"])
+    result = runner.run_command(f"bash -lc {shlex.quote(script)}", timeout=timeout)
+    _require_command_ok(result, "spiceIn failed")
+    return paths
+
+
+def _import_paths(run_dir: str) -> dict[str, str]:
+    base = run_dir.rstrip("/")
+    return {
+        "param_file": f"{base}/spiceIn.il",
+        "spicein_log_file": f"{base}/spiceIn.log",
+        "spicein_stdout_file": f"{base}/spiceIn.stdout",
+        "conn2sch_log_file": f"{base}/conn2sch.stdout",
+    }
+
+
+def _write_spicein_stage(
+    param_file: Path,
+    cds_lib_file: Path,
+    context: dict[str, str],
+    lib: str,
+    cell: str,
+    netlist_file: str,
+    *,
+    language: str,
+    sim_name: str,
+    output_sim_name: str,
+    ref_libs: list[str] | tuple[str, ...],
+    netlist_view: str,
+    overwrite: bool,
+    dev_map_file: str,
+    spicein_log_file: str,
+) -> None:
+    param_file.write_text(
+        _spicein_param_text(
+            lib,
+            cell,
+            netlist_file,
+            language=language,
+            sim_name=sim_name,
+            output_sim_name=output_sim_name,
+            ref_libs=ref_libs,
+            netlist_view=netlist_view,
+            overwrite=overwrite,
+            dev_map_file=dev_map_file,
+            spicein_log_file=spicein_log_file,
+        ),
+        encoding="utf-8",
+    )
+    cds_lib_file.write_text(_staged_cds_lib_text(context), encoding="utf-8")
+
+
+def _spicein_param_text(
+    lib: str,
+    cell: str,
+    netlist_file: str,
+    *,
+    language: str,
+    sim_name: str,
+    output_sim_name: str,
+    ref_libs: list[str] | tuple[str, ...],
+    netlist_view: str,
+    overwrite: bool,
+    dev_map_file: str,
+    spicein_log_file: str,
+) -> str:
+    overwrite_cells = "all" if overwrite else "none"
+    rows = [
+        "spiceInParams = list(nil",
+        f'  \'language "{escape_skill_string(language)}"',
+        f'  \'netlistFile "{escape_skill_string(netlist_file)}"',
+        f'  \'importSubList "{escape_skill_string(cell)}"',
+        f'  \'outputLib "{escape_skill_string(lib)}"',
+        f'  \'refLibList "{escape_skill_string(" ".join(ref_libs))}"',
+        f'  \'outputViewName "{escape_skill_string(netlist_view)}"',
+        '  \'outputViewType "netlist"',
+        f'  \'simName "{escape_skill_string(sim_name)}"',
+        f'  \'outputSimName "{escape_skill_string(output_sim_name)}"',
+        f'  \'overwriteCells "{overwrite_cells}"',
+        f'  \'devMapFile "{escape_skill_string(dev_map_file)}"',
+        '  \'masterCellForGnd "gnd"',
+        f'  \'logFile "{escape_skill_string(spicein_log_file)}"',
+        ")",
+        "",
+    ]
+    return "\n".join(rows)
+
+
+def _staged_cds_lib_text(context: dict[str, str]) -> str:
+    work_dir = context.get("work_dir", "").rstrip("/")
+    return f"INCLUDE {work_dir}/cds.lib\n" if work_dir else ""
+
+
+def _local_input_path(path: str | Path) -> str:
+    candidate = Path(path).expanduser()
+    if candidate.exists():
+        return str(candidate.resolve())
+    return str(path)
+
+
+def _stage_remote_input(client: Any, path: str | Path, run_dir: str, *, timeout: int) -> str:
+    candidate = Path(path).expanduser()
+    if not candidate.is_file():
+        return str(path)
+    remote_path = f"{run_dir.rstrip('/')}/{candidate.name}"
+    _upload_required(client, candidate, remote_path, timeout=timeout)
+    return remote_path
+
+
+def _upload_required(client: Any, local_path: Path, remote_path: str, *, timeout: int) -> None:
+    result = client.upload_file(local_path, remote_path, timeout=timeout)
+    _require_result_ok(result, f"failed to upload {local_path} to {remote_path}")
+
+
+def _spicein_executable(context: dict[str, str]) -> str:
+    cds_inst = context.get("cds_inst_dir", "").rstrip("/")
+    return f"{cds_inst}/bin/spiceIn" if cds_inst else "spiceIn"
+
+
+def _local_spicein_env(context: dict[str, str]) -> dict[str, str]:
+    env = os.environ.copy()
+    env.update(_spicein_env_values(context))
+    return env
+
+
+def _spicein_env_values(context: dict[str, str]) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for key, context_key in (
+        ("PATH", "path"),
+        ("LD_LIBRARY_PATH", "ld_library_path"),
+        ("LM_LICENSE_FILE", "lm_license_file"),
+        ("CDS_LIC_FILE", "cds_lic_file"),
+    ):
+        value = context.get(context_key, "")
+        if value:
+            values[key] = value
+    cds_inst = context.get("cds_inst_dir", "")
+    if cds_inst:
+        values["CDSHOME"] = cds_inst
+        values["CDS_INST_DIR"] = cds_inst
+        values["IC_HOME"] = cds_inst
+    return values
+
+
+def _remote_spicein_script(
+    context: dict[str, str],
+    run_dir: str,
+    param_file: str,
+    stdout_file: str,
+) -> str:
+    exports = []
+    env = _spicein_env_values(context)
+    for key in ("PATH", "LD_LIBRARY_PATH", "LM_LICENSE_FILE", "CDS_LIC_FILE", "CDSHOME", "CDS_INST_DIR", "IC_HOME"):
+        value = env.get(key, "")
+        if value:
+            exports.append(f"export {key}={shlex.quote(value)}")
+    spicein = shlex.quote(_spicein_executable(context))
+    stdout_q = shlex.quote(stdout_file)
+    return "\n".join(
+        [
+            *exports,
+            "export HOSTNAME=$(hostname 2>/dev/null || echo localhost)",
+            f"cd {shlex.quote(run_dir)}",
+            f"{spicein} -param {shlex.quote(param_file)} > {stdout_q} 2>&1",
+            "rc=$?",
+            f'if [ "$rc" -ne 0 ]; then tail -n 120 {stdout_q} >&2 2>/dev/null || true; fi',
+            'exit "$rc"',
+        ]
+    )
+
+
+def _require_command_ok(result: Any, default_error: str) -> None:
+    if getattr(result, "returncode", 1) == 0:
+        return
+    stdout = str(getattr(result, "stdout", "") or "")
+    stderr = str(getattr(result, "stderr", "") or "")
+    details = "\n".join(part.strip() for part in (stderr, stdout) if part and part.strip())
+    message = f"{default_error} with exit code {getattr(result, 'returncode', 1)}"
+    raise RuntimeError(message + (f": {details}" if details else ""))
+
+
+def _spicein_failure_message(returncode: int, stdout: str, stderr: str) -> str:
+    details = "\n".join(part.strip() for part in (stderr, stdout) if part and part.strip())
+    return f"spiceIn failed with exit code {returncode}" + (f": {details}" if details else "")
