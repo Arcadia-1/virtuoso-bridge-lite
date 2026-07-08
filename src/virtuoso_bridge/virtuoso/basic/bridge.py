@@ -1159,6 +1159,109 @@ let((result winName ciwNum)
             }
 
 
+    # -- Cadence documentation search --------------------------------------
+
+    def search_docs(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        doc_roots: list[str | Path] | None = None,
+        cache_dir: str | Path | None = None,
+        rebuild_index: bool = False,
+    ) -> dict[str, object]:
+        """Search installed Cadence documentation.
+
+        In SSH mode this discovers documentation roots on the remote Cadence
+        installation, builds a local SQLite index from remote metadata, and
+        reuses that index for later queries. In local mode it indexes
+        configured local doc roots directly.
+        """
+        from pathlib import Path as _Path
+        from virtuoso_bridge.runtime_paths import cache_dir as runtime_cache_dir
+        from virtuoso_bridge.virtuoso.docs_search import (
+            cache_remote_doc_matches,
+            discover_remote_doc_roots,
+            find_remote_doc_matches,
+            remap_results_to_remote,
+            resolve_doc_roots,
+            search_docs,
+            search_remote_docs,
+        )
+        from virtuoso_bridge.virtuoso.skill_finder import SKILLFinder
+
+        safe_limit = max(limit, 0)
+        runner = self.ssh_runner
+
+        if doc_roots:
+            roots = resolve_doc_roots(doc_roots)
+            cache_root = _Path(cache_dir).expanduser() if cache_dir else runtime_cache_dir("docs_search")
+            return {
+                "doc_roots": [str(root) for root in roots],
+                "results": search_docs(
+                    query,
+                    roots,
+                    cache_root=cache_root / self._skill_finder_cache_host(),
+                    limit=safe_limit,
+                    rebuild=rebuild_index,
+                ),
+            }
+
+        if runner is not None:
+            profile = getattr(self._tunnel, "_profile", None) if self._tunnel else None
+            remote_roots = discover_remote_doc_roots(runner, profile=profile)
+            if not remote_roots:
+                return {"doc_roots": [], "results": []}
+
+            if cache_dir:
+                cache_root = _Path(cache_dir).expanduser()
+            else:
+                cache_root = runtime_cache_dir("docs_search")
+
+            try:
+                return {
+                    "doc_roots": remote_roots,
+                    "results": search_remote_docs(
+                        runner,
+                        query,
+                        remote_roots,
+                        cache_root=cache_root / self._skill_finder_cache_host(),
+                        limit=safe_limit,
+                        rebuild=rebuild_index,
+                    ),
+                }
+            except Exception as exc:
+                logger.warning("search_docs: remote index failed, falling back to candidate download: %s", exc)
+                matches = find_remote_doc_matches(runner, query, remote_roots, limit=safe_limit)
+                local_roots, root_map = cache_remote_doc_matches(
+                    runner,
+                    matches,
+                    cache_root / self._skill_finder_cache_host(),
+                )
+                results = search_docs(query, local_roots, limit=safe_limit)
+                return {
+                    "doc_roots": remote_roots,
+                    "results": remap_results_to_remote(results, root_map),
+                }
+
+        roots = resolve_doc_roots()
+        if not roots:
+            finder_root = SKILLFinder().discover(remote_runner=None)
+            if finder_root is not None:
+                roots = [finder_root.parent.parent.resolve()]
+        cache_root = _Path(cache_dir).expanduser() if cache_dir else runtime_cache_dir("docs_search")
+        return {
+            "doc_roots": [str(root) for root in roots],
+            "results": search_docs(
+                query,
+                roots,
+                cache_root=cache_root / self._skill_finder_cache_host(),
+                limit=safe_limit,
+                rebuild=rebuild_index,
+            ),
+        }
+
+
     # -- IL loading ---------------------------------------------------------
 
     def load_il(self, path: str | Path, timeout: int | None = None) -> VirtuosoResult:

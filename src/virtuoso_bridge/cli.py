@@ -1026,6 +1026,107 @@ def cli_skill_info(*, func_name: str, json_output: bool) -> int:
     return 0
 
 
+def cli_doc_search(
+    *,
+    query: str | None,
+    doc_roots: list[Path],
+    limit: int,
+    list_roots: bool,
+    json_output: bool,
+    rebuild_index: bool,
+) -> int:
+    """Search installed Cadence documentation locally or through the bridge."""
+    import json as _json
+    import sys
+
+    from virtuoso_bridge.runtime_paths import cache_dir as runtime_cache_dir
+    from virtuoso_bridge.virtuoso.docs_search import resolve_doc_roots, search_docs
+
+    if doc_roots:
+        roots = resolve_doc_roots(doc_roots)
+        payload: dict[str, object]
+        if list_roots:
+            payload = {"ok": True, "doc_roots": [str(root) for root in roots]}
+        else:
+            if not query:
+                print("Error: query argument required for 'doc-search'", file=sys.stderr)
+                return 1
+            if not roots:
+                print("Error: no existing Cadence doc roots found for --doc-root.", file=sys.stderr)
+                return 1
+            payload = {
+                "ok": True,
+                "query": query,
+                "doc_roots": [str(root) for root in roots],
+                "results": search_docs(
+                    query,
+                    roots,
+                    cache_root=runtime_cache_dir("docs_search") / "local",
+                    limit=max(limit, 0),
+                    rebuild=rebuild_index,
+                ),
+            }
+    else:
+        _load_cli_env()
+        from virtuoso_bridge import VirtuosoClient
+
+        client = VirtuosoClient.from_env(profile=_get_cli_profile())
+        if list_roots:
+            client_payload = client.search_docs("", limit=0, rebuild_index=rebuild_index)
+            payload = {
+                "ok": True,
+                "doc_roots": client_payload.get("doc_roots", []),
+                "results": [],
+            }
+        else:
+            if not query:
+                print("Error: query argument required for 'doc-search'", file=sys.stderr)
+                return 1
+            client_payload = client.search_docs(query, limit=max(limit, 0), rebuild_index=rebuild_index)
+            payload = {
+                "ok": True,
+                "query": query,
+                "doc_roots": client_payload.get("doc_roots", []),
+                "results": client_payload.get("results", []),
+            }
+
+    if not payload.get("doc_roots") and not list_roots:
+        if doc_roots:
+            print(
+                "Error: no existing Cadence doc roots found for --doc-root.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Error: no Cadence doc roots found. Pass --doc-root or configure "
+                "a Virtuoso Bridge profile with access to the Cadence installation.",
+                file=sys.stderr,
+            )
+        return 1
+
+    if json_output:
+        print(_json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+
+    if list_roots:
+        for root in payload["doc_roots"]:
+            print(root)
+        return 0
+
+    for result in payload.get("results", []):
+        if not isinstance(result, dict):
+            continue
+        location = result.get("target_relative_path") or result.get("relative_path")
+        title = result.get("title") or location
+        line = result.get("line")
+        suffix = f":{line}" if line else ""
+        print(f"{location}{suffix} {title}")
+        snippet = result.get("snippet")
+        if snippet:
+            print(f"  {snippet}")
+    return 0
+
+
 def cli_windows() -> int:
     """List all open Virtuoso windows.
 
@@ -1461,6 +1562,31 @@ def build_parser() -> argparse.ArgumentParser:
     sp_skill_info.add_argument("-p", "--profile", default=None, help="Connection profile")
     sp_skill_info.add_argument("--env", default=None, help="Explicit .env file path (highest priority)")
 
+    sp_doc_search = subparsers.add_parser(
+        "doc-search",
+        help="Search installed Cadence documentation",
+        description=(
+            "Searches Cadence documentation roots, including HTML/text content "
+            "and .tgf topic maps. Pass --doc-root for explicit local/offline "
+            "search, or omit it to discover docs through the active "
+            "Virtuoso Bridge profile."
+        ),
+    )
+    sp_doc_search.add_argument("query", nargs="?", default=None, help="Search query")
+    sp_doc_search.add_argument(
+        "--doc-root",
+        type=Path,
+        action="append",
+        default=[],
+        help="Cadence doc root; may be repeated",
+    )
+    sp_doc_search.add_argument("--list-roots", action="store_true", help="Print resolved doc roots and exit")
+    sp_doc_search.add_argument("-n", "--limit", type=int, default=10, help="Maximum results to return")
+    sp_doc_search.add_argument("--json", action="store_true", help="Output results as JSON")
+    sp_doc_search.add_argument("--rebuild-index", action="store_true", help="Force rebuilding the local documentation search index")
+    sp_doc_search.add_argument("-p", "--profile", default=None, help="Connection profile")
+    sp_doc_search.add_argument("--env", default=None, help="Explicit .env file path (highest priority)")
+
     sp_windows = subparsers.add_parser("windows", help="List all open Virtuoso windows")
     sp_windows.add_argument("-p", "--profile", default=None,
                             help="Connection profile")
@@ -1602,6 +1728,14 @@ def main(argv: list[str] | None = None) -> int:
         "skill-info": lambda: cli_skill_info(
             func_name=getattr(args, "func_name", None) or "",
             json_output=getattr(args, "json", False),
+        ),
+        "doc-search": lambda: cli_doc_search(
+            query=getattr(args, "query", None),
+            doc_roots=getattr(args, "doc_root", []),
+            limit=getattr(args, "limit", 10),
+            list_roots=getattr(args, "list_roots", False),
+            json_output=getattr(args, "json", False),
+            rebuild_index=getattr(args, "rebuild_index", False),
         ),
     }
     screenshot_target = getattr(args, "target", None)
