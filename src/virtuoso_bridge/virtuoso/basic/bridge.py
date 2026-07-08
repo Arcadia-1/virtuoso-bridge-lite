@@ -708,14 +708,20 @@ let((result winName ciwNum)
     # -- file transfer (delegates to tunnel) --------------------------------
 
     def download_file(self, remote_path: str | Path, local_path: str | Path,
-                      *, timeout: int | None = None) -> VirtuosoResult:
+                      *, timeout: int | None = None,
+                      recursive: bool = False) -> VirtuosoResult:
         started = time.perf_counter()
         source = _path_to_posix(remote_path)
         destination = Path(local_path)
-        destination.parent.mkdir(parents=True, exist_ok=True)
 
         if self._tunnel is not None and getattr(self._tunnel, "ssh_runner", None) is not None:
-            result = self._tunnel.download_file(source, destination, timeout=timeout)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            result = self._tunnel.download_file(
+                source,
+                destination,
+                timeout=timeout,
+                recursive=recursive,
+            )
             elapsed = time.perf_counter() - started
             if result.returncode != 0:
                 return VirtuosoResult(
@@ -734,7 +740,32 @@ let((result winName ciwNum)
         # Local mode: just copy
         import shutil
         try:
-            shutil.copy2(Path(source), destination)
+            if recursive:
+                source_path = Path(source).resolve()
+                destination_path = destination.resolve(strict=False)
+                if (
+                    source_path == destination_path
+                    or source_path.is_relative_to(destination_path)
+                    or destination_path.is_relative_to(source_path)
+                ):
+                    return VirtuosoResult(
+                        status=ExecutionStatus.ERROR,
+                        errors=[
+                            "Refusing recursive copy with overlapping "
+                            f"source and destination: {source} -> {destination}"
+                        ],
+                        execution_time=time.perf_counter() - started,
+                    )
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if destination.exists():
+                    if destination.is_dir():
+                        shutil.rmtree(destination)
+                    else:
+                        destination.unlink()
+                shutil.copytree(Path(source), destination)
+            else:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(Path(source), destination)
         except OSError as exc:
             return VirtuosoResult(
                 status=ExecutionStatus.ERROR,

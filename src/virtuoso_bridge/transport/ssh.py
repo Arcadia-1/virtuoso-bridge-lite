@@ -18,7 +18,7 @@ import subprocess
 import threading
 import time
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, NamedTuple
 
 from virtuoso_bridge.env import load_vb_env
@@ -922,20 +922,28 @@ class SSHRunner:
         timeout: int,
     ) -> CommandResult:
         """Download a directory recursively using tar czf piped over SSH."""
-        # Ensure the parent of the local target exists (like scp -r does)
+        # Extract into a sibling staging directory first; replace the requested
+        # target only after both SSH and local tar have succeeded.  The archive
+        # contains the remote directory itself rather than "." so BSD tar does
+        # not try to restore metadata on the pre-created staging directory.
         local_path.parent.mkdir(parents=True, exist_ok=True)
+        stage_path = local_path.with_name(f".{local_path.name}.tmp-{uuid.uuid4().hex}")
+        stage_path.mkdir(parents=True)
+        remote_basename = PurePosixPath(remote_path.rstrip("/")).name
+        if not remote_basename:
+            shutil.rmtree(stage_path, ignore_errors=True)
+            return CommandResult(returncode=1, stdout="", stderr=f"Invalid remote directory path: {remote_path}")
 
-        # To match scp -r behavior, we compress the *directory itself* (not its contents)
-        # and extract it into local_path.parent. If local_path.name != remote basename,
-        # we will extract it then rename it.
         remote_path_q = shlex.quote(remote_path)
-        remote_parent = f"$(dirname {remote_path_q})"
-        remote_base = f"$(basename {remote_path_q})"
-        inner_cmd = f"cd {remote_parent} && tar czf - {remote_base}"
+        inner_cmd = (
+            f"p={remote_path_q}; "
+            'd=$(dirname "$p"); b=$(basename "$p"); '
+            'cd "$d" && tar czf - "$b"'
+        )
         remote_cmd = f"sh -c {shlex.quote(inner_cmd)}"
 
         ssh_cmd = self._build_ssh_base() + [remote_cmd]
-        tar_cmd = [self._tar_cmd, "xzf", "-", "-C", str(local_path.parent).replace("\\", "/")]
+        tar_cmd = [self._tar_cmd, "xzf", "-", "-C", str(stage_path).replace("\\", "/")]
 
         if self._verbose:
             print(f"[cmd] {' '.join(ssh_cmd)} | {' '.join(tar_cmd)}  # download {remote_path} -> {local_path}", flush=True)
@@ -963,24 +971,50 @@ class SSHRunner:
         except subprocess.TimeoutExpired:
             ssh_proc.kill()
             tar_proc.kill()
+            shutil.rmtree(stage_path, ignore_errors=True)
             raise
 
         if ssh_proc.returncode != 0 or tar_proc.returncode != 0:
+            shutil.rmtree(stage_path, ignore_errors=True)
             ssh_err = _as_text(ssh_proc.stderr.read()) if ssh_proc.stderr else ""
             tar_err_str = _as_text(tar_err)
             combined_err = f"SSH error: {ssh_err.strip()} | Tar error: {tar_err_str.strip()}"
             logger.warning("download (tar) failed (rc=%d/%d): %s", ssh_proc.returncode, tar_proc.returncode, combined_err)
             return CommandResult(returncode=ssh_proc.returncode or tar_proc.returncode, stdout="", stderr=combined_err)
 
-        # Handle rename if the remote basename differs from local_path.name
-        remote_basename = Path(remote_path).name
-        if remote_basename != local_path.name:
-            extracted_path = local_path.parent / remote_basename
-            if extracted_path.exists():
-                if local_path.exists():
-                    shutil.rmtree(local_path)
-                extracted_path.rename(local_path)
-
+        backup_path: Path | None = None
+        extracted_path = stage_path / remote_basename
+        if not (extracted_path.exists() or extracted_path.is_symlink()):
+            shutil.rmtree(stage_path, ignore_errors=True)
+            return CommandResult(
+                returncode=1,
+                stdout="",
+                stderr=f"Downloaded archive did not contain expected directory: {remote_basename}",
+            )
+        try:
+            if local_path.exists() or local_path.is_symlink():
+                backup_path = local_path.with_name(
+                    f".{local_path.name}.backup-{uuid.uuid4().hex}"
+                )
+                local_path.rename(backup_path)
+            extracted_path.rename(local_path)
+        except Exception:
+            if stage_path.exists():
+                shutil.rmtree(stage_path, ignore_errors=True)
+            if (
+                backup_path is not None
+                and not (local_path.exists() or local_path.is_symlink())
+                and (backup_path.exists() or backup_path.is_symlink())
+            ):
+                backup_path.rename(local_path)
+            raise
+        else:
+            if backup_path is not None and (backup_path.exists() or backup_path.is_symlink()):
+                if backup_path.is_dir() and not backup_path.is_symlink():
+                    shutil.rmtree(backup_path)
+                else:
+                    backup_path.unlink()
+            shutil.rmtree(stage_path, ignore_errors=True)
         return CommandResult(returncode=0, stdout="", stderr="")
 
     def _upload_via_tar(

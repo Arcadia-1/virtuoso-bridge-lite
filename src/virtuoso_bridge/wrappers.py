@@ -44,6 +44,8 @@ class SanitizingClient:
         result = self._inner.download_file(remote_path, local_path, **kwargs)
         if sanitize:
             local = Path(local_path)
+            if local.is_dir():
+                return result
             try:
                 text = local.read_text(encoding="utf-8")
             except (UnicodeDecodeError, FileNotFoundError):
