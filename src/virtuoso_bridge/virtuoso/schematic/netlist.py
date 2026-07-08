@@ -265,13 +265,15 @@ def schematic_import_netlist_skill(
     overwrite_cells = "all" if overwrite else "none"
 
     return (
-        "let((vbRunDir vbParamFile vbSpiceInLog vbSpiceInStdout vbConn2SchLog "
+        "let((vbRunDir vbParamFile vbRunCdsLib vbWorkCdsLib vbSpiceInLog vbSpiceInStdout vbConn2SchLog "
         "vbOut vbSchematicObj vbNetlistObj vbSpiceOk vbConnOk) "
         f'when("{escaped_netlist_view}" == "{escaped_schematic_view}" '
         'error("netlist and schematic views must differ")) '
         f'vbRunDir = "{escaped_run_dir}" '
         "unless(isDir(vbRunDir) || createDirHier(vbRunDir) error(\"cannot create run directory\")) "
         f'vbParamFile = strcat("{escaped_run_dir}" "/spiceIn.il") '
+        f'vbRunCdsLib = strcat("{escaped_run_dir}" "/cds.lib") '
+        'vbWorkCdsLib = strcat(getWorkingDir() "/cds.lib") '
         f'vbSpiceInLog = strcat("{escaped_run_dir}" "/spiceIn.log") '
         f'vbSpiceInStdout = strcat("{escaped_run_dir}" "/spiceIn.stdout") '
         f'vbConn2SchLog = strcat("{escaped_run_dir}" "/conn2sch.stdout") '
@@ -303,6 +305,11 @@ def schematic_import_netlist_skill(
         "fprintf(vbOut \"  'logFile %L\\n\" vbSpiceInLog) "
         'fprintf(vbOut ")\\n") '
         "close(vbOut) "
+        "when(isFile(vbWorkCdsLib) "
+        "vbOut = outfile(vbRunCdsLib \"w\") "
+        'unless(vbOut error("cannot open run-dir cds.lib")) '
+        'fprintf(vbOut "INCLUDE %s\\n" vbWorkCdsLib) '
+        "close(vbOut)) "
         "unless(isCallable('system) error(\"system API unavailable\")) "
         "vbSpiceOk = system(strcat(\"cd \" vbRunDir \" && spiceIn -param \" vbParamFile "
         "\" > \" vbSpiceInStdout \" 2>&1\")) "

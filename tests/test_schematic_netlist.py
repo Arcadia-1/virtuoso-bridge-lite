@@ -163,6 +163,9 @@ def test_schematic_import_netlist_skill_uses_spicein_and_conn2sch() -> None:
     assert 'fprintf(vbOut "  \'netlistFile %L\\n" "/tmp/nand2.scs")' in skill
     assert 'fprintf(vbOut "  \'refLibList %L\\n" "analogLib basic")' in skill
     assert 'fprintf(vbOut "  \'overwriteCells %L\\n" "all")' in skill
+    assert 'vbRunCdsLib = strcat("/tmp/import-nand2" "/cds.lib")' in skill
+    assert 'vbWorkCdsLib = strcat(getWorkingDir() "/cds.lib")' in skill
+    assert 'fprintf(vbOut "INCLUDE %s\\n" vbWorkCdsLib)' in skill
     assert 'system(strcat("cd " vbRunDir " && spiceIn -param " vbParamFile' in skill
     assert 'conn2Sch("demoLib" "nand2" "netlist" ?destLibName "demoLib"' in skill
     assert 'conn2sch -lib demoLib -cell nand2 -view netlist -destlib demoLib -destview schematic' in skill
