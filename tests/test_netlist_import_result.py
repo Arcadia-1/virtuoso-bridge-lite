@@ -24,6 +24,19 @@ def test_parse_netlist_import_output_from_skill_list() -> None:
     assert result.ok is True
 
 
+def test_parse_netlist_import_output_from_current_skill_list_without_conn2sch_log() -> None:
+    result = parse_netlist_import_output(
+        '("imported" "demoLib" "nand2" "/run/spiceIn.il" "/run/spiceIn.log")'
+    )
+
+    assert result.status == "imported"
+    assert result.lib == "demoLib"
+    assert result.cell == "nand2"
+    assert result.param_file == "/run/spiceIn.il"
+    assert result.spicein_log_file == "/run/spiceIn.log"
+    assert result.conn2sch_log_file is None
+
+
 def test_parse_netlist_import_output_decodes_skill_string_escapes() -> None:
     result = parse_netlist_import_output(
         r'("imported" "demo\"Lib" "nand\\2" "/run/a\tb/spiceIn.il")'

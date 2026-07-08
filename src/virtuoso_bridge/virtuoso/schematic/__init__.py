@@ -90,7 +90,7 @@ class SchematicOps:
         schematic_view: str = "schematic",
         overwrite: bool = False,
         dev_map_file: str | Path | None = None,
-        run_dir: str | Path = "/tmp/virtuoso_bridge_netlist_import",
+        run_dir: str | Path | None = None,
         timeout: int = 300,
     ) -> Any:
         """Import a netlist package through ``spiceIn`` and convert to schematic."""

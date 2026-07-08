@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -158,15 +159,18 @@ def test_schematic_import_netlist_skill_converts_imported_netlist_view_only() ->
         overwrite=True,
         param_file="/tmp/import-nand2/spiceIn.il",
         spicein_log_file="/tmp/import-nand2/spiceIn.log",
-        conn2sch_log_file="/tmp/import-nand2/conn2sch.stdout",
     )
 
     assert "spiceIn -param" not in skill
     assert "system(" not in skill
     assert "conn2sch -" not in skill
+    assert "ddDeleteObj(vbSchematicObj)" not in skill
+    assert "dbCopyCellView" in skill
+    assert 'vbDestViewName = "__vb_import_' in skill
     assert 'conn2Sch("demoLib" "nand2" "netlist" ?destLibName "demoLib"' in skill
-    assert '?block t) nil) unless(vbConnOk && car(vbConnOk)' in skill
+    assert '?destViewName vbDestViewName ?block t) nil)' in skill
     assert 'list("imported" "demoLib" "nand2" "/tmp/import-nand2/spiceIn.il"' in skill
+    assert "conn2sch.stdout" not in skill
     assert "smic12sf" not in skill
     assert "sinomos" not in skill
 
@@ -246,6 +250,47 @@ def test_import_netlist_schematic_runs_spicein_outside_skill(monkeypatch, tmp_pa
     assert 'conn2Sch("demoLib" "nand2" "netlist"' in client.skills[-1]
 
 
+def test_import_netlist_schematic_uses_unique_default_run_dirs(monkeypatch, tmp_path) -> None:
+    work_dir = tmp_path / "virtuoso"
+    work_dir.mkdir()
+    (work_dir / "cds.lib").write_text("DEFINE demoLib ./demoLib\n", encoding="utf-8")
+    netlist_file = tmp_path / "nand2.scs"
+    netlist_file.write_text("simulator lang=spectre\n", encoding="utf-8")
+
+    class Client:
+        ssh_runner = None
+        skills: list[str] = []
+
+        def execute_skill(self, skill: str, *, timeout: int):
+            self.skills.append(skill)
+            if "getWorkingDir()" in skill:
+                return {
+                    "status": "success",
+                    "output": f'("{work_dir}" "/cad/IC/bin:/usr/bin" "" "" "" "/cad/IC")',
+                }
+            if "vbSchematicObj" in skill and "vbNetlistObj" in skill and "conn2Sch" not in skill:
+                return {"status": "success", "output": "t"}
+            return {"status": "success", "output": '("imported" "demoLib" "nand2")'}
+
+    subprocess_calls = []
+
+    def fake_run(*args, **kwargs):
+        subprocess_calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args[0], 0, stdout="", stderr="")
+
+    monkeypatch.setattr(schematic_netlist_module.subprocess, "run", fake_run)
+
+    client = Client()
+    import_netlist_schematic(client, "demoLib", "nand2", netlist_file, timeout=30)
+    import_netlist_schematic(client, "demoLib", "nand2", netlist_file, timeout=30)
+
+    run_dirs = [kwargs["cwd"] for _, kwargs in subprocess_calls]
+    assert len(run_dirs) == 2
+    assert run_dirs[0] != run_dirs[1]
+    assert all(path.name.startswith("virtuoso_bridge_netlist_import_demoLib_nand2_") for path in run_dirs)
+    assert all(str(path).startswith("/tmp/") for path in run_dirs)
+
+
 def test_import_netlist_schematic_uploads_inputs_and_runs_remote_shell(tmp_path) -> None:
     netlist_file = tmp_path / "nand2.scs"
     netlist_file.write_text("simulator lang=spectre\n", encoding="utf-8")
@@ -310,6 +355,134 @@ def test_import_netlist_schematic_uploads_inputs_and_runs_remote_shell(tmp_path)
     assert 'conn2Sch("demoLib" "nand2" "netlist"' in client.skills[-1]
 
 
+def test_import_netlist_schematic_validates_assumed_remote_inputs() -> None:
+    class Runner:
+        commands: list[tuple[str, int | None]] = []
+
+        def run_command(self, command: str, timeout: int | None = None) -> CommandResult:
+            self.commands.append((command, timeout))
+            if command.startswith("test -f "):
+                return CommandResult(0, "", "")
+            return CommandResult(0, "", "")
+
+    class Client:
+        ssh_runner = Runner()
+        uploads: list[tuple[Path, str, int | None]] = []
+        responses = [
+            {
+                "status": "success",
+                "output": '("/remote/work" "/cad/IC/bin:/usr/bin" "" "" "" "/cad/IC")',
+            },
+            {"status": "success", "output": "t"},
+            {"status": "success", "output": '("imported" "demoLib" "nand2")'},
+        ]
+
+        def execute_skill(self, skill: str, *, timeout: int):
+            return self.responses.pop(0)
+
+        def upload_file(self, local_path: Path, remote_path: str, *, timeout: int | None = None):
+            self.uploads.append((Path(local_path), remote_path, timeout))
+            return {"status": "success", "output": remote_path}
+
+    client = Client()
+    import_netlist_schematic(
+        client,
+        "demoLib",
+        "nand2",
+        "/already/remote/nand2.scs",
+        dev_map_file="/already/remote/devmap.txt",
+        run_dir="/remote/import-nand2",
+        timeout=120,
+    )
+
+    commands = [command for command, _ in client.ssh_runner.commands]
+    assert "test -f /already/remote/nand2.scs" in commands
+    assert "test -f /already/remote/devmap.txt" in commands
+    uploaded_names = [path.name for path, _, _ in client.uploads]
+    assert "nand2.scs" not in uploaded_names
+    assert "devmap.txt" not in uploaded_names
+    assert {"spiceIn.il", "cds.lib"}.issubset(set(uploaded_names))
+
+
+def test_import_netlist_schematic_quotes_assumed_remote_input_checks() -> None:
+    netlist_file = "/already remote/nand'2.scs"
+    dev_map_file = "/already remote/dev map's.txt"
+    run_dir = "/remote/import dir/nand'2"
+
+    class Runner:
+        commands: list[tuple[str, int | None]] = []
+
+        def run_command(self, command: str, timeout: int | None = None) -> CommandResult:
+            self.commands.append((command, timeout))
+            return CommandResult(0, "", "")
+
+    class Client:
+        ssh_runner = Runner()
+        uploads: list[tuple[Path, str, int | None]] = []
+        responses = [
+            {
+                "status": "success",
+                "output": '("/remote/work" "/cad/IC/bin:/usr/bin" "" "" "" "/cad/IC")',
+            },
+            {"status": "success", "output": "t"},
+            {"status": "success", "output": '("imported" "demoLib" "nand2")'},
+        ]
+
+        def execute_skill(self, skill: str, *, timeout: int):
+            return self.responses.pop(0)
+
+        def upload_file(self, local_path: Path, remote_path: str, *, timeout: int | None = None):
+            self.uploads.append((Path(local_path), remote_path, timeout))
+            return {"status": "success", "output": remote_path}
+
+    client = Client()
+    import_netlist_schematic(
+        client,
+        "demoLib",
+        "nand2",
+        netlist_file,
+        dev_map_file=dev_map_file,
+        run_dir=run_dir,
+        timeout=120,
+    )
+
+    commands = [command for command, _ in client.ssh_runner.commands]
+    assert f"mkdir -p {shlex.quote(run_dir)}" in commands
+    assert f"test -f {shlex.quote(netlist_file)}" in commands
+    assert f"test -f {shlex.quote(dev_map_file)}" in commands
+
+
+def test_import_netlist_schematic_rejects_missing_remote_input() -> None:
+    class Runner:
+        def run_command(self, command: str, timeout: int | None = None) -> CommandResult:
+            if command.startswith("test -f "):
+                return CommandResult(1, "", "missing")
+            return CommandResult(0, "", "")
+
+    class Client:
+        ssh_runner = Runner()
+        responses = [
+            {
+                "status": "success",
+                "output": '("/remote/work" "/cad/IC/bin:/usr/bin" "" "" "" "/cad/IC")',
+            },
+            {"status": "success", "output": "t"},
+        ]
+
+        def execute_skill(self, skill: str, *, timeout: int):
+            return self.responses.pop(0)
+
+    with pytest.raises(RuntimeError, match="remote input file not found"):
+        import_netlist_schematic(
+            Client(),
+            "demoLib",
+            "nand2",
+            "/missing/remote/nand2.scs",
+            run_dir="/remote/import-nand2",
+            timeout=120,
+        )
+
+
 def test_schematic_ops_import_netlist_delegates_to_client(monkeypatch, tmp_path) -> None:
     calls = []
     netlist_file = tmp_path / "nand2.scs"
@@ -340,7 +513,7 @@ def test_schematic_ops_import_netlist_delegates_to_client(monkeypatch, tmp_path)
         "schematic_view": "schematic",
         "overwrite": False,
         "dev_map_file": None,
-        "run_dir": "/tmp/virtuoso_bridge_netlist_import",
+        "run_dir": None,
         "timeout": 12,
     }
 
