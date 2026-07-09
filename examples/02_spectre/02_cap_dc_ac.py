@@ -67,10 +67,11 @@ def main() -> int:
 
     # AC frequency response
     freq = result.data.get("ac_freq", [])
-    vo_mag = result.data.get("ac_VO", [])
+    vo_ac = result.data.get("ac_VO", [])
 
-    if freq and vo_mag and len(freq) > 1:
-        # Convert to dB (relative to DC gain = 1.0)
+    if freq and vo_ac and len(freq) > 1:
+        # AC data is parsed as complex phasors; use magnitude for response plots.
+        vo_mag = [abs(v) for v in vo_ac]
         vo_db = [20 * math.log10(max(v, 1e-30)) for v in vo_mag]
 
         # Find -3dB frequency

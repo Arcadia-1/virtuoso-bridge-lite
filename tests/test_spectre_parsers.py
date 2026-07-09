@@ -89,6 +89,33 @@ def test_swept_signal_late_first_step_is_nan(parsed_late_signal):
     assert sig_b[2] == 0.7
 
 
+def test_swept_ac_signal_preserves_complex_phasor():
+    """AC PSF values are phasors; consumers must choose magnitude/phase."""
+    text = """\
+HEADER
+PROPERTIES
+SWEEP
+"freq" 1
+TRACE
+"VO" "V"
+VALUE
+"freq" 1e6
+"VO" (1.0 0.0)
+"freq" 1e9
+"VO" (0.5 -0.5)
+END
+"""
+    lines = text.splitlines()
+    parsed = _parse_psf_swept_data(
+        lines,
+        len(lines),
+        {"HEADER": 0, "PROPERTIES": 1, "SWEEP": 2, "TRACE": 4, "VALUE": 6, "END": 11},
+    )
+
+    assert parsed["freq"] == [1e6, 1e9]
+    assert parsed["VO"] == [complex(1.0, 0.0), complex(0.5, -0.5)]
+
+
 # ---------------------------------------------------------------------------
 # parse_sweep_psf_directory — both layouts
 # ---------------------------------------------------------------------------
