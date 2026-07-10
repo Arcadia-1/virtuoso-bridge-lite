@@ -5,6 +5,7 @@ import pytest
 from virtuoso_bridge.virtuoso.schematic.ops import (
     schematic_create_net_stub,
     schematic_create_net_expression,
+    schematic_label_instance_term,
     schematic_set_netset_property,
 )
 
@@ -86,3 +87,45 @@ def test_schematic_create_net_stub_rejects_non_positive_length() -> None:
 def test_schematic_create_net_stub_rejects_unknown_direction() -> None:
     with pytest.raises(ValueError, match="direction must be one of"):
         schematic_create_net_stub("IN", 0, 0, direction="diagonal")
+
+
+def test_schematic_label_instance_term_keeps_unbound_label_by_default() -> None:
+    skill = schematic_label_instance_term("M0", "D", "OUT")
+
+    assert 'schCreateWire(cv "route" "full" list(rbCtr rbStubEnd) 0 0 0 nil nil)' in skill
+    assert 'schCreateWireLabel(cv nil rbMid "OUT"' in skill
+    assert "rbWireObj" not in skill
+
+
+def test_schematic_label_instance_term_preserves_legacy_wire_cv_by_default() -> None:
+    skill = schematic_label_instance_term("M0", "D", "OUT", cv_expr="targetCv")
+
+    assert 'targetCv~>instances' in skill
+    assert 'schCreateWire(cv "route" "full" list(rbCtr rbStubEnd) 0 0 0 nil nil)' in skill
+    assert 'schCreateWireLabel(targetCv nil rbMid "OUT"' in skill
+    assert 'schCreateWire(targetCv "route" "full"' not in skill
+
+
+def test_schematic_label_instance_term_can_bind_label_to_created_wire() -> None:
+    skill = schematic_label_instance_term("M0", "D", "OUT", bind_label_to_wire=True)
+
+    assert 'rbWire = when(rbCtr && rbStubEnd schCreateWire(cv "route" "full" list(rbCtr rbStubEnd) 0 0 0 nil nil))' in skill
+    assert "rbWireObj = if(listp(rbWire) car(rbWire) rbWire)" in skill
+    assert "when(rbWireObj && rbMid" in skill
+    assert 'schCreateWireLabel(cv rbWireObj rbMid "OUT"' in skill
+
+
+def test_schematic_label_instance_term_bind_uses_custom_cellview_expr() -> None:
+    skill = schematic_label_instance_term(
+        "M0",
+        "D",
+        "OUT",
+        cv_expr="targetCv",
+        bind_label_to_wire=True,
+    )
+
+    assert 'targetCv~>instances' in skill
+    assert 'rbWire = when(rbCtr && rbStubEnd schCreateWire(targetCv "route" "full"' in skill
+    assert 'schCreateWireLabel(targetCv rbWireObj rbMid "OUT"' in skill
+    assert 'schCreateWire(cv "route" "full"' not in skill
+    assert 'schCreateWireLabel(cv ' not in skill

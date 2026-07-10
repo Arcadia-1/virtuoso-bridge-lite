@@ -292,6 +292,7 @@ def schematic_label_instance_term(
     extension_length: float | None = None,
     cosmetic: str = "default",
     auto_rotation: bool = False,
+    bind_label_to_wire: bool = False,
 ) -> str:
     """Build SKILL to place a labeled wire stub at an instance terminal.
 
@@ -310,6 +311,11 @@ def schematic_label_instance_term(
     the geometric stub direction (the same ``rbDx`` / ``rbDy`` already
     computed inside the SKILL). Default False keeps the legacy explicit
     behavior.
+
+    ``bind_label_to_wire``: when True, pass the created wire object to
+    ``schCreateWireLabel`` instead of ``nil``. This avoids unconnected-label
+    warnings in flows that check the generated schematic immediately. Default
+    False keeps the legacy generated SKILL unchanged.
     """
     preset = _LABEL_TERM_COSMETIC_PRESETS.get(cosmetic, _LABEL_TERM_COSMETIC_PRESETS["default"])
     eff_just = justification if justification is not None else preset["justification"]
@@ -327,8 +333,18 @@ def schematic_label_instance_term(
     else:
         rotation_expr = f'"{escape_skill_string(rotation)}"'
 
+    wire_vars = "rbWire rbWireObj " if bind_label_to_wire else ""
+    wire_expr = (
+        f'rbWire = when(rbCtr && rbStubEnd schCreateWire({cv_expr} "route" "full" list(rbCtr rbStubEnd) 0 0 0 nil nil)) '
+        "rbWireObj = if(listp(rbWire) car(rbWire) rbWire) "
+        if bind_label_to_wire
+        else 'when(rbCtr && rbStubEnd schCreateWire(cv "route" "full" list(rbCtr rbStubEnd) 0 0 0 nil nil)) '
+    )
+    label_wire_expr = "rbWireObj" if bind_label_to_wire else "nil"
+    label_guard_expr = "rbWireObj && rbMid" if bind_label_to_wire else "rbMid"
+
     return (
-        "let((rbInst rbTerm rbPin rbFig rbLocalBBox rbLocalCtr rbLocalEnd rbCtr rbStubEnd rbMid "
+        f"let((rbInst rbTerm rbPin rbFig rbLocalBBox rbLocalCtr rbLocalEnd rbCtr rbStubEnd rbMid {wire_vars}"
         "rbInstBBox rbInstCtr rbDx rbDy rbMasterName rbTermName rbIsMos rbIsPmos rbOrigin rbLocalDir rbDirPt) "
         f"{_schematic_bind_instance_and_term_expr(instance_name, term_name, cv_expr=cv_expr)}"
         "rbLocalBBox = when(rbFig rbFig~>bBox) "
@@ -341,9 +357,9 @@ def schematic_label_instance_term(
         "rbMid = when(rbCtr && rbStubEnd "
         "list((xCoord(rbCtr) + xCoord(rbStubEnd)) / 2.0 "
         "(yCoord(rbCtr) + yCoord(rbStubEnd)) / 2.0)) "
-        "when(rbCtr && rbStubEnd schCreateWire(cv \"route\" \"full\" list(rbCtr rbStubEnd) 0 0 0 nil nil)) "
-        "when(rbMid "
-        f'schCreateWireLabel({cv_expr} nil rbMid "{escape_skill_string(net_name)}" '
+        f"{wire_expr}"
+        f"when({label_guard_expr} "
+        f'schCreateWireLabel({cv_expr} {label_wire_expr} rbMid "{escape_skill_string(net_name)}" '
         f'"{escape_skill_string(eff_just)}" '
         f'{rotation_expr} '
         f'"{escape_skill_string(style)}" {height:g} nil)))'
