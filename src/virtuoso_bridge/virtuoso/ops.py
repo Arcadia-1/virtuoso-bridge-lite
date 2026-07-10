@@ -24,6 +24,10 @@ def default_view_type_for(view: str) -> str:
         return "maskLayout"
     if normalized == "schematic":
         return "schematic"
+    if normalized == "symbol":
+        return "schematicSymbol"
+    if normalized == "maestro":
+        return "maestro"
     return view
 
 def skill_point(x: float, y: float) -> str:
