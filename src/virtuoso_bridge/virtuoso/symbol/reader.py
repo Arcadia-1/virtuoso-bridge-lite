@@ -73,11 +73,37 @@ def parse_symbol_ports_output(output: str) -> dict[str, Any]:
     text = (output or "").strip()
     if not text.startswith("("):
         raise ValueError("symbol readback output must be a structured SKILL list")
+    if not _is_single_complete_skill_list(text):
+        raise ValueError("symbol readback output must be a single complete SKILL list")
     parsed = parse_sexpr(text)
     failure_detail = _symbol_read_failure_detail(parsed, output=text)
     if failure_detail is not None:
         raise _SymbolReadFailure(failure_detail)
     return _parse_symbol_ports_records(parsed)
+
+
+def _is_single_complete_skill_list(text: str) -> bool:
+    depth = 0
+    in_string = False
+    escaped = False
+    for index, character in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth < 0 or (depth == 0 and index != len(text) - 1):
+                return False
+    return depth == 0 and not in_string
 
 
 def _parse_symbol_ports_records(parsed: Any) -> dict[str, Any]:

@@ -61,6 +61,20 @@ def test_parse_symbol_ports_output_rejects_malformed_read_failure() -> None:
         parse_symbol_ports_output(output)
 
 
+@pytest.mark.parametrize(
+    "output",
+    [
+        '("readFailed" "open symbol failed" nil',
+        '(("term" "A" "input" 1 nil)) ("unexpected")',
+    ],
+)
+def test_parse_symbol_ports_output_rejects_incomplete_or_trailing_data(
+    output: str,
+) -> None:
+    with pytest.raises(ValueError, match="single complete SKILL list"):
+        parse_symbol_ports_output(output)
+
+
 def test_parse_symbol_ports_output_preserves_label_delimiters_from_sexpr() -> None:
     parsed = parse_symbol_ports_output(
         r'(("label" "foo\tbar\nbaz\"\\end" "normalLabel" (0.2 0.0))'
@@ -147,6 +161,24 @@ def test_read_symbol_ports_combines_body_and_close_failures() -> None:
         match=(
             "read_symbol_ports failed for demoLib/missing: open symbol failed; "
             "cleanup failed: symbol close failed"
+        ),
+    ):
+        read_symbol_ports(Client(), "demoLib", "missing")
+
+
+def test_read_symbol_ports_rejects_truncated_failure_output() -> None:
+    class Client:
+        def execute_skill(self, skill: str, *, timeout: int):
+            return VirtuosoResult(
+                status=ExecutionStatus.SUCCESS,
+                output='("readFailed" "open symbol failed" nil',
+            )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "read_symbol_ports response error for demoLib/missing: "
+            "symbol readback output must be a single complete SKILL list"
         ),
     ):
         read_symbol_ports(Client(), "demoLib", "missing")
