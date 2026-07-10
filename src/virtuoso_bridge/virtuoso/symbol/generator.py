@@ -15,7 +15,6 @@ SymbolPinSort = Literal["alphanumeric", "geometric"]
 SymbolGenerationAction = Literal["created", "replaced"]
 
 _PIN_SORT_MODES = {"alphanumeric", "geometric"}
-_DEFAULT_DIRECTION_ORDER = {"output": 0, "inputOutput": 1, "input": 2}
 
 
 @dataclass(frozen=True)
@@ -71,7 +70,7 @@ def symbol_generate_from_schematic_skill(
     return (
         "let((vbSourceCv vbTargetObj vbTempObj vbTempCv vbTargetCv vbPinList vbGenerated "
         "vbReplacing vbAction vbExpectedTerms vbActualTerms vbExpectedTerm vbOldSort "
-        "vbSortChanged vbCleanup) "
+        "vbSortChanged vbCleanup vbCleanupFailed vbResult) "
         f'vbTargetObj = ddGetObj("{escaped_lib}" "{escaped_cell}" "{escaped_symbol_view}") '
         "vbReplacing = if(vbTargetObj t nil) "
         'vbAction = if(vbReplacing "replaced" "created") '
@@ -80,7 +79,7 @@ def symbol_generate_from_schematic_skill(
         f'vbTempObj = ddGetObj("{escaped_lib}" "{escaped_cell}" "{escaped_temp_view}") '
         'when(vbTempObj unless(ddDeleteObj(vbTempObj) error("temporary symbol delete failed"))) '
         f"{sort_capture}"
-        "unwindProtect("
+        "vbResult = unwindProtect("
         "progn("
         f'vbSourceCv = dbOpenCellViewByType("{escaped_lib}" "{escaped_cell}" '
         f'"{escaped_schematic_view}" "schematic" "r") '
@@ -122,8 +121,11 @@ def symbol_generate_from_schematic_skill(
         "when(vbTempObj "
         "vbCleanup = errset(ddDeleteObj(vbTempObj) nil) "
         "unless(vbCleanup && car(vbCleanup) "
-        'warn("temporary symbol cleanup failed"))) '
-        ")))"
+        "vbCleanupFailed = t))) "
+        ") "
+        "if(vbCleanupFailed "
+        'then list("cleanupFailed" "temporary symbol cleanup failed") '
+        "else vbResult))"
     )
 
 
@@ -179,13 +181,12 @@ def generate_symbol_from_schematic(
         )
 
     terminal_names = tuple(term["name"] for term in ports["terms"])
-    explicit_order = tuple(ports["portOrder"] or ports["termOrder"])
-    if explicit_order and Counter(explicit_order) != Counter(terminal_names):
+    term_order = tuple(ports["pinOrder"])
+    if Counter(term_order) != Counter(terminal_names):
         raise RuntimeError(
             f"generated symbol term order mismatch for {lib}/{cell}: "
-            f"terminals {terminal_names}, order {explicit_order}"
+            f"terminals {terminal_names}, order {term_order}"
         )
-    term_order = explicit_order or _default_term_order(ports["terms"])
     return SymbolGenerationResult(
         lib=lib,
         cell=cell,
@@ -201,17 +202,6 @@ def _validate_sort_pins(sort_pins: str | None) -> None:
     if sort_pins is not None and sort_pins not in _PIN_SORT_MODES:
         choices = ", ".join(sorted(_PIN_SORT_MODES))
         raise ValueError(f"sort_pins must be one of: {choices}")
-
-
-def _default_term_order(terms: list[dict[str, Any]]) -> tuple[str, ...]:
-    ordered = sorted(
-        terms,
-        key=lambda term: (
-            _DEFAULT_DIRECTION_ORDER.get(str(term.get("direction", "")), 3),
-            str(term.get("name", "")),
-        ),
-    )
-    return tuple(str(term.get("name", "")) for term in ordered)
 
 
 def _require_generation_success(response: Any, *, lib: str, cell: str) -> str:
@@ -231,6 +221,8 @@ def _parse_generation_output(
     output: str,
 ) -> tuple[SymbolGenerationAction, dict[str, tuple[str, int]]]:
     parsed = parse_sexpr(output)
+    if isinstance(parsed, list) and len(parsed) >= 2 and parsed[0] == "cleanupFailed":
+        raise RuntimeError(f"symbol generation cleanup failed: {parsed[1]}")
     if not isinstance(parsed, list) or len(parsed) < 3 or parsed[0] != "generated":
         raise RuntimeError(f"unexpected symbol generation output: {output}")
     action = str(parsed[1])

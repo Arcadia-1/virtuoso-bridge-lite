@@ -19,6 +19,8 @@ def symbol_read_ports_skill(
     open_expr = open_cell_view(lib, cell, view=view, view_type=view_type, mode="r")
     return (
         "let((cv term pin fig label bbox xy result) "
+        "unwindProtect("
+        "progn("
         f"{open_expr} "
         'unless(cv error("open symbol failed")) '
         "result = nil "
@@ -40,10 +42,11 @@ def symbol_read_ports_skill(
         "when(label~>xy xy = list(xCoord(label~>xy) yCoord(label~>xy))) "
         'result = cons(list("label" if(label~>theLabel label~>theLabel "") '
         'if(label~>labelType label~>labelType "") xy) result))) '
+        'result = cons(list("pinOrder" schGetPinOrder(cv)) result) '
         'result = cons(list("portOrder" cv~>portOrder) result) '
         'result = cons(list("termOrder" cv~>termOrder) result) '
-        "dbClose(cv) "
-        "reverse(result))"
+        "reverse(result)) "
+        "when(cv errset(dbClose(cv) nil) cv = nil)))"
     )
 
 
@@ -59,6 +62,7 @@ def _parse_symbol_ports_records(output: str) -> dict[str, Any]:
     result: dict[str, Any] = {
         "terms": [],
         "labels": [],
+        "pinOrder": [],
         "portOrder": [],
         "termOrder": [],
     }
@@ -87,7 +91,7 @@ def _parse_symbol_ports_records(output: str) -> dict[str, Any]:
                     "xy": _point_value(record[3]),
                 }
             )
-        elif kind in {"portOrder", "termOrder"} and len(record) >= 2:
+        elif kind in {"pinOrder", "portOrder", "termOrder"} and len(record) >= 2:
             order = record[1] if isinstance(record[1], list) else []
             result[kind] = [_string_value(item) for item in order]
     return result

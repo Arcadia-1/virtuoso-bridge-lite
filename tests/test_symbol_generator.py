@@ -37,6 +37,7 @@ def test_generate_from_schematic_returns_verified_created_symbol() -> None:
                 output=(
                     '(("term" "A" "input" 1 nil) '
                     '("term" "Y" "output" 1 nil) '
+                    '("pinOrder" ("A" "Y")) '
                     '("termOrder" ("A" "Y")))'
                 ),
             )
@@ -93,7 +94,7 @@ def test_symbol_generation_skill_escapes_names_and_restores_pin_sort() -> None:
     assert skill.index('schSetEnv("ssgSortPins" "geometric")') < skill.index("schSchemToPinList")
     assert skill.index("schSchemToPinList") < skill.index('schSetEnv("ssgSortPins" vbOldSort)')
     assert skill.index('schSetEnv("ssgSortPins" vbOldSort)') < skill.index("when(vbSourceCv")
-    assert 'warn("temporary symbol cleanup failed")' in skill
+    assert 'list("cleanupFailed" "temporary symbol cleanup failed")' in skill
 
     temp_match = re.search(r'schPinListToSymbol\([^)]*"(__vb_symbol_[0-9a-f]+)" vbPinList\)', skill)
     assert temp_match is not None
@@ -138,6 +139,13 @@ def test_symbol_generation_skill_allows_verified_temporary_copy_when_overwriting
     assert 'ddDeleteObj(vbTargetObj)' not in skill
 
 
+def test_symbol_generation_skill_returns_cleanup_status_inside_let() -> None:
+    skill = symbol_generate_from_schematic_skill("demoLib", "nand2")
+
+    assert "vbCleanupFailed = t))) ) if(vbCleanupFailed" in skill
+    assert "vbCleanupFailed = t))) )) if(vbCleanupFailed" not in skill
+
+
 def test_generate_from_schematic_reports_replaced_custom_view() -> None:
     class Client:
         skills: list[str]
@@ -154,7 +162,10 @@ def test_generate_from_schematic_reports_replaced_custom_view() -> None:
                 )
             return VirtuosoResult(
                 status=ExecutionStatus.SUCCESS,
-                output='(("term" "A" "input" 1 nil) ("termOrder" ("A")))',
+                output=(
+                    '(("term" "A" "input" 1 nil) '
+                    '("pinOrder" ("A")) ("termOrder" ("A")))'
+                ),
             )
 
     client = Client()
@@ -222,7 +233,7 @@ def test_generate_from_schematic_rejects_term_order_mismatch() -> None:
                 output=(
                     '(("term" "A" "input" 1 nil) '
                     '("term" "Y" "output" 1 nil) '
-                    '("termOrder" ("A")))'
+                    '("pinOrder" ("A")) ("termOrder" ("A" "Y")))'
                 ),
             )
 
@@ -230,7 +241,7 @@ def test_generate_from_schematic_rejects_term_order_mismatch() -> None:
         SymbolOps(Client()).generate_from_schematic("demoLib", "nand2")
 
 
-def test_generate_from_schematic_uses_cadence_default_when_order_is_not_explicit() -> None:
+def test_generate_from_schematic_uses_sch_get_pin_order() -> None:
     class Client:
         def execute_skill(self, skill: str, *, timeout: int) -> VirtuosoResult:
             if "schSchemToPinList" in skill:
@@ -243,6 +254,7 @@ def test_generate_from_schematic_uses_cadence_default_when_order_is_not_explicit
                 output=(
                     '(("term" "A" "input" 1 nil) '
                     '("term" "Y" "output" 1 nil) '
+                    '("pinOrder" ("A" "Y")) '
                     '("portOrder" nil) ("termOrder" nil))'
                 ),
             )
@@ -250,4 +262,26 @@ def test_generate_from_schematic_uses_cadence_default_when_order_is_not_explicit
     result = SymbolOps(Client()).generate_from_schematic("demoLib", "nand2")
 
     assert result.terminal_names == ("A", "Y")
-    assert result.term_order == ("Y", "A")
+    assert result.term_order == ("A", "Y")
+
+
+def test_generate_from_schematic_reports_temporary_view_cleanup_failure() -> None:
+    class Client:
+        calls = 0
+
+        def execute_skill(self, skill: str, *, timeout: int) -> VirtuosoResult:
+            self.calls += 1
+            return VirtuosoResult(
+                status=ExecutionStatus.SUCCESS,
+                output='("cleanupFailed" "temporary symbol cleanup failed")',
+            )
+
+    client = Client()
+
+    with pytest.raises(
+        RuntimeError,
+        match="symbol generation cleanup failed: temporary symbol cleanup failed",
+    ):
+        SymbolOps(client).generate_from_schematic("demoLib", "nand2")
+
+    assert client.calls == 1

@@ -34,9 +34,9 @@ view, and verifies the final view with `client.symbol.read_ports()`.
   only after temporary-view generation and terminal validation succeed.
 - `SymbolGenerationResult.action` is `"created"` or `"replaced"`.
 - `terminal_names` contains the generated terminal names.
-- `term_order` uses explicit `portOrder`, then legacy `termOrder`, then the
-  Cadence default order: output, inputOutput, input; names are sorted within
-  each direction.
+- `term_order` is the effective order returned by Cadence's
+  `schGetPinOrder()`, which resolves an explicit `portOrder` or the native
+  default order.
 
 The overwrite path avoids GUI replacement dialogs, but it is not a rollback
 transaction: a failure after the final database copy can leave the new symbol
@@ -48,8 +48,9 @@ in place.
 ports = client.symbol.read_ports("demoLib", "nand2")
 ```
 
-The returned dictionary contains `terms`, `labels`, `portOrder`, and
-`termOrder`. `portOrder` is the native symbol property; `termOrder` is retained
+The returned dictionary contains `terms`, `labels`, `pinOrder`, `portOrder`,
+and `termOrder`. `pinOrder` is the effective value from `schGetPinOrder()`,
+`portOrder` is the native symbol property, and `termOrder` is retained
 separately for existing callers and manually authored symbols.
 
 ## Edit Symbol
