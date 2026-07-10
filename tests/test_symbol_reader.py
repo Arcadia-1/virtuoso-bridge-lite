@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from virtuoso_bridge.models import ExecutionStatus, VirtuosoResult
+from virtuoso_bridge.virtuoso.response import response_fields
 from virtuoso_bridge.virtuoso.symbol import SymbolOps
 from virtuoso_bridge.virtuoso.symbol.reader import (
     parse_symbol_ports_output,
@@ -37,6 +38,26 @@ def test_parse_symbol_ports_output_rejects_legacy_tsv() -> None:
     output = "term\tname=A\tdirection=input\tnumBits=1\tbbox=nil\ntermOrder\t(\"A\")"
 
     with pytest.raises(ValueError, match="structured SKILL list"):
+        parse_symbol_ports_output(output)
+
+
+def test_parse_symbol_ports_output_rejects_read_failure() -> None:
+    output = '("readFailed" "open symbol failed" ("symbol close failed"))'
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "symbol readback failed: open symbol failed; "
+            "cleanup failed: symbol close failed"
+        ),
+    ):
+        parse_symbol_ports_output(output)
+
+
+def test_parse_symbol_ports_output_rejects_malformed_read_failure() -> None:
+    output = '("readFailed" "open symbol failed")'
+
+    with pytest.raises(ValueError, match="malformed symbol read failure output"):
         parse_symbol_ports_output(output)
 
 
@@ -103,7 +124,10 @@ def test_read_symbol_ports_raises_on_skill_error() -> None:
                 errors=["open symbol failed"],
             )
 
-    with pytest.raises(RuntimeError, match="read_symbol_ports SKILL error: open symbol failed"):
+    with pytest.raises(
+        RuntimeError,
+        match="read_symbol_ports SKILL error for demoLib/missing: open symbol failed",
+    ):
         read_symbol_ports(Client(), "demoLib", "missing")
 
 
@@ -142,7 +166,10 @@ def test_read_symbol_ports_raises_on_dict_transport_error() -> None:
         def execute_skill(self, skill: str, *, timeout: int):
             return {"ok": False, "error": "transport failed"}
 
-    with pytest.raises(RuntimeError, match="read_symbol_ports SKILL error: transport failed"):
+    with pytest.raises(
+        RuntimeError,
+        match="read_symbol_ports SKILL error for demoLib/missing: transport failed",
+    ):
         read_symbol_ports(Client(), "demoLib", "missing")
 
 
@@ -193,3 +220,19 @@ def test_read_symbol_ports_accepts_nested_dict_output() -> None:
 
     assert parsed["terms"][0]["name"] == "A"
     assert parsed["termOrder"] == ["A"]
+
+
+def test_response_fields_normalizes_scalar_error() -> None:
+    errors, status, output = response_fields({"errors": "transport failed"})
+
+    assert errors == ["transport failed"]
+    assert status is None
+    assert output == ""
+
+
+def test_response_fields_normalizes_non_string_output() -> None:
+    errors, status, output = response_fields({"output": 17})
+
+    assert errors == []
+    assert status is None
+    assert output == "17"

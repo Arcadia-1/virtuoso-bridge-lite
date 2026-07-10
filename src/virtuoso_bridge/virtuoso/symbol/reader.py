@@ -9,6 +9,12 @@ from virtuoso_bridge.virtuoso.response import response_fields
 from virtuoso_bridge.virtuoso.skill_output import parse_sexpr
 
 
+class _SymbolReadFailure(ValueError):
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(f"symbol readback failed: {detail}")
+
+
 def symbol_read_ports_skill(
     lib: str,
     cell: str,
@@ -67,10 +73,14 @@ def parse_symbol_ports_output(output: str) -> dict[str, Any]:
     text = (output or "").strip()
     if not text.startswith("("):
         raise ValueError("symbol readback output must be a structured SKILL list")
-    return _parse_symbol_ports_records(text)
+    parsed = parse_sexpr(text)
+    failure_detail = _symbol_read_failure_detail(parsed, output=text)
+    if failure_detail is not None:
+        raise _SymbolReadFailure(failure_detail)
+    return _parse_symbol_ports_records(parsed)
 
 
-def _parse_symbol_ports_records(output: str) -> dict[str, Any]:
+def _parse_symbol_ports_records(parsed: Any) -> dict[str, Any]:
     result: dict[str, Any] = {
         "terms": [],
         "labels": [],
@@ -78,7 +88,6 @@ def _parse_symbol_ports_records(output: str) -> dict[str, Any]:
         "portOrder": [],
         "termOrder": [],
     }
-    parsed = parse_sexpr(output)
     if not isinstance(parsed, list):
         return result
 
@@ -130,26 +139,41 @@ def read_symbol_ports(
         raise RuntimeError(f"read_symbol_ports could not open symbol {lib}/{cell}")
     if not raw.strip():
         raise RuntimeError(f"read_symbol_ports returned empty output for {lib}/{cell}")
-    parsed = parse_sexpr(raw)
-    if isinstance(parsed, list) and len(parsed) >= 3 and parsed[0] == "readFailed":
-        body_failure = parsed[1]
-        close_failures = parsed[2]
-        if close_failures is None:
-            close_failures = []
-        if not isinstance(close_failures, list):
-            raise RuntimeError(
-                f"unexpected read_symbol_ports failure output for {lib}/{cell}: {raw}"
-            )
-        details: list[str] = []
-        if body_failure is not None:
-            details.append(str(body_failure))
-        if close_failures:
-            details.append(
-                "cleanup failed: " + ", ".join(str(item) for item in close_failures)
-            )
-        detail = "; ".join(details) or "unknown failure"
-        raise RuntimeError(f"read_symbol_ports failed for {lib}/{cell}: {detail}")
-    return parse_symbol_ports_output(raw)
+    try:
+        return parse_symbol_ports_output(raw)
+    except _SymbolReadFailure as exc:
+        raise RuntimeError(
+            f"read_symbol_ports failed for {lib}/{cell}: {exc.detail}"
+        ) from exc
+    except ValueError as exc:
+        raise RuntimeError(
+            f"read_symbol_ports response error for {lib}/{cell}: {exc}"
+        ) from exc
+
+
+def _symbol_read_failure_detail(parsed: Any, *, output: str) -> str | None:
+    if not isinstance(parsed, list) or not parsed or parsed[0] != "readFailed":
+        return None
+    if len(parsed) != 3:
+        raise ValueError(f"malformed symbol read failure output: {output}")
+
+    body_failure = parsed[1]
+    close_failures = parsed[2]
+    if body_failure is not None and not isinstance(body_failure, str):
+        raise ValueError(f"malformed symbol read failure output: {output}")
+    if close_failures is None:
+        close_failures = []
+    if not isinstance(close_failures, list) or any(
+        not isinstance(item, str) for item in close_failures
+    ):
+        raise ValueError(f"malformed symbol read failure output: {output}")
+
+    details: list[str] = []
+    if body_failure is not None:
+        details.append(body_failure)
+    if close_failures:
+        details.append("cleanup failed: " + ", ".join(close_failures))
+    return "; ".join(details) or "unknown failure"
 
 
 def _string_value(value: Any) -> str:
@@ -200,7 +224,9 @@ def _raise_for_symbol_read_error(
     cell: str,
 ) -> None:
     if errors:
-        raise RuntimeError(f"read_symbol_ports SKILL error: {errors[0]}")
+        raise RuntimeError(
+            f"read_symbol_ports SKILL error for {lib}/{cell}: {errors[0]}"
+        )
 
     status_value = getattr(status, "value", status)
     if status_value is not None and str(status_value).lower() not in {"success", "ok"}:
