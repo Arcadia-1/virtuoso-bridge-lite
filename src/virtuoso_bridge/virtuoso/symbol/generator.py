@@ -9,7 +9,10 @@ from typing import Any, Literal, cast
 
 from virtuoso_bridge.virtuoso.ops import escape_skill_string
 from virtuoso_bridge.virtuoso.response import response_fields
-from virtuoso_bridge.virtuoso.skill_output import parse_sexpr
+from virtuoso_bridge.virtuoso.skill_output import (
+    is_single_complete_skill_list,
+    parse_sexpr,
+)
 
 SymbolPinSort = Literal["alphanumeric", "geometric"]
 SymbolGenerationAction = Literal["created", "replaced"]
@@ -328,7 +331,12 @@ def _require_generation_success(response: Any, *, lib: str, cell: str) -> str:
 def _parse_generation_output(
     output: str,
 ) -> tuple[SymbolGenerationAction, dict[str, tuple[str, int]], tuple[str, ...]]:
-    parsed = parse_sexpr(output)
+    text = (output or "").strip()
+    if not is_single_complete_skill_list(text):
+        raise RuntimeError(
+            "symbol generation output must be a single complete SKILL list"
+        )
+    parsed = parse_sexpr(text)
     if isinstance(parsed, list) and len(parsed) >= 3 and parsed[0] == "failed":
         body_failure = parsed[1]
         cleanup_failures = parsed[2]

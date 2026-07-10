@@ -95,6 +95,35 @@ def parse_sexpr(tok: str):
     return tok
 
 
+def is_single_complete_skill_list(raw: str) -> bool:
+    """Return whether text is exactly one balanced top-level SKILL list."""
+    text = (raw or "").strip()
+    if not text.startswith("("):
+        return False
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for index, character in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth < 0 or (depth == 0 and index != len(text) - 1):
+                return False
+    return depth == 0 and not in_string
+
+
 def _scan_string(text: str, start: int) -> int:
     i = start + 1
     while i < len(text):

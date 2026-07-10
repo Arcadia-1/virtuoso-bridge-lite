@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 
 import pytest
 
@@ -513,6 +515,43 @@ def test_generate_from_schematic_rejects_non_list_terminal_payload() -> None:
         SymbolOps(client).generate_from_schematic("demoLib", "nand2")
 
     assert client.calls == 1
+
+
+def test_generate_from_schematic_rejects_trailing_protocol_data_without_hanging() -> None:
+    code = """
+import sys
+sys.path.insert(0, "src")
+
+from virtuoso_bridge.models import ExecutionStatus, VirtuosoResult
+from virtuoso_bridge.virtuoso.symbol import SymbolOps
+
+class Client:
+    def execute_skill(self, skill: str, *, timeout: int) -> VirtuosoResult:
+        return VirtuosoResult(
+            status=ExecutionStatus.SUCCESS,
+            output='("generated" "created" (("A" "input" 1)) ("A")) ("tail")',
+        )
+
+SymbolOps(Client()).generate_from_schematic("demoLib", "nand2")
+"""
+
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("malformed generation response must not hang")
+
+    assert completed.returncode != 0
+    assert (
+        "symbol generation response error for demoLib/nand2: "
+        "symbol generation output must be a single complete SKILL list"
+        in completed.stderr
+    )
 
 
 @pytest.mark.parametrize(
