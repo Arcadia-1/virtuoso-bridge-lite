@@ -30,7 +30,10 @@ def test_generate_from_schematic_returns_verified_created_symbol() -> None:
             if "schSchemToPinList" in skill:
                 return VirtuosoResult(
                     status=ExecutionStatus.SUCCESS,
-                    output='("generated" "created" (("A" "input" 1) ("Y" "output" 1)))',
+                    output=(
+                        '("generated" "created" '
+                        '(("A" "input" 1) ("Y" "output" 1)) ("A" "Y"))'
+                    ),
                 )
             return VirtuosoResult(
                 status=ExecutionStatus.SUCCESS,
@@ -58,9 +61,8 @@ def test_generate_from_schematic_returns_verified_created_symbol() -> None:
     assert result.action == "created"
     assert result.terminal_names == ("A", "Y")
     assert result.term_order == ("A", "Y")
-    assert len(client.calls) == 2
+    assert len(client.calls) == 1
     assert client.calls[0][1] == 17
-    assert client.calls[1][1] == 17
 
 
 def test_generate_from_schematic_rejects_same_source_and_target_view() -> None:
@@ -93,8 +95,14 @@ def test_symbol_generation_skill_escapes_names_and_restores_pin_sort() -> None:
     assert skill.index("unwindProtect(") < skill.index('schSetEnv("ssgSortPins" "geometric")')
     assert skill.index('schSetEnv("ssgSortPins" "geometric")') < skill.index("schSchemToPinList")
     assert skill.index("schSchemToPinList") < skill.index('schSetEnv("ssgSortPins" vbOldSort)')
+    assert skill.index('schSetEnv("ssgSortPins" vbOldSort)') < skill.index(
+        "dbCopyCellView(vbTempCv"
+    )
     assert skill.index('schSetEnv("ssgSortPins" vbOldSort)') < skill.index("when(vbSourceCv")
-    assert 'list("cleanupFailed" "temporary symbol cleanup failed")' in skill
+    assert (
+        'list("failed" if(vbBodyResult nil vbBodyFailure) reverse(vbCleanupFailures))'
+        in skill
+    )
 
     temp_match = re.search(r'schPinListToSymbol\([^)]*"(__vb_symbol_[0-9a-f]+)" vbPinList\)', skill)
     assert temp_match is not None
@@ -103,7 +111,7 @@ def test_symbol_generation_skill_escapes_names_and_restores_pin_sort() -> None:
     assert f'ddGetObj("demo\\"\\\\Lib" "nand\\"\\\\2" "{temp_view}")' in skill
     assert (
         'dbCopyCellView(vbTempCv "demo\\"\\\\Lib" "nand\\"\\\\2" '
-        '"sym\\"\\\\bol" nil nil vbReplacing)'
+        '"sym\\"\\\\bol" nil nil nil)'
     ) in skill
 
 
@@ -134,16 +142,118 @@ def test_symbol_generation_skill_allows_verified_temporary_copy_when_overwriting
 
     assert 'when(vbReplacing && !t error("target symbol exists"))' in skill
     assert 'error("generated symbol terminals mismatch")' in skill
-    assert 'dbCopyCellView(vbTempCv "demoLib" "nand2" "symbol" nil nil vbReplacing)' in skill
-    assert "dbClose(vbTargetCv) vbTargetCv = nil" in skill
-    assert 'ddDeleteObj(vbTargetObj)' not in skill
+    assert 'dbCopyCellView(vbTempCv "demoLib" "nand2" "symbol" nil nil t)' in skill
+    assert 'unless(dbClose(vbTargetCv) error("installed symbol close failed"))' in skill
+    assert 'dbFindOpenCellViewByName("demoLib" "nand2" "symbol")' in skill
 
 
-def test_symbol_generation_skill_returns_cleanup_status_inside_let() -> None:
+def test_symbol_generation_skill_rolls_back_failed_overwrite_from_backup() -> None:
+    skill = symbol_generate_from_schematic_skill("demoLib", "nand2", overwrite=True)
+
+    backup_match = re.search(r'"(__vb_symbol_backup_[0-9a-f]+)"', skill)
+    assert backup_match is not None
+    backup_view = backup_match.group(1)
+    open_guard = 'error("target symbol is open")'
+    backup_copy = (
+        f'dbCopyCellView(vbBackupSourceCv "demoLib" "nand2" "{backup_view}" nil nil nil)'
+    )
+    target_copy = 'dbCopyCellView(vbTempCv "demoLib" "nand2" "symbol" nil nil t)'
+    final_order = "vbFinalOrder = schGetPinOrder(vbTargetCv)"
+    rollback_copy = 'dbCopyCellView(vbBackupCv "demoLib" "nand2" "symbol" nil nil t)'
+
+    assert 'dbFindOpenCellViewByName("demoLib" "nand2" "symbol")' in skill
+    assert open_guard in skill
+    assert backup_copy in skill
+    assert target_copy in skill
+    assert final_order in skill
+    assert rollback_copy in skill
+    assert "target symbol rollback failed" in skill
+    assert skill.index(open_guard) < skill.index(backup_copy) < skill.index(target_copy)
+    assert skill.index(target_copy) < skill.index(final_order) < skill.index("vbCommitOk = t")
+
+
+def test_generate_from_schematic_does_not_depend_on_post_commit_readback() -> None:
+    class Client:
+        calls = 0
+
+        def execute_skill(self, skill: str, *, timeout: int) -> VirtuosoResult:
+            self.calls += 1
+            if self.calls > 1:
+                raise AssertionError("committed symbol must be verified in the generation call")
+            return VirtuosoResult(
+                status=ExecutionStatus.SUCCESS,
+                output=(
+                    '("generated" "replaced" '
+                    '(("A" "input" 1) ("Y" "output" 1)) ("A" "Y"))'
+                ),
+            )
+
+    client = Client()
+
+    result = SymbolOps(client).generate_from_schematic(
+        "demoLib",
+        "nand2",
+        overwrite=True,
+    )
+
+    assert result.action == "replaced"
+    assert result.terminal_names == ("A", "Y")
+    assert result.term_order == ("A", "Y")
+    assert client.calls == 1
+
+
+def test_symbol_generation_skill_preserves_effective_source_pin_order() -> None:
     skill = symbol_generate_from_schematic_skill("demoLib", "nand2")
 
-    assert "vbCleanupFailed = t))) ) if(vbCleanupFailed" in skill
-    assert "vbCleanupFailed = t))) )) if(vbCleanupFailed" not in skill
+    source_order = "vbExpectedOrder = schGetPinOrder(vbSourceCv)"
+    temp_order = "vbActualOrder = schGetPinOrder(vbTempCv)"
+    order_check = 'unless(equal(vbExpectedOrder vbActualOrder) error("generated symbol pin order mismatch"))'
+    target_copy = 'dbCopyCellView(vbTempCv "demoLib" "nand2" "symbol"'
+
+    assert source_order in skill
+    assert temp_order in skill
+    assert order_check in skill
+    assert 'unless(dbClose(vbSourceCv) error("source schematic close failed"))' in skill
+    assert skill.index(source_order) < skill.index("dbClose(vbSourceCv)")
+    assert skill.index(temp_order) < skill.index(order_check) < skill.index(target_copy)
+    assert 'list("generated" vbAction vbFinalTerms vbFinalOrder)' in skill
+
+
+def test_symbol_generation_skill_captures_body_failure_before_cleanup_reporting() -> None:
+    skill = symbol_generate_from_schematic_skill("demoLib", "nand2")
+
+    body_attempt = "vbBodyAttempt = errset(progn("
+    failure_capture = 'vbBodyFailure = sprintf(nil "%L" errset.errset)'
+    cleanup_start = "progn(when(vbSourceCv"
+
+    assert "vbBodyResult = unwindProtect(progn(" in skill
+    assert body_attempt in skill
+    assert 'vbBodyFailure = "symbol generation failed"' in skill
+    assert failure_capture in skill
+    assert skill.index(body_attempt) < skill.index(failure_capture) < skill.index(cleanup_start)
+    assert (
+        'vbCleanupFailures = cons("temporary symbol cleanup failed" vbCleanupFailures)'
+        in skill
+    )
+    assert (
+        'list("failed" if(vbBodyResult nil vbBodyFailure) reverse(vbCleanupFailures))'
+        in skill
+    )
+
+
+def test_symbol_generation_skill_reports_pin_sort_restore_failure() -> None:
+    skill = symbol_generate_from_schematic_skill(
+        "demoLib",
+        "nand2",
+        sort_pins="geometric",
+    )
+
+    assert 'vbCleanup = errset(schSetEnv("ssgSortPins" vbOldSort) nil)' in skill
+    assert (
+        'vbCleanupFailures = cons("failed to restore ssgSortPins" vbCleanupFailures)'
+        in skill
+    )
+    assert 'warn("failed to restore ssgSortPins")' not in skill
 
 
 def test_generate_from_schematic_reports_replaced_custom_view() -> None:
@@ -158,7 +268,7 @@ def test_generate_from_schematic_reports_replaced_custom_view() -> None:
             if "schSchemToPinList" in skill:
                 return VirtuosoResult(
                     status=ExecutionStatus.SUCCESS,
-                    output='("generated" "replaced" (("A" "input" 1)))',
+                    output='("generated" "replaced" (("A" "input" 1)) ("A"))',
                 )
             return VirtuosoResult(
                 status=ExecutionStatus.SUCCESS,
@@ -182,7 +292,10 @@ def test_generate_from_schematic_reports_replaced_custom_view() -> None:
     assert result.schematic_view == "schematic_alt"
     assert result.symbol_view == "symbol_alt"
     assert 'schSchemToPinList("demoLib" "nand2" "schematic_alt")' in client.skills[0]
-    assert 'dbOpenCellViewByType("demoLib" "nand2" "symbol_alt" "schematicSymbol" "r")' in client.skills[1]
+    assert (
+        'dbOpenCellViewByType("demoLib" "nand2" "symbol_alt" "schematicSymbol" "r")'
+        in client.skills[0]
+    )
 
 
 @pytest.mark.parametrize(
@@ -203,42 +316,45 @@ def test_generate_from_schematic_raises_for_skill_failure(error: str) -> None:
         SymbolOps(Client()).generate_from_schematic("demoLib", "nand2")
 
 
-def test_generate_from_schematic_rejects_terminal_readback_mismatch() -> None:
-    class Client:
-        def execute_skill(self, skill: str, *, timeout: int) -> VirtuosoResult:
-            if "schSchemToPinList" in skill:
-                return VirtuosoResult(
-                    status=ExecutionStatus.SUCCESS,
-                    output='("generated" "created" (("A" "input" 1)))',
-                )
-            return VirtuosoResult(
-                status=ExecutionStatus.SUCCESS,
-                output='(("term" "B" "input" 1 nil) ("termOrder" ("B")))',
-            )
+def test_symbol_generation_skill_validates_installed_terminal_readback() -> None:
+    skill = symbol_generate_from_schematic_skill("demoLib", "nand2")
 
-    with pytest.raises(RuntimeError, match="generated symbol readback mismatch"):
-        SymbolOps(Client()).generate_from_schematic("demoLib", "nand2")
+    target_copy = 'dbCopyCellView(vbTempCv "demoLib" "nand2" "symbol"'
+    final_terms = "vbFinalTerms = mapcar("
+    terminal_check = 'error("installed symbol terminals mismatch")'
+
+    assert target_copy in skill
+    assert final_terms in skill
+    assert terminal_check in skill
+    assert skill.index(target_copy) < skill.index(final_terms) < skill.index(terminal_check)
 
 
 def test_generate_from_schematic_rejects_term_order_mismatch() -> None:
     class Client:
         def execute_skill(self, skill: str, *, timeout: int) -> VirtuosoResult:
-            if "schSchemToPinList" in skill:
-                return VirtuosoResult(
-                    status=ExecutionStatus.SUCCESS,
-                    output='("generated" "created" (("A" "input" 1) ("Y" "output" 1)))',
-                )
             return VirtuosoResult(
                 status=ExecutionStatus.SUCCESS,
                 output=(
-                    '(("term" "A" "input" 1 nil) '
-                    '("term" "Y" "output" 1 nil) '
-                    '("pinOrder" ("A")) ("termOrder" ("A" "Y")))'
+                    '("generated" "created" '
+                    '(("A" "input" 1) ("Y" "output" 1)) ("A"))'
                 ),
             )
 
     with pytest.raises(RuntimeError, match="generated symbol term order mismatch"):
         SymbolOps(Client()).generate_from_schematic("demoLib", "nand2")
+
+
+def test_symbol_generation_skill_rejects_reordered_installed_pin_order() -> None:
+    skill = symbol_generate_from_schematic_skill("demoLib", "nand2")
+
+    final_order = "vbFinalOrder = schGetPinOrder(vbTargetCv)"
+    order_check = 'unless(equal(vbExpectedOrder vbFinalOrder) '
+    order_error = 'error("installed symbol pin order mismatch"))'
+
+    assert final_order in skill
+    assert order_check in skill
+    assert order_error in skill
+    assert skill.index(final_order) < skill.index(order_check) < skill.index(order_error)
 
 
 def test_generate_from_schematic_uses_sch_get_pin_order() -> None:
@@ -247,7 +363,10 @@ def test_generate_from_schematic_uses_sch_get_pin_order() -> None:
             if "schSchemToPinList" in skill:
                 return VirtuosoResult(
                     status=ExecutionStatus.SUCCESS,
-                    output='("generated" "created" (("A" "input" 1) ("Y" "output" 1)))',
+                    output=(
+                        '("generated" "created" '
+                        '(("A" "input" 1) ("Y" "output" 1)) ("A" "Y"))'
+                    ),
                 )
             return VirtuosoResult(
                 status=ExecutionStatus.SUCCESS,
@@ -273,7 +392,7 @@ def test_generate_from_schematic_reports_temporary_view_cleanup_failure() -> Non
             self.calls += 1
             return VirtuosoResult(
                 status=ExecutionStatus.SUCCESS,
-                output='("cleanupFailed" "temporary symbol cleanup failed")',
+                output='("failed" nil ("temporary symbol cleanup failed"))',
             )
 
     client = Client()
@@ -285,3 +404,101 @@ def test_generate_from_schematic_reports_temporary_view_cleanup_failure() -> Non
         SymbolOps(client).generate_from_schematic("demoLib", "nand2")
 
     assert client.calls == 1
+
+
+def test_generate_from_schematic_combines_body_and_cleanup_failures() -> None:
+    class Client:
+        calls = 0
+
+        def execute_skill(self, skill: str, *, timeout: int) -> VirtuosoResult:
+            self.calls += 1
+            return VirtuosoResult(
+                status=ExecutionStatus.SUCCESS,
+                output=(
+                    '("failed" "symbol generation failed" '
+                    '("temporary symbol cleanup failed"))'
+                ),
+            )
+
+    client = Client()
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "symbol generation failed: symbol generation failed; "
+            "cleanup failed: temporary symbol cleanup failed"
+        ),
+    ):
+        SymbolOps(client).generate_from_schematic("demoLib", "nand2")
+
+    assert client.calls == 1
+
+
+def test_generate_from_schematic_rejects_non_list_terminal_payload() -> None:
+    class Client:
+        calls = 0
+
+        def execute_skill(self, skill: str, *, timeout: int) -> VirtuosoResult:
+            self.calls += 1
+            if self.calls == 1:
+                return VirtuosoResult(
+                    status=ExecutionStatus.SUCCESS,
+                    output='("generated" "created" "not-a-terminal-list" nil)',
+                )
+            raise AssertionError("malformed generation output must fail before readback")
+
+    client = Client()
+
+    with pytest.raises(RuntimeError, match="unexpected final terminal payload"):
+        SymbolOps(client).generate_from_schematic("demoLib", "nand2")
+
+    assert client.calls == 1
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        '("generated" "created" (("A" "input" 1)))',
+        '("generated" "created" (("A" "input" 1)) "not-a-pin-order")',
+    ],
+)
+def test_generate_from_schematic_rejects_missing_or_scalar_pin_order(output: str) -> None:
+    class Client:
+        calls = 0
+
+        def execute_skill(self, skill: str, *, timeout: int) -> VirtuosoResult:
+            self.calls += 1
+            if self.calls == 1:
+                return VirtuosoResult(status=ExecutionStatus.SUCCESS, output=output)
+            raise AssertionError("malformed generation output must fail before readback")
+
+    client = Client()
+
+    with pytest.raises(RuntimeError, match="unexpected final pin order payload"):
+        SymbolOps(client).generate_from_schematic("demoLib", "nand2")
+
+    assert client.calls == 1
+
+
+def test_generate_from_schematic_accepts_nil_terminal_payload() -> None:
+    class Client:
+        calls = 0
+
+        def execute_skill(self, skill: str, *, timeout: int) -> VirtuosoResult:
+            self.calls += 1
+            if self.calls == 1:
+                return VirtuosoResult(
+                    status=ExecutionStatus.SUCCESS,
+                    output='("generated" "created" nil nil)',
+                )
+            return VirtuosoResult(
+                status=ExecutionStatus.SUCCESS,
+                output=(
+                    '(("pinOrder" nil) ("portOrder" nil) ("termOrder" nil))'
+                ),
+            )
+
+    result = SymbolOps(Client()).generate_from_schematic("demoLib", "empty")
+
+    assert result.terminal_names == ()
+    assert result.term_order == ()

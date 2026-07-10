@@ -103,9 +103,10 @@ result = client.symbol.generate_from_schematic(
 print(result.terminal_names, result.term_order)
 ```
 The helper wraps `schSchemToPinList` + `schPinListToSymbol`, restores the
-session's prior pin-sort setting, and verifies the generated terminals through
-symbol readback. Set `overwrite=True` to replace an existing symbol through a
-verified temporary view instead of a GUI replace dialog.
+session's prior pin-sort setting, and verifies the generated terminals and
+effective pin order before returning. Set `overwrite=True` to replace a closed
+existing symbol through a backed-up, rollback-capable transaction instead of a
+GUI replace dialog.
 
 Key points:
 - **Auto-wires** everything — instances, nets, pins all connected automatically
