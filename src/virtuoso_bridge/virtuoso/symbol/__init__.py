@@ -5,6 +5,13 @@ from __future__ import annotations
 from typing import Any, TYPE_CHECKING
 
 from virtuoso_bridge.virtuoso.symbol.editor import SymbolEditor
+from virtuoso_bridge.virtuoso.symbol.generator import (
+    SymbolGenerationAction,
+    SymbolGenerationResult,
+    SymbolPinSort,
+    generate_symbol_from_schematic,
+    symbol_generate_from_schematic_skill,
+)
 from virtuoso_bridge.virtuoso.symbol.ops import (
     symbol_check,
     symbol_create_ellipse,
@@ -51,6 +58,29 @@ class SymbolOps:
             timeout=timeout,
         )
 
+    def generate_from_schematic(
+        self,
+        lib: str,
+        cell: str,
+        *,
+        schematic_view: str = "schematic",
+        symbol_view: str = "symbol",
+        sort_pins: SymbolPinSort | None = None,
+        overwrite: bool = False,
+        timeout: int = 60,
+    ) -> SymbolGenerationResult:
+        """Generate and verify a symbol from a schematic cellview."""
+        return generate_symbol_from_schematic(
+            self._owner,
+            lib,
+            cell,
+            schematic_view=schematic_view,
+            symbol_view=symbol_view,
+            sort_pins=sort_pins,
+            overwrite=overwrite,
+            timeout=timeout,
+        )
+
     def read_ports(
         self,
         lib: str,
@@ -59,7 +89,7 @@ class SymbolOps:
         view_type: str = "schematicSymbol",
         timeout: int = 30,
     ) -> dict[str, Any]:
-        """Read symbol terminals, labels, and term order."""
+        """Read symbol terminals, labels, port order, and term order."""
         return read_symbol_ports(
             self._owner,
             lib,
@@ -73,6 +103,11 @@ class SymbolOps:
 __all__ = [
     "SymbolOps",
     "SymbolEditor",
+    "SymbolGenerationAction",
+    "SymbolGenerationResult",
+    "SymbolPinSort",
+    "generate_symbol_from_schematic",
+    "symbol_generate_from_schematic_skill",
     "symbol_create_line",
     "symbol_create_rect",
     "symbol_create_polygon",

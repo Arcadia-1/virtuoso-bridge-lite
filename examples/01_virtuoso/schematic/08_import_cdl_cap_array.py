@@ -207,7 +207,7 @@ cd {work_dir}
         return 1
 
     # 3. Generate symbol for cap_unit
-    client.execute_skill(f'schPinListToSymbol("{lib}" "cap_unit" "symbol" schSchemToPinList("{lib}" "cap_unit" "schematic"))')
+    client.symbol.generate_from_schematic(lib, "cap_unit", overwrite=True)
     r = client.execute_skill(f'ddGetObj("{lib}" "cap_unit")~>views~>name')
     print(f"[symbol] cap_unit: {r.output}")
 

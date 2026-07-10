@@ -15,7 +15,7 @@ def symbol_read_ports_skill(
     view: str = "symbol",
     view_type: str = "schematicSymbol",
 ) -> str:
-    """Build SKILL to report symbol terminals, labels, and term order."""
+    """Build SKILL to report terminals, labels, port order, and term order."""
     open_expr = open_cell_view(lib, cell, view=view, view_type=view_type, mode="r")
     return (
         "let((cv term pin fig label bbox xy result) "
@@ -40,6 +40,7 @@ def symbol_read_ports_skill(
         "when(label~>xy xy = list(xCoord(label~>xy) yCoord(label~>xy))) "
         'result = cons(list("label" if(label~>theLabel label~>theLabel "") '
         'if(label~>labelType label~>labelType "") xy) result))) '
+        'result = cons(list("portOrder" cv~>portOrder) result) '
         'result = cons(list("termOrder" cv~>termOrder) result) '
         "dbClose(cv) "
         "reverse(result))"
@@ -55,7 +56,12 @@ def parse_symbol_ports_output(output: str) -> dict[str, Any]:
 
 
 def _parse_symbol_ports_records(output: str) -> dict[str, Any]:
-    result: dict[str, Any] = {"terms": [], "labels": [], "termOrder": []}
+    result: dict[str, Any] = {
+        "terms": [],
+        "labels": [],
+        "portOrder": [],
+        "termOrder": [],
+    }
     parsed = parse_sexpr(output)
     if not isinstance(parsed, list):
         return result
@@ -81,9 +87,9 @@ def _parse_symbol_ports_records(output: str) -> dict[str, Any]:
                     "xy": _point_value(record[3]),
                 }
             )
-        elif kind == "termOrder" and len(record) >= 2:
+        elif kind in {"portOrder", "termOrder"} and len(record) >= 2:
             order = record[1] if isinstance(record[1], list) else []
-            result["termOrder"] = [_string_value(item) for item in order]
+            result[kind] = [_string_value(item) for item in order]
     return result
 
 
@@ -96,7 +102,7 @@ def read_symbol_ports(
     view_type: str = "schematicSymbol",
     timeout: int = 30,
 ) -> dict[str, Any]:
-    """Read symbol terminals, labels, and term order."""
+    """Read symbol terminals, labels, port order, and term order."""
     response = client.execute_skill(
         symbol_read_ports_skill(lib, cell, view=view, view_type=view_type),
         timeout=timeout,

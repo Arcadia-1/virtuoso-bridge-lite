@@ -7,16 +7,14 @@ Two-step flow:
      pins (IN, OUT, GND).  The cell is auto-timestamped so reruns never
      overwrite earlier results.
 
-  2. Generate a symbol view via the Text-to-Symbol Generator (TSG) primitives::
+  2. Generate a symbol view through ``client.symbol.generate_from_schematic()``,
+     which wraps the Text-to-Symbol Generator (TSG) primitives::
 
         schSchemToPinList(lib, cell, "schematic")    → pin-list struct
         schPinListToSymbol(lib, cell, "symbol", pl)  → writes the symbol view
 
-     We deliberately use the low-level pair instead of the higher-level
-     ``schViewToView`` because the latter relies on ``hiRegTimer`` to dismiss
-     the "Replace existing symbol?" and CDF dialogs that can pop up — fragile
-     in headless automation.  With the low-level path no dialog appears
-     because we always start from a fresh, symbol-less cell.
+     The helper uses a temporary symbol view, verifies its terminals, and then
+     copies it into place without relying on GUI dialog dismissal.
 
 Pin order on the generated symbol comes from the schematic env var
 ``ssgSortPins``:
@@ -72,20 +70,11 @@ def _create_schematic(client: VirtuosoClient, lib: str, cell: str) -> None:
 
 def _generate_symbol(client: VirtuosoClient, lib: str, cell: str) -> None:
     """Run TSG: schematic → pin list → symbol view."""
-    # Pin order on the symbol — geometric preserves where pins live in the
-    # schematic.  Default would be alphanumeric (GND, IN, OUT).
-    client.execute_skill('schSetEnv("ssgSortPins" "geometric")')
-
-    # Two-call TSG pipeline.  The intermediate pinList is a SKILL struct
-    # that we don't need to inspect from Python — keep it inside one
-    # ``let`` so we don't pollute the global SKILL namespace.
-    r = client.execute_skill(
-        'let((pl) '
-        f'pl = schSchemToPinList("{lib}" "{cell}" "schematic") '
-        f'schPinListToSymbol("{lib}" "{cell}" "symbol" pl))'
+    client.symbol.generate_from_schematic(
+        lib,
+        cell,
+        sort_pins="geometric",
     )
-    if r.errors:
-        raise RuntimeError(f"TSG failed: {r.errors[0]}")
 
 
 def _verify_views(client: VirtuosoClient, lib: str, cell: str) -> list[str]:

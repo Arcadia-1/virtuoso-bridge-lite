@@ -94,11 +94,18 @@ devselect := inductor ind
 
 **Symbol generation** after spiceIn import:
 ```python
-# IMPORTANT: must be a single-line SKILL string — multi-line f-strings
-# with newlines cause SKILL parsing failure via bridge
-client.execute_skill(f'schPinListToSymbol("{lib}" "{cell}" "symbol" schSchemToPinList("{lib}" "{cell}" "schematic"))')
+result = client.symbol.generate_from_schematic(
+    lib,
+    cell,
+    sort_pins="alphanumeric",
+    overwrite=False,
+)
+print(result.terminal_names, result.term_order)
 ```
-The function works for all cells. Never manually create symbols. Verify with `ddGetObj(lib cell)~>views~>name`.
+The helper wraps `schSchemToPinList` + `schPinListToSymbol`, restores the
+session's prior pin-sort setting, and verifies the generated terminals through
+symbol readback. Set `overwrite=True` to replace an existing symbol through a
+verified temporary view instead of a GUI replace dialog.
 
 Key points:
 - **Auto-wires** everything — instances, nets, pins all connected automatically

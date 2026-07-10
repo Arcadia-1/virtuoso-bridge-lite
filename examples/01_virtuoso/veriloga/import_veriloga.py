@@ -9,9 +9,10 @@ exposes as a single high-level helper today (this example is the helper):
    Cadence's symbol generator works off the schematic's pin list, not
    off the .va text — so we need a schematic first, even though it
    never gets simulated.
-2. **Symbol** auto-generated from the schematic via
-   ``schSchemToPinList`` + ``schPinListToSymbol``. Geometric pin sort
-   so the symbol layout follows the schematic's pin placement.
+2. **Symbol** auto-generated through
+   ``client.symbol.generate_from_schematic()``. The helper wraps
+   ``schSchemToPinList`` + ``schPinListToSymbol``; geometric pin sort makes
+   the symbol layout follow the schematic's pin placement.
    (Do **not** use ``schPinListToSymbolGen`` — it builds an
    empty-terminal symbol that the veriloga generator chokes on.)
 3. **Veriloga skeleton** generated from the symbol via
@@ -99,14 +100,11 @@ def _build_placeholder_schematic(
 
 
 def _generate_symbol(client: VirtuosoClient, lib: str, cell: str) -> None:
-    client.execute_skill('schSetEnv("ssgSortPins" "geometric")')
-    r = client.execute_skill(
-        'let((pl) '
-        f'pl = schSchemToPinList("{lib}" "{cell}" "schematic") '
-        f'schPinListToSymbol("{lib}" "{cell}" "symbol" pl))'
+    client.symbol.generate_from_schematic(
+        lib,
+        cell,
+        sort_pins="geometric",
     )
-    if r.errors:
-        raise RuntimeError(f"symbol generation failed: {r.errors[0]}")
 
 
 def _generate_veriloga_skeleton(
@@ -191,7 +189,7 @@ def main() -> int:
         args.inputs, args.outputs, args.inouts,
     )
 
-    print(f"[2/5] symbol via schPinListToSymbol")
+    print("[2/5] symbol via client.symbol.generate_from_schematic")
     _generate_symbol(client, args.lib, args.cell)
 
     print(f"[3/5] veriloga skeleton via schViewToView")

@@ -22,7 +22,9 @@ def test_symbol_read_ports_skill_opens_symbol_and_reports_terms_labels_and_order
     assert "list(xCoord(cadr(fig~>bBox)) yCoord(cadr(fig~>bBox))))" in skill
     assert 'result = cons(list("label"' in skill
     assert "xy = list(xCoord(label~>xy) yCoord(label~>xy))" in skill
+    assert 'result = cons(list("portOrder" cv~>portOrder) result)' in skill
     assert 'result = cons(list("termOrder" cv~>termOrder) result)' in skill
+    assert "cv~>terminals~>name" not in skill
     assert "dbClose(cv)" in skill
     assert skill.endswith("reverse(result))")
 
@@ -38,7 +40,8 @@ def test_parse_symbol_ports_output_preserves_label_delimiters_from_sexpr() -> No
     parsed = parse_symbol_ports_output(
         r'(("label" "foo\tbar\nbaz\"\\end" "normalLabel" (0.2 0.0))'
         r' ("term" "A" "input" 1 ((0 0) (0.1 0.1)))'
-        r' ("termOrder" ("A")))'
+        r' ("portOrder" ("Y" "A"))'
+        r' ("termOrder" ("A" "Y")))'
     )
 
     assert parsed["labels"] == [
@@ -47,7 +50,8 @@ def test_parse_symbol_ports_output_preserves_label_delimiters_from_sexpr() -> No
     assert parsed["terms"] == [
         {"name": "A", "direction": "input", "numBits": 1, "bbox": [[0.0, 0.0], [0.1, 0.1]]}
     ]
-    assert parsed["termOrder"] == ["A"]
+    assert parsed["portOrder"] == ["Y", "A"]
+    assert parsed["termOrder"] == ["A", "Y"]
 
 
 def test_read_symbol_ports_executes_skill() -> None:

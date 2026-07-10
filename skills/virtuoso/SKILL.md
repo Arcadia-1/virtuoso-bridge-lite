@@ -47,6 +47,7 @@ Always use the highest level that works. Drop to a lower level only when needed.
 | Domain | What it does | Python package | API docs |
 |--------|-------------|----------------|----------|
 | **Schematic** | Create/edit schematics, wire instances, add pins | `client.schematic.*` | `references/schematic-python-api.md`, `references/schematic-skill-api.md` |
+| **Symbol** | Generate, edit, and read symbol views | `client.symbol.*` | `references/symbol-python-api.md` |
 | **Layout** | Create/edit layout, add shapes/vias/instances | `client.layout.*` | `references/layout-python-api.md`, `references/layout-skill-api.md` |
 | **Maestro** | Read/write ADE Assembler config, run simulations | `virtuoso_bridge.virtuoso.maestro` | `references/maestro-python-api.md`, `references/maestro-skill-api.md` |
 | **Netlist (si)** | Batch netlist generation without Maestro | `simInitEnvWithArgs` + `si` CLI | See "Batch Netlist (si)" section below |

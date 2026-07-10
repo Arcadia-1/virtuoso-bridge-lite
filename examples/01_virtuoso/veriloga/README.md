@@ -17,9 +17,9 @@ The IC618-supported way is mechanical but multi-step. There is no
 1. **Placeholder schematic** with floating pins matching the .va's
    ports.  The symbol generator works off the schematic pin list, not
    off .va text — schematic must exist first.
-2. **Symbol** generated from the schematic via `schSchemToPinList` +
-   `schPinListToSymbol`.  Geometric pin sort ⇒ symbol layout follows
-   schematic placement.
+2. **Symbol** generated through `client.symbol.generate_from_schematic()`,
+   which wraps `schSchemToPinList` + `schPinListToSymbol`. Geometric pin sort
+   ⇒ symbol layout follows schematic placement.
 3. **Veriloga skeleton** generated from the symbol via
    `schViewToView ... "symbol" "veriloga" "schSymbolToPinList"
    "ahdlPinListToveriloga"`.  This drops a default
