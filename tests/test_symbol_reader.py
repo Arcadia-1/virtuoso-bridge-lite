@@ -27,8 +27,10 @@ def test_symbol_read_ports_skill_opens_symbol_and_reports_terms_labels_and_order
     assert 'result = cons(list("portOrder" cv~>portOrder) result)' in skill
     assert 'result = cons(list("termOrder" cv~>termOrder) result)' in skill
     assert "cv~>terminals~>name" not in skill
-    assert "when(cv errset(dbClose(cv) nil) cv = nil)" in skill
-    assert skill.endswith(")))")
+    assert "bodyAttempt = errset(progn(" in skill
+    assert "closeResult = errset(dbClose(cv) nil)" in skill
+    assert 'closeFailures = cons("symbol close failed" closeFailures)' in skill
+    assert 'list("readFailed" if(bodyResult nil bodyFailure) reverse(closeFailures))' in skill
 
 
 def test_parse_symbol_ports_output_rejects_legacy_tsv() -> None:
@@ -102,6 +104,27 @@ def test_read_symbol_ports_raises_on_skill_error() -> None:
             )
 
     with pytest.raises(RuntimeError, match="read_symbol_ports SKILL error: open symbol failed"):
+        read_symbol_ports(Client(), "demoLib", "missing")
+
+
+def test_read_symbol_ports_combines_body_and_close_failures() -> None:
+    class Client:
+        def execute_skill(self, skill: str, *, timeout: int):
+            return VirtuosoResult(
+                status=ExecutionStatus.SUCCESS,
+                output=(
+                    '("readFailed" "open symbol failed" '
+                    '("symbol close failed"))'
+                ),
+            )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "read_symbol_ports failed for demoLib/missing: open symbol failed; "
+            "cleanup failed: symbol close failed"
+        ),
+    ):
         read_symbol_ports(Client(), "demoLib", "missing")
 
 

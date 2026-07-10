@@ -100,7 +100,7 @@ result = client.symbol.generate_from_schematic(
     sort_pins="alphanumeric",
     overwrite=False,
 )
-print(result.terminal_names, result.term_order)
+print(result.terminal_names, result.pin_order)
 ```
 The helper wraps `schSchemToPinList` + `schPinListToSymbol`, restores the
 session's prior pin-sort setting, and verifies the generated terminals and

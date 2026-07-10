@@ -8,13 +8,24 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from virtuoso_bridge.virtuoso.ops import escape_skill_string
+from virtuoso_bridge.virtuoso.response import response_fields
 from virtuoso_bridge.virtuoso.skill_output import parse_sexpr
-from virtuoso_bridge.virtuoso.symbol.reader import _response_fields
 
 SymbolPinSort = Literal["alphanumeric", "geometric"]
 SymbolGenerationAction = Literal["created", "replaced"]
 
 _PIN_SORT_MODES = {"alphanumeric", "geometric"}
+
+
+def _cleanup_close_skill(variable: str, failure: str) -> str:
+    escaped_failure = escape_skill_string(failure)
+    return (
+        f"when({variable} "
+        f"vbCleanup = errset(dbClose({variable}) nil) "
+        "unless(vbCleanup && car(vbCleanup) "
+        f'vbCleanupFailures = cons("{escaped_failure}" vbCleanupFailures)) '
+        f"{variable} = nil) "
+    )
 
 
 @dataclass(frozen=True)
@@ -27,7 +38,7 @@ class SymbolGenerationResult:
     symbol_view: str
     action: SymbolGenerationAction
     terminal_names: tuple[str, ...]
-    term_order: tuple[str, ...]
+    pin_order: tuple[str, ...]
 
 
 def symbol_generate_from_schematic_skill(
@@ -171,13 +182,17 @@ def symbol_generate_from_schematic_skill(
         "vbBodyAttempt) "
         "progn("
         f"{sort_restore}"
-        "when(vbSourceCv errset(dbClose(vbSourceCv) nil) vbSourceCv = nil) "
-        "when(vbTargetCv errset(dbClose(vbTargetCv) nil) vbTargetCv = nil) "
-        "when(vbTempCv errset(dbClose(vbTempCv) nil) vbTempCv = nil) "
-        "when(vbBackupSourceCv errset(dbClose(vbBackupSourceCv) nil) "
-        "vbBackupSourceCv = nil) "
-        "when(vbBackupCv errset(dbClose(vbBackupCv) nil) vbBackupCv = nil) "
-        "unless(vbCommitOk "
+        f'{_cleanup_close_skill("vbSourceCv", "source schematic cleanup close failed")}'
+        f'{_cleanup_close_skill("vbTargetCv", "target symbol cleanup close failed")}'
+        f'{_cleanup_close_skill("vbTempCv", "temporary symbol cleanup close failed")}'
+        f'{_cleanup_close_skill("vbBackupSourceCv", "symbol backup source cleanup close failed")}'
+        f'{_cleanup_close_skill("vbBackupCv", "symbol backup cleanup close failed")}'
+        f'vbTempObj = ddGetObj("{escaped_lib}" "{escaped_cell}" "{escaped_temp_view}") '
+        "when(vbTempObj "
+        "vbCleanup = errset(ddDeleteObj(vbTempObj) nil) "
+        "unless(vbCleanup && car(vbCleanup) "
+        'vbCleanupFailures = cons("temporary symbol cleanup failed" vbCleanupFailures))) '
+        "when(!vbCommitOk || vbCleanupFailures "
         "when(vbInstallAttempted "
         "if(vbReplacing "
         "then if(vbBackupReady "
@@ -218,14 +233,10 @@ def symbol_generate_from_schematic_skill(
         "then vbRollbackSucceeded = t "
         "else vbCleanupFailures = cons("
         '"created symbol rollback failed" vbCleanupFailures)) '
-        "else vbRollbackSucceeded = t)))) "
-        f'vbTempObj = ddGetObj("{escaped_lib}" "{escaped_cell}" "{escaped_temp_view}") '
-        "when(vbTempObj "
-        "vbCleanup = errset(ddDeleteObj(vbTempObj) nil) "
-        "unless(vbCleanup && car(vbCleanup) "
-        'vbCleanupFailures = cons("temporary symbol cleanup failed" vbCleanupFailures)))) '
+        "else vbRollbackSucceeded = t))))) "
         "when(vbBackupReady && "
-        "(!vbInstallAttempted || vbCommitOk || vbRollbackSucceeded) "
+        "(!vbInstallAttempted || (vbCommitOk && !vbCleanupFailures) || "
+        "vbRollbackSucceeded) "
         f'vbBackupObj = ddGetObj("{escaped_lib}" "{escaped_cell}" "{escaped_backup_view}") '
         "when(vbBackupObj "
         "vbCleanup = errset(ddDeleteObj(vbBackupObj) nil) "
@@ -272,12 +283,17 @@ def generate_symbol_from_schematic(
         timeout=timeout,
     )
     output = _require_generation_success(response, lib=lib, cell=cell)
-    action, final_terms, term_order = _parse_generation_output(output)
-    terminal_names = tuple(final_terms)
-    if Counter(term_order) != Counter(terminal_names):
+    try:
+        action, final_terms, pin_order = _parse_generation_output(output)
+    except RuntimeError as exc:
         raise RuntimeError(
-            f"generated symbol term order mismatch for {lib}/{cell}: "
-            f"terminals {terminal_names}, order {term_order}"
+            f"symbol generation response error for {lib}/{cell}: {exc}"
+        ) from exc
+    terminal_names = tuple(final_terms)
+    if Counter(pin_order) != Counter(terminal_names):
+        raise RuntimeError(
+            f"generated symbol pin order mismatch for {lib}/{cell}: "
+            f"terminals {terminal_names}, order {pin_order}"
         )
     return SymbolGenerationResult(
         lib=lib,
@@ -286,7 +302,7 @@ def generate_symbol_from_schematic(
         symbol_view=symbol_view,
         action=action,
         terminal_names=terminal_names,
-        term_order=term_order,
+        pin_order=pin_order,
     )
 
 
@@ -297,7 +313,7 @@ def _validate_sort_pins(sort_pins: str | None) -> None:
 
 
 def _require_generation_success(response: Any, *, lib: str, cell: str) -> str:
-    errors, status, output = _response_fields(response)
+    errors, status, output = response_fields(response)
     if errors:
         raise RuntimeError(f"symbol generation failed for {lib}/{cell}: {errors[0]}")
     status_value = getattr(status, "value", status)
@@ -343,9 +359,20 @@ def _parse_generation_output(
         raise RuntimeError(f"unexpected final terminal payload: {raw_records}")
     expected_terms: dict[str, tuple[str, int]] = {}
     for record in records:
-        if not isinstance(record, list) or len(record) < 3:
+        if not isinstance(record, list) or len(record) != 3:
             raise RuntimeError(f"unexpected final terminal record: {record}")
-        expected_terms[str(record[0])] = (str(record[1]), int(record[2]))
+        name, direction, raw_width = record
+        if not isinstance(name, str) or not isinstance(direction, str):
+            raise RuntimeError(f"unexpected final terminal record: {record}")
+        if name in expected_terms:
+            raise RuntimeError(f"duplicate final terminal: {name}")
+        try:
+            width = int(raw_width)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"invalid final terminal width: {raw_width}") from exc
+        if width < 1:
+            raise RuntimeError(f"invalid final terminal width: {raw_width}")
+        expected_terms[name] = (direction, width)
     if len(parsed) < 4:
         raise RuntimeError("unexpected final pin order payload: missing")
     raw_order = parsed[3]

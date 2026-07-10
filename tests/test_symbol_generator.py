@@ -12,6 +12,31 @@ from virtuoso_bridge.virtuoso.symbol import (
 )
 
 
+def _matching_parenthesis(text: str, open_index: int) -> int:
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(open_index, len(text)):
+        character = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+    raise AssertionError("unbalanced generated SKILL")
+
+
 def test_symbol_ops_exposes_generate_from_schematic() -> None:
     ops = SymbolOps(object())
 
@@ -60,7 +85,7 @@ def test_generate_from_schematic_returns_verified_created_symbol() -> None:
     assert result.symbol_view == "symbol"
     assert result.action == "created"
     assert result.terminal_names == ("A", "Y")
-    assert result.term_order == ("A", "Y")
+    assert result.pin_order == ("A", "Y")
     assert len(client.calls) == 1
     assert client.calls[0][1] == 17
 
@@ -172,6 +197,21 @@ def test_symbol_generation_skill_rolls_back_failed_overwrite_from_backup() -> No
     assert skill.index(target_copy) < skill.index(final_order) < skill.index("vbCommitOk = t")
 
 
+def test_symbol_generation_skill_rolls_back_after_temporary_cleanup_failure() -> None:
+    skill = symbol_generate_from_schematic_skill("demoLib", "nand2", overwrite=True)
+
+    rollback_start = skill.index("when(!vbCommitOk || vbCleanupFailures ")
+    rollback_open = skill.index("(", rollback_start)
+    rollback_end = _matching_parenthesis(skill, rollback_open)
+    temp_cleanup = skill.rfind("vbTempObj = ddGetObj", 0, rollback_start)
+    backup_cleanup = skill.index("when(vbBackupReady &&", rollback_end)
+
+    assert temp_cleanup >= 0
+    assert temp_cleanup < rollback_start < rollback_end < backup_cleanup
+    assert "(vbCommitOk && !vbCleanupFailures)" in skill[backup_cleanup:]
+    assert _matching_parenthesis(skill, skill.index("(")) == len(skill) - 1
+
+
 def test_generate_from_schematic_does_not_depend_on_post_commit_readback() -> None:
     class Client:
         calls = 0
@@ -198,7 +238,7 @@ def test_generate_from_schematic_does_not_depend_on_post_commit_readback() -> No
 
     assert result.action == "replaced"
     assert result.terminal_names == ("A", "Y")
-    assert result.term_order == ("A", "Y")
+    assert result.pin_order == ("A", "Y")
     assert client.calls == 1
 
 
@@ -254,6 +294,26 @@ def test_symbol_generation_skill_reports_pin_sort_restore_failure() -> None:
         in skill
     )
     assert 'warn("failed to restore ssgSortPins")' not in skill
+
+
+@pytest.mark.parametrize(
+    ("variable", "failure"),
+    [
+        ("vbSourceCv", "source schematic cleanup close failed"),
+        ("vbTargetCv", "target symbol cleanup close failed"),
+        ("vbTempCv", "temporary symbol cleanup close failed"),
+        ("vbBackupSourceCv", "symbol backup source cleanup close failed"),
+        ("vbBackupCv", "symbol backup cleanup close failed"),
+    ],
+)
+def test_symbol_generation_skill_reports_cleanup_close_failure(
+    variable: str,
+    failure: str,
+) -> None:
+    skill = symbol_generate_from_schematic_skill("demoLib", "nand2", overwrite=True)
+
+    assert f"vbCleanup = errset(dbClose({variable}) nil)" in skill
+    assert f'vbCleanupFailures = cons("{failure}" vbCleanupFailures)' in skill
 
 
 def test_generate_from_schematic_reports_replaced_custom_view() -> None:
@@ -329,7 +389,7 @@ def test_symbol_generation_skill_validates_installed_terminal_readback() -> None
     assert skill.index(target_copy) < skill.index(final_terms) < skill.index(terminal_check)
 
 
-def test_generate_from_schematic_rejects_term_order_mismatch() -> None:
+def test_generate_from_schematic_rejects_pin_order_terminal_set_mismatch() -> None:
     class Client:
         def execute_skill(self, skill: str, *, timeout: int) -> VirtuosoResult:
             return VirtuosoResult(
@@ -340,7 +400,7 @@ def test_generate_from_schematic_rejects_term_order_mismatch() -> None:
                 ),
             )
 
-    with pytest.raises(RuntimeError, match="generated symbol term order mismatch"):
+    with pytest.raises(RuntimeError, match="generated symbol pin order mismatch"):
         SymbolOps(Client()).generate_from_schematic("demoLib", "nand2")
 
 
@@ -381,7 +441,7 @@ def test_generate_from_schematic_uses_sch_get_pin_order() -> None:
     result = SymbolOps(Client()).generate_from_schematic("demoLib", "nand2")
 
     assert result.terminal_names == ("A", "Y")
-    assert result.term_order == ("A", "Y")
+    assert result.pin_order == ("A", "Y")
 
 
 def test_generate_from_schematic_reports_temporary_view_cleanup_failure() -> None:
@@ -456,6 +516,35 @@ def test_generate_from_schematic_rejects_non_list_terminal_payload() -> None:
 
 
 @pytest.mark.parametrize(
+    ("output", "error"),
+    [
+        (
+            '("generated" "created" '
+            '(("A" "input" 1) ("A" "output" 1)) ("A"))',
+            "duplicate final terminal: A",
+        ),
+        (
+            '("generated" "created" (("A" "input" "wide")) ("A"))',
+            "invalid final terminal width",
+        ),
+    ],
+)
+def test_generate_from_schematic_rejects_invalid_terminal_records(
+    output: str,
+    error: str,
+) -> None:
+    class Client:
+        def execute_skill(self, skill: str, *, timeout: int) -> VirtuosoResult:
+            return VirtuosoResult(status=ExecutionStatus.SUCCESS, output=output)
+
+    with pytest.raises(
+        RuntimeError,
+        match=rf"symbol generation response error for demoLib/nand2: {error}",
+    ):
+        SymbolOps(Client()).generate_from_schematic("demoLib", "nand2")
+
+
+@pytest.mark.parametrize(
     "output",
     [
         '("generated" "created" (("A" "input" 1)))',
@@ -501,4 +590,4 @@ def test_generate_from_schematic_accepts_nil_terminal_payload() -> None:
     result = SymbolOps(Client()).generate_from_schematic("demoLib", "empty")
 
     assert result.terminal_names == ()
-    assert result.term_order == ()
+    assert result.pin_order == ()

@@ -31,14 +31,14 @@ and verifies the requested symbol view in the same SKILL transaction.
 - `sort_pins` accepts `"alphanumeric"`, `"geometric"`, or `None`. A requested
   value temporarily overrides `ssgSortPins`; the previous value is restored
   before the destination is modified. This setting controls physical pin
-  placement, not the logical order returned in `term_order`.
+  placement, not the logical order returned in `pin_order`.
 - `overwrite` defaults to `False`. When `True`, the existing target is replaced
   only after temporary-view validation succeeds. An open target is rejected;
   otherwise the helper creates a private backup and restores it if the copy or
   final validation fails.
 - `SymbolGenerationResult.action` is `"created"` or `"replaced"`.
 - `terminal_names` contains the generated terminal names.
-- `term_order` is the effective order returned by Cadence's
+- `pin_order` is the effective order returned by Cadence's
   `schGetPinOrder()`, which resolves an explicit `portOrder` or the native
   default order.
 

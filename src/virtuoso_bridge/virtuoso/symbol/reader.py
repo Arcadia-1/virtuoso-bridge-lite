@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from virtuoso_bridge.virtuoso.ops import open_cell_view
+from virtuoso_bridge.virtuoso.response import response_fields
 from virtuoso_bridge.virtuoso.skill_output import parse_sexpr
 
 
@@ -18,9 +19,11 @@ def symbol_read_ports_skill(
     """Build SKILL to report terminals, labels, port order, and term order."""
     open_expr = open_cell_view(lib, cell, view=view, view_type=view_type, mode="r")
     return (
-        "let((cv term pin fig label bbox xy result) "
-        "unwindProtect("
-        "progn("
+        "let((cv term pin fig label bbox xy result bodyAttempt bodyResult bodyFailure "
+        "closeResult closeFailures) "
+        'bodyFailure = "symbol read failed" '
+        "bodyResult = unwindProtect(progn("
+        "bodyAttempt = errset(progn("
         f"{open_expr} "
         'unless(cv error("open symbol failed")) '
         "result = nil "
@@ -45,8 +48,17 @@ def symbol_read_ports_skill(
         'result = cons(list("pinOrder" schGetPinOrder(cv)) result) '
         'result = cons(list("portOrder" cv~>portOrder) result) '
         'result = cons(list("termOrder" cv~>termOrder) result) '
-        "reverse(result)) "
-        "when(cv errset(dbClose(cv) nil) cv = nil)))"
+        "reverse(result)) nil) "
+        'unless(bodyAttempt bodyFailure = sprintf(nil "%L" errset.errset)) '
+        "bodyAttempt) "
+        "progn(when(cv "
+        "closeResult = errset(dbClose(cv) nil) "
+        "unless(closeResult && car(closeResult) "
+        'closeFailures = cons("symbol close failed" closeFailures)) '
+        "cv = nil))) "
+        "if(bodyResult && !closeFailures "
+        "then car(bodyResult) "
+        'else list("readFailed" if(bodyResult nil bodyFailure) reverse(closeFailures))))'
     )
 
 
@@ -111,13 +123,32 @@ def read_symbol_ports(
         symbol_read_ports_skill(lib, cell, view=view, view_type=view_type),
         timeout=timeout,
     )
-    errors, status, output = _response_fields(response)
+    errors, status, output = response_fields(response)
     _raise_for_symbol_read_error(errors, status, output, lib=lib, cell=cell)
     raw = (output or "").strip()
     if raw.strip() == "ERROR":
         raise RuntimeError(f"read_symbol_ports could not open symbol {lib}/{cell}")
     if not raw.strip():
         raise RuntimeError(f"read_symbol_ports returned empty output for {lib}/{cell}")
+    parsed = parse_sexpr(raw)
+    if isinstance(parsed, list) and len(parsed) >= 3 and parsed[0] == "readFailed":
+        body_failure = parsed[1]
+        close_failures = parsed[2]
+        if close_failures is None:
+            close_failures = []
+        if not isinstance(close_failures, list):
+            raise RuntimeError(
+                f"unexpected read_symbol_ports failure output for {lib}/{cell}: {raw}"
+            )
+        details: list[str] = []
+        if body_failure is not None:
+            details.append(str(body_failure))
+        if close_failures:
+            details.append(
+                "cleanup failed: " + ", ".join(str(item) for item in close_failures)
+            )
+        detail = "; ".join(details) or "unknown failure"
+        raise RuntimeError(f"read_symbol_ports failed for {lib}/{cell}: {detail}")
     return parse_symbol_ports_output(raw)
 
 
@@ -158,25 +189,6 @@ def _bbox_value(value: Any) -> list[list[float]] | None:
     if any(point is None for point in points):
         return None
     return [point for point in points if point is not None]
-
-
-def _response_fields(response: Any) -> tuple[Any, Any, str]:
-    if isinstance(response, dict):
-        result = response.get("result") if isinstance(response.get("result"), dict) else {}
-        errors = response.get("errors") or result.get("errors")
-        status = response.get("status") or result.get("status")
-        output = response.get("output")
-        if output is None:
-            output = result.get("output", "")
-        if response.get("ok") is False and not errors:
-            errors = [response.get("error") or result.get("error") or "request failed"]
-        return errors, status, output or ""
-
-    return (
-        getattr(response, "errors", None),
-        getattr(response, "status", None),
-        getattr(response, "output", "") or "",
-    )
 
 
 def _raise_for_symbol_read_error(
