@@ -62,3 +62,40 @@ def test_backend_nonfinite_objective_becomes_artifact_failure(tmp_path):
 def test_atomic_artifacts_leave_no_temp_files(tmp_path):
     CandidateEvaluator(lambda *_: {"objective": 1.0}).evaluate(tmp_path, "c0", {"x": 1})
     assert not list((tmp_path / "candidates/c0").glob("*.tmp"))
+
+
+def test_success_writes_complete_artifact_set(tmp_path):
+    backend = lambda *_: {"objective": 2.0, "metrics": {"gain": 4.0}, "specs": {"passed": True}, "metadata": {"corner": "tt"}}
+    CandidateEvaluator(backend).evaluate(tmp_path, "c0", {"x": 1})
+    candidate_dir = tmp_path / "candidates/c0"
+    assert json.loads((candidate_dir / "metrics.json").read_text()) == {"gain": 4.0}
+    assert json.loads((candidate_dir / "specs.json").read_text()) == {"passed": True}
+    assert (candidate_dir / "result.json").exists()
+    assert not (candidate_dir / "failure.json").exists()
+
+
+def test_candidate_directory_is_exclusive(tmp_path):
+    evaluator = CandidateEvaluator(lambda *_: {"objective": 1.0})
+    evaluator.evaluate(tmp_path, "c0", {"x": 1})
+    with pytest.raises(EvaluationFailure, match="already exists"):
+        evaluator.evaluate(tmp_path, "c0", {"x": 2})
+
+
+def test_failure_leaves_no_success_artifacts(tmp_path):
+    def backend(*_):
+        raise EvaluationFailure("convergence", "failed")
+    CandidateEvaluator(backend).evaluate(tmp_path, "c0", {"x": 1})
+    candidate_dir = tmp_path / "candidates/c0"
+    assert (candidate_dir / "failure.json").exists()
+    assert not (candidate_dir / "result.json").exists()
+    assert not (candidate_dir / "metrics.json").exists()
+    assert not (candidate_dir / "specs.json").exists()
+
+
+def test_unwritable_failure_artifact_raises_evaluation_failure(tmp_path, monkeypatch):
+    import analog_opt.evaluator as module
+    def broken(*args, **kwargs):
+        raise OSError("disk full")
+    monkeypatch.setattr(module, "atomic_write_json", broken)
+    with pytest.raises(EvaluationFailure, match="failure artifact"):
+        CandidateEvaluator(lambda *_: {"objective": 1.0}).evaluate(tmp_path, "c0", {"x": 1})

@@ -101,3 +101,101 @@ def test_resume_rejects_tampered_candidate_ids(tmp_path):
     path.write_text(json.dumps(data))
     with pytest.raises(ValueError, match="candidate IDs"):
         run_search(tmp_path, space(), Evaluator(), SearchConfig("random", 3, 1), resume=True)
+
+
+def test_history_records_normalized_vectors_and_best_artifact(tmp_path):
+    result = run_search(tmp_path, space(), Evaluator(), SearchConfig("random", 2, 9))
+    data = json.loads((tmp_path / "search_history.json").read_text())
+    assert all(len(item["normalized_vector"]) == 1 for item in data["history"])
+    best = json.loads((tmp_path / "best_candidate.json").read_text())
+    assert best["status"] == "success"
+    assert best["candidate_id"] == result.best.candidate_id
+    assert best["objective"] == result.best.objective
+    assert best["parameters"]["x"] >= 10.0
+
+
+def test_all_failed_writes_explicit_null_best(tmp_path):
+    class Failed(Evaluator):
+        def evaluate(self, run_dir, candidate_id, candidate):
+            from analog_opt.evaluator import EvaluationResult
+            return EvaluationResult(candidate_id, 10.0, False, {}, {}, {"category": "failed"})
+    run_search(tmp_path, space(), Failed(), SearchConfig("random", 1, 1))
+    best = json.loads((tmp_path / "best_candidate.json").read_text())
+    assert best == {"best": None, "status": "all_failed"}
+
+
+def test_run_lock_rejects_concurrent_search(tmp_path):
+    (tmp_path / ".search.lock").mkdir()
+    with pytest.raises(RuntimeError, match="already active"):
+        run_search(tmp_path, space(), Evaluator(), SearchConfig("random", 1, 1))
+
+
+def test_run_lock_is_released_after_failure(tmp_path):
+    class ExplodingSpace:
+        specs = [object()]
+        def materialize(self, vector):
+            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError, match="boom"):
+        run_search(tmp_path, ExplodingSpace(), Evaluator(), SearchConfig("random", 1, 1))
+    assert not (tmp_path / ".search.lock").exists()
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda data: data.update({"dimension": "1"}),
+    lambda data: data["history"][0].update({"success": 1}),
+    lambda data: data["history"][0].update({"metrics": []}),
+    lambda data: data["history"][0].update({"normalized_vector": [1.1]}),
+    lambda data: data["history"][0].update({"normalized_vector": []}),
+])
+def test_resume_strictly_validates_history_fields(tmp_path, mutation):
+    run_search(tmp_path, space(), Evaluator(), SearchConfig("random", 1, 5))
+    path = tmp_path / "search_history.json"
+    data = json.loads(path.read_text())
+    mutation(data)
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="history|resume"):
+        run_search(tmp_path, space(), Evaluator(), SearchConfig("random", 2, 5), resume=True)
+
+
+def test_resume_rejects_nonstandard_json_constants(tmp_path):
+    run_search(tmp_path, space(), Evaluator(), SearchConfig("random", 1, 5))
+    path = tmp_path / "search_history.json"
+    path.write_text(path.read_text().replace('"objective":', '"objective": NaN, "old_objective":'))
+    with pytest.raises(ValueError, match="history"):
+        run_search(tmp_path, space(), Evaluator(), SearchConfig("random", 2, 5), resume=True)
+
+
+def test_random_resume_validates_recorded_vector(tmp_path):
+    run_search(tmp_path, space(), Evaluator(), SearchConfig("random", 1, 5))
+    path = tmp_path / "search_history.json"
+    data = json.loads(path.read_text())
+    data["history"][0]["normalized_vector"] = [0.25]
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="random sequence"):
+        run_search(tmp_path, space(), Evaluator(), SearchConfig("random", 2, 5), resume=True)
+
+
+@pytest.mark.parametrize("method", ["scipy", "turbo"])
+def test_nonrandom_resume_is_explicitly_unsupported(tmp_path, method):
+    history = {"config": {"method": method, "evaluations": 1, "seed": 2}, "dimension": 1, "history": [{
+        "candidate_id": "candidate-000000", "objective": 1.0, "success": True,
+        "metrics": {}, "specs": {}, "metadata": {}, "failure": None,
+        "normalized_vector": [0.5], "physical_candidate": {"x": 15.0}
+    }]}
+    (tmp_path / "search_history.json").write_text(json.dumps(history))
+    with pytest.raises(ValueError, match="does not support resume"):
+        run_search(tmp_path, space(), Evaluator(), SearchConfig(method, 2, 2), resume=True)
+
+
+def test_scipy_stops_exactly_at_budget_and_sets_safe_options(tmp_path):
+    captured = {}
+    def fake_de(objective, bounds, **kwargs):
+        captured.update(kwargs)
+        for index in range(20):
+            objective([index / 20.0])
+    s = space()
+    result = run_search(tmp_path, s, Evaluator(), SearchConfig("scipy", 3, 4), differential_evolution=fake_de)
+    assert len(result.history) == 3 and s.calls == 3
+    assert captured["polish"] is False
+    assert captured["workers"] == 1
+    assert captured["updating"] == "immediate"
