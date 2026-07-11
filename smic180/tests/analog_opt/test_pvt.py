@@ -80,3 +80,27 @@ def test_evaluation_result_adapter_supports_success_and_failure():
     assert adapted["point_id"] == point.point_id and adapted["corner"] == "ss"
     assert adapted["parameters"] == {"w": 2e-6} and adapted["metrics"] == {"gain": 42.0}
     assert adapted["failure"]["category"] == "convergence"
+
+
+@pytest.mark.parametrize("evaluation", [
+    EvaluationResult("c", math.nan, True, {}, {}, None, {"gain": {"passed": True, "violation": 0.0}}),
+    EvaluationResult("c", 1.0, 1, {}, {}, None, {"gain": {"passed": True, "violation": 0.0}}),
+    EvaluationResult("c", 1.0, True, [], {}, None, {"gain": {"passed": True, "violation": 0.0}}),
+    EvaluationResult("c", 1.0, True, {}, [], None, {"gain": {"passed": True, "violation": 0.0}}),
+    EvaluationResult("c", 1.0, True, {}, {}, None, []),
+    EvaluationResult("c", 1.0, True, {}, {}, {"category": "x", "message": "y"}, {"gain": {"passed": True, "violation": 0.0}}),
+    EvaluationResult("c", 1.0, False, {}, {}, None, {"gain": {"passed": False, "violation": 0.1}}),
+    EvaluationResult("c", 1.0, False, {}, {}, {"category": "", "message": "bad"}, {"gain": {"passed": False, "violation": 0.1}}),
+])
+def test_evaluation_adapter_rejects_invalid_protocol(evaluation):
+    point = build_pvt_points(PvtConfig(("tt",), (1.8,), (25.0,)))[0]
+    with pytest.raises(ValueError):
+        pvt_result_from_evaluation(point, evaluation, {"w": 1e-6})
+
+
+def test_evaluation_adapter_rejects_nonmapping_parameters():
+    point = build_pvt_points(PvtConfig(("tt",), (1.8,), (25.0,)))[0]
+    evaluation = EvaluationResult("c", 1.0, True, {}, {}, None,
+                                  {"gain": {"passed": True, "violation": 0.0}})
+    with pytest.raises(ValueError):
+        pvt_result_from_evaluation(point, evaluation, [])

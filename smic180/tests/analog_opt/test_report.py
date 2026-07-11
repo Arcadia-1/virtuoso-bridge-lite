@@ -74,3 +74,24 @@ def test_replace_error_has_report_context(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "replace", lambda *args: (_ for _ in ()).throw(OSError("locked")))
     with pytest.raises(ReportError, match="result_manifest.json.*locked"):
         write_result_manifest(tmp_path, sample_data())
+
+
+@pytest.mark.parametrize("failure", [
+    "not-a-mapping",
+    {"category": "artifact", "message": "bad", "blocking": "false"},
+    {"category": "", "message": "bad", "blocking": True},
+    {"category": "artifact", "message": "", "blocking": True},
+])
+def test_result_manifest_rejects_invalid_failure_schema(tmp_path, failure):
+    data = sample_data()
+    data["failures"] = [failure]
+    with pytest.raises(ReportError):
+        write_result_manifest(tmp_path, data)
+
+
+def test_missing_blocking_defaults_to_true_and_blocks_publish(tmp_path):
+    data = sample_data()
+    data["failures"] = [{"category": "artifact", "message": "unsafe"}]
+    parsed = json.loads(write_result_manifest(tmp_path, data).read_text(encoding="utf-8"))
+    assert parsed["publishable"] is False
+    assert parsed["failures"][0]["blocking"] is True

@@ -74,16 +74,31 @@ def build_pvt_points(config: PvtConfig) -> Tuple[PvtPoint, ...]:
 
 
 def pvt_result_from_evaluation(point: PvtPoint, result: Any, parameters: Optional[Mapping[str, Any]] = None) -> Mapping[str, Any]:
-    required = ("objective", "success", "metrics", "specs", "failure")
-    if not all(hasattr(result, name) for name in required): raise ValueError("result is not EvaluationResult-compatible")
-    if type(result.success) is not bool: raise ValueError("success must be bool")
-    if parameters is None: parameters = {}
-    if not isinstance(parameters, Mapping) or not isinstance(result.metrics, Mapping) or not isinstance(result.specs, Mapping):
-        raise ValueError("parameters, metrics, and specs must be mappings")
+    required = ("objective", "success", "metrics", "metadata", "specs", "failure")
+    if not all(hasattr(result, name) for name in required):
+        raise ValueError("result is not EvaluationResult-compatible")
+    objective = _finite(result.objective, "objective")
+    if type(result.success) is not bool:
+        raise ValueError("success must be bool")
+    if parameters is None:
+        parameters = {}
+    if not all(isinstance(value, Mapping) for value in (parameters, result.metrics, result.metadata, result.specs)):
+        raise ValueError("parameters, metrics, metadata, and specs must be mappings")
+    failure = result.failure
+    if result.success:
+        if failure is not None:
+            raise ValueError("successful evaluation cannot contain failure")
+    else:
+        if not isinstance(failure, Mapping):
+            raise ValueError("failed evaluation requires failure mapping")
+        category = failure.get("category")
+        message = failure.get("message")
+        if not isinstance(category, str) or not category.strip() or not isinstance(message, str) or not message.strip():
+            raise ValueError("failure category and message must be non-empty strings")
     return {"point_id": point.point_id, "corner": point.corner, "voltage": point.voltage,
             "temperature": point.temperature, "parameters": dict(parameters), "metrics": dict(result.metrics),
-            "success": result.success, "objective": result.objective, "specs": dict(result.specs),
-            "failure": None if result.failure is None else dict(result.failure)}
+            "success": result.success, "objective": objective, "specs": dict(result.specs),
+            "failure": None if failure is None else dict(failure)}
 
 
 def _spec_ids(expected: Optional[Sequence[str]], results: Sequence[Mapping[str, Any]]) -> Tuple[str, ...]:

@@ -69,6 +69,36 @@ def _json(path: Path, value: Any) -> Path:
     return _atomic(path, json.dumps(plain, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n")
 
 
+def _normalize_failures(value: Any, label: str = "failures") -> list:
+    if not isinstance(value, (list, tuple)):
+        raise ReportError(label + " must be a list")
+    normalized = []
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            raise ReportError("%s[%d] must be a mapping" % (label, index))
+        category = item.get("category")
+        message = item.get("message")
+        blocking = item.get("blocking", True)
+        if not isinstance(category, str) or not category.strip():
+            raise ReportError("%s[%d].category must be a non-empty string" % (label, index))
+        if not isinstance(message, str) or not message.strip():
+            raise ReportError("%s[%d].message must be a non-empty string" % (label, index))
+        if type(blocking) is not bool:
+            raise ReportError("%s[%d].blocking must be bool" % (label, index))
+        normalized.append(dict(item, category=category, message=message, blocking=blocking))
+    return normalized
+
+
+def _normalize_result_data(data: Mapping[str, Any]) -> Mapping[str, Any]:
+    output = dict(data)
+    output["failures"] = _normalize_failures(data.get("failures", []))
+    pvt = data.get("pvt")
+    if isinstance(pvt, Mapping):
+        normalized_pvt = dict(pvt)
+        normalized_pvt["failures"] = _normalize_failures(pvt.get("failures", []), "pvt.failures")
+        output["pvt"] = normalized_pvt
+    return output
+
 def _publishable(data: Mapping[str, Any]) -> bool:
     best = data.get("best"); pvt = data.get("pvt")
     if not isinstance(best, Mapping) or not isinstance(pvt, Mapping) or pvt.get("overall_passed") is not True: return False
@@ -76,7 +106,7 @@ def _publishable(data: Mapping[str, Any]) -> bool:
     if not isinstance(specs, Mapping) or not specs: return False
     if not all(isinstance(item, Mapping) and item.get("passed") is True for item in specs.values()): return False
     failures = data.get("failures", [])
-    return isinstance(failures, (list, tuple)) and not any(isinstance(item, Mapping) and item.get("blocking") is True for item in failures)
+    return not any(item["blocking"] for item in failures)
 
 
 def write_run_manifest(run_dir: Any, data: Mapping[str, Any]) -> Path:
@@ -87,7 +117,7 @@ def write_run_manifest(run_dir: Any, data: Mapping[str, Any]) -> Path:
 
 def write_result_manifest(run_dir: Any, data: Mapping[str, Any]) -> Path:
     if not isinstance(data, Mapping): raise ValueError("result manifest data must be a mapping")
-    directory = Path(run_dir); plain = _plain(data); _validate(plain); _artifact_paths(directory, plain)
+    directory = Path(run_dir); plain = _normalize_result_data(_plain(data)); _validate(plain); _artifact_paths(directory, plain)
     output = dict(plain); output["publishable"] = _publishable(plain)
     return _json(directory / "result_manifest.json", output)
 
@@ -111,7 +141,7 @@ def _table(mapping: Mapping[str, Any]) -> list:
 
 def write_report(run_dir: Any, data: Mapping[str, Any]) -> Path:
     if not isinstance(data, Mapping): raise ValueError("report data must be a mapping")
-    directory = Path(run_dir); plain = _plain(data); _validate(plain); _artifact_paths(directory, plain)
+    directory = Path(run_dir); plain = _normalize_result_data(_plain(data)); _validate(plain); _artifact_paths(directory, plain)
     best = plain.get("best", {}); pvt = plain.get("pvt", {}); metrics = best.get("metrics", {})
     lines = ["# Analog Optimization Report", "", "Publishable: **%s**" % ("yes" if _publishable(plain) else "no"), "",
              "## Best Candidate", "", "Objective: %s" % _escape(best.get("objective", "unavailable")), "", "### Parameters", ""]
