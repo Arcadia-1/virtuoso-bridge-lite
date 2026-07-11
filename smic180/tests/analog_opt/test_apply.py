@@ -196,3 +196,18 @@ def test_rollback_closes_failed_destination_before_deleting_view():
     close_dst = skill.index("when(dstCv dbClose(dstCv)) dstCv=nil", rollback)
     delete_dst = skill.index('dbDeleteCellView("tr" "work" "schematic")', rollback)
     assert rollback < close_dst < delete_dst
+
+def test_create_work_cell_copies_and_verifies_symbol_view():
+ c=RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])
+ VirtuosoApplier(c).create_work_cell("tr","amp","work",False)
+ skill=c.calls[0][0]
+ assert 'dbOpenCellViewByType("tr" "amp" "symbol"' in skill
+ assert 'dbCopyCellView' in skill and '"symbol"' in skill
+ assert 'ddGetObj("tr" "work" "symbol")' in skill
+ assert 'when(srcSym dbClose(srcSym))' in skill and 'when(dstSym dbClose(dstSym))' in skill
+
+def test_existing_work_cell_without_replace_never_enters_symbol_mutation():
+ c=RecordingClient([Result("ANALOG_OPT_OK:create:EXISTS")])
+ with pytest.raises(ApplyError,match='exists'): VirtuosoApplier(c).create_work_cell('tr','amp','work',False)
+ skill=c.calls[0][0]
+ assert 'when(status=="CREATED"||status=="REPLACED"' in skill

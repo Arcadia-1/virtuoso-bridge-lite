@@ -16,18 +16,18 @@ def test_netlist_adapter_builds_dedicated_tb_with_work_cell_dut(tmp_path):
  exported.write_text('subckt amp_work IN OUT\nM1 (OUT IN 0 0) nch w=1e-5 l=1e-6\nends amp_work\nDUT (VIN VOUT) amp_work\nSRC_VDD (VDD 0) vsource dc=3.3\n')
  calls=[]
  adapter=NetlistAdapter(client,Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda c,l,t,d,site:calls.append((l,t)) or exported,base_deck_factory=lambda **k:type('D',(),{'model_includes':[]})())
- adapter.configure({}, {}, {'VDD':{'source_instance':'SRC_VDD','value':3.3}}, {})
+ adapter.analyses=[{'name':'op','type':'dc_op'}]; adapter.configure({}, {}, {'VDD':{'source_instance':'SRC_VDD','value':3.3}}, {})
  deck=adapter.export_fresh('tr','amp_work',tmp_path/'run')
- assert calls==[('tr','amp_tb__analog_opt')]
+ assert len(calls)==1 and calls[0][0]=='tr' and calls[0][1].startswith('amp_tb__analog_opt_')
  assert 'DUT' in client.skills[0] and 'amp_work' in client.skills[0]
- text=deck.read_text(); assert 'subckt amp_work' in text and 'DUT (VIN VOUT) amp_work' in text
+ deck=deck['op']; text=deck.read_text(); assert 'subckt amp_work' in text and 'DUT (VIN VOUT) amp_work' in text
 
 def test_netlist_adapter_applies_corner_temperature_and_voltage_source(tmp_path):
  raw=tmp_path/'raw.scs'; raw.write_text('subckt amp_work A\nends amp_work\nDUT (A) amp_work\nSUPPLY_MAIN (VDD 0) vsource type=dc dc=3.3\n')
  deck_cfg=type('D',(),{'model_includes':[type('M',(),{'path':'models.scs','section':'tt'})()]})()
  adapter=NetlistAdapter(Client(),Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda *a,**k:raw,base_deck_factory=lambda **k:deck_cfg,corner_patcher=lambda d,c:type('D',(),{'model_includes':[type('M',(),{'path':'models.scs','section':c.lower()})()]})())
- adapter.configure({}, {}, {'VDD':{'source_instance':'SUPPLY_MAIN','value':3.3}}, {'corner':'FF','temperature':-40.,'voltage':3.0,'voltage_stimulus':'VDD'})
- deck=adapter.export_fresh('tr','amp_work',tmp_path/'run'); text=deck.read_text()
+ adapter.analyses=[{'name':'op','type':'dc_op'}]; adapter.configure({}, {}, {'VDD':{'source_instance':'SUPPLY_MAIN','value':3.3}}, {'corner':'FF','temperature':-40.,'voltage':3.0,'voltage_stimulus':'VDD'})
+ deck=adapter.export_fresh('tr','amp_work',tmp_path/'run')['op']; text=deck.read_text()
  assert 'include "models.scs" section=ff' in text
  assert 'temp=-40' in text and 'SUPPLY_MAIN (VDD 0) vsource type=dc dc=3' in text
  confirmed=adapter.confirm(deck,['VDD','temperature','corner','dut_cell'])
@@ -43,7 +43,7 @@ def test_metrics_adapter_preserves_curves_and_extracts_task6_metrics():
  data={'freq':[1.,10.,100.],'ac:VOUT':[10+0j,1+0j,.1+0j],'noise:VOUT':[1e-9,2e-9,3e-9],'time':[0.,1e-6,2e-6],'VOUT':[0.,1.1,1.0],'op:M1':{'gm':1e-3,'id':1e-4,'gds':1e-5,'vds':1.2,'vdsat':.2},'VDD_SWEEP':[2.7,3.0,3.3],'dc:VOUT':[1.0,1.1,1.2]}
  result=type('R',(),{'ok':True,'data':data})()
  plan=[{'name':'ac_main','type':'ac','signal':'VOUT'},{'name':'onoise','type':'noise','signal':'VOUT'},{'name':'step','type':'tran','signal':'VOUT','target':1.0},{'name':'op','type':'dc_op','instances':['M1']},{'name':'line','type':'dc_sweep','parameter':'VDD_SWEEP','signal':'VOUT'}]
- metrics=MetricsAdapter(plan)(result)
+ metrics=MetricsAdapter(plan)({item['name']:result for item in plan})
  assert metrics['op.M1.gm_over_id']==10.0
  assert 'ac.ac_main.bandwidth_3db_hz' in metrics and 'noise.onoise.integrated_output_vrms' in metrics
  assert metrics['curves']['ac_main']['response']==[[10.0,0.0],[1.0,0.0],[0.1,0.0]]
@@ -63,7 +63,7 @@ def test_metrics_complex_curve_is_strict_json_serializable():
  import json
  data={'freq':[1.,10.],'ac:VOUT':[1+2j,3-4j]}
  result=type('R',(),{'ok':True,'data':data})()
- metrics=MetricsAdapter([{'name':'ac_main','type':'ac','signal':'VOUT'}])(result)
+ metrics=MetricsAdapter([{'name':'ac_main','type':'ac','signal':'VOUT'}])({'ac_main':result})
  json.dumps(metrics,allow_nan=False)
  assert metrics['curves']['ac_main']['response']==[[1.0,2.0],[3.0,-4.0]]
 
@@ -82,3 +82,95 @@ def test_publication_adapter_queries_applier_client_when_no_cell_exists_method(t
   def read_cdf(self,lib,cell,specs): return {'W':1e-5}
  specs=[ParameterSpec('W','virtuoso_cdf',1e-6,2e-5,instance='M1',property='w',unit='m')]
  assert PublicationAdapter(A(),tmp_path,specs,lambda:{'W':1e-5}).confirm_result_cell('tr','amp_opt','hash') is True
+
+def test_analysis_runner_runs_each_analysis_in_isolated_directory(tmp_path):
+ from analog_opt.live import AnalysisRunner
+ calls=[]
+ def run(deck,directory):
+  calls.append((deck.name,directory.name)); return type('R',(),{'ok':True,'data':{'freq':[1.],directory.name:[1.]}})()
+ runner=AnalysisRunner(run)
+ decks={'ac_main':tmp_path/'ac.scs','onoise':tmp_path/'noise.scs'}
+ results=runner.run(decks,tmp_path,[{'name':'ac_main','type':'ac'},{'name':'onoise','type':'noise'}])
+ assert calls==[('ac.scs','ac_main'),('noise.scs','onoise')]
+ assert set(results)=={'ac_main','onoise'}
+
+def test_metrics_adapter_requires_real_mos_op_data():
+ from analog_opt.analyses import AnalysisError
+ result=type('R',(),{'ok':True,'data':{}})()
+ with pytest.raises(AnalysisError,match='operating-point'):
+  MetricsAdapter([{'name':'op','type':'dc_op','instances':['M1']}])({'op':result})
+
+def test_export_builds_one_deck_per_analysis_and_parameterizes_dc_source(tmp_path):
+ raw=tmp_path/'raw.scs'; raw.write_text('subckt amp_work A\nends amp_work\nDUT (A) amp_work\nSRC_VDD (VDD 0) vsource type=dc dc=3.3\n')
+ adapter=NetlistAdapter(Client(),Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda *a,**k:raw,base_deck_factory=lambda **k:type('D',(),{'model_includes':[]})())
+ adapter.analyses=[{'name':'line','type':'dc_sweep','source':'VDD','parameter':'VDD_SWEEP','start':2.7,'stop':3.6,'points':10},{'name':'ac_main','type':'ac','start':1.,'stop':1e6,'points_per_decade':10}]
+ adapter.configure({}, {}, {'VDD':{'source_instance':'SRC_VDD','value':3.3}}, {})
+ decks=adapter.export_fresh('tr','amp_work',tmp_path/'run')
+ assert set(decks)=={'line','ac_main'}
+ assert 'dc=VDD_SWEEP' in decks['line'].read_text()
+ assert 'line dc param=VDD_SWEEP' in decks['line'].read_text() and 'ac_main ac' not in decks['line'].read_text()
+ assert 'ac_main ac' in decks['ac_main'].read_text()
+
+def test_source_parser_handles_continuation_case_and_expression(tmp_path):
+ raw=tmp_path/'raw.scs'; raw.write_text('subckt amp_work A\nends amp_work\nDUT (A) amp_work\nsupply_main (VDD 0) VSOURCE type=dc \\\n  dc=(3.0+0.3)\n')
+ adapter=NetlistAdapter(Client(),Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda *a,**k:raw,base_deck_factory=lambda **k:type('D',(),{'model_includes':[]})())
+ adapter.analyses=[{'name':'op','type':'dc_op'}]; adapter.configure({}, {}, {'VDD':{'source_instance':'SUPPLY_MAIN','value':3.3}}, {})
+ deck=adapter.export_fresh('tr','amp_work',tmp_path/'run')['op']
+ assert adapter.confirm(deck,['VDD'])=={'VDD':3.3}
+
+def test_mixed_corner_patches_only_core_mos_sections():
+ from analog_opt.live import patch_smic180_corner
+ models=[type('M',(),{'path':'core.scs','section':'tt'})(),type('M',(),{'path':'bjt.scs','section':'bjt_tt'})(),type('M',(),{'path':'res.scs','section':'res_tt'})()]
+ deck=type('D',(),{'model_includes':models})()
+ patched=patch_smic180_corner(deck,'fnsp')
+ assert [m.section for m in patched.model_includes]==['fnsp','bjt_tt','res_tt']
+
+def test_confirm_cdf_parses_units_and_requires_complete_expected_keys(tmp_path):
+ deck=tmp_path/'deck.scs'; deck.write_text('subckt amp_work A B\nM1 (A B 0 0) nch w=10u \\\n l=180n\nends amp_work\nDUT (A B) amp_work\n')
+ specs=[ParameterSpec('W','virtuoso_cdf',1e-6,2e-5,instance='M1',property='w',unit='m'),ParameterSpec('L','virtuoso_cdf',1e-7,1e-6,instance='M1',property='l',unit='m')]
+ adapter=NetlistAdapter(Client(),Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=None,base_deck_factory=None)
+ values=adapter.confirm_cdf(deck,specs); assert values['W']==pytest.approx(10e-6) and values['L']==pytest.approx(180e-9)
+ deck.write_text('subckt amp_work A B\nM1 (A B 0 0) nch w=10u\nends amp_work\nDUT (A B) amp_work\n')
+ with pytest.raises(ValueError,match='complete'): adapter.confirm_cdf(deck,specs)
+
+def test_noise_uses_its_own_frequency_axis():
+ result=type('R',(),{'ok':True,'data':{'freq':[1.,10.],'noise_freq':[100.,1000.],'noise:VOUT':[1e-9,2e-9]}})()
+ metrics=MetricsAdapter([{'name':'onoise','type':'noise','signal':'VOUT'}])({'onoise':result})
+ assert metrics['curves']['onoise']['frequency']==[100.,1000.]
+
+def test_publication_without_cdf_requires_matching_intent_and_hash_marker(tmp_path):
+ class A:
+  def cell_exists(self,lib,cell): return True
+ candidate={'GAIN':4.0}; (tmp_path/'publication.json').write_text('{"candidate_hash":"abc","parameters":{"GAIN":4.0}}'); (tmp_path/'publication.confirmed.json').write_text('{"candidate_hash":"abc"}')
+ adapter=PublicationAdapter(A(),tmp_path,[],lambda:candidate)
+ assert adapter.confirm_result_cell('tr','amp_opt','abc') is True
+ (tmp_path/'publication.confirmed.json').write_text('{"candidate_hash":"wrong"}')
+ assert adapter.confirm_result_cell('tr','amp_opt','abc') is False
+
+def test_publication_with_cdf_requires_complete_readback(tmp_path):
+ class A:
+  def cell_exists(self,lib,cell): return True
+  def read_cdf(self,lib,cell,specs): return {}
+ specs=[ParameterSpec('W','virtuoso_cdf',1e-6,2e-5,instance='M1',property='w',unit='m')]
+ assert PublicationAdapter(A(),tmp_path,specs,lambda:{'W':1e-5}).confirm_result_cell('tr','amp_opt','abc') is False
+
+def test_publication_write_creates_hash_marker_for_noncdf(tmp_path):
+ class A:
+  def publish_result_cell(self,*args): pass
+ (tmp_path/'publication.json').write_text('{"candidate_hash":"abc","parameters":{"GAIN":4.0}}')
+ adapter=PublicationAdapter(A(),tmp_path,[],lambda:{'GAIN':4.0}); adapter.publish_result_cell('tr','w','r','s',False)
+ assert __import__('json').loads((tmp_path/'publication.confirmed.json').read_text())['candidate_hash']=='abc'
+
+def test_dedicated_tb_name_is_unique_and_skill_closes_all_views(tmp_path):
+ client=Client(); adapter=NetlistAdapter(client,Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda *a,**k:None,base_deck_factory=lambda **k:None)
+ first=adapter._prepare_tb(); second=adapter._prepare_tb()
+ assert first!=second and first.startswith('amp_tb__analog_opt_')
+ for skill in client.skills:
+  assert 'unwindProtect' in skill and 'dbClose' in skill
+  assert 'length(setof(i dst~>instances i~>name=="DUT"))==1' in skill
+  assert 'dbCreateInst' in skill and 'dbDeleteObject(dut)' in skill
+
+def test_live_factory_uses_safe_mixed_corner_patcher_source():
+ import inspect,analog_opt.live as live
+ source=inspect.getsource(live._build_runtime_adapters)
+ assert 'corner_patcher=patch_smic180_corner' in source

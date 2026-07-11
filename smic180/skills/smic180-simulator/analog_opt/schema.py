@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from numbers import Real
 from dataclasses import dataclass
 from pathlib import Path
@@ -182,6 +183,8 @@ def _parse_stimuli(value: Any) -> Dict[str, StimulusConfig]:
             if lower_value >= upper_value:
                 raise ConfigError(f"stimuli.{name} bounds require lower < upper")
         source_instance = _nonempty_string(stimulus.get("source_instance", "SRC_" + name), f"stimuli.{name}.source_instance")
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.$]*", source_instance) is None:
+            raise ConfigError(f"stimuli.{name}.source_instance must be a safe identifier")
         stimuli[name] = StimulusConfig(
             kind=kind,
             optimizable=optimizable,
@@ -192,6 +195,8 @@ def _parse_stimuli(value: Any) -> Dict[str, StimulusConfig]:
             upper=upper_value if optimizable else None,
             source_instance=source_instance,
         )
+    if len({item.source_instance for item in stimuli.values()}) != len(stimuli):
+        raise ConfigError("stimuli source_instance values must be unique")
     return stimuli
 
 
@@ -237,8 +242,17 @@ def load_config(path: Union[str, Path]) -> AnalogOptConfig:
     _validate_named_items(analyses, "analyses", "type", _ANALYSIS_TYPES)
 
     parsed_stimuli = _parse_stimuli(data["stimuli"])
+    for index, parameter in enumerate(parameters):
+        if parameter.get("target") == "bias":
+            stimulus_name = parameter.get("stimulus")
+            if stimulus_name not in parsed_stimuli:
+                raise ConfigError(f"parameters[{index}] bias stimulus must exist")
+            if parsed_stimuli[stimulus_name].optimizable is not True:
+                raise ConfigError(f"parameters[{index}] bias stimulus must be optimizable")
     pvt = dict(_mapping(data["pvt"], "pvt"))
     voltage_stimulus = pvt.get("voltage_stimulus")
+    if pvt.get("voltages") and voltage_stimulus is None:
+        raise ConfigError("pvt.voltage_stimulus is required when voltages are configured")
     if voltage_stimulus is not None and (voltage_stimulus not in parsed_stimuli or parsed_stimuli[voltage_stimulus].kind != "voltage"):
         raise ConfigError("pvt.voltage_stimulus must reference a voltage stimulus")
     return AnalogOptConfig(

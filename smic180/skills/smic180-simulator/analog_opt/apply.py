@@ -105,7 +105,7 @@ class VirtuosoApplier:
         replace_flag = "t" if replace else "nil"
         recovery = "ANALOG_OPT_RECOVERY_REQUIRED:%s" % backup
         skill = (
-            f'let((srcCv tmpCv oldCv backupCv dstCv restoreCv status tempCreated backupSafe cleanupBackup publishOk) '
+            f'let((srcCv tmpCv oldCv backupCv dstCv restoreCv srcSym dstSym status tempCreated backupSafe cleanupBackup publishOk) '
             f'status="FAILED" tempCreated=nil backupSafe=nil cleanupBackup=nil publishOk=nil '
             f'unwindProtect(progn('
             f'when(ddGetObj({lib} {tmp}) error("temporary cell already exists")) '
@@ -138,8 +138,15 @@ class VirtuosoApplier:
             f'else progn(dstCv=dbCopyCellView(tmpCv {lib} {dst} "schematic") '
             f'unless(dstCv error("publish copy failed")) '
             f'unless(dbSave(dstCv) error("destination save failed")) status="CREATED")) '
-            f'unless(status=="FAILED" printf("{prefix}:%s" status))) '
-            f'when(srcCv dbClose(srcCv)) when(tmpCv dbClose(tmpCv)) when(oldCv dbClose(oldCv)) '
+            f'when(status=="CREATED"||status=="REPLACED" progn(' +
+            f'srcSym=dbOpenCellViewByType({lib} {src} "symbol" nil "r") ' +
+            f'unless(srcSym error("source symbol missing")) ' +
+            f'when(ddGetObj({lib} {dst} "symbol") unless(dbDeleteCellView({lib} {dst} "symbol") error("target symbol delete failed"))) ' +
+            f'dstSym=dbCopyCellView(srcSym {lib} {dst} "symbol") ' +
+            f'unless(dstSym error("symbol copy failed")) unless(dbSave(dstSym) error("symbol save failed")) ' +
+            f'unless(ddGetObj({lib} {dst} "symbol") error("destination symbol missing")) ' +
+            f'printf("{prefix}:%s" status)))) '
+            f'when(srcCv dbClose(srcCv)) when(tmpCv dbClose(tmpCv)) when(oldCv dbClose(oldCv)) when(srcSym dbClose(srcSym)) when(dstSym dbClose(dstSym)) '
             f'when(backupCv dbClose(backupCv)) when(dstCv dbClose(dstCv)) when(restoreCv dbClose(restoreCv)) '
             f'when(tempCreated unless(dbDeleteCellView({lib} {tmp} "schematic") error("temporary cleanup failed"))) '
             f'when(backupSafe&&cleanupBackup unless(dbDeleteCellView({lib} {bak} "schematic") error("backup cleanup failed")))))'

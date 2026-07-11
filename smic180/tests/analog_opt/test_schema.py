@@ -30,7 +30,7 @@ def minimal_config():
         "metrics": [],
         "specs": [],
         "search": {"algorithm": "random", "max_evals": 5, "seed": 7},
-        "pvt": {"corners": ["tt"], "voltages": ["3.3V"], "temperatures_c": [27]},
+        "pvt": {"corners": ["tt"], "voltages": ["3.3V"], "temperatures_c": [27], "voltage_stimulus": "VDD"},
         "outputs": {},
     }
 
@@ -220,7 +220,11 @@ def test_parameter_names_must_be_unique(tmp_path):
 @pytest.mark.parametrize("target", ["virtuoso_cdf", "bias", "spectre_variable"])
 def test_accepts_supported_parameter_targets(tmp_path, target):
     data = minimal_config()
-    data["parameters"] = [{"name": "P", "target": target}]
+    if target == "bias":
+        data["stimuli"]["VDD"].update({"optimizable": True, "lower": "2.7V", "upper": "3.6V"})
+        data["parameters"] = [{"name": "P", "target": target, "stimulus": "VDD"}]
+    else:
+        data["parameters"] = [{"name": "P", "target": target}]
     assert load_config(write_config(tmp_path, data)).parameters[0]["target"] == target
 
 
@@ -288,4 +292,23 @@ def test_stimulus_source_instance_and_pvt_voltage_stimulus_are_explicit(tmp_path
 
 def test_pvt_voltage_stimulus_must_reference_voltage_stimulus(tmp_path):
  data=minimal_config(); data['pvt']={'corners':['TT'],'voltages':[3.3],'temperatures':[25],'voltage_stimulus':'MISSING'}
+ with pytest.raises(ConfigError,match='voltage_stimulus'): load_config(write_config(tmp_path,data))
+
+@pytest.mark.parametrize('value',['1BAD','SRC-VDD','SRC VDD',''])
+def test_source_instance_must_be_safe_identifier(tmp_path,value):
+ data=minimal_config(); data['stimuli']['VDD']['source_instance']=value
+ with pytest.raises(ConfigError,match='source_instance'): load_config(write_config(tmp_path,data))
+
+def test_source_instances_must_be_unique(tmp_path):
+ data=minimal_config(); data['stimuli']['VIN']={'kind':'voltage','value':'1V','source_instance':'SRC_VDD'}
+ with pytest.raises(ConfigError,match='source_instance'): load_config(write_config(tmp_path,data))
+
+def test_bias_parameter_requires_existing_optimizable_stimulus(tmp_path):
+ data=minimal_config(); data['parameters']=[{'name':'BIAS','target':'bias','stimulus':'MISSING','lower':0.5,'upper':1.5}]
+ with pytest.raises(ConfigError,match='bias'): load_config(write_config(tmp_path,data))
+ data['parameters'][0]['stimulus']='VDD'
+ with pytest.raises(ConfigError,match='optimizable'): load_config(write_config(tmp_path,data))
+
+def test_pvt_voltage_grid_requires_voltage_stimulus(tmp_path):
+ data=minimal_config(); data['pvt']={'corners':['tt'],'voltages':[3.0,3.3],'temperatures_c':[25]}
  with pytest.raises(ConfigError,match='voltage_stimulus'): load_config(write_config(tmp_path,data))
