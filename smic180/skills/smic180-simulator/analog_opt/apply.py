@@ -88,7 +88,7 @@ class VirtuosoApplier:
             _identifier(spec.property, "property")
         return result
 
-    def _copy_new(self, library: str, source: str, destination: str, operation: str) -> None:
+    def _copy_new(self, library: str, source: str, destination: str, operation: str, replace: bool) -> None:
         library = _identifier(library, "library")
         source = _identifier(source, "source cell")
         destination = _identifier(destination, "destination cell")
@@ -109,19 +109,19 @@ class VirtuosoApplier:
             "else dstCv=dbCopyCellView(tmpCv %s %s \"schematic\") "
             "unless(dstCv error(\"publish copy failed\")) dbSave(dstCv) status=\"CREATED\")) "
             "printf(\"%s:%%s\" status)) "
-            "when(srcCv dbClose(srcCv)) when(tmpCv dbClose(tmpCv)) "
+            "when(srcCv dbClose(srcCv)) when(tmpCv dbClose(tmpCv)) when(dstCv dbClose(dstCv)) "
             "when(ddGetObj(%s %s) dbDeleteCellView(%s %s \"schematic\"))))"
         ) % (lib, tmp, lib, tmp, lib, src, lib, tmp, lib, dst, lib, dst, prefix, lib, tmp, lib, tmp)
         output = self._execute(skill, prefix + ":")
         if any(line.strip() == prefix + ":EXISTS" for line in output.splitlines()):
-            raise ApplyError("destination cell already exists; replacement is unavailable safely")
+            raise ApplyError("safe replacement unsupported" if replace else "destination cell already exists")
         if not any(line.strip() == prefix + ":CREATED" for line in output.splitlines()):
             raise ApplyError("bridge did not confirm destination creation")
 
     def create_work_cell(self, library: str, source_cell: str, work_cell: str, replace: bool) -> None:
         # replace is accepted for API compatibility, but an existing destination
         # is never destroyed because this bridge has no atomic cell swap.
-        self._copy_new(library, source_cell, work_cell, "create")
+        self._copy_new(library, source_cell, work_cell, "create", bool(replace))
 
     def apply_cdf(self, library: str, cell: str, specs: Sequence[ParameterSpec], candidate: Mapping[str, Any]) -> None:
         library = _identifier(library, "library")
@@ -136,28 +136,38 @@ class VirtuosoApplier:
                 text = format_quantity(value, spec.unit) if spec.unit else (str(value) if spec.dtype == "int" else "%.12g" % value)
             except UnitError as exc:
                 raise ApplyError("invalid unit for %s: %s" % (spec.name, exc)) from exc
-            prepared.append((index, spec, text))
-        declarations = " ".join("inst%d" % index for index, _, _ in prepared)
-        validations = []
+            sync_property = _identifier(spec.sync_property, "sync property") if spec.sync_property is not None else None
+            prepared.append((index, spec, text, sync_property))
+        declarations = "param " + " ".join("inst%d cdf%d param%d" % (i, i, i) for i, _, _, _ in prepared)
+        locate_instances = []
+        locate_params = []
         writes = []
-        for index, spec, text in prepared:
-            ivar = "inst%d" % index
-            validations.append(
-                "foreach(inst cv~>instances when(inst~>name==%s %s=inst)) unless(%s error(\"instance not found: %s\"))"
-                % (_quote(spec.instance), ivar, ivar, spec.instance)
+        verifies = []
+        for index, spec, text, sync_property in prepared:
+            locate_instances.append(
+                "foreach(inst cv~>instances when(inst~>name==%s inst%d=inst)) unless(inst%d error(\"instance not found: %s\"))"
+                % (_quote(spec.instance), index, index, spec.instance)
             )
-            # setInstParams is the established CDF path. dbReplaceProp remains
-            # an explicit fallback in the same transaction for headless use.
-            writes.append(
-                "unless(setInstParams(%s %s %s list(%s %s)) dbReplaceProp(%s %s \"string\" %s))"
-                % (_quote(library), _quote(cell), _quote(spec.instance), _quote(spec.property), _quote(text), ivar, _quote(spec.property), _quote(text))
+            locate_params.append(
+                "cdf%d=cdfGetInstCDF(inst%d) unless(cdf%d error(\"CDF unavailable: %s\")) "
+                "foreach(param cdf%d~>parameters when(param~>name==%s param%d=param)) "
+                "unless(param%d error(\"CDF parameter missing: %s.%s\"))"
+                % (index, index, index, spec.instance, index, _quote(spec.property), index, index, spec.instance, spec.property)
+            )
+            writes.append("param%d~>value=%s" % (index, _quote(text)))
+            if sync_property is not None:
+                writes.append("dbReplaceProp(inst%d %s \"string\" %s)" % (index, _quote(sync_property), _quote(text)))
+                verifies.append("unless(getq(inst%d stringToSymbol(%s))==%s error(\"sync verification failed: %s.%s\"))" % (index, _quote(sync_property), _quote(text), spec.instance, sync_property))
+            verifies.append(
+                "unless(param%d~>value==%s error(\"CDF verification failed: %s.%s\"))"
+                % (index, _quote(text), spec.instance, spec.property)
             )
         skill = (
             "let((cv inst %s ok) ok=nil cv=dbOpenCellViewByType(%s %s \"schematic\" \"schematic\" \"a\") "
-            "unless(cv error(\"work schematic missing\")) unwindProtect(progn(%s %s "
+            "unless(cv error(\"work schematic missing\")) unwindProtect(progn(%s %s %s %s "
             "when(schCheck(cv) dbSave(cv) ok=t) unless(ok error(\"schCheck failed\")) printf(\"ANALOG_OPT_OK:apply\")) "
             "when(cv dbClose(cv))))"
-        ) % (declarations, _quote(library), _quote(cell), " ".join(validations), " ".join(writes))
+        ) % (declarations, _quote(library), _quote(cell), " ".join(locate_instances), " ".join(locate_params), " ".join(writes), " ".join(verifies))
         self._execute(skill, "ANALOG_OPT_OK:apply")
 
     def read_cdf(self, library: str, cell: str, specs: Sequence[ParameterSpec]) -> Dict[str, Real]:
@@ -167,12 +177,13 @@ class VirtuosoApplier:
         rows = []
         for spec in selected:
             rows.append(
-                "inst=nil foreach(x cv~>instances when(x~>name==%s inst=x)) unless(inst error(\"instance not found\")) "
-                "value=getq(inst stringToSymbol(%s)) unless(value error(\"property missing\")) printf(\"\\n%s\\t%%s\" value)"
+                "inst=nil param=nil foreach(x cv~>instances when(x~>name==%s inst=x)) unless(inst error(\"instance not found\")) "
+                "foreach(p cdfGetInstCDF(inst)~>parameters when(p~>name==%s param=p)) "
+                "unless(param error(\"CDF parameter missing\")) printf(\"\\n%s\\t%%s\" param~>value)"
                 % (_quote(spec.instance), _quote(spec.property), spec.name)
             )
         skill = (
-            "let((cv inst x value) cv=dbOpenCellViewByType(%s %s \"schematic\" \"schematic\" \"r\") "
+            "let((cv inst x p param) cv=dbOpenCellViewByType(%s %s \"schematic\" \"schematic\" \"r\") "
             "unless(cv error(\"schematic missing\")) unwindProtect(progn(printf(\"ANALOG_OPT_OK:read\") %s) when(cv dbClose(cv))))"
         ) % (_quote(library), _quote(cell), " ".join(rows))
         output = self._execute(skill, "ANALOG_OPT_OK:read")
@@ -210,11 +221,10 @@ class VirtuosoApplier:
         if missing:
             raise ApplyError("missing read values: %s" % ", ".join(sorted(missing)))
         return parsed
-
     def publish_result_cell(self, library: str, work_cell: str, result_cell: str, source_cell: str, replace: bool) -> None:
         work_cell = _identifier(work_cell, "work cell")
         result_cell = _identifier(result_cell, "result cell")
         source_cell = _identifier(source_cell, "source cell")
         if len({work_cell, result_cell, source_cell}) != 3:
             raise ApplyError("source, work, and result cells must be distinct")
-        self._copy_new(library, work_cell, result_cell, "publish")
+        self._copy_new(library, work_cell, result_cell, "publish", bool(replace))

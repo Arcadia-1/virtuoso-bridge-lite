@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from numbers import Real
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
@@ -25,6 +26,7 @@ class ParameterSpec:
     variable: Optional[str] = None
     stimulus: Optional[str] = None
     unit: Optional[str] = None
+    sync_property: Optional[str] = None
 
 
 class ParameterSpace:
@@ -106,6 +108,9 @@ class ParameterSpace:
                 )
                 if step_count < 0.0:
                     raise ValueError("%s finite representable step count is invalid" % spec.name)
+            if spec.sync_property is not None:
+                if not isinstance(spec.sync_property, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.$]*", spec.sync_property):
+                    raise ValueError("parameter sync_property must be a valid identifier")
             names.append(spec.name)
         if len(names) != len(set(names)):
             raise ValueError("parameter names must be unique")

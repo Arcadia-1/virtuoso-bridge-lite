@@ -269,3 +269,10 @@ def test_schema_module_uses_python_39_compatible_annotations():
         for annotation in annotations
         for node in ast.walk(annotation)
     )
+
+def test_schema_preserves_sync_property(tmp_path):
+    config = minimal_config()
+    config["parameters"] = [{"name": "M1_W", "target": "virtuoso_cdf", "sync_property": "fw"}]
+    path = write_config(tmp_path, config)
+    loaded = load_config(path)
+    assert loaded.parameters[0]["sync_property"] == "fw"

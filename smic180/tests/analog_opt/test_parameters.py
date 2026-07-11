@@ -147,3 +147,14 @@ def test_parameters_module_uses_python_39_compatible_annotations():
     module = ast.parse(path.read_text(encoding="utf-8-sig"))
     annotations = [node.annotation for node in ast.walk(module) if isinstance(node, (ast.arg, ast.AnnAssign)) and node.annotation is not None]
     assert not any(isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr) for annotation in annotations for node in ast.walk(annotation))
+
+def test_parameter_spec_accepts_explicit_sync_property():
+    item = ParameterSpec(name="W", target="virtuoso_cdf", lower=1e-6, upper=20e-6, instance="M1", property="w", sync_property="fw")
+    space = ParameterSpace([item])
+    assert space.specs[0].sync_property == "fw"
+
+
+def test_parameter_space_rejects_invalid_sync_property():
+    item = ParameterSpec(name="W", target="virtuoso_cdf", lower=1e-6, upper=20e-6, instance="M1", property="w", sync_property="bad property")
+    with pytest.raises(ValueError, match="sync_property"):
+        ParameterSpace([item])
