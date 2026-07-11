@@ -88,7 +88,7 @@ def test_replace_true_backs_up_before_deleting_target_and_cleans_helpers():
     publish_copy = 'dstCv=dbCopyCellView(tmpCv "tr" "work" "schematic")'
     assert backup_copy in skill and delete_target in skill and publish_copy in skill
     assert skill.index(backup_copy) < skill.index(delete_target) < skill.index(publish_copy)
-    assert 'dbDeleteCellView("tr" "work__analog_opt_tmp" "schematic")' in skill
+    assert 'dbDeleteCellView("tr" "work__analog_opt_tmp_' in skill
     assert 'dbDeleteCellView("tr" "work__analog_opt_backup_' in skill
     assert 'printf("ANALOG_OPT_OK:create:%s" status)' in skill
 
@@ -98,9 +98,9 @@ def test_replace_script_rolls_back_failed_publish_from_backup():
     VirtuosoApplier(c).publish_result_cell("tr", "work", "best", "amp", True)
     skill = c.calls[0][0]
     assert 'unless(dstCv' in skill
-    assert 'when(ddGetObj("tr" "best") dbDeleteCellView("tr" "best" "schematic"))' in skill
+    assert 'when(ddGetObj("tr" "best") unless(dbDeleteCellView("tr" "best" "schematic")' in skill
     assert 'restoreCv=dbCopyCellView(backupCv "tr" "best" "schematic")' in skill
-    assert 'unless(restoreCv error("rollback restore failed"))' in skill
+    assert 'unless(restoreCv progn(printf("ANALOG_OPT_RECOVERY_REQUIRED:' in skill and 'rollback restore failed; backup=' in skill
     assert "when(oldCv dbClose(oldCv))" in skill
     assert "when(backupCv dbClose(backupCv))" in skill
     assert "when(restoreCv dbClose(restoreCv))" in skill
@@ -115,3 +115,50 @@ def test_replace_uses_unique_backup_and_closes_old_view_before_delete():
     assert s1 != s2
     assert "work__analog_opt_backup_" in s1 and "work__analog_opt_backup_" in s2
     assert s1.index("when(oldCv dbClose(oldCv)) oldCv=nil") < s1.index('dbDeleteCellView("tr" "work" "schematic")')
+
+def test_temp_and_backup_are_unique_and_never_predeleted():
+    c1 = RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])
+    c2 = RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])
+    VirtuosoApplier(c1).create_work_cell("tr", "amp", "work", False)
+    VirtuosoApplier(c2).create_work_cell("tr", "amp", "work", False)
+    s1, s2 = c1.calls[0][0], c2.calls[0][0]
+    assert s1 != s2
+    assert "work__analog_opt_tmp_" in s1 and "work__analog_opt_backup_" in s1
+    first_copy = s1.index("tmpCv=dbCopyCellView")
+    assert "dbDeleteCellView" not in s1[:first_copy]
+    assert 'ddGetObj("tr" "amp")' not in s1.split("tmpCv=dbCopyCellView", 1)[0]
+
+
+def test_helper_cleanup_is_gated_by_confirmed_creation_flags():
+    c = RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])
+    VirtuosoApplier(c).create_work_cell("tr", "amp", "work", True)
+    skill = c.calls[0][0]
+    assert "tempCreated=nil" in skill and "backupSafe=nil" in skill and "cleanupBackup=nil" in skill
+    assert "tempCreated=t" in skill and "backupSafe=t" in skill
+    assert "when(tempCreated" in skill
+    assert "when(backupSafe&&cleanupBackup" in skill
+
+
+def test_rollback_failure_preserves_backup_and_reports_its_name():
+    c = RecordingClient([Result("ANALOG_OPT_OK:publish:REPLACED")])
+    VirtuosoApplier(c).publish_result_cell("tr", "work", "best", "amp", True)
+    skill = c.calls[0][0]
+    assert 'unless(restoreCv progn(printf("ANALOG_OPT_RECOVERY_REQUIRED:' in skill
+    assert "backupSafe=t" in skill and "cleanupBackup=nil" in skill
+    assert "when(backupSafe&&cleanupBackup" in skill
+    assert "backup cell" in skill or "RECOVERY_REQUIRED" in skill
+
+
+def test_replace_true_accepts_created_when_target_is_absent():
+    VirtuosoApplier(RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])).create_work_cell("tr", "amp", "work", True)
+
+
+def test_every_critical_save_and_delete_is_checked():
+    c = RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])
+    VirtuosoApplier(c).create_work_cell("tr", "amp", "work", True)
+    skill = c.calls[0][0]
+    for name in ("tmpCv", "backupCv", "dstCv", "restoreCv"):
+        assert 'unless(dbSave(%s)' % name in skill
+    assert 'unless(dbDeleteCellView("tr" "work" "schematic")' in skill
+    assert "temporary cleanup failed" in skill
+    assert "backup cleanup failed" in skill

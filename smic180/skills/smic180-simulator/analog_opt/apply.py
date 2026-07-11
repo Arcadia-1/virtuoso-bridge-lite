@@ -95,46 +95,61 @@ class VirtuosoApplier:
         destination = _identifier(destination, "destination cell")
         if source == destination:
             raise ApplyError("source and destination cells must be distinct")
-        temp = _identifier(destination + "__analog_opt_tmp", "temporary cell")
-        backup = _identifier(destination + "__analog_opt_backup_" + uuid.uuid4().hex[:12], "backup cell")
+        nonce = uuid.uuid4().hex[:12]
+        temp = _identifier(destination + "__analog_opt_tmp_" + nonce, "temporary cell")
+        backup = _identifier(destination + "__analog_opt_backup_" + nonce, "backup cell")
+        if len({source, destination, temp, backup}) != 4:
+            raise ApplyError("source, destination, temporary, and backup cells must be distinct")
         lib, src, dst, tmp, bak = map(_quote, (library, source, destination, temp, backup))
         prefix = "ANALOG_OPT_OK:%s" % operation
         replace_flag = "t" if replace else "nil"
+        recovery = "ANALOG_OPT_RECOVERY_REQUIRED:%s" % backup
         skill = (
-            f'let((srcCv tmpCv oldCv backupCv dstCv restoreCv status replacing) status="FAILED" replacing=nil '
+            f'let((srcCv tmpCv oldCv backupCv dstCv restoreCv status tempCreated backupSafe cleanupBackup) '
+            f'status="FAILED" tempCreated=nil backupSafe=nil cleanupBackup=nil '
             f'unwindProtect(progn('
-            f'when(ddGetObj({lib} {tmp}) dbDeleteCellView({lib} {tmp} "schematic")) '
-            f'when(ddGetObj({lib} {bak}) dbDeleteCellView({lib} {bak} "schematic")) '
+            f'when(ddGetObj({lib} {tmp}) error("temporary cell already exists")) '
+            f'when(ddGetObj({lib} {bak}) error("backup cell already exists")) '
             f'srcCv=dbOpenCellViewByType({lib} {src} "schematic" "schematic" "r") '
             f'unless(srcCv error("source schematic missing")) '
             f'tmpCv=dbCopyCellView(srcCv {lib} {tmp} "schematic") '
-            f'unless(tmpCv error("temporary copy failed")) dbSave(tmpCv) '
+            f'unless(tmpCv error("temporary copy failed")) tempCreated=t '
+            f'unless(dbSave(tmpCv) error("temporary save failed")) '
             f'if(ddGetObj({lib} {dst}) then '
             f'if({replace_flag} then progn('
             f'oldCv=dbOpenCellViewByType({lib} {dst} "schematic" "schematic" "r") '
             f'unless(oldCv error("existing target open failed")) '
             f'backupCv=dbCopyCellView(oldCv {lib} {bak} "schematic") '
-            f'unless(backupCv error("backup copy failed")) dbSave(backupCv) replacing=t when(oldCv dbClose(oldCv)) oldCv=nil '
+            f'unless(backupCv error("backup copy failed")) '
+            f'unless(dbSave(backupCv) error("backup save failed")) backupSafe=t '
+            f'when(oldCv dbClose(oldCv)) oldCv=nil '
             f'unless(dbDeleteCellView({lib} {dst} "schematic") error("target delete failed")) '
             f'dstCv=dbCopyCellView(tmpCv {lib} {dst} "schematic") '
-            f'unless(dstCv progn('
-            f'when(ddGetObj({lib} {dst}) dbDeleteCellView({lib} {dst} "schematic")) '
+            f'if(dstCv then progn('
+            f'unless(dbSave(dstCv) error("destination save failed")) status="REPLACED" cleanupBackup=t) '
+            f'else progn('
+            f'when(ddGetObj({lib} {dst}) unless(dbDeleteCellView({lib} {dst} "schematic") error("failed target cleanup failed"))) '
             f'restoreCv=dbCopyCellView(backupCv {lib} {dst} "schematic") '
-            f'unless(restoreCv error("rollback restore failed")) dbSave(restoreCv) error("replacement publish failed"))) '
-            f'dbSave(dstCv) status="REPLACED") status="EXISTS") '
+            f'unless(restoreCv progn(printf("{recovery}") error("rollback restore failed; backup={backup}"))) '
+            f'unless(dbSave(restoreCv) progn(printf("{recovery}") error("rollback save failed; backup={backup}"))) '
+            f'cleanupBackup=t error("replacement publish failed; rollback restored")))) '
+            f'status="EXISTS") '
             f'else progn(dstCv=dbCopyCellView(tmpCv {lib} {dst} "schematic") '
-            f'unless(dstCv error("publish copy failed")) dbSave(dstCv) status="CREATED")) '
+            f'unless(dstCv error("publish copy failed")) '
+            f'unless(dbSave(dstCv) error("destination save failed")) status="CREATED")) '
             f'unless(status=="FAILED" printf("{prefix}:%s" status))) '
             f'when(srcCv dbClose(srcCv)) when(tmpCv dbClose(tmpCv)) when(oldCv dbClose(oldCv)) '
             f'when(backupCv dbClose(backupCv)) when(dstCv dbClose(dstCv)) when(restoreCv dbClose(restoreCv)) '
-            f'when(ddGetObj({lib} {tmp}) dbDeleteCellView({lib} {tmp} "schematic")) '
-            f'when(ddGetObj({lib} {bak}) dbDeleteCellView({lib} {bak} "schematic"))))'
+            f'when(tempCreated unless(dbDeleteCellView({lib} {tmp} "schematic") error("temporary cleanup failed"))) '
+            f'when(backupSafe&&cleanupBackup unless(dbDeleteCellView({lib} {bak} "schematic") error("backup cleanup failed")))))'
         )
         output = self._execute(skill, prefix + ":")
         if any(line.strip() == prefix + ":EXISTS" for line in output.splitlines()):
             raise ApplyError("destination cell already exists")
-        expected = prefix + (":REPLACED" if replace else ":CREATED")
-        if not any(line.strip() == expected for line in output.splitlines()):
+        accepted = {prefix + ":CREATED"}
+        if replace:
+            accepted.add(prefix + ":REPLACED")
+        if not any(line.strip() in accepted for line in output.splitlines()):
             raise ApplyError("bridge did not confirm destination publication")
     def create_work_cell(self, library: str, source_cell: str, work_cell: str, replace: bool) -> None:
         # replace is accepted for API compatibility, but an existing destination
