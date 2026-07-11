@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import math
+from numbers import Real
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Union
+from typing import Any, Dict, List, Mapping, Union
+
+from analog_opt.units import UnitError, parse_quantity
 
 
 class ConfigError(ValueError):
@@ -61,6 +65,7 @@ _REQUIRED_TOP_LEVEL = (
 _REQUIRED_DESIGN = ("library", "cell", "work_cell", "result_cell", "testbench_cell")
 _PARAMETER_TARGETS = {"virtuoso_cdf", "bias", "spectre_variable"}
 _ANALYSIS_TYPES = {"dc_op", "dc_sweep", "ac", "noise", "tran"}
+_STIMULUS_DIMENSIONS = {"voltage": "voltage", "current": "current"}
 
 
 def _mapping(value: Any, location: str) -> Mapping[str, Any]:
@@ -101,6 +106,26 @@ def _parse_design(value: Any) -> DesignConfig:
     )
 
 
+def _parse_bound(value: Any, kind: str, location: str) -> float:
+    if isinstance(value, Real) and not isinstance(value, bool):
+        result = float(value)
+        if not math.isfinite(result):
+            raise ConfigError(f"{location} must be finite")
+        return result
+    if isinstance(value, str):
+        try:
+            dimension = _STIMULUS_DIMENSIONS[kind]
+        except KeyError as exc:
+            raise ConfigError(
+                f"{location} cannot parse quantity for stimulus kind: {kind}"
+            ) from exc
+        try:
+            return parse_quantity(value, dimension)
+        except UnitError as exc:
+            raise ConfigError(f"{location} must be a valid quantity: {exc}") from exc
+    raise ConfigError(f"{location} must be a number or quantity")
+
+
 def _parse_stimuli(value: Any) -> Dict[str, StimulusConfig]:
     data = _mapping(value, "stimuli")
     stimuli = {}
@@ -112,6 +137,14 @@ def _parse_stimuli(value: Any) -> Dict[str, StimulusConfig]:
             raise ConfigError(f"stimuli.{name}.optimizable must be a boolean")
         if optimizable:
             _require_keys(stimulus, ("lower", "upper"), f"stimuli.{name}.")
+            lower_value = _parse_bound(
+                stimulus["lower"], stimulus["kind"], f"stimuli.{name}.lower"
+            )
+            upper_value = _parse_bound(
+                stimulus["upper"], stimulus["kind"], f"stimuli.{name}.upper"
+            )
+            if lower_value >= upper_value:
+                raise ConfigError(f"stimuli.{name} bounds require lower < upper")
         stimuli[name] = StimulusConfig(
             kind=stimulus["kind"],
             optimizable=optimizable,
@@ -154,7 +187,7 @@ def load_config(path: Union[str, Path]) -> AnalogOptConfig:
 
     data = _mapping(raw, "config")
     _require_keys(data, _REQUIRED_TOP_LEVEL, "")
-    if data["version"] != 2:
+    if type(data["version"]) is not int or data["version"] != 2:
         raise ConfigError("version must be 2")
 
     parameters = _list_of_mappings(data["parameters"], "parameters")

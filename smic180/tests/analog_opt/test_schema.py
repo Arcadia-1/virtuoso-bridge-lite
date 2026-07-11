@@ -48,9 +48,10 @@ def test_loads_v2_config_as_dataclasses(tmp_path):
     assert config.version == 2
 
 
-def test_rejects_old_version(tmp_path):
+@pytest.mark.parametrize("version", [1, 2.0, True, False, "2"])
+def test_version_must_be_exact_integer_two(tmp_path, version):
     data = minimal_config()
-    data["version"] = 1
+    data["version"] = version
     with pytest.raises(ConfigError, match="version must be 2"):
         load_config(write_config(tmp_path, data))
 
@@ -88,6 +89,38 @@ def test_optimizable_stimulus_requires_both_bounds(tmp_path, missing_bound):
     del data["stimuli"]["VDD"][missing_bound]
     with pytest.raises(ConfigError, match=missing_bound):
         load_config(write_config(tmp_path, data))
+
+
+@pytest.mark.parametrize(
+    ("lower", "upper"),
+    [
+        (None, "3.6V"),
+        ("2.7V", None),
+        ("invalid", "3.6V"),
+        ("2.7V", "invalid"),
+        (float("nan"), 3.6),
+        (2.7, float("inf")),
+        ("3.3V", "3.3V"),
+        ("3.6V", "2.7V"),
+    ],
+)
+def test_optimizable_stimulus_requires_valid_increasing_bounds(tmp_path, lower, upper):
+    data = minimal_config()
+    data["stimuli"]["VDD"].update(
+        {"optimizable": True, "lower": lower, "upper": upper}
+    )
+    with pytest.raises(ConfigError, match="bounds|lower|upper"):
+        load_config(write_config(tmp_path, data))
+
+
+def test_optimizable_stimulus_accepts_numeric_bounds(tmp_path):
+    data = minimal_config()
+    data["stimuli"]["VDD"].update(
+        {"optimizable": True, "lower": 2.7, "upper": 3.6}
+    )
+    stimulus = load_config(write_config(tmp_path, data)).stimuli["VDD"]
+    assert stimulus.lower == 2.7
+    assert stimulus.upper == 3.6
 
 
 def test_optimizable_stimulus_accepts_both_bounds(tmp_path):
