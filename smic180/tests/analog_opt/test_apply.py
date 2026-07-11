@@ -46,18 +46,15 @@ def test_copy_closes_all_views_and_only_deletes_temp_view():
     c=RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")]); VirtuosoApplier(c).create_work_cell("tr","amp","work",False); s=c.calls[0][0]
     assert 'dbOpenCellViewByType("tr" "amp" "schematic" "schematic" "r")' in s and "dbCopyCellView" in s
     assert "when(srcCv dbClose(srcCv))" in s and "when(tmpCv dbClose(tmpCv))" in s and "when(dstCv dbClose(dstCv))" in s
-    assert "ddDeleteCell" not in s and 'dbDeleteCellView("tr" "work"' not in s and '__analog_opt_tmp' in s
+    assert "ddDeleteCell" not in s and 'dbDeleteCellView("tr" "amp"' not in s and '__analog_opt_tmp' in s and 'if(nil then progn(' in s
 
-@pytest.mark.parametrize("replace,message",[(False,"already exists"),(True,"safe replacement unsupported")])
-def test_create_existing_destination_replace_contract(replace,message):
-    with pytest.raises(ApplyError,match=message): VirtuosoApplier(RecordingClient([Result("ANALOG_OPT_OK:create:EXISTS")])).create_work_cell("tr","amp","work",replace)
+def test_create_existing_without_replace_is_rejected():
+    with pytest.raises(ApplyError, match="already exists"):
+        VirtuosoApplier(RecordingClient([Result("ANALOG_OPT_OK:create:EXISTS")])).create_work_cell("tr", "amp", "work", False)
 
 @pytest.mark.parametrize("work,result,source",[("amp","best","amp"),("work","amp","amp"),("work","work","amp")])
 def test_publish_requires_distinct_cells(work,result,source):
     with pytest.raises(ApplyError,match="distinct"): VirtuosoApplier(RecordingClient([])).publish_result_cell("tr",work,result,source,False)
-
-def test_publish_existing_replace_true_is_unsupported():
-    with pytest.raises(ApplyError,match="safe replacement unsupported"): VirtuosoApplier(RecordingClient([Result("ANALOG_OPT_OK:publish:EXISTS")])).publish_result_cell("tr","work","best","amp",True)
 
 def test_read_uses_cdf_parameters_and_returns_si_mapping():
     c=RecordingClient([Result("ANALOG_OPT_OK:read\nW\t10um\nM\t4\nR\t2kOhm")]); values=VirtuosoApplier(c).read_cdf("tr","work",[spec("W","M1","w","um"),spec("M","M1","m",dtype="int"),spec("R","R1","r","kOhm")]); s=c.calls[0][0]
@@ -76,5 +73,45 @@ def test_explicit_sync_property_is_read_back_before_save():
     c = RecordingClient([Result("ANALOG_OPT_OK:apply")])
     VirtuosoApplier(c).apply_cdf("tr", "work", [spec("W", "M1", "w", "um", sync_property="fw")], {"W": 10e-6})
     skill = c.calls[0][0]
-    assert 'getq(inst0 stringToSymbol("fw"))=="10um"' in skill
-    assert skill.index('getq(inst0 stringToSymbol("fw"))') < skill.index("dbSave(cv)")
+    assert 'syncProp0=dbReplaceProp(inst0 "fw" "string" "10um")' in skill
+    assert 'unless(syncProp0 error("sync property failed: M1.fw"))' in skill
+    assert 'syncProp0~>value=="10um"' in skill
+    assert skill.index('syncProp0~>value') < skill.index("dbSave(cv)")
+
+def test_replace_true_backs_up_before_deleting_target_and_cleans_helpers():
+    c = RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])
+    VirtuosoApplier(c).create_work_cell("tr", "amp", "work", True)
+    skill = c.calls[0][0]
+    assert "work__analog_opt_backup" in skill
+    backup_copy = 'backupCv=dbCopyCellView(oldCv "tr" "work__analog_opt_backup_'
+    delete_target = 'dbDeleteCellView("tr" "work" "schematic")'
+    publish_copy = 'dstCv=dbCopyCellView(tmpCv "tr" "work" "schematic")'
+    assert backup_copy in skill and delete_target in skill and publish_copy in skill
+    assert skill.index(backup_copy) < skill.index(delete_target) < skill.index(publish_copy)
+    assert 'dbDeleteCellView("tr" "work__analog_opt_tmp" "schematic")' in skill
+    assert 'dbDeleteCellView("tr" "work__analog_opt_backup_' in skill
+    assert 'printf("ANALOG_OPT_OK:create:%s" status)' in skill
+
+
+def test_replace_script_rolls_back_failed_publish_from_backup():
+    c = RecordingClient([Result("ANALOG_OPT_OK:publish:REPLACED")])
+    VirtuosoApplier(c).publish_result_cell("tr", "work", "best", "amp", True)
+    skill = c.calls[0][0]
+    assert 'unless(dstCv' in skill
+    assert 'when(ddGetObj("tr" "best") dbDeleteCellView("tr" "best" "schematic"))' in skill
+    assert 'restoreCv=dbCopyCellView(backupCv "tr" "best" "schematic")' in skill
+    assert 'unless(restoreCv error("rollback restore failed"))' in skill
+    assert "when(oldCv dbClose(oldCv))" in skill
+    assert "when(backupCv dbClose(backupCv))" in skill
+    assert "when(restoreCv dbClose(restoreCv))" in skill
+
+
+def test_replace_uses_unique_backup_and_closes_old_view_before_delete():
+    c1 = RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])
+    c2 = RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])
+    VirtuosoApplier(c1).create_work_cell("tr", "amp", "work", True)
+    VirtuosoApplier(c2).create_work_cell("tr", "amp", "work", True)
+    s1, s2 = c1.calls[0][0], c2.calls[0][0]
+    assert s1 != s2
+    assert "work__analog_opt_backup_" in s1 and "work__analog_opt_backup_" in s2
+    assert s1.index("when(oldCv dbClose(oldCv)) oldCv=nil") < s1.index('dbDeleteCellView("tr" "work" "schematic")')

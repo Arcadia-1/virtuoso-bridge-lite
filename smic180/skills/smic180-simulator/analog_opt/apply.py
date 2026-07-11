@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import re
+import uuid
 from numbers import Real
 from typing import Any, Dict, Mapping, Sequence
 
@@ -95,29 +96,46 @@ class VirtuosoApplier:
         if source == destination:
             raise ApplyError("source and destination cells must be distinct")
         temp = _identifier(destination + "__analog_opt_tmp", "temporary cell")
-        lib, src, dst, tmp = map(_quote, (library, source, destination, temp))
+        backup = _identifier(destination + "__analog_opt_backup_" + uuid.uuid4().hex[:12], "backup cell")
+        lib, src, dst, tmp, bak = map(_quote, (library, source, destination, temp, backup))
         prefix = "ANALOG_OPT_OK:%s" % operation
+        replace_flag = "t" if replace else "nil"
         skill = (
-            "let((srcCv tmpCv dstCv status) status=\"FAILED\" "
-            "unwindProtect(progn("
-            "when(ddGetObj(%s %s) dbDeleteCellView(%s %s \"schematic\")) "
-            "srcCv=dbOpenCellViewByType(%s %s \"schematic\" \"schematic\" \"r\") "
-            "unless(srcCv error(\"source schematic missing\")) "
-            "tmpCv=dbCopyCellView(srcCv %s %s \"schematic\") "
-            "unless(tmpCv error(\"temporary copy failed\")) "
-            "if(ddGetObj(%s %s) then status=\"EXISTS\" "
-            "else dstCv=dbCopyCellView(tmpCv %s %s \"schematic\") "
-            "unless(dstCv error(\"publish copy failed\")) dbSave(dstCv) status=\"CREATED\")) "
-            "printf(\"%s:%%s\" status)) "
-            "when(srcCv dbClose(srcCv)) when(tmpCv dbClose(tmpCv)) when(dstCv dbClose(dstCv)) "
-            "when(ddGetObj(%s %s) dbDeleteCellView(%s %s \"schematic\"))))"
-        ) % (lib, tmp, lib, tmp, lib, src, lib, tmp, lib, dst, lib, dst, prefix, lib, tmp, lib, tmp)
+            f'let((srcCv tmpCv oldCv backupCv dstCv restoreCv status replacing) status="FAILED" replacing=nil '
+            f'unwindProtect(progn('
+            f'when(ddGetObj({lib} {tmp}) dbDeleteCellView({lib} {tmp} "schematic")) '
+            f'when(ddGetObj({lib} {bak}) dbDeleteCellView({lib} {bak} "schematic")) '
+            f'srcCv=dbOpenCellViewByType({lib} {src} "schematic" "schematic" "r") '
+            f'unless(srcCv error("source schematic missing")) '
+            f'tmpCv=dbCopyCellView(srcCv {lib} {tmp} "schematic") '
+            f'unless(tmpCv error("temporary copy failed")) dbSave(tmpCv) '
+            f'if(ddGetObj({lib} {dst}) then '
+            f'if({replace_flag} then progn('
+            f'oldCv=dbOpenCellViewByType({lib} {dst} "schematic" "schematic" "r") '
+            f'unless(oldCv error("existing target open failed")) '
+            f'backupCv=dbCopyCellView(oldCv {lib} {bak} "schematic") '
+            f'unless(backupCv error("backup copy failed")) dbSave(backupCv) replacing=t when(oldCv dbClose(oldCv)) oldCv=nil '
+            f'unless(dbDeleteCellView({lib} {dst} "schematic") error("target delete failed")) '
+            f'dstCv=dbCopyCellView(tmpCv {lib} {dst} "schematic") '
+            f'unless(dstCv progn('
+            f'when(ddGetObj({lib} {dst}) dbDeleteCellView({lib} {dst} "schematic")) '
+            f'restoreCv=dbCopyCellView(backupCv {lib} {dst} "schematic") '
+            f'unless(restoreCv error("rollback restore failed")) dbSave(restoreCv) error("replacement publish failed"))) '
+            f'dbSave(dstCv) status="REPLACED") status="EXISTS") '
+            f'else progn(dstCv=dbCopyCellView(tmpCv {lib} {dst} "schematic") '
+            f'unless(dstCv error("publish copy failed")) dbSave(dstCv) status="CREATED")) '
+            f'unless(status=="FAILED" printf("{prefix}:%s" status))) '
+            f'when(srcCv dbClose(srcCv)) when(tmpCv dbClose(tmpCv)) when(oldCv dbClose(oldCv)) '
+            f'when(backupCv dbClose(backupCv)) when(dstCv dbClose(dstCv)) when(restoreCv dbClose(restoreCv)) '
+            f'when(ddGetObj({lib} {tmp}) dbDeleteCellView({lib} {tmp} "schematic")) '
+            f'when(ddGetObj({lib} {bak}) dbDeleteCellView({lib} {bak} "schematic"))))'
+        )
         output = self._execute(skill, prefix + ":")
         if any(line.strip() == prefix + ":EXISTS" for line in output.splitlines()):
-            raise ApplyError("safe replacement unsupported" if replace else "destination cell already exists")
-        if not any(line.strip() == prefix + ":CREATED" for line in output.splitlines()):
-            raise ApplyError("bridge did not confirm destination creation")
-
+            raise ApplyError("destination cell already exists")
+        expected = prefix + (":REPLACED" if replace else ":CREATED")
+        if not any(line.strip() == expected for line in output.splitlines()):
+            raise ApplyError("bridge did not confirm destination publication")
     def create_work_cell(self, library: str, source_cell: str, work_cell: str, replace: bool) -> None:
         # replace is accepted for API compatibility, but an existing destination
         # is never destroyed because this bridge has no atomic cell swap.
@@ -138,7 +156,7 @@ class VirtuosoApplier:
                 raise ApplyError("invalid unit for %s: %s" % (spec.name, exc)) from exc
             sync_property = _identifier(spec.sync_property, "sync property") if spec.sync_property is not None else None
             prepared.append((index, spec, text, sync_property))
-        declarations = "param " + " ".join("inst%d cdf%d param%d" % (i, i, i) for i, _, _, _ in prepared)
+        declarations = "param " + " ".join("inst%d cdf%d param%d syncProp%d" % (i, i, i, i) for i, _, _, _ in prepared)
         locate_instances = []
         locate_params = []
         writes = []
@@ -156,8 +174,8 @@ class VirtuosoApplier:
             )
             writes.append("param%d~>value=%s" % (index, _quote(text)))
             if sync_property is not None:
-                writes.append("dbReplaceProp(inst%d %s \"string\" %s)" % (index, _quote(sync_property), _quote(text)))
-                verifies.append("unless(getq(inst%d stringToSymbol(%s))==%s error(\"sync verification failed: %s.%s\"))" % (index, _quote(sync_property), _quote(text), spec.instance, sync_property))
+                writes.append("syncProp%d=dbReplaceProp(inst%d %s \"string\" %s) unless(syncProp%d error(\"sync property failed: %s.%s\"))" % (index, index, _quote(sync_property), _quote(text), index, spec.instance, sync_property))
+                verifies.append("unless(syncProp%d~>value==%s error(\"sync verification failed: %s.%s\"))" % (index, _quote(text), spec.instance, sync_property))
             verifies.append(
                 "unless(param%d~>value==%s error(\"CDF verification failed: %s.%s\"))"
                 % (index, _quote(text), spec.instance, spec.property)
