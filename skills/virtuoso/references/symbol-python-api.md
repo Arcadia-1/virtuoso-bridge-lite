@@ -52,10 +52,16 @@ the exception identifies the retained backup view for manual recovery.
 ports = client.symbol.read_ports("demoLib", "nand2")
 ```
 
-The returned dictionary contains `terms`, `labels`, `pinOrder`, `portOrder`,
-and `termOrder`. `pinOrder` is the effective value from `schGetPinOrder()`,
-`portOrder` is the native symbol property, and `termOrder` is retained
-separately for existing callers and manually authored symbols.
+The returned dictionary contains `terms`, `labels`, `selectionBoxes`,
+`pinOrder`, `portOrder`, and `termOrder`. Each label record includes its text,
+label type, layer, purpose, position, justification, orientation, font, height,
+and bounding box. These fields matter because label type alone does not
+identify a semantic symbol label: a normal label on `pin/label` is a pin name,
+while a normal label on `annotate/drawing` is only drawing text.
+
+`pinOrder` is the effective value from `schGetPinOrder()`, `portOrder` is the
+native symbol property, and `termOrder` is retained separately for existing
+callers and manually authored symbols.
 
 ## Edit Symbol
 
@@ -66,3 +72,92 @@ symbol-specific `schSymbolToPinList()` API. Cadence rejects non-symbol
 cellviews with `SCH-1004`, while unsuccessful pin-list generation also fails
 the edit. This validation does not run schematic connectivity, SRC, or VIC;
 `schCheck()` remains schematic-only.
+
+### Drawing and semantic labels
+
+The geometric builders create ordinary database shapes:
+
+```python
+from virtuoso_bridge.virtuoso.symbol import (
+    symbol_create_ellipse,
+    symbol_create_instance_label,
+    symbol_create_label,
+    symbol_create_line,
+    symbol_create_logical_label,
+    symbol_create_pin,
+    symbol_create_pin_name,
+    symbol_create_polygon,
+    symbol_create_rect,
+    symbol_create_selection_box,
+    symbol_set_term_order,
+)
+```
+
+`symbol_create_label()` is for non-semantic drawing text. Labels that
+Virtuoso interprets on placed instances must use the dedicated builders. They
+call `schCreateSymbolLabel`, which applies the current session's
+`schSymbolLabelChoices` mapping:
+
+| Meaning | Builder | Label choice | Default text | Type | Layer/purpose |
+|---|---|---|---|---|---|
+| Pin name | `symbol_create_pin_name` | `pin name` | pin name | `normalLabel` | `pin/label` |
+| Instance name | `symbol_create_instance_label` | `instance label` | `[@instanceName]` | `NLPLabel` | `instance/label` |
+| Logical/part name | `symbol_create_logical_label` | `logical label` | `[@partName]` | `NLPLabel` | `device/label` |
+
+Do not create `[@instanceName]` or `[@partName]` as generic labels and then
+set `labelType` manually. In particular, `ILLabel` is not the native type for
+these two choices. It is normally used by analog annotation expressions such
+as `cdsName()`, `cdsTerm()`, and `cdsParam()`.
+
+`symbol_create_pin(..., label=True)` creates its visible name through the
+native `pin name` choice. Use `label=False` only when placing the name
+separately with `symbol_create_pin_name()`.
+
+### Selection box
+
+Every manually drawn symbol should contain one selection box so that placed
+instances can be selected and preselected in a schematic:
+
+```python
+symbol.add(symbol_create_selection_box(-1.5, -1.0, 1.5, 1.0))
+```
+
+The builder creates a rectangle on `instance/drawing`, matching Cadence's
+native symbol generator. Size it around the symbol pin origins and device
+shapes; instance and logical labels do not need to enlarge it. The editor does
+not infer this geometry because the caller controls the drawing.
+
+### Complete manual symbol
+
+```python
+with client.symbol.edit("demoLib", "prettyBlock") as symbol:
+    symbol.add(symbol_create_polygon(
+        "device", "drawing",
+        [(-1.0, -0.75), (-1.0, 0.75), (1.0, 0.0)],
+    ))
+
+    symbol.add(symbol_create_pin(
+        "VIN", -1.5, 0.25,
+        direction="input",
+        label_x=-0.9,
+        label_y=0.25,
+    ))
+    symbol.add(symbol_create_pin(
+        "VOUT", 1.5, 0.0,
+        direction="output",
+        label_x=0.9,
+        label_y=0.0,
+        label_justification="centerRight",
+    ))
+
+    symbol.add(symbol_create_instance_label(0.0, 1.0))
+    symbol.add(symbol_create_logical_label(0.0, -1.0))
+    symbol.add(symbol_create_selection_box(-1.5, -0.75, 1.5, 0.75))
+    symbol.add(symbol_set_term_order(["VIN", "VOUT"]))
+```
+
+After creation, inspect `client.symbol.read_ports()` rather than checking only
+the visible strings. For a correct manually drawn symbol, verify that pin-name
+labels are `pin/label + normalLabel`, the instance label is
+`instance/label + NLPLabel`, the logical label is `device/label + NLPLabel`,
+and exactly one `selectionBoxes` record is present.

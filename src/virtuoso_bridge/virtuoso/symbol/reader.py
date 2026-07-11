@@ -52,8 +52,25 @@ def symbol_read_ports_skill(
         'when(label~>objType == "label" '
         "xy = nil "
         "when(label~>xy xy = list(xCoord(label~>xy) yCoord(label~>xy))) "
+        "bbox = nil "
+        "when(label~>bBox "
+        "bbox = list(list(xCoord(car(label~>bBox)) yCoord(car(label~>bBox))) "
+        "list(xCoord(cadr(label~>bBox)) yCoord(cadr(label~>bBox))))) "
         'result = cons(list("label" if(label~>theLabel label~>theLabel "") '
-        'if(label~>labelType label~>labelType "") xy) result))) '
+        'if(label~>labelType label~>labelType "") xy '
+        'if(label~>layerName label~>layerName "") '
+        'if(label~>purpose label~>purpose "") '
+        'if(label~>justify label~>justify "") '
+        'if(label~>orient label~>orient "") '
+        'if(label~>font label~>font "") '
+        "if(label~>height label~>height 0) bbox) result)) "
+        'when(label~>objType == "rect" && '
+        'label~>layerName == "instance" && label~>purpose == "drawing" '
+        "bbox = nil "
+        "when(label~>bBox "
+        "bbox = list(list(xCoord(car(label~>bBox)) yCoord(car(label~>bBox))) "
+        "list(xCoord(cadr(label~>bBox)) yCoord(cadr(label~>bBox))))) "
+        'result = cons(list("selectionBox" bbox) result))) '
         'result = cons(list("pinOrder" schGetPinOrder(cv)) result) '
         'result = cons(list("portOrder" cv~>portOrder) result) '
         'result = cons(list("termOrder" cv~>termOrder) result) '
@@ -92,6 +109,7 @@ def _parse_symbol_ports_records(parsed: Any) -> dict[str, Any]:
         "pinOrder": [],
         "portOrder": [],
         "termOrder": [],
+        "selectionBoxes": [],
     }
     if not isinstance(parsed, list):
         return result
@@ -110,13 +128,26 @@ def _parse_symbol_ports_records(parsed: Any) -> dict[str, Any]:
                 }
             )
         elif kind == "label" and len(record) >= 4:
-            result["labels"].append(
-                {
-                    "text": _string_value(record[1]),
-                    "labelType": _string_value(record[2]),
-                    "xy": _point_value(record[3]),
-                }
-            )
+            label = {
+                "text": _string_value(record[1]),
+                "labelType": _string_value(record[2]),
+                "xy": _point_value(record[3]),
+            }
+            if len(record) >= 11:
+                label.update(
+                    {
+                        "layerName": _string_value(record[4]),
+                        "purpose": _string_value(record[5]),
+                        "justify": _string_value(record[6]),
+                        "orient": _string_value(record[7]),
+                        "font": _string_value(record[8]),
+                        "height": _float_value(record[9]),
+                        "bbox": _bbox_value(record[10]),
+                    }
+                )
+            result["labels"].append(label)
+        elif kind == "selectionBox" and len(record) >= 2:
+            result["selectionBoxes"].append(_bbox_value(record[1]))
         elif kind in {"pinOrder", "portOrder", "termOrder"} and len(record) >= 2:
             order = record[1] if isinstance(record[1], list) else []
             result[kind] = [_string_value(item) for item in order]

@@ -15,11 +15,15 @@ from virtuoso_bridge.virtuoso.symbol.generator import (
 from virtuoso_bridge.virtuoso.symbol.ops import (
     symbol_check,
     symbol_create_ellipse,
+    symbol_create_instance_label,
     symbol_create_label,
     symbol_create_line,
+    symbol_create_logical_label,
     symbol_create_pin,
+    symbol_create_pin_name,
     symbol_create_polygon,
     symbol_create_rect,
+    symbol_create_selection_box,
     symbol_set_term_order,
 )
 from virtuoso_bridge.virtuoso.symbol.reader import (
@@ -113,6 +117,10 @@ __all__ = [
     "symbol_create_polygon",
     "symbol_create_ellipse",
     "symbol_create_label",
+    "symbol_create_pin_name",
+    "symbol_create_instance_label",
+    "symbol_create_logical_label",
+    "symbol_create_selection_box",
     "symbol_create_pin",
     "symbol_set_term_order",
     "symbol_check",

@@ -278,6 +278,11 @@ Load on demand — each contains detailed API docs and edge-case guidance:
 - `06_read_layout.py` — read layout shapes
 - `07–10` — delete/clear operations
 
+### `examples/01_virtuoso/symbol/`
+- `01_rc_create_with_symbol.py` — native schematic-to-symbol generation
+- `02_bus10_create_with_symbol.py` — native generation with 20 pins
+- `03_manual_symbol_semantics.py` — manual drawing with native pin-name, instance/logical labels, selection box, and readback verification
+
 ### `examples/01_virtuoso/maestro/`
 - `01_read_focused_maestro.py` — in-memory snapshot of the focused maestro (config + env + results + outputs + corners + variables)
 - `02_snapshot_with_metrics.py` — snapshot the focused maestro to a timestamped directory (disk artifacts)
