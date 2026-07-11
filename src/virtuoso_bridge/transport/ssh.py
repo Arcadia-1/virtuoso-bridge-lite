@@ -926,8 +926,10 @@ class SSHRunner:
         # target only after both SSH and local tar have succeeded.  The archive
         # contains the remote directory itself rather than "." so BSD tar does
         # not try to restore metadata on the pre-created staging directory.
+        # A short sibling name and subprocess cwd keep local paths out of tar's
+        # narrow argv on Windows without giving up same-volume atomic renames.
         local_path.parent.mkdir(parents=True, exist_ok=True)
-        stage_path = local_path.with_name(f".{local_path.name}.tmp-{uuid.uuid4().hex}")
+        stage_path = local_path.parent / f".vbtmp-{uuid.uuid4().hex}"
         stage_path.mkdir(parents=True)
         remote_basename = PurePosixPath(remote_path.rstrip("/")).name
         if not remote_basename:
@@ -943,7 +945,7 @@ class SSHRunner:
         remote_cmd = f"sh -c {shlex.quote(inner_cmd)}"
 
         ssh_cmd = self._build_ssh_base() + [remote_cmd]
-        tar_cmd = [self._tar_cmd, "xzf", "-", "-C", str(stage_path).replace("\\", "/")]
+        tar_cmd = [self._tar_cmd, "xzf", "-"]
 
         if self._verbose:
             print(f"[cmd] {' '.join(ssh_cmd)} | {' '.join(tar_cmd)}  # download {remote_path} -> {local_path}", flush=True)
@@ -960,6 +962,7 @@ class SSHRunner:
             stdin=ssh_proc.stdout,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            cwd=stage_path,
             **_windows_no_window_kwargs(),
         )
         if ssh_proc.stdout:
@@ -967,7 +970,7 @@ class SSHRunner:
 
         try:
             tar_out, tar_err = tar_proc.communicate(timeout=timeout)
-            ssh_proc.wait(timeout=5)
+            ssh_proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             ssh_proc.kill()
             tar_proc.kill()
@@ -993,9 +996,7 @@ class SSHRunner:
             )
         try:
             if local_path.exists() or local_path.is_symlink():
-                backup_path = local_path.with_name(
-                    f".{local_path.name}.backup-{uuid.uuid4().hex}"
-                )
+                backup_path = local_path.parent / f".vbbak-{uuid.uuid4().hex}"
                 local_path.rename(backup_path)
             extracted_path.rename(local_path)
         except Exception:
