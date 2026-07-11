@@ -21,7 +21,7 @@ def test_apply_single_transaction_uses_cdf_and_verifies_before_save():
     assert "foreach(inst cv~>instances" in s and "cdfGetInstCDF(inst0)" in s and 'param~>name=="w"' in s
     assert 'unless(param0 error("CDF parameter missing: M1.w"))' in s and 'param0~>value="10um"' in s
     assert 'unless(param0~>value=="10um"' in s and s.index("CDF parameter missing") < s.index("param0~>value") < s.index("dbSave(cv)")
-    assert "when(schCheck(cv) dbSave(cv)" in s and "when(cv dbClose(cv))" in s and "dbReplaceProp" not in s
+    assert 'unless(schCheck(cv) error("schCheck failed"))' in s and 'unless(dbSave(cv) error("schematic save failed"))' in s and "when(cv dbClose(cv))" in s and "dbReplaceProp" not in s
 
 def test_explicit_sync_property_uses_db_replace_prop_only_for_sync():
     c=RecordingClient([Result("ANALOG_OPT_OK:apply")]); VirtuosoApplier(c).apply_cdf("tr","work",[spec("W","M1","w","um",sync_property="fw")],{"W":10e-6})
@@ -162,3 +162,28 @@ def test_every_critical_save_and_delete_is_checked():
     assert 'unless(dbDeleteCellView("tr" "work" "schematic")' in skill
     assert "temporary cleanup failed" in skill
     assert "backup cleanup failed" in skill
+
+def test_destination_save_failure_enters_same_rollback_path_as_copy_failure():
+    c = RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])
+    VirtuosoApplier(c).create_work_cell("tr", "amp", "work", True)
+    skill = c.calls[0][0]
+    assert "publishOk=nil" in skill
+    assert "when(dstCv when(dbSave(dstCv) publishOk=t))" in skill
+    rollback = skill.index("unless(publishOk progn(")
+    assert skill.index("dstCv=dbCopyCellView") < rollback
+    assert skill.index("when(dstCv when(dbSave(dstCv) publishOk=t))") < rollback
+    assert 'printf("ANALOG_OPT_RECOVERY_REQUIRED:' in skill[rollback:]
+    assert 'restoreCv=dbCopyCellView(backupCv' in skill[rollback:]
+    replace_branch = skill[:skill.index('status="EXISTS"')]
+    assert 'unless(dbSave(dstCv) error("destination save failed"))' not in replace_branch
+
+
+def test_apply_checks_schematic_and_save_separately_before_success():
+    c = RecordingClient([Result("ANALOG_OPT_OK:apply")])
+    VirtuosoApplier(c).apply_cdf("tr", "work", [spec("W", "M1", "w", "um")], {"W": 10e-6})
+    skill = c.calls[0][0]
+    check = 'unless(schCheck(cv) error("schCheck failed"))'
+    save = 'unless(dbSave(cv) error("schematic save failed"))'
+    assert check in skill and save in skill
+    assert skill.index(check) < skill.index(save) < skill.index("ok=t") < skill.index('printf("ANALOG_OPT_OK:apply")')
+    assert "when(schCheck(cv) dbSave(cv) ok=t)" not in skill

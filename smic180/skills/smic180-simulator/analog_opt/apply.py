@@ -105,8 +105,8 @@ class VirtuosoApplier:
         replace_flag = "t" if replace else "nil"
         recovery = "ANALOG_OPT_RECOVERY_REQUIRED:%s" % backup
         skill = (
-            f'let((srcCv tmpCv oldCv backupCv dstCv restoreCv status tempCreated backupSafe cleanupBackup) '
-            f'status="FAILED" tempCreated=nil backupSafe=nil cleanupBackup=nil '
+            f'let((srcCv tmpCv oldCv backupCv dstCv restoreCv status tempCreated backupSafe cleanupBackup publishOk) '
+            f'status="FAILED" tempCreated=nil backupSafe=nil cleanupBackup=nil publishOk=nil '
             f'unwindProtect(progn('
             f'when(ddGetObj({lib} {tmp}) error("temporary cell already exists")) '
             f'when(ddGetObj({lib} {bak}) error("backup cell already exists")) '
@@ -125,14 +125,14 @@ class VirtuosoApplier:
             f'when(oldCv dbClose(oldCv)) oldCv=nil '
             f'unless(dbDeleteCellView({lib} {dst} "schematic") error("target delete failed")) '
             f'dstCv=dbCopyCellView(tmpCv {lib} {dst} "schematic") '
-            f'if(dstCv then progn('
-            f'unless(dbSave(dstCv) error("destination save failed")) status="REPLACED" cleanupBackup=t) '
-            f'else progn('
+            f'when(dstCv when(dbSave(dstCv) publishOk=t)) '
+            f'unless(publishOk progn('
             f'when(ddGetObj({lib} {dst}) unless(dbDeleteCellView({lib} {dst} "schematic") error("failed target cleanup failed"))) '
             f'restoreCv=dbCopyCellView(backupCv {lib} {dst} "schematic") '
             f'unless(restoreCv progn(printf("{recovery}") error("rollback restore failed; backup={backup}"))) '
             f'unless(dbSave(restoreCv) progn(printf("{recovery}") error("rollback save failed; backup={backup}"))) '
-            f'cleanupBackup=t error("replacement publish failed; rollback restored")))) '
+            f'cleanupBackup=t error("replacement publish failed; rollback restored"))) '
+            f'when(publishOk status="REPLACED" cleanupBackup=t) '
             f'status="EXISTS") '
             f'else progn(dstCv=dbCopyCellView(tmpCv {lib} {dst} "schematic") '
             f'unless(dstCv error("publish copy failed")) '
@@ -198,7 +198,7 @@ class VirtuosoApplier:
         skill = (
             "let((cv inst %s ok) ok=nil cv=dbOpenCellViewByType(%s %s \"schematic\" \"schematic\" \"a\") "
             "unless(cv error(\"work schematic missing\")) unwindProtect(progn(%s %s %s %s "
-            "when(schCheck(cv) dbSave(cv) ok=t) unless(ok error(\"schCheck failed\")) printf(\"ANALOG_OPT_OK:apply\")) "
+            "unless(schCheck(cv) error(\"schCheck failed\")) unless(dbSave(cv) error(\"schematic save failed\")) ok=t printf(\"ANALOG_OPT_OK:apply\")) "
             "when(cv dbClose(cv))))"
         ) % (declarations, _quote(library), _quote(cell), " ".join(locate_instances), " ".join(locate_params), " ".join(writes), " ".join(verifies))
         self._execute(skill, "ANALOG_OPT_OK:apply")
