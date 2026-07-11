@@ -79,25 +79,70 @@ def _mapping(value: Any, location: str) -> Mapping[str, Any]:
     return dict(value)
 
 
+def _failure_fields(value: Any) -> Mapping[str, str]:
+    try:
+        failure = _mapping(value, "failure")
+    except TypeError as exc:
+        raise EvaluationFailure("protocol", str(exc)) from exc
+    category = failure.get("category")
+    message = failure.get("message")
+    if not isinstance(category, str) or not category.strip():
+        raise EvaluationFailure("protocol", "failure.category must be a nonempty string")
+    if not isinstance(message, str) or not message.strip():
+        raise EvaluationFailure("protocol", "failure.message must be a nonempty string")
+    return {"category": category, "message": message}
+
+
+def _validated_result(
+    candidate_id: str,
+    objective: Any,
+    success: Any,
+    metrics: Any,
+    metadata: Any,
+    failure: Any,
+    specs: Any,
+) -> EvaluationResult:
+    if type(success) is not bool:
+        raise EvaluationFailure("protocol", "success must be exactly bool")
+    try:
+        finite_objective = _finite(objective, "objective")
+        metric_values = _mapping(metrics, "metrics")
+        spec_values = _mapping(specs, "specs")
+        metadata_values = _mapping(metadata, "metadata")
+    except (TypeError, ValueError) as exc:
+        raise EvaluationFailure("protocol", str(exc)) from exc
+    if success:
+        if failure is not None:
+            raise EvaluationFailure("protocol", "successful result must not include failure")
+        return EvaluationResult(
+            candidate_id, finite_objective, True, metric_values,
+            metadata_values, None, spec_values
+        )
+    failure_values = _failure_fields(failure)
+    return EvaluationResult(
+        candidate_id, finite_objective, False, metric_values,
+        metadata_values, failure_values, spec_values
+    )
+
+
 def _result_from_backend(candidate_id: str, raw: Any) -> EvaluationResult:
     if isinstance(raw, EvaluationResult):
         if raw.candidate_id != candidate_id:
-            raise ValueError("backend result candidate_id does not match")
-        _finite(raw.objective, "objective")
-        _mapping(raw.metrics, "metrics")
-        _mapping(raw.specs, "specs")
-        _mapping(raw.metadata, "metadata")
-        return raw
+            raise EvaluationFailure("protocol", "backend result candidate_id does not match")
+        return _validated_result(
+            candidate_id, raw.objective, raw.success, raw.metrics,
+            raw.metadata, raw.failure, raw.specs
+        )
     if not isinstance(raw, Mapping):
-        raise TypeError("backend must return a mapping or EvaluationResult")
-    return EvaluationResult(
+        raise EvaluationFailure("protocol", "backend must return a mapping or EvaluationResult")
+    return _validated_result(
         candidate_id=candidate_id,
-        objective=_finite(raw.get("objective"), "objective"),
-        success=True,
-        metrics=_mapping(raw.get("metrics", {}), "metrics"),
-        metadata=_mapping(raw.get("metadata", {}), "metadata"),
-        failure=None,
-        specs=_mapping(raw.get("specs", {}), "specs"),
+        objective=raw.get("objective"),
+        success=raw.get("success", True),
+        metrics=raw.get("metrics", {}),
+        metadata=raw.get("metadata", {}),
+        failure=raw.get("failure"),
+        specs=raw.get("specs", {}),
     )
 
 
@@ -149,6 +194,11 @@ class CandidateEvaluator:
             return self._failure(candidate_dir, candidate_id, "artifact", str(exc))
         try:
             result = _result_from_backend(candidate_id, self.backend(physical_candidate, candidate_dir))
+            if not result.success:
+                return self._failure(
+                    candidate_dir, candidate_id,
+                    result.failure["category"], result.failure["message"]
+                )
             atomic_write_json(candidate_dir / "metrics.json", result.metrics)
             atomic_write_json(candidate_dir / "specs.json", result.specs)
             atomic_write_json(candidate_dir / "result.json", asdict(result))

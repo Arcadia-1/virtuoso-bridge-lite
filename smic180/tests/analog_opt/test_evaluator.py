@@ -99,3 +99,47 @@ def test_unwritable_failure_artifact_raises_evaluation_failure(tmp_path, monkeyp
     monkeypatch.setattr(module, "atomic_write_json", broken)
     with pytest.raises(EvaluationFailure, match="failure artifact"):
         CandidateEvaluator(lambda *_: {"objective": 1.0}).evaluate(tmp_path, "c0", {"x": 1})
+
+
+@pytest.mark.parametrize("raw", [
+    {"objective": 1.0, "success": "false", "failure": {"category": "sim", "message": "bad"}},
+    EvaluationResult("c0", 1.0, "false", {}, {}, {"category": "sim", "message": "bad"}),
+])
+def test_backend_success_must_be_exact_bool(tmp_path, raw):
+    result = CandidateEvaluator(lambda *_: raw, failure_penalty=77.0).evaluate(tmp_path, "c0", {"x": 1})
+    assert not result.success and result.objective == 77.0
+    assert json.loads((tmp_path / "candidates/c0/failure.json").read_text())["category"] == "protocol"
+
+
+@pytest.mark.parametrize("raw", [
+    {"objective": 1.0, "success": True, "failure": {"category": "sim", "message": "bad"}},
+    EvaluationResult("c0", 1.0, True, {}, {}, {"category": "sim", "message": "bad"}),
+])
+def test_success_result_must_not_have_failure(tmp_path, raw):
+    result = CandidateEvaluator(lambda *_: raw).evaluate(tmp_path, "c0", {"x": 1})
+    assert not result.success
+    assert json.loads((tmp_path / "candidates/c0/failure.json").read_text())["category"] == "protocol"
+
+
+@pytest.mark.parametrize("failure", [None, {}, {"category": "", "message": "bad"}, {"category": "sim", "message": ""}, {"category": 3, "message": "bad"}, {"category": "sim", "message": 3}])
+def test_failed_result_requires_valid_failure_mapping(tmp_path, failure):
+    raw = {"objective": 8.0, "success": False, "failure": failure}
+    result = CandidateEvaluator(lambda *_: raw).evaluate(tmp_path, "c0", {"x": 1})
+    assert not result.success
+    stored = json.loads((tmp_path / "candidates/c0/failure.json").read_text())
+    assert stored["category"] == "protocol"
+
+
+def test_valid_failed_mapping_uses_configured_penalty_and_only_failure_artifact(tmp_path):
+    raw = {"objective": 8.0, "success": False, "failure": {"category": "convergence", "message": "no solution"}, "metrics": {"partial": 1}, "specs": {"passed": False}}
+    result = CandidateEvaluator(lambda *_: raw, failure_penalty=321.0).evaluate(tmp_path, "c0", {"x": 1})
+    candidate_dir = tmp_path / "candidates/c0"
+    assert result == EvaluationResult("c0", 321.0, False, {}, {}, {"category": "convergence", "message": "no solution"})
+    assert sorted(path.name for path in candidate_dir.iterdir()) == ["failure.json", "parameters.json"]
+
+
+def test_valid_failed_result_object_uses_failure_artifact_path(tmp_path):
+    raw = EvaluationResult("c0", 8.0, False, {"partial": 1}, {"source": "spectre"}, {"category": "timeout", "message": "too slow"}, {"passed": False})
+    result = CandidateEvaluator(lambda *_: raw, failure_penalty=44.0).evaluate(tmp_path, "c0", {"x": 1})
+    assert result.objective == 44.0 and result.failure["category"] == "timeout"
+    assert sorted(path.name for path in (tmp_path / "candidates/c0").iterdir()) == ["failure.json", "parameters.json"]
