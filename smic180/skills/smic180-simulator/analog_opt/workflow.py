@@ -50,7 +50,7 @@ class AnalogSimulationBackend:
     if name not in self.stimuli or _stimulus(self.stimuli[name])[1] is not True: raise EvaluationFailure('configuration','fixed stimulus cannot be optimized: %s'%name)
     biases[name]=value
    else: raise EvaluationFailure('configuration','unsupported parameter target: %s'%spec.target)
-  fixed={name:value for name,item in self.stimuli.items() for value,opt in [_stimulus(item)] if not opt and value is not None}
+  fixed={name:item for name,item in self.stimuli.items() if _stimulus(item)[1] is not True and _stimulus(item)[0] is not None}
   try:
    if cdf_specs: self.applier.apply_cdf(self.library,self.work_cell,cdf_specs,cdf)
   except Exception as exc: raise EvaluationFailure('apply',str(exc)) from exc
@@ -66,14 +66,30 @@ class AnalogSimulationBackend:
   except Exception as exc: raise EvaluationFailure('specification',str(exc)) from exc
   try:
    observed={}
-   if cdf_specs: observed.update(self.applier.read_cdf(self.library,self.work_cell,cdf_specs))
-   names=list(variables)+list(biases)+list(fixed); net_values=self.netlist.confirm(deck,names)
+   if cdf_specs:
+    observed.update(self.applier.read_cdf(self.library,self.work_cell,cdf_specs))
+    deck_cdf=self.netlist.confirm_cdf(deck,cdf_specs)
+    for name,value in deck_cdf.items():
+     if name in observed and not math.isclose(float(observed[name]),float(value),rel_tol=self.rtol,abs_tol=self.atol): raise ValueError('%s final deck CDF mismatch'%name)
+   names=list(variables)+list(biases)+list(fixed)+['dut_cell']
+   if conditions:
+    names.extend(name for name in ('temperature','corner') if name in conditions)
+    if conditions.get('voltage') is not None: names.append(conditions.get('voltage_stimulus'))
+   net_values=self.netlist.confirm(deck,names)
    if not isinstance(net_values,Mapping): raise ValueError('netlist confirmation must return mapping')
-   observed.update(net_values); requested=dict(cdf); requested.update(variables); requested.update(biases); requested.update(fixed)
+   observed.update(net_values); requested=dict(cdf); requested.update(variables); requested.update(biases)
+   requested.update({name:_stimulus(item)[0] for name,item in fixed.items()})
+   requested['dut_cell']=self.work_cell
+   if conditions:
+    if 'temperature' in conditions: requested['temperature']=conditions['temperature']
+    if 'corner' in conditions: requested['corner']=conditions['corner']
+    if conditions.get('voltage') is not None: requested[conditions['voltage_stimulus']]=conditions['voltage']
    for name,want in requested.items():
     if name not in observed: raise ValueError('missing confirmation for %s'%name)
     got=observed[name]
-    if isinstance(got,bool) or not isinstance(got,(int,float)) or not math.isfinite(float(got)) or not math.isclose(float(got),float(want),rel_tol=self.rtol,abs_tol=self.atol): raise ValueError('%s physical value mismatch'%name)
+    if isinstance(want,str):
+     if got!=want: raise ValueError('%s physical value mismatch'%name)
+    elif isinstance(got,bool) or not isinstance(got,(int,float)) or not math.isfinite(float(got)) or not math.isclose(float(got),float(want),rel_tol=self.rtol,abs_tol=self.atol): raise ValueError('%s physical value mismatch'%name)
   except Exception as exc: raise EvaluationFailure('confirmation',str(exc)) from exc
   return {'objective':objective,'success':True,'metrics':metrics,'specs':spec_results,'metadata':{'physical_candidate':dict(candidate),'specs_passed':passed,'netlist':str(deck)}}
 

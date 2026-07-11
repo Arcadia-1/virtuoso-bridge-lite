@@ -34,6 +34,7 @@ class StimulusConfig:
     ac: Optional[float] = None
     lower: Optional[float] = None
     upper: Optional[float] = None
+    source_instance: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -180,6 +181,7 @@ def _parse_stimuli(value: Any) -> Dict[str, StimulusConfig]:
             )
             if lower_value >= upper_value:
                 raise ConfigError(f"stimuli.{name} bounds require lower < upper")
+        source_instance = _nonempty_string(stimulus.get("source_instance", "SRC_" + name), f"stimuli.{name}.source_instance")
         stimuli[name] = StimulusConfig(
             kind=kind,
             optimizable=optimizable,
@@ -188,6 +190,7 @@ def _parse_stimuli(value: Any) -> Dict[str, StimulusConfig]:
             ac=ac_parsed,
             lower=lower_value if optimizable else None,
             upper=upper_value if optimizable else None,
+            source_instance=source_instance,
         )
     return stimuli
 
@@ -233,15 +236,20 @@ def load_config(path: Union[str, Path]) -> AnalogOptConfig:
     _validate_named_items(parameters, "parameters", "target", _PARAMETER_TARGETS)
     _validate_named_items(analyses, "analyses", "type", _ANALYSIS_TYPES)
 
+    parsed_stimuli = _parse_stimuli(data["stimuli"])
+    pvt = dict(_mapping(data["pvt"], "pvt"))
+    voltage_stimulus = pvt.get("voltage_stimulus")
+    if voltage_stimulus is not None and (voltage_stimulus not in parsed_stimuli or parsed_stimuli[voltage_stimulus].kind != "voltage"):
+        raise ConfigError("pvt.voltage_stimulus must reference a voltage stimulus")
     return AnalogOptConfig(
         version=2,
         design=_parse_design(data["design"]),
-        stimuli=_parse_stimuli(data["stimuli"]),
+        stimuli=parsed_stimuli,
         parameters=parameters,
         analyses=analyses,
         metrics=_list_of_mappings(data["metrics"], "metrics"),
         specs=_list_of_mappings(data["specs"], "specs"),
         search=dict(_mapping(data["search"], "search")),
-        pvt=dict(_mapping(data["pvt"], "pvt")),
+        pvt=pvt,
         outputs=dict(_mapping(data["outputs"], "outputs")),
     )

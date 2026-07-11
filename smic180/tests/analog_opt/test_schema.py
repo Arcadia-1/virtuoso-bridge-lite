@@ -276,3 +276,16 @@ def test_schema_preserves_sync_property(tmp_path):
     path = write_config(tmp_path, config)
     loaded = load_config(path)
     assert loaded.parameters[0]["sync_property"] == "fw"
+
+def test_stimulus_source_instance_and_pvt_voltage_stimulus_are_explicit(tmp_path):
+ data=minimal_config()
+ data['stimuli']['VDD']['source_instance']='SUPPLY_MAIN'
+ data['pvt']={'corners':['TT'],'voltages':[3.0,3.3],'temperatures':[25],'voltage_stimulus':'VDD'}
+ path=write_config(tmp_path,data)
+ config=load_config(path)
+ assert config.stimuli['VDD'].source_instance=='SUPPLY_MAIN'
+ assert config.pvt['voltage_stimulus']=='VDD'
+
+def test_pvt_voltage_stimulus_must_reference_voltage_stimulus(tmp_path):
+ data=minimal_config(); data['pvt']={'corners':['TT'],'voltages':[3.3],'temperatures':[25],'voltage_stimulus':'MISSING'}
+ with pytest.raises(ConfigError,match='voltage_stimulus'): load_config(write_config(tmp_path,data))

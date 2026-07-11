@@ -22,7 +22,8 @@ class Netlist:
  def __init__(self,log,confirm=None): self.log=log; self.confirmed=confirm or {'gain':4.,'VBIAS':1.2,'VDD':3.3}
  def configure(self,design_variables,biases,stimuli,conditions): self.log.add('configure',dict(design_variables),dict(biases),dict(stimuli),dict(conditions))
  def export_fresh(self,library,work_cell,directory): self.log.add('export',library,work_cell,directory.name); return directory/'fresh.scs'
- def confirm(self,path,names): self.log.add('confirm',tuple(names)); return dict(self.confirmed)
+ def confirm(self,path,names): self.log.add('confirm',tuple(names)); return dict(self.confirmed, dut_cell='amp_work')
+ def confirm_cdf(self,path,specs): return {'W':10e-6}
 class Runner:
  def __init__(self,log,fail=False): self.log=log; self.fail=fail
  def run(self,path,directory,analyses): self.log.add('run',path.name)
@@ -36,7 +37,7 @@ def test_backend_uses_real_applier_signature_and_structured_confirmation(tmp_pat
  log=Log(); result=make_backend(tmp_path,log)(CANDIDATE,tmp_path)
  assert result['success'] is True and result['objective']==.25
  assert log.calls[0]==('apply','tr','amp_work',('W',),{'W':10e-6})
- assert log.calls[1][0]=='configure' and log.calls[1][1:]==({'gain':4.},{'VBIAS':1.2},{'VDD':3.3},{})
+ assert log.calls[1][0]=='configure' and log.calls[1][1:]==({'gain':4.},{'VBIAS':1.2},{'VDD':{'value':3.3,'optimizable':False}},{})
  assert [c[0] for c in log.calls]==['apply','configure','export','run','metrics','read','confirm']
 
 def test_backend_confirmation_compares_each_finite_physical_value(tmp_path):
@@ -121,3 +122,10 @@ def test_state_requires_best_pvt_and_publication_fields(tmp_path):
   (tmp_path/'workflow_state.json').write_text(json.dumps(dict(base,state=state)))
   with pytest.raises(EvaluationFailure) as err: workflow(tmp_path,Log()).resume()
   assert err.value.category=='state'
+
+def test_hard_spec_failure_has_penalized_objective_and_never_publishes(tmp_path):
+ log=Log(); best=eval_result('candidate-000000'); best=EvaluationResult(best.candidate_id,10000.2,True,best.metrics,{'physical_candidate':dict(CANDIDATE)},None,{'gain':{'passed':False,'violation':.2}})
+ w=workflow(tmp_path,log,search_result=SearchResult((best,),best,False))
+ w.replay=lambda candidate,directory,conditions=None: EvaluationResult('best-replay',10000.2,True,{}, {'physical_candidate':dict(candidate)},None,{'gain':{'passed':False,'violation':.2}})
+ with pytest.raises(EvaluationFailure) as err: w.run()
+ assert err.value.category=='best_replay' and not any(c[0]=='publish' for c in log.calls)
