@@ -178,3 +178,45 @@ def test_settling_time_is_duration_with_interpolated_band_entry():
         "offset", "V", [5.0, 7.0, 9.0], [0.0, 0.8, 1.0], target=1.0, settling_tolerance=0.1
     )
     assert metrics["tran.offset.V.settling_time_s"] == pytest.approx(3.0)
+
+def test_settling_band_scales_with_small_step_amplitude():
+    metrics = extract_tran_metrics(
+        "small", "V", [0.0, 1.0, 2.0], [100.0, 100.9, 101.0], target=101.0, settling_tolerance=0.02
+    )
+    assert metrics["tran.small.V.settling_time_s"] == pytest.approx(1.8)
+
+
+def test_settling_band_uses_step_amplitude_when_target_is_zero():
+    metrics = extract_tran_metrics(
+        "zero_target", "V", [0.0, 1.0, 2.0], [-1.0, -0.1, 0.0], target=0.0, settling_tolerance=0.02
+    )
+    assert metrics["tran.zero_target.V.settling_time_s"] == pytest.approx(1.8)
+
+
+def test_zero_step_omits_settling_time():
+    metrics = extract_tran_metrics("no_step", "V", [0.0, 1.0], [1.0, 1.0], target=1.0)
+    assert "tran.no_step.V.settling_time_s" not in metrics
+
+
+def test_transient_derived_metrics_never_emit_nonfinite_values():
+    metrics = extract_tran_metrics(
+        "extreme", "V", [0.0, 1e-308, 2e-308], [-1e308, 1e308, -1e308], target=1e308
+    )
+    assert all(isinstance(value, float) and math.isfinite(value) for value in metrics.values())
+    assert "tran.extreme.V.overshoot" not in metrics
+    assert "tran.extreme.V.undershoot" not in metrics
+    assert "tran.extreme.V.slew_rise_v_per_s" not in metrics
+    assert "tran.extreme.V.slew_fall_v_per_s" not in metrics
+
+
+def test_unity_gain_accepts_peak_sample_exactly_zero_db_before_descent():
+    frequencies = [1.0, 10.0, 100.0]
+    gain_db = [-3.0, 0.0, -6.0]
+    response = [10.0 ** (gain / 20.0) for gain in gain_db]
+    metrics = extract_ac_metrics("zero_peak", frequencies, response)
+    assert metrics["ac.zero_peak.unity_gain_hz"] == pytest.approx(10.0)
+
+
+def test_merge_metrics_preserves_string_metadata():
+    merged = merge_metrics({"op.M1.region": "sat"}, {"op.M1.gm_over_id": 20.0})
+    assert merged == {"op.M1.region": "sat", "op.M1.gm_over_id": 20.0}

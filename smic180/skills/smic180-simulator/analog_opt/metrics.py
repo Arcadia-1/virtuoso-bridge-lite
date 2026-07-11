@@ -2,7 +2,10 @@
 
 import math
 from collections.abc import Mapping, Sequence
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Union
+
+
+MetricValue = Union[float, str]
 
 
 _MOS_FIELDS = (
@@ -40,10 +43,10 @@ def _finite_curve(x_values: Sequence[Any], y_values: Sequence[Any]) -> Optional[
     return xs, ys
 
 
-def extract_mos_op_metrics(instance: str, operating_point: Mapping[str, Any]) -> Dict[str, Any]:
+def extract_mos_op_metrics(instance: str, operating_point: Mapping[str, Any]) -> Dict[str, MetricValue]:
     """Extract available MOS operating-point fields and well-defined derivatives."""
     prefix = f"op.{instance}."
-    result: Dict[str, Any] = {}
+    result: Dict[str, MetricValue] = {}
     values: Dict[str, float] = {}
     for field in _MOS_FIELDS:
         value = _finite_real(operating_point.get(field))
@@ -127,9 +130,14 @@ def extract_ac_metrics(name: str, frequencies: Sequence[Any], response: Sequence
         if bandwidth is not None:
             result[prefix + "bandwidth_3db_hz"] = bandwidth
     peak_index = max(range(len(gain_db)), key=gain_db.__getitem__)
-    unity_gain = _downward_crossing(xs, gain_db, 0.0, start=peak_index + 1, last=True)
-    if unity_gain is not None:
-        result[prefix + "unity_gain_hz"] = unity_gain
+    if peak_index > 0 and gain_db[peak_index] == 0.0 and any(
+        value < 0.0 for value in gain_db[peak_index + 1:]
+    ):
+        result[prefix + "unity_gain_hz"] = xs[peak_index]
+    else:
+        unity_gain = _downward_crossing(xs, gain_db, 0.0, start=peak_index + 1, last=True)
+        if unity_gain is not None:
+            result[prefix + "unity_gain_hz"] = unity_gain
     return result
 
 
@@ -171,7 +179,7 @@ def extract_tran_metrics(
     name: str, signal: str, times: Sequence[Any], values: Sequence[Any], *, target: Any,
     settling_tolerance: float = 0.02,
 ) -> Dict[str, float]:
-    """Extract step-envelope excursions, settling duration, and slew rates."""
+    """Extract finite step-envelope excursions, settling duration, and slew rates."""
     curve = _finite_curve(times, values)
     target_value = _finite_real(target)
     tolerance = _finite_real(settling_tolerance)
@@ -182,38 +190,52 @@ def extract_tran_metrics(
     result: Dict[str, float] = {}
     initial = ys[0]
     step = target_value - initial
-    if step != 0.0:
+
+    if math.isfinite(step) and step != 0.0:
         scale = abs(step)
         if step > 0:
-            overshoot = max(0.0, max(ys) - target_value) / scale
-            undershoot = max(0.0, initial - min(ys)) / scale
+            overshoot_delta = max(ys) - target_value
+            undershoot_delta = initial - min(ys)
         else:
-            overshoot = max(0.0, target_value - min(ys)) / scale
-            undershoot = max(0.0, max(ys) - initial) / scale
-        result[prefix + "overshoot"] = overshoot
-        result[prefix + "undershoot"] = undershoot
+            overshoot_delta = target_value - min(ys)
+            undershoot_delta = max(ys) - initial
+        for suffix, delta in (("overshoot", overshoot_delta), ("undershoot", undershoot_delta)):
+            if math.isfinite(delta):
+                ratio = max(0.0, delta) / scale
+                if math.isfinite(ratio):
+                    result[prefix + suffix] = ratio
 
-    band = tolerance * abs(target_value)
-    outside = [index for index, value in enumerate(ys) if abs(value - target_value) > band]
-    if not outside:
-        result[prefix + "settling_time_s"] = 0.0
-    elif outside[-1] < len(xs) - 1:
-        entry = _settling_entry_time(xs, ys, target_value, band, outside[-1])
-        result[prefix + "settling_time_s"] = entry - xs[0]
+        band = tolerance * scale
+        if math.isfinite(band):
+            outside = [index for index, value in enumerate(ys) if abs(value - target_value) > band]
+            if not outside:
+                result[prefix + "settling_time_s"] = 0.0
+            elif outside[-1] < len(xs) - 1:
+                entry = _settling_entry_time(xs, ys, target_value, band, outside[-1])
+                duration = entry - xs[0]
+                if math.isfinite(duration):
+                    result[prefix + "settling_time_s"] = duration
 
-    slopes = [(ys[index] - ys[index - 1]) / (xs[index] - xs[index - 1]) for index in range(1, len(xs))]
-    rise = max(slopes)
-    fall = min(slopes)
-    if rise > 0:
-        result[prefix + "slew_rise_v_per_s"] = rise
-    if fall < 0:
-        result[prefix + "slew_fall_v_per_s"] = abs(fall)
+    slopes = []
+    for index in range(1, len(xs)):
+        delta = ys[index] - ys[index - 1]
+        if not math.isfinite(delta):
+            continue
+        slope = delta / (xs[index] - xs[index - 1])
+        if math.isfinite(slope):
+            slopes.append(slope)
+    if slopes:
+        rise = max(slopes)
+        fall = min(slopes)
+        if rise > 0:
+            result[prefix + "slew_rise_v_per_s"] = rise
+        if fall < 0:
+            result[prefix + "slew_fall_v_per_s"] = abs(fall)
     return result
 
-
-def merge_metrics(*metric_maps: Mapping[str, float]) -> Dict[str, float]:
+def merge_metrics(*metric_maps: Mapping[str, MetricValue]) -> Dict[str, MetricValue]:
     """Merge metric maps deterministically, with later maps taking precedence."""
-    result: Dict[str, float] = {}
+    result: Dict[str, MetricValue] = {}
     for metric_map in metric_maps:
         result.update(metric_map)
     return result
