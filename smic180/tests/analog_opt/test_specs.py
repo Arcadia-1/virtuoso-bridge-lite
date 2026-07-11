@@ -1,5 +1,6 @@
 ﻿import ast
 import math
+import sys
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
@@ -142,9 +143,23 @@ def test_specs_module_uses_python_39_compatible_annotations():
     )
 
 
-def test_extreme_finite_inputs_produce_finite_total():
-    result = evaluate_specs(
-        {"swing": float("1.7976931348623157e308")},
-        [Spec("swing", "<=", value=-float("1.7976931348623157e308"))],
-    )
+@pytest.mark.parametrize(
+    ("actual", "spec"),
+    [
+        (-sys.float_info.max, Spec("metric", ">=", value=sys.float_info.max)),
+        (sys.float_info.max, Spec("metric", "<=", value=-sys.float_info.max)),
+        (
+            sys.float_info.max,
+            Spec(
+                "metric",
+                "between",
+                lower=-sys.float_info.max,
+                upper=-sys.float_info.max / 2,
+            ),
+        ),
+    ],
+)
+def test_extreme_finite_inputs_produce_finite_violation_and_total(actual, spec):
+    result = evaluate_specs({"metric": actual}, [spec])
+    assert math.isfinite(result.results[0].violation)
     assert math.isfinite(result.total)

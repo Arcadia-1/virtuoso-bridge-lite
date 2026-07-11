@@ -41,6 +41,24 @@ def _saturated_multiply(left: float, right: float) -> float:
     return left * right
 
 
+def _bounded_add(left: float, right: float) -> float:
+    result = left + right
+    if math.isinf(result):
+        return math.copysign(_MAX_FLOAT, result)
+    return result
+
+
+def _bounded_subtract(left: float, right: float) -> float:
+    result = left - right
+    if math.isinf(result):
+        return math.copysign(_MAX_FLOAT, result)
+    return result
+
+
+def _finite_distance(upper: float, lower: float) -> float:
+    return max(_bounded_subtract(upper, lower), 0.0)
+
+
 def _fractional_violation(delta: float, reference: float) -> float:
     denominator = max(abs(reference), _EPSILON)
     if delta > _MAX_FLOAT * denominator:
@@ -110,22 +128,22 @@ class SpecSummary:
 def _evaluate_present(spec: Spec, actual: float) -> float:
     tolerance = spec.tolerance
     if spec.op == ">=":
-        boundary = float(spec.value) - tolerance
+        boundary = _bounded_subtract(float(spec.value), tolerance)
         if actual >= boundary:
             return 0.0
-        return _fractional_violation(boundary - actual, float(spec.value))
+        return _fractional_violation(_finite_distance(boundary, actual), float(spec.value))
     if spec.op == "<=":
-        boundary = float(spec.value) + tolerance
+        boundary = _bounded_add(float(spec.value), tolerance)
         if actual <= boundary:
             return 0.0
-        return _fractional_violation(actual - boundary, float(spec.value))
+        return _fractional_violation(_finite_distance(actual, boundary), float(spec.value))
 
-    lower = float(spec.lower) - tolerance
-    upper = float(spec.upper) + tolerance
+    lower = _bounded_subtract(float(spec.lower), tolerance)
+    upper = _bounded_add(float(spec.upper), tolerance)
     if actual < lower:
-        return _fractional_violation(lower - actual, float(spec.lower))
+        return _fractional_violation(_finite_distance(lower, actual), float(spec.lower))
     if actual > upper:
-        return _fractional_violation(actual - upper, float(spec.upper))
+        return _fractional_violation(_finite_distance(actual, upper), float(spec.upper))
     return 0.0
 
 
