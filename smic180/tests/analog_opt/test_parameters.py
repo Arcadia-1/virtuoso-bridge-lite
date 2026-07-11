@@ -112,6 +112,36 @@ def test_parameter_bounds_and_step_reject_bool_and_nonfinite():
             ParameterSpace([ParameterSpec("x", "bias", **kwargs)])
 
 
+@pytest.mark.parametrize(
+    ("lower", "upper"),
+    [(1.5, 4), (1, 4.5), (-2.25, 3.0)],
+)
+def test_int_parameters_require_integer_valued_bounds(lower, upper):
+    with pytest.raises(ValueError, match="integer-valued bounds"):
+        ParameterSpace([ParameterSpec("count", "bias", lower, upper, dtype="int")])
+
+
+def test_int_parameters_accept_integer_valued_float_bounds_without_escaping_bounds():
+    space = ParameterSpace([ParameterSpec("count", "bias", 1.0, 4.0, dtype="int")])
+    assert space.materialize([-1.0]) == {"count": 1}
+    assert space.materialize([1.0]) == {"count": 4}
+
+
+def test_linear_materialize_avoids_overflow_and_preserves_endpoints():
+    space = ParameterSpace([ParameterSpec("x", "bias", -1e308, 1e308)])
+    assert space.materialize([0.0]) == {"x": -1e308}
+    assert space.materialize([0.5]) == {"x": 0.0}
+    assert space.materialize([1.0]) == {"x": 1e308}
+
+
+def test_step_rejects_nonfinite_step_count_with_stable_value_error():
+    with pytest.raises(ValueError, match="finite representable step count"):
+        ParameterSpace([ParameterSpec("x", "bias", 0.0, 1.0, step=1e-320)])
+
+
+def test_large_finite_step_count_is_accepted_and_quantizes_without_overflow():
+    space = ParameterSpace([ParameterSpec("x", "bias", -1e308, 1e308, step=1e308)])
+    assert space.materialize([0.9]) == {"x": 1e308}
 def test_parameters_module_uses_python_39_compatible_annotations():
     path = Path(__file__).resolve().parents[2] / "skills" / "smic180-simulator" / "analog_opt" / "parameters.py"
     module = ast.parse(path.read_text(encoding="utf-8-sig"))
