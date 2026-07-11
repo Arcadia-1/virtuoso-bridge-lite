@@ -60,5 +60,9 @@ separately for existing callers and manually authored symbols.
 ## Edit Symbol
 
 Use `client.symbol.edit()` as a context manager with the builders exported by
-`virtuoso_bridge.virtuoso.symbol.ops`. The editor runs `schCheck`, saves, and
-closes the symbol on context exit.
+`virtuoso_bridge.virtuoso.symbol.ops`. Before saving on context exit, the
+editor verifies that the open symbol can produce a pin list through Cadence's
+symbol-specific `schSymbolToPinList()` API. Cadence rejects non-symbol
+cellviews with `SCH-1004`, while unsuccessful pin-list generation also fails
+the edit. This validation does not run schematic connectivity, SRC, or VIC;
+`schCheck()` remains schematic-only.
