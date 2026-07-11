@@ -115,10 +115,19 @@ def test_symbol_create_pin_escapes_repeated_pin_name_and_direction() -> None:
     assert '"A\\"\\\\B" "centerLeft"' in skill
 
 
-def test_symbol_set_term_order_and_check() -> None:
+def test_symbol_set_term_order() -> None:
     assert symbol_set_term_order(["A", "Y", "VDD", "VSS"]) == 'cv~>termOrder = list("A" "Y" "VDD" "VSS")'
     assert symbol_set_term_order(['A"\\B', "Y"]) == 'cv~>termOrder = list("A\\"\\\\B" "Y")'
-    assert symbol_check() == "schCheck(cv)"
+
+
+def test_symbol_check_uses_symbol_pin_list_api() -> None:
+    skill = symbol_check(cv_expr="myCv")
+
+    assert "rbCv = myCv" in skill
+    assert "schSymbolToPinList(rbCv~>libName rbCv~>cellName rbCv~>viewName)" in skill
+    assert 'unless(rbPinList error("symbol pin-list generation failed"))' in skill
+    assert "schCheck(" not in skill
+    assert skill.endswith("t)")
 
 
 def test_symbol_editor_opens_symbol_view_and_saves() -> None:
@@ -139,7 +148,7 @@ def test_symbol_editor_opens_symbol_view_and_saves() -> None:
     assert client.commands is not None
     assert client.commands[0] == 'cv = dbOpenCellViewByType("demoLib" "nand2" "symbol" "schematicSymbol" "w")'
     assert client.commands[1] == 'dbCreateRect(cv list("device" "drawing") list(list(-1 -1) list(1 1)))'
-    assert client.commands[2] == "schCheck(cv)"
+    assert client.commands[2] == symbol_check()
     assert "dbSave(rbCv)" in client.commands[3]
 
 

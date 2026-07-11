@@ -177,5 +177,14 @@ def symbol_set_term_order(term_names: Iterable[str], *, cv_expr: str = "cv") -> 
 
 
 def symbol_check(*, cv_expr: str = "cv") -> str:
-    """Build SKILL to run symbol/schematic checking."""
-    return f"schCheck({cv_expr})"
+    """Build SKILL to verify that a symbol can produce a pin list."""
+    # Cadence documents schSymbolToPinList as the symbol-specific converter:
+    # it returns the generated pin list on success and nil on failure.
+    return (
+        "let((rbCv rbPinList) "
+        f"rbCv = {cv_expr} "
+        'unless(rbCv error("symbol cellview not open")) '
+        "rbPinList = schSymbolToPinList(rbCv~>libName rbCv~>cellName rbCv~>viewName) "
+        'unless(rbPinList error("symbol pin-list generation failed")) '
+        "t)"
+    )
