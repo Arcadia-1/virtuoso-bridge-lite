@@ -105,13 +105,15 @@ class VirtuosoApplier:
         replace_flag = "t" if replace else "nil"
         recovery = "ANALOG_OPT_RECOVERY_REQUIRED:%s" % backup
         skill = (
-            f'let((srcCv tmpCv oldCv backupCv dstCv restoreCv srcSym dstSym status tempCreated backupSafe cleanupBackup publishOk) '
-            f'status="FAILED" tempCreated=nil backupSafe=nil cleanupBackup=nil publishOk=nil '
+            f'let((srcCv tmpCv oldCv backupCv dstCv restoreCv srcSym oldSym backupSym dstSym restoreSym status tempCreated backupSafe cleanupBackup publishOk symbolPublishOk) '
+            f'status="FAILED" tempCreated=nil backupSafe=nil cleanupBackup=nil publishOk=nil symbolPublishOk=nil '
             f'unwindProtect(progn('
             f'when(ddGetObj({lib} {tmp}) error("temporary cell already exists")) '
             f'when(ddGetObj({lib} {bak}) error("backup cell already exists")) '
             f'srcCv=dbOpenCellViewByType({lib} {src} "schematic" "schematic" "r") '
             f'unless(srcCv error("source schematic missing")) '
+            f'srcSym=dbOpenCellViewByType({lib} {src} "symbol" nil "r") '
+            f'unless(srcSym error("source symbol missing")) '
             f'tmpCv=dbCopyCellView(srcCv {lib} {tmp} "schematic") '
             f'unless(tmpCv error("temporary copy failed")) tempCreated=t '
             f'unless(dbSave(tmpCv) error("temporary save failed")) '
@@ -119,10 +121,15 @@ class VirtuosoApplier:
             f'if({replace_flag} then progn('
             f'oldCv=dbOpenCellViewByType({lib} {dst} "schematic" "schematic" "r") '
             f'unless(oldCv error("existing target open failed")) '
+            f'oldSym=dbOpenCellViewByType({lib} {dst} "symbol" nil "r") '
+            f'unless(oldSym error("existing target symbol open failed")) '
             f'backupCv=dbCopyCellView(oldCv {lib} {bak} "schematic") '
             f'unless(backupCv error("backup copy failed")) '
-            f'unless(dbSave(backupCv) error("backup save failed")) backupSafe=t '
-            f'when(oldCv dbClose(oldCv)) oldCv=nil '
+            f'unless(dbSave(backupCv) error("backup save failed")) '
+            f'backupSym=dbCopyCellView(oldSym {lib} {bak} "symbol") '
+            f'unless(backupSym error("symbol backup copy failed")) '
+            f'unless(dbSave(backupSym) error("symbol backup save failed")) backupSafe=t '
+            f'when(oldCv dbClose(oldCv)) oldCv=nil when(oldSym dbClose(oldSym)) oldSym=nil '
             f'unless(dbDeleteCellView({lib} {dst} "schematic") error("target delete failed")) '
             f'dstCv=dbCopyCellView(tmpCv {lib} {dst} "schematic") '
             f'when(dstCv when(dbSave(dstCv) publishOk=t)) '
@@ -133,23 +140,32 @@ class VirtuosoApplier:
             f'unless(restoreCv progn(printf("{recovery}") error("rollback restore failed; backup={backup}"))) '
             f'unless(dbSave(restoreCv) progn(printf("{recovery}") error("rollback save failed; backup={backup}"))) '
             f'cleanupBackup=t error("replacement publish failed; rollback restored"))) '
-            f'when(publishOk status="REPLACED" cleanupBackup=t) '
+            f'when(publishOk status="REPLACED") '
             f'status="EXISTS") '
             f'else progn(dstCv=dbCopyCellView(tmpCv {lib} {dst} "schematic") '
             f'unless(dstCv error("publish copy failed")) '
             f'unless(dbSave(dstCv) error("destination save failed")) status="CREATED")) '
-            f'when(status=="CREATED"||status=="REPLACED" progn(' +
-            f'srcSym=dbOpenCellViewByType({lib} {src} "symbol" nil "r") ' +
-            f'unless(srcSym error("source symbol missing")) ' +
-            f'when(ddGetObj({lib} {dst} "symbol") unless(dbDeleteCellView({lib} {dst} "symbol") error("target symbol delete failed"))) ' +
-            f'dstSym=dbCopyCellView(srcSym {lib} {dst} "symbol") ' +
-            f'unless(dstSym error("symbol copy failed")) unless(dbSave(dstSym) error("symbol save failed")) ' +
-            f'unless(ddGetObj({lib} {dst} "symbol") error("destination symbol missing")) ' +
-            f'printf("{prefix}:%s" status)))) '
-            f'when(srcCv dbClose(srcCv)) when(tmpCv dbClose(tmpCv)) when(oldCv dbClose(oldCv)) when(srcSym dbClose(srcSym)) when(dstSym dbClose(dstSym)) '
-            f'when(backupCv dbClose(backupCv)) when(dstCv dbClose(dstCv)) when(restoreCv dbClose(restoreCv)) '
+            f'when(status=="CREATED"||status=="REPLACED" progn('
+            f'when(ddGetObj({lib} {dst} "symbol") unless(dbDeleteCellView({lib} {dst} "symbol") error("target symbol delete failed"))) '
+            f'dstSym=dbCopyCellView(srcSym {lib} {dst} "symbol") '
+            f'when(dstSym when(dbSave(dstSym) symbolPublishOk=t)) '
+            f'unless(symbolPublishOk progn('
+            f'when(dstCv dbClose(dstCv)) dstCv=nil when(dstSym dbClose(dstSym)) dstSym=nil '
+            f'when(ddGetObj({lib} {dst} "schematic") unless(dbDeleteCellView({lib} {dst} "schematic") error("failed schematic cleanup failed"))) '
+            f'when(ddGetObj({lib} {dst} "symbol") unless(dbDeleteCellView({lib} {dst} "symbol") error("failed symbol cleanup failed"))) '
+            f'if(status=="REPLACED" then progn('
+            f'restoreCv=dbCopyCellView(backupCv {lib} {dst} "schematic") '
+            f'restoreSym=dbCopyCellView(backupSym {lib} {dst} "symbol") '
+            f'unless(restoreCv&&restoreSym progn(cleanupBackup=nil printf("{recovery}") error("rollback restore failed; backup={backup}"))) '
+            f'unless(dbSave(restoreCv)&&dbSave(restoreSym) progn(cleanupBackup=nil printf("{recovery}") error("rollback save failed; backup={backup}"))) '
+            f'cleanupBackup=nil printf("{recovery}") error("symbol publish failed; rollback restored; backup={backup}")) '
+            f'error("symbol publish failed; new destination removed"))) '
+            f'unless(ddGetObj({lib} {dst} "symbol") error("destination symbol missing")) '
+            f'when(status=="REPLACED" cleanupBackup=t) printf("{prefix}:%s" status)))) '
+            f'when(srcCv dbClose(srcCv)) when(tmpCv dbClose(tmpCv)) when(oldCv dbClose(oldCv)) when(srcSym dbClose(srcSym)) when(oldSym dbClose(oldSym)) when(dstSym dbClose(dstSym)) '
+            f'when(backupCv dbClose(backupCv)) when(backupSym dbClose(backupSym)) when(dstCv dbClose(dstCv)) when(restoreCv dbClose(restoreCv)) when(restoreSym dbClose(restoreSym)) '
             f'when(tempCreated unless(dbDeleteCellView({lib} {tmp} "schematic") error("temporary cleanup failed"))) '
-            f'when(backupSafe&&cleanupBackup unless(dbDeleteCellView({lib} {bak} "schematic") error("backup cleanup failed")))))'
+            f'when(backupSafe&&cleanupBackup progn(unless(dbDeleteCellView({lib} {bak} "schematic") error("backup cleanup failed")) unless(dbDeleteCellView({lib} {bak} "symbol") error("symbol backup cleanup failed"))))))'
         )
         output = self._execute(skill, prefix + ":")
         if any(line.strip() == prefix + ":EXISTS" for line in output.splitlines()):

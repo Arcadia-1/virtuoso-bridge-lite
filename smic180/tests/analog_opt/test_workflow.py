@@ -21,8 +21,8 @@ class Applier:
 class Netlist:
  def __init__(self,log,confirm=None): self.log=log; self.confirmed=confirm or {'gain':4.,'VBIAS':1.2,'VDD':3.3}
  def configure(self,design_variables,biases,stimuli,conditions): self.log.add('configure',dict(design_variables),dict(biases),dict(stimuli),dict(conditions))
- def export_fresh(self,library,work_cell,directory): self.log.add('export',library,work_cell,directory.name); return directory/'fresh.scs'
- def confirm(self,path,names): self.log.add('confirm',tuple(names)); return dict(self.confirmed, dut_cell='amp_work')
+ def export_fresh(self,library,work_cell,directory): self.log.add('export',library,work_cell,directory.name); return {'op':directory/'fresh.scs'}
+ def confirm(self,path,expected_by_analysis): self.log.add('confirm',tuple(expected_by_analysis)); return {'op':dict(self.confirmed, dut_cell='amp_work')}
  def confirm_cdf(self,path,specs): return {'W':10e-6}
 class Runner:
  def __init__(self,log,fail=False): self.log=log; self.fail=fail
@@ -30,7 +30,7 @@ class Runner:
 
 
 def make_backend(tmp_path,log,confirm=None,spec_summary=None,runner=None):
- r=runner or Runner(log); r.run=lambda p,d,a: (_ for _ in ()).throw(RuntimeError('spectre')) if getattr(r,'fail',False) else (log.add('run',p.name) or {'raw':1})
+ r=runner or Runner(log); r.run=lambda p,d,a: (_ for _ in ()).throw(RuntimeError('spectre')) if getattr(r,'fail',False) else (log.add('run',next(iter(p.values())).name) or {'raw':1})
  return AnalogSimulationBackend('tr','amp_work',SPECS,{'VDD':{'value':3.3,'optimizable':False},'VBIAS':{'value':1.,'optimizable':True}},[{'name':'op','type':'dc_op'}],[{'metric':'gain'}],applier=Applier(log),netlist=Netlist(log,confirm),runner=r,metric_extractor=lambda raw: log.add('metrics') or {'gain':8.},spec_evaluator=lambda metrics: spec_summary or {'objective':.25,'passed':False,'results':{'gain':{'passed':False,'violation':.25}}})
 
 def test_backend_uses_real_applier_signature_and_structured_confirmation(tmp_path):
@@ -129,3 +129,26 @@ def test_hard_spec_failure_has_penalized_objective_and_never_publishes(tmp_path)
  w.replay=lambda candidate,directory,conditions=None: EvaluationResult('best-replay',10000.2,True,{}, {'physical_candidate':dict(candidate)},None,{'gain':{'passed':False,'violation':.2}})
  with pytest.raises(EvaluationFailure) as err: w.run()
  assert err.value.category=='best_replay' and not any(c[0]=='publish' for c in log.calls)
+
+def test_backend_confirms_every_analysis_deck_and_dc_parameter_token(tmp_path):
+ log=Log(); backend=make_backend(tmp_path,log)
+ backend.analyses=({'name':'line','type':'dc_sweep','source':'VDD','parameter':'VDD_SWEEP','start':2.7,'stop':3.6,'points':3},{'name':'ac_main','type':'ac','start':1.,'stop':1e6,'points_per_decade':10})
+ class MultiNet(Netlist):
+  def export_fresh(self,library,cell,directory): return {'line':directory/'line.scs','ac_main':directory/'ac.scs'}
+  def confirm_cdf(self,decks,specs): return {'W':10e-6}
+  def confirm(self,decks,expected):
+   self.log.add('confirm_multi',decks,expected)
+   return {'line':{'VDD_SWEEP':'VDD_SWEEP','VBIAS':1.2,'gain':4.0,'dut_cell':'amp_work'},'ac_main':{'VDD':3.3,'VBIAS':1.2,'gain':4.0,'dut_cell':'amp_work'}}
+ backend.netlist=MultiNet(log); backend.runner.run=lambda decks,d,a:{name:type('R',(),{'ok':True,'data':{}})() for name in decks}; backend.metric_extractor=lambda r:{}
+ result=backend(CANDIDATE,tmp_path)
+ assert result['success'] is True and any(c[0]=='confirm_multi' for c in log.calls)
+
+def test_backend_fails_when_one_analysis_confirmation_is_missing(tmp_path):
+ backend=make_backend(tmp_path,Log()); backend.analyses=({'name':'a','type':'ac'},{'name':'b','type':'ac'})
+ class N(Netlist):
+  def export_fresh(self,l,c,d): return {'a':d/'a.scs','b':d/'b.scs'}
+  def confirm_cdf(self,d,s): return {'W':10e-6}
+  def confirm(self,d,e): return {'a':{'VDD':3.3,'VBIAS':1.2,'gain':4.0,'dut_cell':'amp_work'}}
+ backend.netlist=N(Log()); backend.runner.run=lambda d,p,a:{k:type('R',(),{'ok':True,'data':{}})() for k in d}; backend.metric_extractor=lambda r:{}
+ with pytest.raises(EvaluationFailure) as err: backend(CANDIDATE,tmp_path)
+ assert err.value.category=='confirmation' and 'analysis' in err.value.message

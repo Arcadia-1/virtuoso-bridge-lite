@@ -1,0 +1,15 @@
+from pathlib import Path
+from sim_io.sim.run import _load_primary_psf_data
+
+def test_noise_psf_loader_preserves_independent_frequency_axis(tmp_path):
+ raw=tmp_path/'deck.raw'; raw.mkdir(); deck=tmp_path/'deck.scs'; deck.write_text('// deck')
+ (raw/'onoise.noise').write_text('''HEADER\n"analysis type" "noise"\nTRACE\n"freq" "double"\n"VOUT" "double"\nVALUE\n"freq" 10\n"VOUT" 1e-9\n"freq" 100\n"VOUT" 2e-9\nEND\n''')
+ data=_load_primary_psf_data(tmp_path,deck)
+ assert data['noise_freq']==[10.0,100.0]
+ assert data['noise:VOUT']==[1e-9,2e-9]
+
+def test_oppoint_psf_loader_maps_device_fields(tmp_path):
+ raw=tmp_path/'deck.raw'; raw.mkdir(); deck=tmp_path/'deck.scs'; deck.write_text('// deck')
+ (raw/'op.dcOp').write_text('''HEADER\n"analysis type" "dcOp"\nVALUE\n"M1:gm" 1e-3\n"M1:id" 1e-4\n"M1:gds" 1e-5\n"M1:vds" 1.2\n"M1:vdsat" 0.2\n"M1:region" 2\nEND\n''')
+ data=_load_primary_psf_data(tmp_path,deck)
+ assert data['op:M1']=={'gm':1e-3,'id':1e-4,'gds':1e-5,'vds':1.2,'vdsat':0.2,'region':2.0}

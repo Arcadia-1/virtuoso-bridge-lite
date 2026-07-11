@@ -71,25 +71,28 @@ class AnalogSimulationBackend:
     deck_cdf=self.netlist.confirm_cdf(deck,cdf_specs)
     for name,value in deck_cdf.items():
      if name in observed and not math.isclose(float(observed[name]),float(value),rel_tol=self.rtol,abs_tol=self.atol): raise ValueError('%s final deck CDF mismatch'%name)
-   names=list(variables)+list(biases)+list(fixed)+['dut_cell']
+   base_requested=dict(variables); base_requested.update(biases); base_requested.update({name:_stimulus(item)[0] for name,item in fixed.items()}); base_requested['dut_cell']=self.work_cell
    if conditions:
-    names.extend(name for name in ('temperature','corner') if name in conditions)
-    if conditions.get('voltage') is not None: names.append(conditions.get('voltage_stimulus'))
-   net_values=self.netlist.confirm(deck,names)
-   if not isinstance(net_values,Mapping): raise ValueError('netlist confirmation must return mapping')
-   observed.update(net_values); requested=dict(cdf); requested.update(variables); requested.update(biases)
-   requested.update({name:_stimulus(item)[0] for name,item in fixed.items()})
-   requested['dut_cell']=self.work_cell
-   if conditions:
-    if 'temperature' in conditions: requested['temperature']=conditions['temperature']
-    if 'corner' in conditions: requested['corner']=conditions['corner']
-    if conditions.get('voltage') is not None: requested[conditions['voltage_stimulus']]=conditions['voltage']
-   for name,want in requested.items():
-    if name not in observed: raise ValueError('missing confirmation for %s'%name)
-    got=observed[name]
-    if isinstance(want,str):
-     if got!=want: raise ValueError('%s physical value mismatch'%name)
-    elif isinstance(got,bool) or not isinstance(got,(int,float)) or not math.isfinite(float(got)) or not math.isclose(float(got),float(want),rel_tol=self.rtol,abs_tol=self.atol): raise ValueError('%s physical value mismatch'%name)
+    if 'temperature' in conditions: base_requested['temperature']=conditions['temperature']
+    if 'corner' in conditions: base_requested['corner']=conditions['corner']
+    if conditions.get('voltage') is not None: base_requested[conditions['voltage_stimulus']]=conditions['voltage']
+   expected_by_analysis={}
+   for analysis in self.analyses:
+    requested=dict(base_requested)
+    if analysis.get('type')=='dc_sweep':
+     source=analysis['source']; requested.pop(source,None); requested[analysis['parameter']]=analysis['parameter']
+    expected_by_analysis[analysis['name']]=requested
+   net_values=self.netlist.confirm(deck,expected_by_analysis)
+   if not isinstance(net_values,Mapping) or set(net_values)!=set(expected_by_analysis): raise ValueError('analysis confirmation set is incomplete')
+   for analysis_name,requested in expected_by_analysis.items():
+    actual=net_values.get(analysis_name)
+    if not isinstance(actual,Mapping): raise ValueError('analysis confirmation missing: '+analysis_name)
+    for name,want in requested.items():
+     if name not in actual: raise ValueError('analysis %s missing confirmation for %s'%(analysis_name,name))
+     got=actual[name]
+     if isinstance(want,str):
+      if got!=want: raise ValueError('analysis %s physical value mismatch for %s'%(analysis_name,name))
+     elif isinstance(got,bool) or not isinstance(got,(int,float)) or not math.isfinite(float(got)) or not math.isclose(float(got),float(want),rel_tol=self.rtol,abs_tol=self.atol): raise ValueError('analysis %s physical value mismatch for %s'%(analysis_name,name))
   except Exception as exc: raise EvaluationFailure('confirmation',str(exc)) from exc
   return {'objective':objective,'success':True,'metrics':metrics,'specs':spec_results,'metadata':{'physical_candidate':dict(candidate),'specs_passed':passed,'netlist':str(deck)}}
 

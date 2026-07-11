@@ -30,8 +30,8 @@ def test_netlist_adapter_applies_corner_temperature_and_voltage_source(tmp_path)
  deck=adapter.export_fresh('tr','amp_work',tmp_path/'run')['op']; text=deck.read_text()
  assert 'include "models.scs" section=ff' in text
  assert 'temp=-40' in text and 'SUPPLY_MAIN (VDD 0) vsource type=dc dc=3' in text
- confirmed=adapter.confirm(deck,['VDD','temperature','corner','dut_cell'])
- assert confirmed=={'VDD':3.0,'temperature':-40.0,'corner':'FF','dut_cell':'amp_work'}
+ confirmed=adapter.confirm({'op':deck},{'op':{'VDD':3.0,'temperature':-40.0,'corner':'FF','dut_cell':'amp_work'}})
+ assert confirmed=={'op':{'VDD':3.0,'temperature':-40.0,'corner':'FF','dut_cell':'amp_work'}}
 
 def test_netlist_confirm_extracts_cdf_values_from_work_subckt(tmp_path):
  deck=tmp_path/'deck.scs'; deck.write_text('subckt amp_work A B\nM1 (A B 0 0) nch w=1e-5 l=1e-6\nends amp_work\nDUT (A B) amp_work\n')
@@ -70,7 +70,7 @@ def test_metrics_complex_curve_is_strict_json_serializable():
 def test_corner_confirmation_reads_deck_not_requested_condition(tmp_path):
  deck=tmp_path/'deck.scs'; deck.write_text('include "models.scs" section=ss\nsubckt amp_work A\nends amp_work\nDUT (A) amp_work\n')
  adapter=NetlistAdapter(Client(),Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=None,base_deck_factory=None); adapter.conditions={'corner':'FF'}
- assert adapter.confirm(deck,['corner'])['corner']=='SS'
+ assert adapter.confirm({'op':deck},{'op':{'corner':'SS'}})['op']['corner']=='SS'
 
 def test_publication_adapter_queries_applier_client_when_no_cell_exists_method(tmp_path):
  class BridgeResult:
@@ -116,7 +116,7 @@ def test_source_parser_handles_continuation_case_and_expression(tmp_path):
  adapter=NetlistAdapter(Client(),Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda *a,**k:raw,base_deck_factory=lambda **k:type('D',(),{'model_includes':[]})())
  adapter.analyses=[{'name':'op','type':'dc_op'}]; adapter.configure({}, {}, {'VDD':{'source_instance':'SUPPLY_MAIN','value':3.3}}, {})
  deck=adapter.export_fresh('tr','amp_work',tmp_path/'run')['op']
- assert adapter.confirm(deck,['VDD'])=={'VDD':3.3}
+ assert adapter.confirm({'op':deck},{'op':{'VDD':3.3}})=={'op':{'VDD':3.3}}
 
 def test_mixed_corner_patches_only_core_mos_sections():
  from analog_opt.live import patch_smic180_corner
@@ -170,7 +170,30 @@ def test_dedicated_tb_name_is_unique_and_skill_closes_all_views(tmp_path):
   assert 'length(setof(i dst~>instances i~>name=="DUT"))==1' in skill
   assert 'dbCreateInst' in skill and 'dbDeleteObject(dut)' in skill
 
+def test_dedicated_tb_copies_properties_and_cdf_without_sharing_inst_header(tmp_path):
+ client=Client(); adapter=NetlistAdapter(client,Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda *a,**k:None,base_deck_factory=lambda **k:None)
+ adapter._prepare_tb(); skill=client.skills[0]
+ assert 'dut~>prop' in skill and 'dbCreateProp(newDut' in skill
+ assert 'cdfGetInstCDF(dut)~>parameters' in skill and 'cdfGetInstCDF(newDut)~>parameters' in skill
+ assert 'instHeader~>cdfData' not in skill
+ assert 'unless(schCheck(dst)' in skill and 'unless(dbSave(dst)' in skill
+
 def test_live_factory_uses_safe_mixed_corner_patcher_source():
  import inspect,analog_opt.live as live
  source=inspect.getsource(live._build_runtime_adapters)
  assert 'corner_patcher=patch_smic180_corner' in source
+
+def test_dc_op_deck_requests_real_device_oppoint_output(tmp_path):
+ raw=tmp_path/'raw.scs'; raw.write_text('subckt amp_work A\nM1 (A 0 0 0) nch w=10u l=180n\nends amp_work\nDUT (A) amp_work\n')
+ adapter=NetlistAdapter(Client(),Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda *a,**k:raw,base_deck_factory=lambda **k:type('D',(),{'model_includes':[]})())
+ adapter.analyses=[{'name':'op','type':'dc_op','instances':['M1']}]; adapter.configure({}, {}, {}, {})
+ text=adapter.export_fresh('tr','amp_work',tmp_path/'run')['op'].read_text()
+ assert 'save M1:oppoint' in text and 'what=oppoint' in text
+
+def test_oppoint_fixture_flows_from_loader_to_metrics(tmp_path):
+ from sim_io.sim.run import _load_primary_psf_data
+ raw=tmp_path/'deck.raw'; raw.mkdir(); deck=tmp_path/'deck.scs'; deck.write_text('// deck')
+ (raw/'op.dcOp').write_text('HEADER\n"analysis type" "dcOp"\nVALUE\n"M1:gm" 1e-3\n"M1:id" 1e-4\n"M1:gds" 1e-5\n"M1:vds" 1.2\n"M1:vdsat" .2\nEND\n')
+ data=_load_primary_psf_data(tmp_path,deck); result=type('R',(),{'ok':True,'data':data})()
+ metrics=MetricsAdapter([{'name':'op','type':'dc_op','instances':['M1']}])({'op':result})
+ assert metrics['op.M1.gm_over_id']==pytest.approx(10.0)

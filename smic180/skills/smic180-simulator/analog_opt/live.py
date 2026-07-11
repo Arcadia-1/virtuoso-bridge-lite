@@ -46,15 +46,19 @@ class NetlistAdapter:
  def configure(self,design_variables,biases,stimuli,conditions): self.variables=dict(design_variables); self.biases=dict(biases); self.stimuli=dict(stimuli); self.conditions=dict(conditions)
  def _prepare_tb(self):
   tb=self.source_tb+'__analog_opt_'+uuid.uuid4().hex[:10]
-  skill=('let((src dst dut master newDut transform params) unwindProtect(progn('
+  skill=('let((src dst dut master newDut transform props cdfPairs prop pair param) unwindProtect(progn('
          'src=dbOpenCellViewByType("%s" "%s" "schematic" "schematic" "r") '
          'unless(src error("source TB missing")) dst=dbCopyCellView(src "%s" "%s" "schematic") '
          'unless(dst error("dedicated TB copy failed")) '
          'unless(length(setof(i dst~>instances i~>name=="DUT"))==1 error("DUT must be unique")) '
-         'dut=car(setof(i dst~>instances i~>name=="DUT")) transform=dut~>transform params=dut~>instHeader~>cdfData '
+         'dut=car(setof(i dst~>instances i~>name=="DUT")) transform=dut~>transform props=dut~>prop cdfPairs=nil '
+         'foreach(param cdfGetInstCDF(dut)~>parameters cdfPairs=cons(list(param~>name param~>value) cdfPairs)) '
          'master=dbOpenCellViewByType("%s" "%s" "symbol" nil "r") unless(master error("work symbol missing")) '
          'dbDeleteObject(dut) newDut=dbCreateInst(dst master "DUT" car(transform) cadr(transform) caddr(transform)) '
-         'unless(newDut error("DUT rebuild failed")) when(params newDut~>instHeader~>cdfData=params) schCheck(dst) dbSave(dst) printf("ANALOG_OPT_TB_OK")) '
+         'unless(newDut error("DUT rebuild failed")) '
+         'foreach(prop props dbCreateProp(newDut prop~>name prop~>valueType prop~>value)) '
+         'foreach(pair cdfPairs param=car(setof(p cdfGetInstCDF(newDut)~>parameters p~>name==car(pair))) when(param param~>value=cadr(pair))) '
+         'unless(schCheck(dst) error("dedicated TB schCheck failed")) unless(dbSave(dst) error("dedicated TB save failed")) printf("ANALOG_OPT_TB_OK")) '
          'when(src dbClose(src)) when(master dbClose(master)) when(dst dbClose(dst))))')%(self.library,self.source_tb,self.library,tb,self.library,self.work_cell)
   result=self.client.execute_skill(skill,timeout=30)
   if getattr(result,'errors',None) or 'ANALOG_OPT_TB_OK' not in (getattr(result,'output','') or ''): raise RuntimeError('dedicated work-cell testbench creation failed')
@@ -91,25 +95,38 @@ class NetlistAdapter:
    temp=self.conditions.get('temperature')
    if temp is not None: lines.append('simulatorOptions options temp=%s'%_num(temp))
    if self.variables: lines.append('parameters '+' '.join('%s=%s'%(k,_num(v)) for k,v in sorted(self.variables.items())))
-   lines.extend(build_analysis_lines([analysis])); target=directory/analysis['name']; target.mkdir(parents=True,exist_ok=True); deck=target/'analog_opt.scs'; deck.write_text(text.rstrip()+'\n'+'\n'.join(lines)+'\n',encoding='utf-8'); decks[analysis['name']]=deck
+   analysis_lines=build_analysis_lines([analysis])
+   if analysis.get('type')=='dc_op' and analysis.get('instances'):
+    analysis_lines=[*(f"save {instance}:oppoint" for instance in analysis['instances']),*analysis_lines,'opInfo info what=oppoint where=rawfile']
+   lines.extend(analysis_lines); target=directory/analysis['name']; target.mkdir(parents=True,exist_ok=True); deck=target/'analog_opt.scs'; deck.write_text(text.rstrip()+'\n'+'\n'.join(lines)+'\n',encoding='utf-8'); decks[analysis['name']]=deck
   return decks
 
- def confirm(self,path,names):
-  if isinstance(path,Mapping): path=next(iter(path.values()))
-  text=Path(path).read_text(encoding='utf-8',errors='replace'); result={}; sources=self._source_values()
-  for name in names:
-   if name in sources:
-    inst,value=sources[name]
-    if re.search(r'(?mi)^\s*%s\b[^\n]*\bdc\s*=\s*%s(?:\s|$)'%(re.escape(inst),re.escape(_num(value))),text): result[name]=float(value)
-   elif name=='temperature':
-    m=re.search(r'\btemp\s*=\s*([^\s]+)',text); result[name]=float(m.group(1)) if m else None
-   elif name=='corner':
-    sections=re.findall(r'\bsection\s*=\s*([A-Za-z0-9_]+)',text)
-    if sections: result[name]=str(self.conditions.get('corner','')).upper() if any(section.lower()==str(self.conditions.get('corner','')).lower() for section in sections) else sections[0].upper()
-   elif name=='dut_cell': result[name]=self.work_cell if re.search(r'(?m)^\s*DUT\b[^\n]*\s%s\s*$'%re.escape(self.work_cell),text) else None
-   elif name in self.variables:
-    m=re.search(r'\b%s\s*=\s*([^\s]+)'%re.escape(name),text); result[name]=float(m.group(1)) if m else None
-  return {k:v for k,v in result.items() if v is not None}
+ def confirm(self,decks,expected_by_analysis):
+  if not isinstance(decks,Mapping) or not isinstance(expected_by_analysis,Mapping): raise ValueError('analysis-specific confirmation requires mappings')
+  output={}; sources=self._source_values()
+  for analysis_name,expected in expected_by_analysis.items():
+   if analysis_name not in decks: continue
+   text=Path(decks[analysis_name]).read_text(encoding='utf-8',errors='replace'); result={}
+   for name,want in expected.items():
+    if name in sources:
+     inst,_=sources[name]; match=re.search(r'(?mi)^\s*%s\b[^\n]*\bdc\s*=\s*([^\s]+)'%re.escape(inst),text)
+     if match:
+      try: result[name]=_spectre_number(match.group(1),'scalar')
+      except ValueError: pass
+    elif isinstance(want,str) and name not in ('dut_cell','corner'):
+     for stimulus,(inst,_) in sources.items():
+      match=re.search(r'(?mi)^\s*%s\b[^\n]*\bdc\s*=\s*%s(?:\s|$)'%(re.escape(inst),re.escape(want)),text)
+      if match: result[name]=want; break
+    elif name=='temperature':
+     match=re.search(r'\btemp\s*=\s*([^\s]+)',text); result[name]=float(match.group(1)) if match else None
+    elif name=='corner':
+     sections=re.findall(r'\bsection\s*=\s*([A-Za-z0-9_]+)',text); result[name]=str(want).upper() if any(x.lower()==str(want).lower() for x in sections) else None
+    elif name=='dut_cell': result[name]=self.work_cell if re.search(r'(?m)^\s*DUT\b[^\n]*\s%s\s*$'%re.escape(self.work_cell),text) else None
+    elif name in self.variables:
+     match=re.search(r'\b%s\s*=\s*([^\s]+)'%re.escape(name),text); result[name]=float(match.group(1)) if match else None
+   output[analysis_name]={k:v for k,v in result.items() if v is not None}
+  return output
+
  def confirm_cdf(self,path,specs):
   if isinstance(path,Mapping): path=next(iter(path.values()))
   text=_logical_text(Path(path).read_text(encoding='utf-8',errors='replace')); block=re.search(r'(?mis)^\s*subckt\s+%s\b.*?^\s*ends\s+%s\b'%(re.escape(self.work_cell),re.escape(self.work_cell)),text)

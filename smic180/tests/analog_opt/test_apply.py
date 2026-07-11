@@ -211,3 +211,28 @@ def test_existing_work_cell_without_replace_never_enters_symbol_mutation():
  with pytest.raises(ApplyError,match='exists'): VirtuosoApplier(c).create_work_cell('tr','amp','work',False)
  skill=c.calls[0][0]
  assert 'when(status=="CREATED"||status=="REPLACED"' in skill
+
+
+def test_replace_backs_up_and_rolls_back_schematic_and_symbol_as_one_transaction():
+ c=RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])
+ VirtuosoApplier(c).create_work_cell("tr","amp","work",True)
+ skill=c.calls[0][0]
+ schematic_backup='backupCv=dbCopyCellView(oldCv "tr" "work__analog_opt_backup_'
+ symbol_backup='backupSym=dbCopyCellView(oldSym "tr" "work__analog_opt_backup_'
+ assert schematic_backup in skill and symbol_backup in skill
+ first_delete=skill.index('dbDeleteCellView("tr" "work" "schematic")')
+ assert skill.index(schematic_backup)<first_delete and skill.index(symbol_backup)<first_delete
+ assert 'restoreCv=dbCopyCellView(backupCv "tr" "work" "schematic")' in skill
+ assert 'restoreSym=dbCopyCellView(backupSym "tr" "work" "symbol")' in skill
+ assert 'when(backupSafe&&cleanupBackup' in skill
+ assert 'dbDeleteCellView("tr" "work__analog_opt_backup_' in skill
+
+def test_symbol_publish_failure_keeps_backup_for_manual_recovery():
+ c=RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])
+ VirtuosoApplier(c).create_work_cell("tr","amp","work",True)
+ skill=c.calls[0][0]
+ symbol_publish=skill.index('dstSym=dbCopyCellView(srcSym')
+ recovery=skill.index('restoreSym=dbCopyCellView(backupSym',symbol_publish)
+ assert recovery>symbol_publish
+ assert 'cleanupBackup=nil' in skill[recovery:]
+ assert 'ANALOG_OPT_RECOVERY_REQUIRED' in skill[recovery:]
