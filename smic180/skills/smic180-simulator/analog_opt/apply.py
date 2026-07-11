@@ -127,6 +127,7 @@ class VirtuosoApplier:
             f'dstCv=dbCopyCellView(tmpCv {lib} {dst} "schematic") '
             f'when(dstCv when(dbSave(dstCv) publishOk=t)) '
             f'unless(publishOk progn('
+            f'when(dstCv dbClose(dstCv)) dstCv=nil '
             f'when(ddGetObj({lib} {dst}) unless(dbDeleteCellView({lib} {dst} "schematic") error("failed target cleanup failed"))) '
             f'restoreCv=dbCopyCellView(backupCv {lib} {dst} "schematic") '
             f'unless(restoreCv progn(printf("{recovery}") error("rollback restore failed; backup={backup}"))) '

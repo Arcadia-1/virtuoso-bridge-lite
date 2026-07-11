@@ -187,3 +187,12 @@ def test_apply_checks_schematic_and_save_separately_before_success():
     assert check in skill and save in skill
     assert skill.index(check) < skill.index(save) < skill.index("ok=t") < skill.index('printf("ANALOG_OPT_OK:apply")')
     assert "when(schCheck(cv) dbSave(cv) ok=t)" not in skill
+
+def test_rollback_closes_failed_destination_before_deleting_view():
+    c = RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])
+    VirtuosoApplier(c).create_work_cell("tr", "amp", "work", True)
+    skill = c.calls[0][0]
+    rollback = skill.index("unless(publishOk progn(")
+    close_dst = skill.index("when(dstCv dbClose(dstCv)) dstCv=nil", rollback)
+    delete_dst = skill.index('dbDeleteCellView("tr" "work" "schematic")', rollback)
+    assert rollback < close_dst < delete_dst
