@@ -110,12 +110,19 @@ def _parse_design(value: Any) -> DesignConfig:
     return DesignConfig(**fields)
 
 
+def _finite_float(value: Real, location: str) -> float:
+    try:
+        result = float(value)
+    except (OverflowError, ValueError) as exc:
+        raise ConfigError(f"{location} must be a finite number") from exc
+    if not math.isfinite(result):
+        raise ConfigError(f"{location} must be a finite number")
+    return result
+
+
 def _parse_quantity_value(value: Any, kind: str, location: str) -> float:
     if isinstance(value, Real) and not isinstance(value, bool):
-        result = float(value)
-        if not math.isfinite(result):
-            raise ConfigError(f"{location} must be finite")
-        return result
+        return _finite_float(value, location)
     if isinstance(value, str):
         try:
             dimension = _STIMULUS_DIMENSIONS[kind]
@@ -133,10 +140,7 @@ def _parse_quantity_value(value: Any, kind: str, location: str) -> float:
 def _parse_ac(value: Any, location: str) -> float:
     if not isinstance(value, Real) or isinstance(value, bool):
         raise ConfigError(f"{location} must be a finite number")
-    result = float(value)
-    if not math.isfinite(result):
-        raise ConfigError(f"{location} must be a finite number")
-    return result
+    return _finite_float(value, location)
 
 
 def _parse_stimuli(value: Any) -> Dict[str, StimulusConfig]:

@@ -114,6 +114,15 @@ def test_rejects_stimulus_quantity_with_wrong_dimension(tmp_path):
         load_config(write_config(tmp_path, data))
 
 
+@pytest.mark.parametrize("field", ["value", "dc", "ac"])
+def test_huge_fixed_stimulus_number_raises_config_error(tmp_path, field):
+    data = minimal_config()
+    data["stimuli"]["VDD"].pop("value", None)
+    data["stimuli"]["VDD"][field] = 10**1000
+    with pytest.raises(ConfigError, match=field):
+        load_config(write_config(tmp_path, data))
+
+
 @pytest.mark.parametrize("ac", [None, "1", True, float("nan"), float("inf")])
 def test_rejects_nonfinite_or_nonnumeric_ac_value(tmp_path, ac):
     data = minimal_config()
@@ -135,6 +144,16 @@ def test_optimizable_stimulus_requires_both_bounds(tmp_path, missing_bound):
     data["stimuli"]["VDD"].update({"optimizable": True, "lower": "2.7V", "upper": "3.6V"})
     del data["stimuli"]["VDD"][missing_bound]
     with pytest.raises(ConfigError, match=missing_bound):
+        load_config(write_config(tmp_path, data))
+
+
+@pytest.mark.parametrize("field", ["lower", "upper"])
+def test_huge_optimizable_bound_raises_config_error(tmp_path, field):
+    data = minimal_config()
+    bounds = {"lower": "2.7V", "upper": "3.6V"}
+    bounds[field] = 10**1000
+    data["stimuli"]["VDD"].update({"optimizable": True, **bounds})
+    with pytest.raises(ConfigError, match=field):
         load_config(write_config(tmp_path, data))
 
 
