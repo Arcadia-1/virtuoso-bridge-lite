@@ -1,6 +1,7 @@
 import ast
 import json
 from pathlib import Path
+from typing import Optional, get_type_hints
 
 import pytest
 
@@ -64,6 +65,15 @@ def test_missing_top_level_required_key_names_key(tmp_path, missing_key):
         load_config(write_config(tmp_path, data))
 
 
+@pytest.mark.parametrize("field", ["library", "cell", "work_cell", "result_cell", "testbench_cell"])
+@pytest.mark.parametrize("invalid_value", [None, 7, "", "   "])
+def test_design_fields_must_be_nonempty_strings(tmp_path, field, invalid_value):
+    data = minimal_config()
+    data["design"][field] = invalid_value
+    with pytest.raises(ConfigError, match=field):
+        load_config(write_config(tmp_path, data))
+
+
 @pytest.mark.parametrize(
     ("field", "duplicate"),
     [("work_cell", "amp"), ("result_cell", "amp"), ("result_cell", "amp_opt_work")],
@@ -72,6 +82,43 @@ def test_source_work_and_result_cells_must_be_distinct(tmp_path, field, duplicat
     data = minimal_config()
     data["design"][field] = duplicate
     with pytest.raises(ConfigError, match="must be distinct"):
+        load_config(write_config(tmp_path, data))
+
+
+def test_fixed_stimulus_quantities_are_stored_as_si_values(tmp_path):
+    data = minimal_config()
+    data["stimuli"] = {
+        "VDD": {"kind": "voltage", "value": "3300mV"},
+        "VIN": {"kind": "voltage", "dc": "1200mV", "ac": 1},
+        "IBIAS": {"kind": "current", "value": "10uA"},
+    }
+    stimuli = load_config(write_config(tmp_path, data)).stimuli
+    assert stimuli["VDD"].value == pytest.approx(3.3)
+    assert stimuli["VIN"].dc == pytest.approx(1.2)
+    assert stimuli["VIN"].ac == pytest.approx(1.0)
+    assert stimuli["IBIAS"].value == pytest.approx(10e-6)
+
+
+@pytest.mark.parametrize("kind", ["resistance", "", None, []])
+def test_rejects_unknown_stimulus_kind(tmp_path, kind):
+    data = minimal_config()
+    data["stimuli"]["VDD"]["kind"] = kind
+    with pytest.raises(ConfigError, match="kind"):
+        load_config(write_config(tmp_path, data))
+
+
+def test_rejects_stimulus_quantity_with_wrong_dimension(tmp_path):
+    data = minimal_config()
+    data["stimuli"]["VDD"]["value"] = "10uA"
+    with pytest.raises(ConfigError, match="value"):
+        load_config(write_config(tmp_path, data))
+
+
+@pytest.mark.parametrize("ac", [None, "1", True, float("nan"), float("inf")])
+def test_rejects_nonfinite_or_nonnumeric_ac_value(tmp_path, ac):
+    data = minimal_config()
+    data["stimuli"]["VDD"]["ac"] = ac
+    with pytest.raises(ConfigError, match="ac"):
         load_config(write_config(tmp_path, data))
 
 
@@ -123,13 +170,24 @@ def test_optimizable_stimulus_accepts_numeric_bounds(tmp_path):
     assert stimulus.upper == 3.6
 
 
-def test_optimizable_stimulus_accepts_both_bounds(tmp_path):
+def test_optimizable_stimulus_stores_bounds_as_si_floats(tmp_path):
     data = minimal_config()
-    data["stimuli"]["VDD"].update({"optimizable": True, "lower": "2.7V", "upper": "3.6V"})
+    data["stimuli"]["VDD"].update({"optimizable": True, "lower": "2700mV", "upper": "3.6V"})
     stimulus = load_config(write_config(tmp_path, data)).stimuli["VDD"]
     assert stimulus.optimizable is True
-    assert stimulus.lower == "2.7V"
-    assert stimulus.upper == "3.6V"
+    assert stimulus.lower == pytest.approx(2.7)
+    assert stimulus.upper == pytest.approx(3.6)
+    hints = get_type_hints(StimulusConfig)
+    assert hints["lower"] == Optional[float]
+    assert hints["upper"] == Optional[float]
+
+
+@pytest.mark.parametrize("name", [None, 3, [], "", "   "])
+def test_parameter_name_must_be_nonempty_string(tmp_path, name):
+    data = minimal_config()
+    data["parameters"] = [{"name": name, "target": "bias"}]
+    with pytest.raises(ConfigError, match="parameter.*name"):
+        load_config(write_config(tmp_path, data))
 
 
 def test_parameter_names_must_be_unique(tmp_path):
@@ -151,6 +209,14 @@ def test_rejects_unsupported_parameter_target(tmp_path):
     data = minimal_config()
     data["parameters"] = [{"name": "P", "target": "netlist_text"}]
     with pytest.raises(ConfigError, match="target"):
+        load_config(write_config(tmp_path, data))
+
+
+@pytest.mark.parametrize("name", [None, 3, [], "", "   "])
+def test_analysis_name_must_be_nonempty_string(tmp_path, name):
+    data = minimal_config()
+    data["analyses"] = [{"name": name, "type": "dc_op"}]
+    with pytest.raises(ConfigError, match="analysis.*name"):
         load_config(write_config(tmp_path, data))
 
 

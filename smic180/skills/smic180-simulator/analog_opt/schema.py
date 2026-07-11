@@ -7,7 +7,7 @@ import math
 from numbers import Real
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Union
+from typing import Any, Dict, List, Mapping, Optional, Union
 
 from analog_opt.units import UnitError, parse_quantity
 
@@ -29,11 +29,11 @@ class DesignConfig:
 class StimulusConfig:
     kind: str
     optimizable: bool = False
-    value: Any = None
-    dc: Any = None
-    ac: Any = None
-    lower: Any = None
-    upper: Any = None
+    value: Optional[float] = None
+    dc: Optional[float] = None
+    ac: Optional[float] = None
+    lower: Optional[float] = None
+    upper: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -91,22 +91,26 @@ def _require_keys(data: Mapping[str, Any], keys: Any, location: str) -> None:
             raise ConfigError(f"missing required key: {location}{key}")
 
 
+def _nonempty_string(value: Any, location: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{location} must be a nonempty string")
+    return value
+
+
 def _parse_design(value: Any) -> DesignConfig:
     data = _mapping(value, "design")
     _require_keys(data, _REQUIRED_DESIGN, "design.")
-    cells = [data["cell"], data["work_cell"], data["result_cell"]]
+    fields = {
+        key: _nonempty_string(data[key], f"design.{key}")
+        for key in _REQUIRED_DESIGN
+    }
+    cells = [fields["cell"], fields["work_cell"], fields["result_cell"]]
     if len(set(cells)) != len(cells):
         raise ConfigError("design source, work, and result cells must be distinct")
-    return DesignConfig(
-        library=data["library"],
-        cell=data["cell"],
-        work_cell=data["work_cell"],
-        result_cell=data["result_cell"],
-        testbench_cell=data["testbench_cell"],
-    )
+    return DesignConfig(**fields)
 
 
-def _parse_bound(value: Any, kind: str, location: str) -> float:
+def _parse_quantity_value(value: Any, kind: str, location: str) -> float:
     if isinstance(value, Real) and not isinstance(value, bool):
         result = float(value)
         if not math.isfinite(result):
@@ -126,33 +130,60 @@ def _parse_bound(value: Any, kind: str, location: str) -> float:
     raise ConfigError(f"{location} must be a number or quantity")
 
 
+def _parse_ac(value: Any, location: str) -> float:
+    if not isinstance(value, Real) or isinstance(value, bool):
+        raise ConfigError(f"{location} must be a finite number")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ConfigError(f"{location} must be a finite number")
+    return result
+
+
 def _parse_stimuli(value: Any) -> Dict[str, StimulusConfig]:
     data = _mapping(value, "stimuli")
     stimuli = {}
     for name, raw_stimulus in data.items():
         stimulus = _mapping(raw_stimulus, f"stimuli.{name}")
         _require_keys(stimulus, ("kind",), f"stimuli.{name}.")
+        kind = stimulus["kind"]
+        if not isinstance(kind, str) or kind not in _STIMULUS_DIMENSIONS:
+            raise ConfigError(f"stimuli.{name}.kind is unsupported: {kind}")
+        value_parsed = (
+            _parse_quantity_value(stimulus["value"], kind, f"stimuli.{name}.value")
+            if "value" in stimulus
+            else None
+        )
+        dc_parsed = (
+            _parse_quantity_value(stimulus["dc"], kind, f"stimuli.{name}.dc")
+            if "dc" in stimulus
+            else None
+        )
+        ac_parsed = (
+            _parse_ac(stimulus["ac"], f"stimuli.{name}.ac")
+            if "ac" in stimulus
+            else None
+        )
         optimizable = stimulus.get("optimizable", False)
         if not isinstance(optimizable, bool):
             raise ConfigError(f"stimuli.{name}.optimizable must be a boolean")
         if optimizable:
             _require_keys(stimulus, ("lower", "upper"), f"stimuli.{name}.")
-            lower_value = _parse_bound(
-                stimulus["lower"], stimulus["kind"], f"stimuli.{name}.lower"
+            lower_value = _parse_quantity_value(
+                stimulus["lower"], kind, f"stimuli.{name}.lower"
             )
-            upper_value = _parse_bound(
-                stimulus["upper"], stimulus["kind"], f"stimuli.{name}.upper"
+            upper_value = _parse_quantity_value(
+                stimulus["upper"], kind, f"stimuli.{name}.upper"
             )
             if lower_value >= upper_value:
                 raise ConfigError(f"stimuli.{name} bounds require lower < upper")
         stimuli[name] = StimulusConfig(
-            kind=stimulus["kind"],
+            kind=kind,
             optimizable=optimizable,
-            value=stimulus.get("value"),
-            dc=stimulus.get("dc"),
-            ac=stimulus.get("ac"),
-            lower=stimulus.get("lower"),
-            upper=stimulus.get("upper"),
+            value=value_parsed,
+            dc=dc_parsed,
+            ac=ac_parsed,
+            lower=lower_value if optimizable else None,
+            upper=upper_value if optimizable else None,
         )
     return stimuli
 
@@ -167,13 +198,16 @@ def _validate_named_items(
     singular = {"parameters": "parameter", "analyses": "analysis"}[location]
     for index, item in enumerate(items):
         _require_keys(item, ("name", discriminator), f"{location}[{index}].")
-        name = item["name"]
+        name = _nonempty_string(item["name"], f"{singular} name")
+        discriminator_value = item[discriminator]
+        if not isinstance(discriminator_value, str):
+            raise ConfigError(f"{singular} {discriminator} must be a string")
         if name in names:
             raise ConfigError(f"{singular} names must be unique: {name}")
         names.add(name)
-        if item[discriminator] not in allowed:
+        if discriminator_value not in allowed:
             raise ConfigError(
-                f"unsupported {singular} {discriminator}: {item[discriminator]}"
+                f"unsupported {singular} {discriminator}: {discriminator_value}"
             )
 
 
