@@ -13,9 +13,10 @@ from analog_opt.metrics import (
 
 def test_mos_metrics_include_available_raw_and_derived_values():
     metrics = extract_mos_op_metrics(
-        "M1", {"id": 10e-6, "gm": 200e-6, "gds": 2e-6, "vds": -0.8, "vdsat": -0.2}
+        "M1", {"id": 10e-6, "gm": 200e-6, "gds": 2e-6, "vds": -0.8, "vdsat": -0.2, "region": "sat"}
     )
     assert metrics["op.M1.id"] == pytest.approx(10e-6)
+    assert metrics["op.M1.region"] == "sat"
     assert metrics["op.M1.gm_over_id"] == pytest.approx(20)
     assert metrics["op.M1.intrinsic_gain"] == pytest.approx(100)
     assert metrics["op.M1.saturation_margin"] == pytest.approx(0.6)
@@ -23,7 +24,7 @@ def test_mos_metrics_include_available_raw_and_derived_values():
 
 def test_mos_omits_missing_nonfinite_and_undefined_derivatives():
     metrics = extract_mos_op_metrics(
-        "M0", {"id": 0.0, "gm": 1e-3, "gds": 0.0, "vds": math.inf, "region": "sat"}
+        "M0", {"id": 0.0, "gm": 1e-3, "gds": 0.0, "vds": math.inf}
     )
     assert metrics == {"op.M0.id": 0.0, "op.M0.gm": 1e-3, "op.M0.gds": 0.0}
 
@@ -80,16 +81,16 @@ def test_transient_uses_target_and_last_out_of_band_sample():
         [0.0, 1.1, 0.97, 1.03, 1.0], target=1.0, settling_tolerance=0.02,
     )
     assert metrics["tran.step.VOUT.overshoot"] == pytest.approx(0.1)
-    assert metrics["tran.step.VOUT.undershoot"] == pytest.approx(1.0)
-    assert metrics["tran.step.VOUT.settling_time_s"] == pytest.approx(4e-6)
+    assert metrics["tran.step.VOUT.undershoot"] == pytest.approx(0.0)
+    assert metrics["tran.step.VOUT.settling_time_s"] == pytest.approx(10e-6 / 3.0)
     assert metrics["tran.step.VOUT.slew_rise_v_per_s"] == pytest.approx(1.1e6)
-    assert metrics["tran.step.VOUT.slew_fall_v_per_s"] == pytest.approx(-0.13e6)
+    assert metrics["tran.step.VOUT.slew_fall_v_per_s"] == pytest.approx(0.13e6)
 
 
 def test_transient_negative_target_uses_target_magnitude():
     metrics = extract_tran_metrics("neg", "VOUT", [0.0, 1.0, 2.0], [0.0, -1.2, -1.0], target=-1.0)
     assert metrics["tran.neg.VOUT.overshoot"] == pytest.approx(0.2)
-    assert metrics["tran.neg.VOUT.undershoot"] == pytest.approx(1.0)
+    assert metrics["tran.neg.VOUT.undershoot"] == pytest.approx(0.0)
 
 
 @pytest.mark.parametrize(
@@ -112,3 +113,68 @@ def test_transient_zero_target_omits_normalized_excursions():
 
 def test_merge_metrics_uses_later_values():
     assert merge_metrics({"a": 1.0}, {}, {"a": 2.0, "b": 3.0}) == {"a": 2.0, "b": 3.0}
+
+def test_ac_bandwidth_uses_first_downward_dc_minus_3db_crossing():
+    frequencies = [1.0, 10.0, 100.0, 1000.0, 10000.0]
+    gain_db = [20.0, 17.0, 19.0, 16.0, 10.0]
+    response = [10.0 ** (gain / 20.0) for gain in gain_db]
+    metrics = extract_ac_metrics("multi", frequencies, response)
+    assert metrics["ac.multi.bandwidth_3db_hz"] == pytest.approx(10.0)
+
+
+def test_ac_bandwidth_accepts_exact_downward_threshold_sample():
+    frequencies = [1.0, 10.0, 100.0]
+    gain_db = [20.0, 18.0, 17.0]
+    response = [10.0 ** (gain / 20.0) for gain in gain_db]
+    metrics = extract_ac_metrics("exact", frequencies, response)
+    assert metrics["ac.exact.bandwidth_3db_hz"] == pytest.approx(100.0)
+
+
+def test_ac_unity_gain_uses_last_downward_crossing_after_peak():
+    frequencies = [1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0]
+    gain_db = [0.0, -2.0, 6.0, -1.0, 2.0, -4.0]
+    response = [10.0 ** (gain / 20.0) for gain in gain_db]
+    metrics = extract_ac_metrics("ugf", frequencies, response)
+    expected = 10.0 ** (4.0 + 2.0 / 6.0)
+    assert metrics["ac.ugf.unity_gain_hz"] == pytest.approx(expected)
+
+
+def test_ac_bandwidth_omitted_when_first_point_is_not_above_threshold():
+    metrics = extract_ac_metrics("nan_dc", [1.0, 10.0], [1.0 + 0j, 1.0 + 0j])
+    assert "ac.nan_dc.bandwidth_3db_hz" not in metrics
+
+
+def test_noise_overflow_keeps_finite_start_density():
+    metrics = extract_noise_metrics("huge", [1.0, 2.0], [1e308, 1e308])
+    assert metrics == {"noise.huge.output_density_v_per_sqrt_hz": 1e308}
+
+
+def test_monotonic_steps_have_no_overshoot_or_undershoot():
+    rising = extract_tran_metrics("rise", "V", [0.0, 1.0, 2.0], [2.0, 3.0, 4.0], target=4.0)
+    falling = extract_tran_metrics("fall", "V", [0.0, 1.0, 2.0], [4.0, 3.0, 2.0], target=2.0)
+    assert rising["tran.rise.V.overshoot"] == pytest.approx(0.0)
+    assert rising["tran.rise.V.undershoot"] == pytest.approx(0.0)
+    assert falling["tran.fall.V.overshoot"] == pytest.approx(0.0)
+    assert falling["tran.fall.V.undershoot"] == pytest.approx(0.0)
+
+
+def test_transient_excursions_use_initial_target_step_amplitude():
+    rising = extract_tran_metrics("rise", "V", [0.0, 1.0, 2.0], [2.0, 4.5, 1.5], target=4.0)
+    falling = extract_tran_metrics("fall", "V", [0.0, 1.0, 2.0], [4.0, 1.5, 4.5], target=2.0)
+    assert rising["tran.rise.V.overshoot"] == pytest.approx(0.25)
+    assert rising["tran.rise.V.undershoot"] == pytest.approx(0.25)
+    assert falling["tran.fall.V.overshoot"] == pytest.approx(0.25)
+    assert falling["tran.fall.V.undershoot"] == pytest.approx(0.25)
+
+
+def test_transient_equal_initial_and_target_omits_excursions():
+    metrics = extract_tran_metrics("flat", "V", [0.0, 1.0], [1.0, 1.1], target=1.0)
+    assert "tran.flat.V.overshoot" not in metrics
+    assert "tran.flat.V.undershoot" not in metrics
+
+
+def test_settling_time_is_duration_with_interpolated_band_entry():
+    metrics = extract_tran_metrics(
+        "offset", "V", [5.0, 7.0, 9.0], [0.0, 0.8, 1.0], target=1.0, settling_tolerance=0.1
+    )
+    assert metrics["tran.offset.V.settling_time_s"] == pytest.approx(3.0)
