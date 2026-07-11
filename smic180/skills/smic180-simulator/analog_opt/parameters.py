@@ -75,17 +75,6 @@ class ParameterSpace:
     def _clamp(value: float, lower: float, upper: float) -> float:
         return min(max(value, lower), upper)
 
-    @staticmethod
-    def _implicit_integer_grid(spec: ParameterSpec) -> bool:
-        return (
-            spec.dtype == "float"
-            and spec.step is None
-            and isinstance(spec.lower, int)
-            and not isinstance(spec.lower, bool)
-            and isinstance(spec.upper, int)
-            and not isinstance(spec.upper, bool)
-        )
-
     def materialize(self, normalized_values: Sequence[Number]) -> Dict[str, Number]:
         if len(normalized_values) != len(self.specs):
             raise ValueError("normalized vector length must match parameter space")
@@ -101,8 +90,6 @@ class ParameterSpace:
                 value = lower + normalized * (upper - lower)
             if spec.step is not None:
                 value = lower + round((value - lower) / float(spec.step)) * float(spec.step)
-            elif self._implicit_integer_grid(spec):
-                value = float(round(value))
             if spec.dtype == "int":
                 value = int(round(value))
             value = self._clamp(value, lower, upper)

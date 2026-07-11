@@ -43,13 +43,19 @@ def test_int_rounding_happens_after_denormalization():
     assert isinstance(space.materialize([0.5])["fingers"], int)
 
 
-def test_historical_exactly_once_transform_regression():
-    space = ParameterSpace([ParameterSpec("x", "bias", 1, 40)])
+@pytest.mark.parametrize(("lower", "upper"), [(1, 40), (1.0, 40.0)])
+def test_float_parameters_do_not_infer_integer_grid_from_bound_types(lower, upper):
+    space = ParameterSpace([ParameterSpec("x", "bias", lower, upper)])
+    assert space.materialize([0.5]) == {"x": 20.5}
+
+
+def test_historical_m7_exactly_once_transform_regression():
+    space = ParameterSpace([ParameterSpec("m7_fingers", "virtuoso_cdf", 1, 40, dtype="int")])
     materialized = space.materialize([0.5])
-    assert materialized == {"x": 20.0}
+    assert materialized == {"m7_fingers": 20}
     normalized = space.normalize(materialized)
     assert normalized == pytest.approx([19.0 / 39.0])
-    assert space.materialize(normalized) == {"x": 20.0}
+    assert space.materialize(normalized) == {"m7_fingers": 20}
 
 
 @pytest.mark.parametrize("spec,match", [
