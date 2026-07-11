@@ -129,10 +129,14 @@ def build_analysis_lines(analyses: Iterable[Mapping[str, Any]]) -> List[str]:
         elif analysis_type == "noise":
             input_source = _required_name(analysis, "input_source")
             output = _required_name(analysis, "output")
+            output_reference = analysis.get("output_reference", "0")
+            if output_reference != "0":
+                output_reference = _name(output_reference, "output_reference")
             start, stop, points = _frequency_sweep(analysis)
             lines.append(
-                f"{name} noise iprobe={input_source} oprobe={output} "
-                f"start={_format(start)} stop={_format(stop)} dec={points}"
+                f"{name} ({output} {output_reference}) noise "
+                f"iprobe={input_source} start={_format(start)} "
+                f"stop={_format(stop)} dec={points}"
             )
         else:
             stop = _required_number(analysis, "stop", "time")

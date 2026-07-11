@@ -22,8 +22,24 @@ def test_builds_supported_spectre_analysis_lines():
         "op dc",
         "vdd dc param=VDD_SWEEP start=2.7 stop=3.6 lin=91",
         "ac_main ac start=1 stop=1000000000 dec=100",
-        "onoise noise iprobe=VIN oprobe=VOUT start=1 stop=100000000 dec=50",
+        "onoise (VOUT 0) noise iprobe=VIN start=1 stop=100000000 dec=50",
         "step tran stop=2e-05 maxstep=1e-08 errpreset=conservative",
+    ]
+
+
+def test_noise_node_output_supports_explicit_reference():
+    analysis = {
+        "name": "inoise",
+        "type": "noise",
+        "input_source": "VIN_SRC",
+        "output": "VOUT_P",
+        "output_reference": "VOUT_N",
+        "start": "10Hz",
+        "stop": "1MHz",
+        "points_per_decade": 20,
+    }
+    assert build_analysis_lines([analysis]) == [
+        "inoise (VOUT_P VOUT_N) noise iprobe=VIN_SRC start=10 stop=1000000 dec=20"
     ]
 
 
