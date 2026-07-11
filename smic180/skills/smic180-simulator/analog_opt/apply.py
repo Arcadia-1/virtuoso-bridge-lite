@@ -4,17 +4,27 @@ from __future__ import annotations
 import math
 import re
 from numbers import Real
-from typing import Any, Mapping, Sequence
+from typing import Any, Dict, Mapping, Sequence
 
 from .parameters import ParameterSpec
-from .units import UnitError, format_quantity
+from .units import UnitError, format_quantity, parse_quantity
 
 
 class ApplyError(RuntimeError):
-    """Raised when an application request is unsafe or Virtuoso rejects it."""
+    """Raised when validation or a structured bridge operation fails."""
 
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_.$]*$")
+_UNIT_DIMENSIONS = {
+    "V": "voltage", "mV": "voltage", "uV": "voltage",
+    "A": "current", "mA": "current", "uA": "current", "nA": "current",
+    "F": "capacitance", "nF": "capacitance", "pF": "capacitance",
+    "Ohm": "resistance", "kOhm": "resistance", "MOhm": "resistance",
+    "Hz": "frequency", "kHz": "frequency", "MHz": "frequency", "GHz": "frequency",
+    "s": "time", "ms": "time", "us": "time", "ns": "time",
+    "m": "length", "mm": "length", "um": "length", "nm": "length",
+    "W": "power", "mW": "power", "uW": "power",
+}
 
 
 def _identifier(value: Any, label: str) -> str:
@@ -23,126 +33,188 @@ def _identifier(value: Any, label: str) -> str:
     return value
 
 
-def _skill_string(value: str) -> str:
-    # Identifiers are validated before reaching this boundary. Keep escaping
-    # here as a second line of defence for future non-identifier strings.
+def _quote(value: str) -> str:
     return '"%s"' % value.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _finite(value: Any, name: str) -> float:
+def _number(value: Any, spec: ParameterSpec) -> Real:
     if isinstance(value, bool) or not isinstance(value, Real):
-        raise ApplyError("candidate %s must be a finite number" % name)
+        raise ApplyError("candidate %s must be a finite number" % spec.name)
     try:
         result = float(value)
     except (OverflowError, ValueError) as exc:
-        raise ApplyError("candidate %s must be a finite number" % name) from exc
+        raise ApplyError("candidate %s must be a finite number" % spec.name) from exc
     if not math.isfinite(result):
-        raise ApplyError("candidate %s must be a finite number" % name)
+        raise ApplyError("candidate %s must be a finite number" % spec.name)
+    if spec.dtype == "int":
+        if not result.is_integer():
+            raise ApplyError("candidate %s must be an integer" % spec.name)
+        return int(result)
     return result
 
 
 class VirtuosoApplier:
-    """Apply validated physical candidates through checked SKILL calls."""
+    """Apply validated physical candidates through machine-readable SKILL calls."""
 
     def __init__(self, client: Any, timeout: int = 30) -> None:
         self.client = client
         self.timeout = timeout
 
-    def _execute(self, skill: str) -> Any:
+    def _execute(self, skill: str, sentinel: str) -> str:
         try:
             result = self.client.execute_skill(skill, timeout=self.timeout)
         except Exception as exc:
             raise ApplyError("bridge execution failed: %s" % exc) from exc
         errors = getattr(result, "errors", ()) or ()
+        if errors:
+            raise ApplyError("bridge rejected SKILL: %s" % (errors,))
         output = getattr(result, "output", "") or ""
-        if errors or "error" in output.lower():
-            detail = errors or output
-            raise ApplyError("bridge rejected SKILL: %s" % detail)
+        if not any(line.strip().startswith(sentinel) for line in output.splitlines()):
+            raise ApplyError("bridge response missing sentinel %s" % sentinel)
+        return output
+
+    @staticmethod
+    def _cdf_specs(specs: Sequence[ParameterSpec]) -> Sequence[ParameterSpec]:
+        result = list(specs)
+        names = set()
+        for spec in result:
+            if not isinstance(spec, ParameterSpec) or spec.target != "virtuoso_cdf":
+                raise ApplyError("operation accepts only virtuoso_cdf ParameterSpec values")
+            if spec.name in names:
+                raise ApplyError("parameter names must be unique")
+            names.add(spec.name)
+            _identifier(spec.name, "parameter")
+            _identifier(spec.instance, "instance")
+            _identifier(spec.property, "property")
         return result
 
-    def _copy_cell(self, library: str, source: str, destination: str, replace: bool) -> None:
+    def _copy_new(self, library: str, source: str, destination: str, operation: str) -> None:
         library = _identifier(library, "library")
         source = _identifier(source, "source cell")
         destination = _identifier(destination, "destination cell")
         if source == destination:
             raise ApplyError("source and destination cells must be distinct")
-        lib, src, dst = map(_skill_string, (library, source, destination))
-        if not replace:
-            exists = self._execute("if(ddGetObj(%s %s) then \"EXISTS\" else \"MISSING\")" % (lib, dst))
-            if "EXISTS" in (getattr(exists, "output", "") or ""):
-                raise ApplyError("destination cell already exists; set replace=true")
-        delete = "when(ddGetObj(%s %s) ddDeleteCell(%s %s)) " % (lib, dst, lib, dst) if replace else ""
+        temp = _identifier(destination + "__analog_opt_tmp", "temporary cell")
+        lib, src, dst, tmp = map(_quote, (library, source, destination, temp))
+        prefix = "ANALOG_OPT_OK:%s" % operation
         skill = (
-            "let((srcCv dstCv) %s"
+            "let((srcCv tmpCv dstCv status) status=\"FAILED\" "
+            "unwindProtect(progn("
+            "when(ddGetObj(%s %s) dbDeleteCellView(%s %s \"schematic\")) "
             "srcCv=dbOpenCellViewByType(%s %s \"schematic\" \"schematic\" \"r\") "
             "unless(srcCv error(\"source schematic missing\")) "
-            "dstCv=dbCopyCellView(srcCv %s %s \"schematic\") "
-            "unless(dstCv error(\"dbCopyCellView failed\")) dbSave(dstCv) dbClose(srcCv) t)"
-        ) % (delete, lib, src, lib, dst)
-        self._execute(skill)
+            "tmpCv=dbCopyCellView(srcCv %s %s \"schematic\") "
+            "unless(tmpCv error(\"temporary copy failed\")) "
+            "if(ddGetObj(%s %s) then status=\"EXISTS\" "
+            "else dstCv=dbCopyCellView(tmpCv %s %s \"schematic\") "
+            "unless(dstCv error(\"publish copy failed\")) dbSave(dstCv) status=\"CREATED\")) "
+            "printf(\"%s:%%s\" status)) "
+            "when(srcCv dbClose(srcCv)) when(tmpCv dbClose(tmpCv)) "
+            "when(ddGetObj(%s %s) dbDeleteCellView(%s %s \"schematic\"))))"
+        ) % (lib, tmp, lib, tmp, lib, src, lib, tmp, lib, dst, lib, dst, prefix, lib, tmp, lib, tmp)
+        output = self._execute(skill, prefix + ":")
+        if any(line.strip() == prefix + ":EXISTS" for line in output.splitlines()):
+            raise ApplyError("destination cell already exists; replacement is unavailable safely")
+        if not any(line.strip() == prefix + ":CREATED" for line in output.splitlines()):
+            raise ApplyError("bridge did not confirm destination creation")
 
     def create_work_cell(self, library: str, source_cell: str, work_cell: str, replace: bool) -> None:
-        self._copy_cell(library, source_cell, work_cell, bool(replace))
+        # replace is accepted for API compatibility, but an existing destination
+        # is never destroyed because this bridge has no atomic cell swap.
+        self._copy_new(library, source_cell, work_cell, "create")
 
     def apply_cdf(self, library: str, cell: str, specs: Sequence[ParameterSpec], candidate: Mapping[str, Any]) -> None:
         library = _identifier(library, "library")
         cell = _identifier(cell, "cell")
-        if not isinstance(candidate, Mapping):
-            raise ApplyError("candidate must be a mapping")
-        selected = list(specs)
-        expected = {spec.name for spec in selected}
-        if len(expected) != len(selected) or set(candidate) != expected:
+        selected = self._cdf_specs(specs)
+        if not isinstance(candidate, Mapping) or set(candidate) != {spec.name for spec in selected}:
             raise ApplyError("candidate names must exactly match CDF parameter specs")
-        updates = []
-        for spec in selected:
-            if not isinstance(spec, ParameterSpec) or spec.target != "virtuoso_cdf":
-                raise ApplyError("apply_cdf accepts only virtuoso_cdf ParameterSpec values")
-            instance = _identifier(spec.instance, "instance")
-            prop = _identifier(spec.property, "property")
-            value = _finite(candidate[spec.name], spec.name)
+        prepared = []
+        for index, spec in enumerate(selected):
+            value = _number(candidate[spec.name], spec)
             try:
-                text = format_quantity(value, spec.unit) if spec.unit else "%.12g" % value
+                text = format_quantity(value, spec.unit) if spec.unit else (str(value) if spec.dtype == "int" else "%.12g" % value)
             except UnitError as exc:
                 raise ApplyError("invalid unit for %s: %s" % (spec.name, exc)) from exc
-            assignments = [(prop, text)]
-            if prop == "w":
-                assignments.append(("fw", text))
-            body = " ".join(
-                "dbReplaceProp(inst %s \"string\" %s)" % (_skill_string(name), _skill_string(val))
-                for name, val in assignments
+            prepared.append((index, spec, text))
+        declarations = " ".join("inst%d" % index for index, _, _ in prepared)
+        validations = []
+        writes = []
+        for index, spec, text in prepared:
+            ivar = "inst%d" % index
+            validations.append(
+                "foreach(inst cv~>instances when(inst~>name==%s %s=inst)) unless(%s error(\"instance not found: %s\"))"
+                % (_quote(spec.instance), ivar, ivar, spec.instance)
             )
-            updates.append(
-                "found=nil foreach(inst cv~>instances when(inst~>name==%s found=t %s)) unless(found error(\"instance not found: %s\"))"
-                % (_skill_string(instance), body, instance)
+            # setInstParams is the established CDF path. dbReplaceProp remains
+            # an explicit fallback in the same transaction for headless use.
+            writes.append(
+                "unless(setInstParams(%s %s %s list(%s %s)) dbReplaceProp(%s %s \"string\" %s))"
+                % (_quote(library), _quote(cell), _quote(spec.instance), _quote(spec.property), _quote(text), ivar, _quote(spec.property), _quote(text))
             )
         skill = (
-            "let((cv inst found) cv=dbOpenCellViewByType(%s %s \"schematic\" \"schematic\" \"a\") "
-            "unless(cv error(\"work schematic missing\")) %s schCheck(cv) dbSave(cv) t)"
-        ) % (_skill_string(library), _skill_string(cell), " ".join(updates))
-        self._execute(skill)
+            "let((cv inst %s ok) ok=nil cv=dbOpenCellViewByType(%s %s \"schematic\" \"schematic\" \"a\") "
+            "unless(cv error(\"work schematic missing\")) unwindProtect(progn(%s %s "
+            "when(schCheck(cv) dbSave(cv) ok=t) unless(ok error(\"schCheck failed\")) printf(\"ANALOG_OPT_OK:apply\")) "
+            "when(cv dbClose(cv))))"
+        ) % (declarations, _quote(library), _quote(cell), " ".join(validations), " ".join(writes))
+        self._execute(skill, "ANALOG_OPT_OK:apply")
 
-    def read_cdf(self, library: str, cell: str, specs: Sequence[ParameterSpec]) -> str:
+    def read_cdf(self, library: str, cell: str, specs: Sequence[ParameterSpec]) -> Dict[str, Real]:
         library = _identifier(library, "library")
         cell = _identifier(cell, "cell")
-        requests = []
-        for spec in specs:
-            if not isinstance(spec, ParameterSpec) or spec.target != "virtuoso_cdf":
-                raise ApplyError("read_cdf accepts only virtuoso_cdf ParameterSpec values")
-            instance = _identifier(spec.instance, "instance")
-            prop = _identifier(spec.property, "property")
-            requests.append("list(%s %s)" % (_skill_string(instance), _skill_string(prop)))
+        selected = self._cdf_specs(specs)
+        rows = []
+        for spec in selected:
+            rows.append(
+                "inst=nil foreach(x cv~>instances when(x~>name==%s inst=x)) unless(inst error(\"instance not found\")) "
+                "value=getq(inst stringToSymbol(%s)) unless(value error(\"property missing\")) printf(\"\\n%s\\t%%s\" value)"
+                % (_quote(spec.instance), _quote(spec.property), spec.name)
+            )
         skill = (
-            "let((cv result inst) cv=dbOpenCellViewByType(%s %s \"schematic\" \"schematic\" \"r\") "
-            "unless(cv error(\"schematic missing\")) result=list() foreach(pair list(%s) "
-            "inst=car(setof(x cv~>instances x~>name==car(pair))) "
-            "unless(inst error(\"instance not found\")) result=cons(list(car(pair) cadr(pair) dbGetq(inst stringToSymbol(cadr(pair)))) result)) reverse(result))"
-        ) % (_skill_string(library), _skill_string(cell), " ".join(requests))
-        result = self._execute(skill)
-        return getattr(result, "output", "") or ""
+            "let((cv inst x value) cv=dbOpenCellViewByType(%s %s \"schematic\" \"schematic\" \"r\") "
+            "unless(cv error(\"schematic missing\")) unwindProtect(progn(printf(\"ANALOG_OPT_OK:read\") %s) when(cv dbClose(cv))))"
+        ) % (_quote(library), _quote(cell), " ".join(rows))
+        output = self._execute(skill, "ANALOG_OPT_OK:read")
+        parsed: Dict[str, Real] = {}
+        expected = {spec.name: spec for spec in selected}
+        for raw_line in output.splitlines():
+            line = raw_line.strip()
+            if not line or line == "ANALOG_OPT_OK:read":
+                continue
+            parts = line.split("\t")
+            if len(parts) != 2 or parts[0] not in expected:
+                continue
+            name, text = parts
+            if name in parsed:
+                raise ApplyError("duplicate read value for %s" % name)
+            spec = expected[name]
+            try:
+                if spec.dtype == "int":
+                    numeric = float(text)
+                    if not math.isfinite(numeric):
+                        raise ApplyError("read value must be finite")
+                    if not numeric.is_integer():
+                        raise ApplyError("read value for %s must be an integer" % name)
+                    parsed[name] = int(numeric)
+                elif spec.unit:
+                    parsed[name] = parse_quantity(text, _UNIT_DIMENSIONS[spec.unit])
+                else:
+                    numeric = float(text)
+                    if not math.isfinite(numeric):
+                        raise ApplyError("read value must be finite")
+                    parsed[name] = numeric
+            except (ValueError, UnitError, KeyError) as exc:
+                raise ApplyError("read value for %s must be finite and valid" % name) from exc
+        missing = set(expected) - set(parsed)
+        if missing:
+            raise ApplyError("missing read values: %s" % ", ".join(sorted(missing)))
+        return parsed
 
     def publish_result_cell(self, library: str, work_cell: str, result_cell: str, source_cell: str, replace: bool) -> None:
-        source_cell = _identifier(source_cell, "source cell")
+        work_cell = _identifier(work_cell, "work cell")
         result_cell = _identifier(result_cell, "result cell")
-        if result_cell == source_cell:
-            raise ApplyError("result cell cannot overwrite source cell")
-        self._copy_cell(library, work_cell, result_cell, bool(replace))
+        source_cell = _identifier(source_cell, "source cell")
+        if len({work_cell, result_cell, source_cell}) != 3:
+            raise ApplyError("source, work, and result cells must be distinct")
+        self._copy_new(library, work_cell, result_cell, "publish")
