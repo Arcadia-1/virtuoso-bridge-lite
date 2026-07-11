@@ -1,4 +1,7 @@
-﻿import pytest
+﻿import ast
+from pathlib import Path
+
+import pytest
 
 from analog_opt.units import UnitError, format_quantity, parse_quantity
 
@@ -82,3 +85,33 @@ def test_format_quantity():
 def test_format_rejects_unknown_unit():
     with pytest.raises(UnitError):
         format_quantity(1.0, "foo")
+
+def test_units_module_uses_python_39_compatible_annotations():
+    units_path = (
+        Path(__file__).resolve().parents[2]
+        / "skills"
+        / "smic180-simulator"
+        / "analog_opt"
+        / "units.py"
+    )
+    module = ast.parse(units_path.read_text(encoding="utf-8-sig"))
+    annotations = [
+        node.annotation
+        for node in ast.walk(module)
+        if isinstance(node, (ast.arg, ast.AnnAssign)) and node.annotation is not None
+    ]
+    assert not any(
+        isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr)
+        for annotation in annotations
+        for node in ast.walk(annotation)
+    )
+
+
+def test_parse_huge_scalar_raises_unit_error():
+    with pytest.raises(UnitError):
+        parse_quantity(10**10000, "scalar")
+
+
+def test_format_huge_quantity_raises_unit_error():
+    with pytest.raises(UnitError):
+        format_quantity(10**10000, "V")

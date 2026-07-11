@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import re
 from numbers import Real
+from typing import Union
 
 
 class UnitError(ValueError):
@@ -35,7 +36,14 @@ _QUANTITY_RE = re.compile(
 )
 
 
-def parse_quantity(value: str | Real, dimension: str) -> float:
+def _to_float(value: Union[str, Real]) -> float:
+    try:
+        return float(value)
+    except (OverflowError, ValueError) as exc:
+        raise UnitError("quantity cannot be represented as a float") from exc
+
+
+def parse_quantity(value: Union[str, Real], dimension: str) -> float:
     """Parse a quantity into its SI scalar value for the expected dimension."""
     try:
         valid_units = _DIMENSION_UNITS[dimension]
@@ -45,7 +53,7 @@ def parse_quantity(value: str | Real, dimension: str) -> float:
     if isinstance(value, Real) and not isinstance(value, bool):
         if dimension != "scalar":
             raise UnitError(f"unit required for dimension: {dimension}")
-        result = float(value)
+        result = _to_float(value)
     elif isinstance(value, str):
         match = _QUANTITY_RE.fullmatch(value)
         if match is None:
@@ -55,7 +63,7 @@ def parse_quantity(value: str | Real, dimension: str) -> float:
             raise UnitError(f"unknown unit: {unit}")
         if unit not in valid_units:
             raise UnitError(f"unit {unit or '<none>'} does not match {dimension}")
-        result = float(number_text) * valid_units[unit]
+        result = _to_float(number_text) * valid_units[unit]
     else:
         raise UnitError(f"unsupported quantity type: {type(value).__name__}")
 
@@ -73,7 +81,7 @@ def format_quantity(value: Real, unit: str) -> str:
     if not isinstance(value, Real) or isinstance(value, bool):
         raise UnitError(f"unsupported quantity type: {type(value).__name__}")
 
-    scaled = float(value) / factor
+    scaled = _to_float(value) / factor
     if not math.isfinite(scaled):
         raise UnitError("quantity must be finite")
     return f"{scaled:.12g}{unit}"
