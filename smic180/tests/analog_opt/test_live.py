@@ -8,7 +8,9 @@ class Result:
  def __init__(self,output='OK',errors=()): self.output=output; self.errors=errors
 class Client:
  def __init__(self): self.skills=[]
- def execute_skill(self,skill,timeout=30): self.skills.append(skill); return Result('ANALOG_OPT_TB_OK')
+ def execute_skill(self,skill,timeout=30):
+  self.skills.append(skill)
+  return Result('ANALOG_OPT_TB_DELETE_OK' if 'ANALOG_OPT_TB_DELETE_OK' in skill else 'ANALOG_OPT_TB_OK')
 class Site: pass
 
 def test_netlist_adapter_builds_dedicated_tb_with_work_cell_dut(tmp_path):
@@ -188,7 +190,7 @@ def test_dc_op_deck_requests_real_device_oppoint_output(tmp_path):
  adapter=NetlistAdapter(Client(),Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda *a,**k:raw,base_deck_factory=lambda **k:type('D',(),{'model_includes':[]})())
  adapter.analyses=[{'name':'op','type':'dc_op','instances':['M1']}]; adapter.configure({}, {}, {}, {})
  text=adapter.export_fresh('tr','amp_work',tmp_path/'run')['op'].read_text()
- assert 'save M1:oppoint' in text and 'what=oppoint' in text
+ assert 'save DUT.M1:oppoint' in text and 'what=oppoint' in text
 
 def test_oppoint_fixture_flows_from_loader_to_metrics(tmp_path):
  from sim_io.sim.run import _load_primary_psf_data
@@ -197,3 +199,61 @@ def test_oppoint_fixture_flows_from_loader_to_metrics(tmp_path):
  data=_load_primary_psf_data(tmp_path,deck); result=type('R',(),{'ok':True,'data':data})()
  metrics=MetricsAdapter([{'name':'op','type':'dc_op','instances':['M1']}])({'op':result})
  assert metrics['op.M1.gm_over_id']==pytest.approx(10.0)
+
+
+def test_dc_sweep_deck_only_parameterizes_its_own_source_and_saves_hierarchical_op(tmp_path):
+ raw=tmp_path/'raw.scs'; raw.write_text('subckt amp_work A B\nM1 (A B 0 0) nch\nends amp_work\nDUT (A B) amp_work\nSRC_VDD (A 0) vsource dc=3.3\nSRC_VBIAS (B 0) vsource dc=1.2\n')
+ adapter=NetlistAdapter(Client(),Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda *a,**k:raw,base_deck_factory=lambda **k:type('D',(),{'model_includes':[]})())
+ adapter.analyses=[{'name':'vdd','type':'dc_sweep','source':'VDD','parameter':'VDD_SWEEP','start':2.7,'stop':3.6,'points':3},{'name':'vbias','type':'dc_sweep','source':'VBIAS','parameter':'VBIAS_SWEEP','start':1.0,'stop':1.4,'points':3},{'name':'op','type':'dc_op','instances':['M1']}]
+ adapter.configure({}, {}, {'VDD':{'source_instance':'SRC_VDD','value':3.3},'VBIAS':{'source_instance':'SRC_VBIAS','value':1.2}}, {})
+ decks=adapter.export_fresh('tr','amp_work',tmp_path/'run')
+ vdd=decks['vdd'].read_text(); vbias=decks['vbias'].read_text(); op=decks['op'].read_text()
+ assert 'dc=VDD_SWEEP' in vdd and 'dc=VBIAS_SWEEP' not in vdd
+ assert 'dc=VBIAS_SWEEP' in vbias and 'dc=VDD_SWEEP' not in vbias
+ assert 'save DUT.M1:oppoint' in op
+
+
+def test_mixed_corner_replaces_only_core_tt_sections():
+ models=[type('M',(),{'path':'core.scs','section':'tt_core'})(),type('M',(),{'path':'passive.scs','section':'tt_res'})()]
+ deck=type('D',(),{'model_includes':models})()
+ patched=__import__('analog_opt.live',fromlist=['patch_smic180_corner']).patch_smic180_corner(deck,'FNSP')
+ assert [(m.path,m.section) for m in patched.model_includes]==[('core.scs','fnsp_core'),('passive.scs','tt_res')]
+
+
+def test_metrics_adapter_validates_dc_curve_and_writes_svg(tmp_path):
+ result=type('R',(),{'ok':True,'data':{'VDD_SWEEP':[2.7,3.0,3.3],'dc:VOUT':[1.0,1.1,1.2]},'metadata':{'run_dir':str(tmp_path)}})()
+ metrics=MetricsAdapter([{'name':'line','type':'dc_sweep','parameter':'VDD_SWEEP','signal':'VOUT','points':3}])({'line':result})
+ svg=tmp_path/'line'/'dc_line.svg'
+ assert svg.exists() and '<path' in svg.read_text(encoding='utf-8')
+ assert metrics['artifacts']['line']['svg'].endswith('dc_line.svg')
+
+@pytest.mark.parametrize('x,y',[(None,[1,2]),([1],[1]),([1,2],[1]),([1,float('nan')],[1,2])])
+def test_metrics_adapter_rejects_invalid_dc_curve(tmp_path,x,y):
+ result=type('R',(),{'ok':True,'data':{'VDD_SWEEP':x,'dc:VOUT':y},'metadata':{'run_dir':str(tmp_path)}})()
+ with pytest.raises((RuntimeError,ValueError)):
+  MetricsAdapter([{'name':'line','type':'dc_sweep','parameter':'VDD_SWEEP','signal':'VOUT','points':2}])({'line':result})
+
+
+def test_dedicated_tb_is_deleted_after_export(tmp_path):
+ client=Client(); raw=tmp_path/'raw.scs'; raw.write_text('subckt amp_work A\nends amp_work\nDUT (A) amp_work\n')
+ adapter=NetlistAdapter(client,Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda *a,**k:raw,base_deck_factory=lambda **k:type('D',(),{'model_includes':[]})())
+ adapter.analyses=[{'name':'op','type':'dc_op'}]; adapter.configure({}, {}, {}, {})
+ adapter.export_fresh('tr','amp_work',tmp_path/'run')
+ assert len(client.skills)==2 and 'dbDeleteCellView' in client.skills[1] and 'ANALOG_OPT_TB_DELETE_OK' in client.skills[1]
+
+
+def test_empty_pvt_uses_fixed_nominal_voltage_without_override():
+ from analog_opt.live import _pvt_settings
+ cfg=type('C',(),{'pvt':{},'stimuli':{'VDD':type('S',(),{'kind':'voltage','value':3.3,'dc':None})()}})()
+ pvt,voltage_stimulus,override=_pvt_settings(cfg)
+ assert pvt.voltages==(3.3,) and voltage_stimulus=='VDD' and override is False
+
+
+def test_mixed_corner_final_deck_replaces_exported_core_include(tmp_path):
+ raw=tmp_path/'raw.scs'; raw.write_text('include "core.scs" section=tt_core\ninclude "passive.scs" section=tt_res\nsubckt amp_work A\nends amp_work\nDUT (A) amp_work\n')
+ cfg=type('D',(),{'model_includes':[type('M',(),{'path':'core.scs','section':'tt_core'})(),type('M',(),{'path':'passive.scs','section':'tt_res'})()]})()
+ adapter=NetlistAdapter(Client(),Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda *a,**k:raw,base_deck_factory=lambda **k:cfg,corner_patcher=__import__('analog_opt.live',fromlist=['patch_smic180_corner']).patch_smic180_corner)
+ adapter.analyses=[{'name':'op','type':'dc_op'}]; adapter.configure({}, {}, {}, {'corner':'FNSP'})
+ text=adapter.export_fresh('tr','amp_work',tmp_path/'run')['op'].read_text()
+ assert text.count('core.scs')==1 and 'section=fnsp_core' in text and 'section=tt_core' not in text
+ assert text.count('passive.scs')==1 and 'section=tt_res' in text

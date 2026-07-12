@@ -73,7 +73,7 @@ def eval_result(cid='best-replay',passed=True,params=CANDIDATE):
 
 def workflow(tmp_path,log,search_result=None,pvt_pass=True,applier=None):
  best=eval_result('candidate-000000')
- return OptimizationWorkflow(tmp_path,library='tr',source_cell='amp',work_cell='amp_work',result_cell='amp_opt',parameter_specs=SPECS,applier=applier or WorkflowApplier(log),evaluator=object(),search_config=SearchConfig('random',1,1),search_runner=lambda resume: log.add('search',resume) or (search_result or SearchResult((best,),best,False)),replay=lambda candidate,directory,conditions=None: log.add('replay',dict(candidate),directory.name,conditions) or eval_result(params=candidate),pvt_config=PvtConfig(('TT',),(3.3,),(25.,)),pvt_evaluator=lambda point,candidate,directory: log.add('pvt_eval',point.point_id,directory.name) or eval_result(point.point_id,pvt_pass,candidate))
+ return OptimizationWorkflow(tmp_path,config_payload={'version':2,'design':{'library':'tr','cell':'amp','work_cell':'amp_work','result_cell':'amp_opt','testbench_cell':'amp_tb'},'stimuli':{'VDD':{'kind':'voltage','value':3.3}},'parameters':[],'analyses':[],'metrics':[],'specs':[],'search':{},'pvt':{},'outputs':{'run_dir':str(tmp_path)}},library='tr',source_cell='amp',work_cell='amp_work',result_cell='amp_opt',parameter_specs=SPECS,applier=applier or WorkflowApplier(log),evaluator=object(),search_config=SearchConfig('random',1,1),search_runner=lambda resume: log.add('search',resume) or (search_result or SearchResult((best,),best,False)),replay=lambda candidate,directory,conditions=None: log.add('replay',dict(candidate),directory.name,conditions) or eval_result(params=candidate),pvt_config=PvtConfig(('TT',),(3.3,),(25.,)),pvt_evaluator=lambda point,candidate,directory: log.add('pvt_eval',point.point_id,directory.name) or eval_result(point.point_id,pvt_pass,candidate))
 
 def test_workflow_evaluate_uses_candidate_evaluator_once(tmp_path):
  class E:
@@ -82,6 +82,8 @@ def test_workflow_evaluate_uses_candidate_evaluator_once(tmp_path):
  e=E(); w=workflow(tmp_path,Log()); w.evaluator=e
  result=w.evaluate(CANDIDATE)
  assert result.success and len(e.calls)==1 and e.calls[0][2]==CANDIDATE
+ assert [c[0] for c in w.applier.log.calls]==['create']
+ assert (tmp_path/'run_manifest.json').exists() and (tmp_path/'analog_opt_config.resolved.json').exists()
 
 def test_workflow_full_order_fresh_replay_pvt_report_publish(tmp_path):
  log=Log(); w=workflow(tmp_path,log); state=w.run(replace_work_cell=True,replace_result_cell=True)
@@ -152,3 +154,25 @@ def test_backend_fails_when_one_analysis_confirmation_is_missing(tmp_path):
  backend.netlist=N(Log()); backend.runner.run=lambda d,p,a:{k:type('R',(),{'ok':True,'data':{}})() for k in d}; backend.metric_extractor=lambda r:{}
  with pytest.raises(EvaluationFailure) as err: backend(CANDIDATE,tmp_path)
  assert err.value.category=='confirmation' and 'analysis' in err.value.message
+
+
+def test_run_writes_resumable_manifests_before_search_and_resume_uses_them(tmp_path):
+ log=Log(); w=workflow(tmp_path,log)
+ w.search_runner=lambda resume: (_ for _ in ()).throw(RuntimeError('power loss'))
+ with pytest.raises(RuntimeError,match='power loss'): w.run()
+ manifest=json.loads((tmp_path/'run_manifest.json').read_text())
+ assert manifest['config']=='analog_opt_config.resolved.json'
+ assert json.loads((tmp_path/'workflow_state.json').read_text())['state']=='searching'
+ from analog_opt.schema import load_config
+ loaded=load_config(tmp_path/manifest['config'])
+ assert loaded.design.work_cell=='amp_work'
+ resumed=workflow(tmp_path,log)
+ state=resumed.resume()
+ assert state['state']=='published'
+
+
+def test_report_payload_includes_best_replay_dc_artifact(tmp_path):
+ w=workflow(tmp_path,Log())
+ best={'objective':.1,'metrics':{'artifacts':{'line':{'svg':'line/dc_line.svg'}}},'specs':{'gain':{'passed':True}},'parameters':CANDIDATE}
+ payload=w._report_payload(best,{'overall_passed':True})
+ assert payload['artifacts']['dc.line.svg']=='best_replay/line/dc_line.svg'

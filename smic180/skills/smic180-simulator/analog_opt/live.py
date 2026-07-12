@@ -1,6 +1,7 @@
 """Lazy live adapters for SMIC180 analog optimization."""
 from __future__ import annotations
 import copy,json,math,re,uuid
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any,Mapping
 from analog_opt.analyses import AnalysisError, build_analysis_lines, required_source_parameters
@@ -37,7 +38,7 @@ def patch_smic180_corner(deck,corner):
   section=getattr(model,'section','')
   if not section: continue
   if target in ('fnsp','snfp'):
-   if section.lower()=='tt': model.section=target
+   if re.search(r'(^|_)tt($|_)',section,re.I) and re.search(r'core|mos|nch|pch',str(getattr(model,'path',''))+' '+section,re.I): model.section=re.sub(r'(^|_)tt(?=$|_)',lambda m:m.group(1)+target,section,flags=re.I)
   elif 'tt' in section.lower(): model.section=re.sub('tt',target,section,flags=re.I)
  return patched
 
@@ -63,6 +64,10 @@ class NetlistAdapter:
   result=self.client.execute_skill(skill,timeout=30)
   if getattr(result,'errors',None) or 'ANALOG_OPT_TB_OK' not in (getattr(result,'output','') or ''): raise RuntimeError('dedicated work-cell testbench creation failed')
   return tb
+ def _delete_tb(self,tb):
+  skill=('let((ok) ok=dbDeleteCellView("%s" "%s" "schematic") if(ok then printf("ANALOG_OPT_TB_DELETE_OK") else error("dedicated TB cleanup failed")))')%(self.library,tb)
+  result=self.client.execute_skill(skill,timeout=30)
+  if getattr(result,'errors',None) or 'ANALOG_OPT_TB_DELETE_OK' not in (getattr(result,'output','') or ''): raise RuntimeError('dedicated testbench cleanup failed; retained cell: '+tb)
  def _source_values(self):
   values={}
   for name,item in self.stimuli.items():
@@ -76,28 +81,34 @@ class NetlistAdapter:
    values[voltage_name]=(values[voltage_name][0],voltage)
   return values
  def export_fresh(self,library,work_cell,directory):
-  directory=Path(directory); directory.mkdir(parents=True,exist_ok=True); tb=self._prepare_tb(); raw=self.exporter(self.client,library,tb,directory,site=self.site)
-  if raw is None: raise RuntimeError('fresh netlist export failed')
-  circuit=_logical_text(Path(raw).read_text(encoding='utf-8',errors='replace'))
+  directory=Path(directory); directory.mkdir(parents=True,exist_ok=True); tb=self._prepare_tb()
+  try:
+   raw=self.exporter(self.client,library,tb,directory,site=self.site)
+   if raw is None: raise RuntimeError('fresh netlist export failed')
+   circuit=_logical_text(Path(raw).read_text(encoding='utf-8',errors='replace'))
+  finally:
+   self._delete_tb(tb)
   if not re.search(r'(?mi)^\s*subckt\s+%s\b'%re.escape(work_cell),circuit) or not re.search(r'(?mi)^\s*DUT\s*\([^\n]*\)\s+%s\b'%re.escape(work_cell),circuit): raise RuntimeError('fresh export does not contain DUT work-cell subckt')
-  source_values=self._source_values(); source_parameters=required_source_parameters(self.analyses); decks={}
+  source_values=self._source_values(); decks={}
   for analysis in self.analyses:
    text=circuit
    for stimulus,(instance,value) in source_values.items():
-    replacement_value=source_parameters.get(stimulus,_num(value)) if analysis['type']=='dc_sweep' else _num(value)
+    replacement_value=analysis['parameter'] if analysis['type']=='dc_sweep' and analysis.get('source')==stimulus else _num(value)
     pattern=r'(?mi)^(\s*%s\s*\([^\n]*\)\s+[vi]source\b[^\n]*?\bdc\s*=\s*)(\([^\n]*?\)|[^\s]+)'%re.escape(instance)
     text,count=re.subn(pattern,lambda m:m.group(1)+replacement_value,text,count=1)
     if count!=1: raise RuntimeError('source instance not found in fresh netlist: '+instance)
    deck_cfg=self.base_deck_factory(library=library,cell=tb); corner=self.conditions.get('corner')
    if corner: deck_cfg=self.corner_patcher(deck_cfg,str(corner).lower())
    lines=['','simulator lang=spectre']
-   for model in getattr(deck_cfg,'model_includes',[]): lines.append('include "%s"%s'%(model.path,' section='+model.section if model.section else ''))
+   for model in getattr(deck_cfg,'model_includes',[]):
+    text=re.sub(r'(?mi)^\s*include\s+["\']%s["\'][^\n]*\n?'%re.escape(str(model.path)),'',text)
+    lines.append('include "%s"%s'%(model.path,' section='+model.section if model.section else ''))
    temp=self.conditions.get('temperature')
    if temp is not None: lines.append('simulatorOptions options temp=%s'%_num(temp))
    if self.variables: lines.append('parameters '+' '.join('%s=%s'%(k,_num(v)) for k,v in sorted(self.variables.items())))
    analysis_lines=build_analysis_lines([analysis])
    if analysis.get('type')=='dc_op' and analysis.get('instances'):
-    analysis_lines=[*(f"save {instance}:oppoint" for instance in analysis['instances']),*analysis_lines,'opInfo info what=oppoint where=rawfile']
+    analysis_lines=[*(f"save DUT.{instance}:oppoint" for instance in analysis['instances']),*analysis_lines,'opInfo info what=oppoint where=rawfile']
    lines.extend(analysis_lines); target=directory/analysis['name']; target.mkdir(parents=True,exist_ok=True); deck=target/'analog_opt.scs'; deck.write_text(text.rstrip()+'\n'+'\n'.join(lines)+'\n',encoding='utf-8'); decks[analysis['name']]=deck
   return decks
 
@@ -148,6 +159,8 @@ class AnalysisRunner:
   for analysis in analyses:
    name=analysis['name']; target=Path(directory)/name; target.mkdir(parents=True,exist_ok=True)
    results[name]=self.run_one(decks[name],target)
+   metadata=getattr(results[name],'metadata',None)
+   if isinstance(metadata,dict): metadata['run_dir']=str(Path(directory))
   return results
 
 class MetricsAdapter:
@@ -171,8 +184,17 @@ class MetricsAdapter:
      if not isinstance(op,Mapping): raise AnalysisError('operating-point data unavailable for '+inst)
      maps.append(extract_mos_op_metrics(inst,op))
    elif kind=='dc_sweep':
-    x=data.get(analysis['parameter']); y=data.get('dc:'+signal,data.get(signal)); curves[name]={'x':x,'y':y}
-  output=merge_metrics(*maps); output['curves']=curves; return output
+    x=data.get(analysis['parameter']); y=data.get('dc:'+signal,data.get(signal))
+    if not isinstance(x,(list,tuple)) or not isinstance(y,(list,tuple)) or len(x)<2 or len(x)!=len(y) or len(x)!=analysis.get('points',len(x)) or any(isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(float(v)) for v in list(x)+list(y)): raise AnalysisError('invalid DC sweep curve for '+name)
+    curves[name]={'x':list(x),'y':list(y)}
+    run_root=getattr(result,'metadata',{}).get('run_dir')
+    if run_root:
+     target=Path(run_root)/name; target.mkdir(parents=True,exist_ok=True); svg=target/('dc_'+name+'.svg')
+     xmin,xmax=min(x),max(x); ymin,ymax=min(y),max(y); dx=xmax-xmin or 1.; dy=ymax-ymin or 1.
+     points=['%.3f,%.3f'%(20+360*(float(xv)-xmin)/dx,180-150*(float(yv)-ymin)/dy) for xv,yv in zip(x,y)]
+     svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="420" height="210" viewBox="0 0 420 210"><path d="M '+(' L '.join(points))+'" fill="none" stroke="black"/></svg>\n',encoding='utf-8')
+     curves.setdefault('artifacts',{})[name]={'svg':str(Path(name)/svg.name)}
+  output=merge_metrics(*maps); output['curves']={k:v for k,v in curves.items() if k!='artifacts'}; output['artifacts']=curves.get('artifacts',{}); return output
 
 class PublicationAdapter:
  def __init__(self,applier,run_dir,specs,candidate_provider): self._applier=applier; self.run_dir=Path(run_dir); self.specs=tuple(s for s in specs if s.target=='virtuoso_cdf'); self.candidate_provider=candidate_provider
@@ -214,9 +236,27 @@ def _build_runtime_adapters(client,config,specs,run_dir):
  runner=AnalysisRunner(lambda path,directory:run_spectre(path,directory,site=site,client=client))
  return VirtuosoApplier(client),netlist,runner,MetricsAdapter(config.analyses)
 
+def _pvt_settings(config):
+ raw=dict(config.pvt); explicit='voltages' in raw
+ voltage_stimulus=raw.get('voltage_stimulus')
+ if explicit:
+  voltages=tuple(raw['voltages'])
+ else:
+  nominal=None
+  for name,item in config.stimuli.items():
+   kind=item.get('kind') if isinstance(item,Mapping) else getattr(item,'kind',None)
+   value=_stim_record(item)['value']
+   if kind=='voltage' and value is not None:
+    voltage_stimulus=name; nominal=float(value); break
+  voltages=(nominal if nominal is not None else 1.0,)
+ return PvtConfig(tuple(raw.get('corners',('TT',))),voltages,tuple(raw.get('temperatures',raw.get('temperatures_c',(25.,))))),voltage_stimulus,explicit
+
 def create_workflow(config,run_dir):
  client=_load_client_class().from_env(); specs=tuple(_parameter(x) for x in config.parameters); declarations=tuple(_spec(x) for x in config.specs); raw,netlist,runner,metrics=_build_runtime_adapters(client,config,specs,run_dir); holder={}
- applier=PublicationAdapter(raw,run_dir,specs,lambda:holder.get('candidate',{})); backend=AnalogSimulationBackend(config.design.library,config.design.work_cell,specs,config.stimuli,config.analyses,declarations,applier=applier,netlist=netlist,runner=runner,metric_extractor=metrics,spec_evaluator=_spec_eval(declarations)); evaluator=CandidateEvaluator(backend); space=ParameterSpace(specs); search=SearchConfig(config.search.get('method','random'),config.search.get('evaluations',20),config.search.get('seed',0)); pvt=PvtConfig(tuple(config.pvt.get('corners',('TT',))),tuple(config.pvt.get('voltages',(3.3,))),tuple(config.pvt.get('temperatures',config.pvt.get('temperatures_c',(25.,))))); root=Path(run_dir)
+ applier=PublicationAdapter(raw,run_dir,specs,lambda:holder.get('candidate',{})); backend=AnalogSimulationBackend(config.design.library,config.design.work_cell,specs,config.stimuli,config.analyses,declarations,applier=applier,netlist=netlist,runner=runner,metric_extractor=metrics,spec_evaluator=_spec_eval(declarations)); evaluator=CandidateEvaluator(backend); space=ParameterSpace(specs); search=SearchConfig(config.search.get('method','random'),config.search.get('evaluations',20),config.search.get('seed',0)); pvt,voltage_stimulus,pvt_voltage_override=_pvt_settings(config); root=Path(run_dir)
  def evaluate(candidate,directory,conditions=None): holder['candidate']=dict(candidate); directory.mkdir(parents=True,exist_ok=True); raw_result=backend(candidate,directory,conditions or {}); return EvaluationResult(directory.name,raw_result['objective'],True,raw_result['metrics'],raw_result['metadata'],None,raw_result['specs'])
- def pvt_eval(point,candidate,directory): return evaluate(candidate,directory,{'corner':point.corner,'voltage':point.voltage,'temperature':point.temperature,'voltage_stimulus':config.pvt.get('voltage_stimulus')})
- return OptimizationWorkflow(root,library=config.design.library,source_cell=config.design.cell,work_cell=config.design.work_cell,result_cell=config.design.result_cell,parameter_specs=specs,applier=applier,evaluator=evaluator,search_config=search,search_runner=lambda resume:run_search(root,space,evaluator,search,resume=resume),replay=evaluate,pvt_config=pvt,pvt_evaluator=pvt_eval)
+ def pvt_eval(point,candidate,directory):
+  conditions={'corner':point.corner,'temperature':point.temperature}
+  if pvt_voltage_override: conditions.update(voltage=point.voltage,voltage_stimulus=voltage_stimulus)
+  return evaluate(candidate,directory,conditions)
+ return OptimizationWorkflow(root,config_payload=asdict(config),library=config.design.library,source_cell=config.design.cell,work_cell=config.design.work_cell,result_cell=config.design.result_cell,parameter_specs=specs,applier=applier,evaluator=evaluator,search_config=search,search_runner=lambda resume:run_search(root,space,evaluator,search,resume=resume),replay=evaluate,pvt_config=pvt,pvt_evaluator=pvt_eval)

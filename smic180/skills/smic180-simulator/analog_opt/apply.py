@@ -105,7 +105,7 @@ class VirtuosoApplier:
         replace_flag = "t" if replace else "nil"
         recovery = "ANALOG_OPT_RECOVERY_REQUIRED:%s" % backup
         skill = (
-            f'let((srcCv tmpCv oldCv backupCv dstCv restoreCv srcSym oldSym backupSym dstSym restoreSym status tempCreated backupSafe cleanupBackup publishOk symbolPublishOk) '
+            f'let((srcCv tmpCv oldCv backupCv dstCv restoreCv srcSym oldSym backupSym dstSym restoreSym status tempCreated backupSafe cleanupBackup publishOk symbolPublishOk symbolTxn) '
             f'status="FAILED" tempCreated=nil backupSafe=nil cleanupBackup=nil publishOk=nil symbolPublishOk=nil '
             f'unwindProtect(progn('
             f'when(ddGetObj({lib} {tmp}) error("temporary cell already exists")) '
@@ -146,9 +146,11 @@ class VirtuosoApplier:
             f'unless(dstCv error("publish copy failed")) '
             f'unless(dbSave(dstCv) error("destination save failed")) status="CREATED")) '
             f'when(status=="CREATED"||status=="REPLACED" progn('
-            f'when(ddGetObj({lib} {dst} "symbol") unless(dbDeleteCellView({lib} {dst} "symbol") error("target symbol delete failed"))) '
+            f'symbolTxn=errset(progn(when(ddGetObj({lib} {dst} "symbol") unless(dbDeleteCellView({lib} {dst} "symbol") error("target symbol delete failed"))) '
             f'dstSym=dbCopyCellView(srcSym {lib} {dst} "symbol") '
-            f'when(dstSym when(dbSave(dstSym) symbolPublishOk=t)) '
+            f'unless(dstSym error("symbol publish copy failed")) unless(dbSave(dstSym) error("symbol publish save failed")) t) t) '
+            f'if(symbolTxn then symbolPublishOk=t else symbolPublishOk=nil) '
+            f'unless(symbolTxn symbolPublishOk=nil) '
             f'unless(symbolPublishOk progn('
             f'when(dstCv dbClose(dstCv)) dstCv=nil when(dstSym dbClose(dstSym)) dstSym=nil '
             f'when(ddGetObj({lib} {dst} "schematic") unless(dbDeleteCellView({lib} {dst} "schematic") error("failed schematic cleanup failed"))) '

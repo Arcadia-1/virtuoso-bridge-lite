@@ -94,11 +94,11 @@ class AnalogSimulationBackend:
       if got!=want: raise ValueError('analysis %s physical value mismatch for %s'%(analysis_name,name))
      elif isinstance(got,bool) or not isinstance(got,(int,float)) or not math.isfinite(float(got)) or not math.isclose(float(got),float(want),rel_tol=self.rtol,abs_tol=self.atol): raise ValueError('analysis %s physical value mismatch for %s'%(analysis_name,name))
   except Exception as exc: raise EvaluationFailure('confirmation',str(exc)) from exc
-  return {'objective':objective,'success':True,'metrics':metrics,'specs':spec_results,'metadata':{'physical_candidate':dict(candidate),'specs_passed':passed,'netlist':str(deck)}}
+  return {'objective':objective,'success':True,'metrics':metrics,'specs':spec_results,'metadata':{'physical_candidate':dict(candidate),'specs_passed':passed,'netlist':str(deck),'artifacts':dict(metrics.get('artifacts',{})) if isinstance(metrics,Mapping) else {}}}
 
 class OptimizationWorkflow:
- def __init__(self,run_dir:Any,*,library:str,source_cell:str,work_cell:str,result_cell:str,parameter_specs:Sequence[ParameterSpec],applier:Any,evaluator:Any,search_config:Any,search_runner:Callable,replay:Callable,pvt_config:Any,pvt_evaluator:Callable):
-  self.run_dir=Path(run_dir); self.run_dir.mkdir(parents=True,exist_ok=True); self.library=library; self.source_cell=source_cell; self.work_cell=work_cell; self.result_cell=result_cell; self.parameter_specs=tuple(parameter_specs); self.applier=applier; self.evaluator=evaluator; self.search_config=search_config; self.search_runner=search_runner; self.replay=replay; self.pvt_config=pvt_config; self.pvt_evaluator=pvt_evaluator; self.state_path=self.run_dir/'workflow_state.json'
+ def __init__(self,run_dir:Any,*,config_payload:Mapping[str,Any]=None,library:str,source_cell:str,work_cell:str,result_cell:str,parameter_specs:Sequence[ParameterSpec],applier:Any,evaluator:Any,search_config:Any,search_runner:Callable,replay:Callable,pvt_config:Any,pvt_evaluator:Callable):
+  self.run_dir=Path(run_dir); self.run_dir.mkdir(parents=True,exist_ok=True); self.config_payload=dict(config_payload or {}); self.library=library; self.source_cell=source_cell; self.work_cell=work_cell; self.result_cell=result_cell; self.parameter_specs=tuple(parameter_specs); self.applier=applier; self.evaluator=evaluator; self.search_config=search_config; self.search_runner=search_runner; self.replay=replay; self.pvt_config=pvt_config; self.pvt_evaluator=pvt_evaluator; self.state_path=self.run_dir/'workflow_state.json'
  @property
  def names(self): return tuple(sorted(s.name for s in self.parameter_specs))
  def _save(self,state,**data): atomic_write_json(self.state_path,dict(data,version=1,state=state,parameter_names=list(self.names)))
@@ -126,7 +126,16 @@ class OptimizationWorkflow:
   for name,value in candidate.items():
    if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(float(value)): raise EvaluationFailure('candidate','parameter %s must be finite'%name)
   return dict(candidate)
- def evaluate(self,candidate): return self.evaluator.evaluate(self.run_dir,'evaluate',self._candidate(candidate))
+ def _write_bootstrap(self,state):
+  if not self.config_payload: raise EvaluationFailure('configuration','resolved configuration payload is required')
+  atomic_write_json(self.run_dir/'analog_opt_config.resolved.json',self.config_payload)
+  write_run_manifest(self.run_dir,{'config':'analog_opt_config.resolved.json','state':state,'artifacts':{}})
+ def evaluate(self,candidate,replace_work_cell=False):
+  if self.state_path.exists(): raise EvaluationFailure('state','evaluate run directory already has workflow state')
+  self._write_bootstrap('validated'); self._save('validated')
+  self.applier.create_work_cell(self.library,self.source_cell,self.work_cell,replace_work_cell)
+  self._save('work_cell_created')
+  return self.evaluator.evaluate(self.run_dir,'evaluate',self._candidate(candidate))
  def _search_best_parameters(self,result):
   if result.best is None: raise EvaluationFailure('search','search produced no successful candidate')
   history=json.loads((self.run_dir/'search_history.json').read_text(encoding='utf-8')) if (self.run_dir/'search_history.json').exists() else None
@@ -137,16 +146,16 @@ class OptimizationWorkflow:
   return self._candidate(result.best.metadata.get('physical_candidate'))
  def run(self,replace_work_cell=False,replace_result_cell=False):
   if self.state_path.exists(): raise EvaluationFailure('state','run directory already has workflow state; use resume')
-  self._save('validated'); return self._execute(False,replace_work_cell,replace_result_cell)
+  self._write_bootstrap('validated'); self._save('validated'); return self._execute(False,replace_work_cell,replace_result_cell)
  def resume(self,replace_result_cell=False): return self._execute(True,False,replace_result_cell)
  def _execute(self,resume,replace_work,replace_result):
   data=self._load()
   if data is None: raise EvaluationFailure('state','resume requires workflow state')
   state=data['state']
-  if state=='validated': self.applier.create_work_cell(self.library,self.source_cell,self.work_cell,replace_work); self._save('work_cell_created'); state='work_cell_created'
+  if state=='validated': self.applier.create_work_cell(self.library,self.source_cell,self.work_cell,replace_work); self._save('work_cell_created'); write_run_manifest(self.run_dir,{'config':'analog_opt_config.resolved.json','state':'work_cell_created','artifacts':{}}); state='work_cell_created'
   if state in ('work_cell_created','searching'):
    if state=='searching' and self.search_config.method!='random': raise EvaluationFailure('search','non-random search cannot resume without a complete best candidate')
-   self._save('searching'); search=self.search_runner(state=='searching'); parameters=self._search_best_parameters(search)
+   self._save('searching'); write_run_manifest(self.run_dir,{'config':'analog_opt_config.resolved.json','state':'searching','artifacts':{}}); search=self.search_runner(state=='searching'); parameters=self._search_best_parameters(search)
    replay=self.replay(parameters,self.run_dir/'best_replay',None); self._validate_replay(replay,parameters)
    best={'objective':float(replay.objective),'metrics':dict(replay.metrics),'specs':dict(replay.specs),'parameters':parameters}
    self._save('best_replayed',parameters=parameters,best=best); data=self._load(); state='best_replayed'
@@ -176,4 +185,8 @@ class OptimizationWorkflow:
   if actual!=parameters or not result.specs or not all(isinstance(v,Mapping) and v.get('passed') is True for v in result.specs.values()): raise EvaluationFailure('best_replay','fresh best replay did not confirm passing specifications and parameters')
  def _report_payload(self,best,pvt):
   artifacts={'best_replay':'best_replay','pvt_results':'pvt_results.json','report':'optimization_report.md'}
+  metric_artifacts=best.get('metrics',{}).get('artifacts',{}) if isinstance(best.get('metrics'),Mapping) else {}
+  for analysis,items in metric_artifacts.items():
+   if isinstance(items,Mapping):
+    for kind,value in items.items(): artifacts['dc.%s.%s'%(analysis,kind)]='best_replay/'+str(value).replace('\\','/')
   return {'best':best,'pvt':pvt,'failures':[],'artifacts':artifacts}

@@ -236,3 +236,15 @@ def test_symbol_publish_failure_keeps_backup_for_manual_recovery():
  assert recovery>symbol_publish
  assert 'cleanupBackup=nil' in skill[recovery:]
  assert 'ANALOG_OPT_RECOVERY_REQUIRED' in skill[recovery:]
+
+
+def test_symbol_delete_and_publish_errors_are_caught_before_unified_rollback():
+ c=RecordingClient([Result('ANALOG_OPT_OK:create:REPLACED')])
+ VirtuosoApplier(c).create_work_cell('tr','amp','work',True)
+ skill=c.calls[0][0]
+ assert 'symbolTxn=errset(progn(' in skill
+ assert 'unless(symbolTxn symbolPublishOk=nil)' in skill
+ rollback=skill.index('unless(symbolPublishOk progn(')
+ assert skill.index('target symbol delete failed') < rollback
+ assert 'restoreCv=dbCopyCellView(backupCv' in skill[rollback:]
+ assert 'restoreSym=dbCopyCellView(backupSym' in skill[rollback:]

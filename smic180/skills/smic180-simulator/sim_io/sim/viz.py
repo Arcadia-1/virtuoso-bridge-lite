@@ -78,24 +78,41 @@ def parse_psf_ascii(path: str | Path) -> DCSweepData | ACSweepData | TranData | 
 
 def _parse_noise_psf(text: str) -> NoiseData:
     data = NoiseData()
+    aliases = {}
+    in_trace = False
     in_value = False
+    pending_group = None
     for raw_line in text.splitlines():
         line = raw_line.strip()
+        if line == "TRACE":
+            in_trace = True
+            continue
         if line == "VALUE":
+            in_trace = False
             in_value = True
             continue
         if line == "END":
             break
+        if in_trace:
+            group = re.match(r'^"([^"]+)"\s+GROUP\b', line)
+            if group:
+                pending_group = group.group(1)
+                continue
+            trace = re.match(r'^"([^"]+)"\s+"[^"]+"', line)
+            if trace and pending_group is not None:
+                aliases[pending_group] = trace.group(1)
+                pending_group = None
+            continue
         if not in_value:
             continue
-        match = re.match(r'^"([^"]+)"\s+([\d.eE+\-]+)$', line)
+        match = re.match(r'^"([^"]+)"\s+([\d.eE+\-]+)', line)
         if not match:
             continue
         name, value = match.group(1), float(match.group(2))
         if name.lower() == "freq":
             data.freq.append(value)
         else:
-            data.signals.setdefault(name, []).append(value)
+            data.signals.setdefault(aliases.get(name, name), []).append(value)
     return data
 
 
@@ -111,13 +128,12 @@ def _parse_oppoint_psf(text: str) -> OperatingPointData:
             break
         if not in_value:
             continue
-        match = re.match(r'^"([^":]+):([^"\s]+)"\s+([\d.eE+\-]+)$', line)
+        match = re.match(r'^"([^"]+):([^"\s]+)"(?:\s+"[^"]+")?\s+([\d.eE+\-]+)', line)
         if match:
             instance, field_name, value = match.groups()
+            instance = re.sub(r'^DUT[./]', '', instance, flags=re.I)
             data.instances.setdefault(instance, {})[field_name.lower()] = float(value)
     return data
-
-
 def _parse_dc_psf(text: str) -> DCSweepData:
     # Extract sweep variable name from SWEEP section
     sweep_var = "VDD"
