@@ -1,7 +1,6 @@
 """Lazy live adapters for SMIC180 analog optimization."""
 from __future__ import annotations
 import copy,json,math,re,uuid
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any,Mapping
 from analog_opt.analyses import AnalysisError, build_analysis_lines, required_source_parameters
@@ -12,6 +11,7 @@ from analog_opt.parameters import ParameterSpace,ParameterSpec
 from analog_opt.pvt import PvtConfig
 from analog_opt.search import SearchConfig,run_search
 from analog_opt.specs import Spec,evaluate_specs
+from analog_opt.schema import canonical_resolved_payload
 from analog_opt.workflow import AnalogSimulationBackend,OptimizationWorkflow
 from analog_opt.units import parse_quantity
 
@@ -32,13 +32,17 @@ def _spectre_number(token,dimension='length'):
  suffix_name=match.group(2).lower(); unit_map={'length':{'m':'mm','u':'um','n':'nm'}}
  if dimension in unit_map and suffix_name in unit_map[dimension]: return parse_quantity(match.group(1)+unit_map[dimension][suffix_name],dimension)
  return float(match.group(1))*suffix[suffix_name]
-def patch_smic180_corner(deck,corner):
+def patch_smic180_corner(deck,corner,core_model_include=None):
  patched=copy.deepcopy(deck); target=str(corner).lower()
+ core_identity=str(core_model_include).replace('\\','/').lower() if core_model_include else None
  for model in getattr(patched,'model_includes',[]):
   section=getattr(model,'section','')
   if not section: continue
+  model_identity=str(getattr(model,'path','')).replace('\\','/').lower()
   if target in ('fnsp','snfp'):
-   if re.search(r'(^|_)tt($|_)',section,re.I) and re.search(r'core|mos|nch|pch',str(getattr(model,'path',''))+' '+section,re.I): model.section=re.sub(r'(^|_)tt(?=$|_)',lambda m:m.group(1)+target,section,flags=re.I)
+   explicit_core=core_identity is not None and model_identity==core_identity
+   legacy_core=core_identity is None and re.search(r'core|mos|nch|pch',model_identity+' '+section,re.I)
+   if re.search(r'(^|_)tt($|_)',section,re.I) and (explicit_core or legacy_core): model.section=re.sub(r'(^|_)tt(?=$|_)',lambda m:m.group(1)+target,section,flags=re.I)
   elif 'tt' in section.lower(): model.section=re.sub('tt',target,section,flags=re.I)
  return patched
 
@@ -232,12 +236,12 @@ def _build_runtime_adapters(client,config,specs,run_dir):
  from sim_io.site_config import SiteConfig
  from sim_io.sim.run import export_netlist,run_spectre
  from sim_io.sim.config import resolve_sim_config
- site=SiteConfig.from_env(); netlist=NetlistAdapter(client,site,library=config.design.library,source_tb=config.design.testbench_cell,work_cell=config.design.work_cell,exporter=export_netlist,base_deck_factory=lambda **k:resolve_sim_config(run_dir=run_dir,lib=k['library'],cell=k['cell']),corner_patcher=patch_smic180_corner); netlist.analyses=config.analyses
+ site=SiteConfig.from_env(); netlist=NetlistAdapter(client,site,library=config.design.library,source_tb=config.design.testbench_cell,work_cell=config.design.work_cell,exporter=export_netlist,base_deck_factory=lambda **k:resolve_sim_config(run_dir=run_dir,lib=k['library'],cell=k['cell']),corner_patcher=lambda deck,corner:patch_smic180_corner(deck,corner,core_model_include=site.pdk_spectre_include)); netlist.analyses=config.analyses
  runner=AnalysisRunner(lambda path,directory:run_spectre(path,directory,site=site,client=client))
  return VirtuosoApplier(client),netlist,runner,MetricsAdapter(config.analyses)
 
 def _pvt_settings(config):
- raw=dict(config.pvt); explicit='voltages' in raw
+ raw=dict(config.pvt); explicit=bool(raw.get('voltages'))
  voltage_stimulus=raw.get('voltage_stimulus')
  if explicit:
   voltages=tuple(raw['voltages'])
@@ -259,4 +263,4 @@ def create_workflow(config,run_dir):
   conditions={'corner':point.corner,'temperature':point.temperature}
   if pvt_voltage_override: conditions.update(voltage=point.voltage,voltage_stimulus=voltage_stimulus)
   return evaluate(candidate,directory,conditions)
- return OptimizationWorkflow(root,config_payload=asdict(config),library=config.design.library,source_cell=config.design.cell,work_cell=config.design.work_cell,result_cell=config.design.result_cell,parameter_specs=specs,applier=applier,evaluator=evaluator,search_config=search,search_runner=lambda resume:run_search(root,space,evaluator,search,resume=resume),replay=evaluate,pvt_config=pvt,pvt_evaluator=pvt_eval)
+ return OptimizationWorkflow(root,config_payload=canonical_resolved_payload(config),library=config.design.library,source_cell=config.design.cell,work_cell=config.design.work_cell,result_cell=config.design.result_cell,parameter_specs=specs,applier=applier,evaluator=evaluator,search_config=search,search_runner=lambda resume:run_search(root,space,evaluator,search,resume=resume),replay=evaluate,pvt_config=pvt,pvt_evaluator=pvt_eval)

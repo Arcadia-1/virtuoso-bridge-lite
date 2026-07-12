@@ -11,6 +11,7 @@ from analog_opt.schema import (
     DesignConfig,
     StimulusConfig,
     load_config,
+    canonical_resolved_payload,
 )
 
 
@@ -312,3 +313,28 @@ def test_bias_parameter_requires_existing_optimizable_stimulus(tmp_path):
 def test_pvt_voltage_grid_requires_voltage_stimulus(tmp_path):
  data=minimal_config(); data['pvt']={'corners':['tt'],'voltages':[3.0,3.3],'temperatures_c':[25]}
  with pytest.raises(ConfigError,match='voltage_stimulus'): load_config(write_config(tmp_path,data))
+
+
+def test_canonical_resolved_payload_round_trips_without_none(tmp_path):
+ config=load_config(write_config(tmp_path,minimal_config()))
+ payload=canonical_resolved_payload(config)
+ text=json.dumps(payload,allow_nan=False)
+ assert 'null' not in text
+ resolved=tmp_path/'resolved.json'; resolved.write_text(text,encoding='utf-8')
+ reloaded=load_config(resolved)
+ assert reloaded==config
+ assert reloaded.pvt['voltages']==[3.3]
+
+@pytest.mark.parametrize('change,match',[
+ ({'corners':['BAD'],'voltages':['3.3V'],'temperatures_c':[25],'voltage_stimulus':'VDD'},'corner'),
+ ({'corners':['TT'],'voltages':['0V'],'temperatures_c':[25],'voltage_stimulus':'VDD'},'positive'),
+ ({'corners':['TT'],'voltages':['NaNV'],'temperatures_c':[25],'voltage_stimulus':'VDD'},'valid quantity'),
+ ({'corners':['TT'],'voltages':['3.3V'],'temperatures_c':[float('inf')],'voltage_stimulus':'VDD'},'finite'),
+])
+def test_pvt_boundary_strictly_validates_values(tmp_path,change,match):
+ data=minimal_config(); data['pvt']=change
+ with pytest.raises(ConfigError,match=match): load_config(write_config(tmp_path,data))
+
+def test_pvt_quantity_strings_are_normalized_to_si(tmp_path):
+ config=load_config(write_config(tmp_path,minimal_config()))
+ assert config.pvt=={'corners':['TT'],'voltages':[3.3],'temperatures_c':[27.0],'voltage_stimulus':'VDD'}

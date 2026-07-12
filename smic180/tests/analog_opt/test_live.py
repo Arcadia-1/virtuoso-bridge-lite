@@ -183,7 +183,7 @@ def test_dedicated_tb_copies_properties_and_cdf_without_sharing_inst_header(tmp_
 def test_live_factory_uses_safe_mixed_corner_patcher_source():
  import inspect,analog_opt.live as live
  source=inspect.getsource(live._build_runtime_adapters)
- assert 'corner_patcher=patch_smic180_corner' in source
+ assert 'corner_patcher=lambda' in source and 'core_model_include=site.pdk_spectre_include' in source
 
 def test_dc_op_deck_requests_real_device_oppoint_output(tmp_path):
  raw=tmp_path/'raw.scs'; raw.write_text('subckt amp_work A\nM1 (A 0 0 0) nch w=10u l=180n\nends amp_work\nDUT (A) amp_work\n')
@@ -244,7 +244,7 @@ def test_dedicated_tb_is_deleted_after_export(tmp_path):
 
 def test_empty_pvt_uses_fixed_nominal_voltage_without_override():
  from analog_opt.live import _pvt_settings
- cfg=type('C',(),{'pvt':{},'stimuli':{'VDD':type('S',(),{'kind':'voltage','value':3.3,'dc':None})()}})()
+ cfg=type('C',(),{'pvt':{'corners':['TT'],'voltages':[],'temperatures_c':[25.0]},'stimuli':{'VDD':type('S',(),{'kind':'voltage','value':3.3,'dc':None})()}})()
  pvt,voltage_stimulus,override=_pvt_settings(cfg)
  assert pvt.voltages==(3.3,) and voltage_stimulus=='VDD' and override is False
 
@@ -257,3 +257,18 @@ def test_mixed_corner_final_deck_replaces_exported_core_include(tmp_path):
  text=adapter.export_fresh('tr','amp_work',tmp_path/'run')['op'].read_text()
  assert text.count('core.scs')==1 and 'section=fnsp_core' in text and 'section=tt_core' not in text
  assert text.count('passive.scs')==1 and 'section=tt_res' in text
+
+
+def test_mixed_corner_uses_explicit_real_site_core_include_identity():
+ from analog_opt.live import patch_smic180_corner
+ core='/home/IC/pdk/smic180/models/e2r018_v1p8_spe.scs'
+ models=[type('M',(),{'path':core,'section':'tt'})(),type('M',(),{'path':'/home/IC/pdk/passive.scs','section':'tt'})()]
+ deck=type('D',(),{'model_includes':models})()
+ patched=patch_smic180_corner(deck,'FNSP',core_model_include=core)
+ assert [(m.path,m.section) for m in patched.model_includes]==[(core,'fnsp'),('/home/IC/pdk/passive.scs','tt')]
+
+def test_runtime_adapter_binds_site_core_model_identity():
+ import inspect
+ from analog_opt.live import _build_runtime_adapters
+ source=inspect.getsource(_build_runtime_adapters)
+ assert 'site.pdk_spectre_include' in source and 'core_model_include' in source

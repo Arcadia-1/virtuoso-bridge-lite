@@ -6,7 +6,7 @@ import json
 import math
 import re
 from numbers import Real
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Union
 
@@ -223,6 +223,68 @@ def _validate_named_items(
             )
 
 
+def _parse_pvt(value: Any, stimuli: Mapping[str, StimulusConfig]) -> Dict[str, Any]:
+    raw = dict(_mapping(value, "pvt"))
+    allowed = {"TT", "FF", "SS", "FNSP", "SNFP"}
+    corners_raw = raw.get("corners", ["TT"])
+    if not isinstance(corners_raw, list) or not corners_raw:
+        raise ConfigError("pvt.corners must be a nonempty list")
+    corners = []
+    for index, corner in enumerate(corners_raw):
+        if not isinstance(corner, str) or corner.upper() not in allowed:
+            raise ConfigError(f"pvt.corners[{index}] is an unsupported corner")
+        normalized = corner.upper()
+        if normalized in corners:
+            raise ConfigError("pvt.corners must be unique")
+        corners.append(normalized)
+    voltages_raw = raw.get("voltages", [])
+    if not isinstance(voltages_raw, list):
+        raise ConfigError("pvt.voltages must be a list")
+    voltages = []
+    for index, voltage in enumerate(voltages_raw):
+        parsed = _parse_quantity_value(voltage, "voltage", f"pvt.voltages[{index}]")
+        if parsed <= 0:
+            raise ConfigError(f"pvt.voltages[{index}] must be positive")
+        if parsed in voltages:
+            raise ConfigError("pvt.voltages must be unique")
+        voltages.append(parsed)
+    temperatures_raw = raw.get("temperatures_c", raw.get("temperatures", [25.0]))
+    if not isinstance(temperatures_raw, list) or not temperatures_raw:
+        raise ConfigError("pvt.temperatures_c must be a nonempty list")
+    temperatures = []
+    for index, temperature in enumerate(temperatures_raw):
+        if not isinstance(temperature, Real) or isinstance(temperature, bool):
+            raise ConfigError(f"pvt.temperatures_c[{index}] must be a finite number")
+        parsed = _finite_float(temperature, f"pvt.temperatures_c[{index}]")
+        if parsed in temperatures:
+            raise ConfigError("pvt.temperatures_c must be unique")
+        temperatures.append(parsed)
+    voltage_stimulus = raw.get("voltage_stimulus")
+    if voltages and voltage_stimulus is None:
+        raise ConfigError("pvt.voltage_stimulus is required when voltages are configured")
+    if voltage_stimulus is not None and (voltage_stimulus not in stimuli or stimuli[voltage_stimulus].kind != "voltage"):
+        raise ConfigError("pvt.voltage_stimulus must reference a voltage stimulus")
+    result = {"corners": corners, "voltages": voltages, "temperatures_c": temperatures}
+    if voltage_stimulus is not None:
+        result["voltage_stimulus"] = voltage_stimulus
+    return result
+
+
+def _omit_none(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _omit_none(item) for key, item in value.items() if item is not None}
+    if isinstance(value, list):
+        return [_omit_none(item) for item in value]
+    return value
+
+
+def canonical_resolved_payload(config: AnalogOptConfig) -> Dict[str, Any]:
+    """Return a reloadable V2 payload with normalized SI quantities."""
+    if not isinstance(config, AnalogOptConfig):
+        raise ConfigError("resolved payload requires AnalogOptConfig")
+    return _omit_none(asdict(config))
+
+
 def load_config(path: Union[str, Path]) -> AnalogOptConfig:
     """Load and validate a version 2 analog optimization JSON config."""
     config_path = Path(path)
@@ -249,12 +311,7 @@ def load_config(path: Union[str, Path]) -> AnalogOptConfig:
                 raise ConfigError(f"parameters[{index}] bias stimulus must exist")
             if parsed_stimuli[stimulus_name].optimizable is not True:
                 raise ConfigError(f"parameters[{index}] bias stimulus must be optimizable")
-    pvt = dict(_mapping(data["pvt"], "pvt"))
-    voltage_stimulus = pvt.get("voltage_stimulus")
-    if pvt.get("voltages") and voltage_stimulus is None:
-        raise ConfigError("pvt.voltage_stimulus is required when voltages are configured")
-    if voltage_stimulus is not None and (voltage_stimulus not in parsed_stimuli or parsed_stimuli[voltage_stimulus].kind != "voltage"):
-        raise ConfigError("pvt.voltage_stimulus must reference a voltage stimulus")
+    pvt = _parse_pvt(data["pvt"], parsed_stimuli)
     return AnalogOptConfig(
         version=2,
         design=_parse_design(data["design"]),

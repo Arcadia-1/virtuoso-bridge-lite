@@ -248,3 +248,26 @@ def test_symbol_delete_and_publish_errors_are_caught_before_unified_rollback():
  assert skill.index('target symbol delete failed') < rollback
  assert 'restoreCv=dbCopyCellView(backupCv' in skill[rollback:]
  assert 'restoreSym=dbCopyCellView(backupSym' in skill[rollback:]
+
+
+def test_symbol_delete_failure_preserves_old_symbol_and_restores_schematic_only():
+ c=RecordingClient([Result('ANALOG_OPT_OK:create:REPLACED')])
+ VirtuosoApplier(c).create_work_cell('tr','amp','work',True)
+ skill=c.calls[0][0]
+ assert 'symbolDeleted=nil' in skill
+ assert 'symbolDeleted=t' in skill
+ rollback=skill.index('unless(symbolPublishOk progn(')
+ restore=skill.index('restoreCv=dbCopyCellView(backupCv',rollback)
+ rollback_text=skill[rollback:restore]
+ assert 'when(symbolDeleted errset(' in rollback_text
+ assert 'if(symbolDeleted then restoreSym=dbCopyCellView' in skill[restore:]
+ assert '!symbolDeleted||dbSave(restoreSym)' in skill[restore:]
+
+def test_rollback_view_deletes_are_errset_and_cannot_prevent_restore_attempt():
+ c=RecordingClient([Result('ANALOG_OPT_OK:create:REPLACED')])
+ VirtuosoApplier(c).create_work_cell('tr','amp','work',True)
+ skill=c.calls[0][0]; rollback=skill.index('unless(symbolPublishOk progn('); restore=skill.index('restoreCv=dbCopyCellView',rollback)
+ block=skill[rollback:restore]
+ assert block.count('errset(')>=2
+ assert 'failed schematic cleanup failed' not in block
+ assert 'failed symbol cleanup failed' not in block

@@ -176,3 +176,25 @@ def test_report_payload_includes_best_replay_dc_artifact(tmp_path):
  best={'objective':.1,'metrics':{'artifacts':{'line':{'svg':'line/dc_line.svg'}}},'specs':{'gain':{'passed':True}},'parameters':CANDIDATE}
  payload=w._report_payload(best,{'overall_passed':True})
  assert payload['artifacts']['dc.line.svg']=='best_replay/line/dc_line.svg'
+
+
+def test_real_load_create_workflow_interruption_writes_reloadable_resolved_config(tmp_path,monkeypatch):
+ from analog_opt.schema import load_config
+ from analog_opt.live import create_workflow
+ from test_schema import minimal_config,write_config
+ config=load_config(write_config(tmp_path,minimal_config()))
+ class Raw:
+  def create_work_cell(self,*args): pass
+  def publish_result_cell(self,*args): pass
+  def confirm_result_cell(self,*args): return False
+ class ClientClass:
+  @classmethod
+  def from_env(cls): return object()
+ monkeypatch.setattr('analog_opt.live._load_client_class',lambda:ClientClass)
+ monkeypatch.setattr('analog_opt.live._build_runtime_adapters',lambda *args:(Raw(),object(),object(),lambda x:{}))
+ run_dir=tmp_path/'run'; workflow=create_workflow(config,run_dir)
+ workflow.search_runner=lambda resume: (_ for _ in ()).throw(RuntimeError('interrupted'))
+ with pytest.raises(RuntimeError,match='interrupted'): workflow.run()
+ manifest=json.loads((run_dir/'run_manifest.json').read_text())
+ reloaded=load_config(run_dir/manifest['config'])
+ assert reloaded==config
