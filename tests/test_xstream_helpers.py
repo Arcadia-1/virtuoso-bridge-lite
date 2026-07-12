@@ -235,10 +235,38 @@ def test_xstream_renderer_captures_every_field_before_first_mutation() -> None:
     assert max(capture_positions) < min(set_positions)
 
 
+def test_xstream_renderer_suppresses_and_restores_completion_dialog() -> None:
+    skill = xstream_export_gds_skill(_request())
+
+    capture = (
+        'vbOldShowCompletionMsgBox = '
+        'xstGetField("showCompletionMsgBox")'
+    )
+    suppress = 'xstSetField("showCompletionMsgBox" "false")'
+    translate = "xstOutDoTranslate()"
+    restore = (
+        'vbCleanup = errset(xstSetField("showCompletionMsgBox" '
+        "vbOldShowCompletionMsgBox) nil)"
+    )
+
+    assert skill.count(capture) == 1
+    assert skill.count(suppress) == 1
+    assert skill.count(restore) == 1
+    mutation_positions = [
+        skill.index(f'xstSetField("{xstream_field}"')
+        for _request_field, xstream_field, _old_variable in _XSTREAM_FIELDS
+    ]
+    mutation_positions.append(skill.index(suppress))
+    assert skill.index(capture) < min(mutation_positions)
+    assert skill.index(suppress) < skill.index(translate)
+    assert skill.index(translate) < skill.index(restore)
+    assert "failed to restore XStream field showCompletionMsgBox" in skill
+
+
 def test_xstream_renderer_restores_exact_old_field_mapping_independently() -> None:
     skill = xstream_export_gds_skill(_request())
 
-    assert skill.count("vbCleanup = errset(xstSetField(") == 7
+    assert skill.count("vbCleanup = errset(xstSetField(") == 8
     for _request_field, xstream_field, old_variable in _XSTREAM_FIELDS:
         restore = (
             f'vbCleanup = errset(xstSetField("{xstream_field}" '

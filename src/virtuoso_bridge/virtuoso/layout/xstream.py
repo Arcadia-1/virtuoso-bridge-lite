@@ -23,6 +23,8 @@ _XSTREAM_FIELDS = (
     ("log_file", "logFile", "vbOldLogFile"),
     ("run_dir", "runDir", "vbOldRunDir"),
 )
+_COMPLETION_MESSAGE_FIELD = "showCompletionMsgBox"
+_COMPLETION_MESSAGE_OLD_VARIABLE = "vbOldShowCompletionMsgBox"
 _PRODUCT_ANCHOR_RE = re.compile(
     r"^Product[ \t]*:[ \t]*Virtuoso\(R\)[ \t]+XStream[ \t]+Out",
     re.MULTILINE,
@@ -126,14 +128,33 @@ def xstream_export_gds_skill(request: XStreamExportRequest) -> str:
             raise ValueError(f"{request_field} must be a nonempty string")
         escaped_values[request_field] = escape_skill_string(value)
 
-    old_variables = " ".join(old_variable for _, _, old_variable in _XSTREAM_FIELDS)
+    old_variables = " ".join(
+        (
+            *(old_variable for _, _, old_variable in _XSTREAM_FIELDS),
+            _COMPLETION_MESSAGE_OLD_VARIABLE,
+        )
+    )
     captures = "".join(
         f'{old_variable} = xstGetField("{xstream_field}") '
         for _request_field, xstream_field, old_variable in _XSTREAM_FIELDS
     )
+    captures += (
+        f'{_COMPLETION_MESSAGE_OLD_VARIABLE} = '
+        f'xstGetField("{_COMPLETION_MESSAGE_FIELD}") '
+    )
     setters = "".join(
         f'xstSetField("{xstream_field}" "{escaped_values[request_field]}") '
         for request_field, xstream_field, _old_variable in _XSTREAM_FIELDS
+    )
+    setters += f'xstSetField("{_COMPLETION_MESSAGE_FIELD}" "false") '
+    restored_fields = tuple(
+        (xstream_field, old_variable)
+        for _request_field, xstream_field, old_variable in _XSTREAM_FIELDS
+    ) + (
+        (
+            _COMPLETION_MESSAGE_FIELD,
+            _COMPLETION_MESSAGE_OLD_VARIABLE,
+        ),
     )
     restorations = "".join(
         (
@@ -143,7 +164,7 @@ def xstream_export_gds_skill(request: XStreamExportRequest) -> str:
             f'vbCleanupFailures = cons("failed to restore XStream field '
             f'{xstream_field}" vbCleanupFailures)) '
         )
-        for _request_field, xstream_field, old_variable in _XSTREAM_FIELDS
+        for xstream_field, old_variable in restored_fields
     )
 
     return (
