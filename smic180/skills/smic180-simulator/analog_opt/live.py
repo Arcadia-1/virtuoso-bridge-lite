@@ -63,15 +63,17 @@ class NetlistAdapter:
          'unless(newDut error("DUT rebuild failed")) '
          'foreach(prop props dbCreateProp(newDut prop~>name prop~>valueType prop~>value)) '
          'foreach(pair cdfPairs param=car(setof(p cdfGetInstCDF(newDut)~>parameters p~>name==car(pair))) when(param param~>value=cadr(pair))) '
-         'unless(schCheck(dst) error("dedicated TB schCheck failed")) unless(dbSave(dst) error("dedicated TB save failed")) printf("ANALOG_OPT_TB_OK")) '
+         'unless(schCheck(dst) error("dedicated TB schCheck failed")) unless(dbSave(dst) error("dedicated TB save failed")) "ANALOG_OPT_TB_OK") '
          'when(src dbClose(src)) when(master dbClose(master)) when(dst dbClose(dst))))')%(self.library,self.source_tb,self.library,tb,self.library,self.work_cell)
-  result=self.client.execute_skill(skill,timeout=30)
-  if getattr(result,'errors',None) or 'ANALOG_OPT_TB_OK' not in (getattr(result,'output','') or ''): raise RuntimeError('dedicated work-cell testbench creation failed')
+  result=self.client.execute_skill("progn(\n"+skill+"\n)",timeout=30)
+  output=(getattr(result,'output','') or '').strip().strip('"')
+  if getattr(result,'errors',None) or output!='ANALOG_OPT_TB_OK': raise RuntimeError('dedicated work-cell testbench creation failed')
   return tb
  def _delete_tb(self,tb):
-  skill=('let((ok) ok=dbDeleteCellView("%s" "%s" "schematic") if(ok then printf("ANALOG_OPT_TB_DELETE_OK") else error("dedicated TB cleanup failed")))')%(self.library,tb)
-  result=self.client.execute_skill(skill,timeout=30)
-  if getattr(result,'errors',None) or 'ANALOG_OPT_TB_DELETE_OK' not in (getattr(result,'output','') or ''): raise RuntimeError('dedicated testbench cleanup failed; retained cell: '+tb)
+  skill=('let((ok) ok=dbDeleteCellView("%s" "%s" "schematic") if(ok then "ANALOG_OPT_TB_DELETE_OK" else error("dedicated TB cleanup failed")))')%(self.library,tb)
+  result=self.client.execute_skill("progn(\n"+skill+"\n)",timeout=30)
+  output=(getattr(result,'output','') or '').strip().strip('"')
+  if getattr(result,'errors',None) or output!='ANALOG_OPT_TB_DELETE_OK': raise RuntimeError('dedicated testbench cleanup failed; retained cell: '+tb)
  def _source_values(self):
   values={}
   for name,item in self.stimuli.items():

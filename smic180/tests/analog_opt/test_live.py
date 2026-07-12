@@ -13,6 +13,19 @@ class Client:
   return Result('ANALOG_OPT_TB_DELETE_OK' if 'ANALOG_OPT_TB_DELETE_OK' in skill else 'ANALOG_OPT_TB_OK')
 class Site: pass
 
+def test_testbench_skill_uses_file_channel_and_return_sentinel(tmp_path):
+ class C:
+  def __init__(self): self.skills=[]
+  def execute_skill(self,skill,timeout=30):
+   self.skills.append(skill)
+   return Result('"ANALOG_OPT_TB_OK"')
+ client=C(); adapter=NetlistAdapter(client,Site(),library="tr",source_tb="tb",work_cell="work",exporter=lambda *a:None,base_deck_factory=lambda **k:None)
+ tb=adapter._prepare_tb()
+ assert tb.startswith("tb__analog_opt_")
+ assert client.skills[0].startswith("progn(\n")
+ assert '"ANALOG_OPT_TB_OK"' in client.skills[0]
+
+
 def test_netlist_adapter_builds_dedicated_tb_with_work_cell_dut(tmp_path):
  client=Client(); exported=tmp_path/'raw.scs'
  exported.write_text('subckt amp_work IN OUT\nM1 (OUT IN 0 0) nch w=1e-5 l=1e-6\nends amp_work\nDUT (VIN VOUT) amp_work\nSRC_VDD (VDD 0) vsource dc=3.3\n')
