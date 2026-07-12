@@ -313,7 +313,7 @@ def test_dedicated_tb_cleanup_uses_available_dd_delete_obj(tmp_path):
  skill=client.skills[-1]
  assert 'ok=ddDeleteObj(obj)' in skill and 'obj=ddGetObj("tr" "amp_tb__analog_opt_deadbeef00")' in skill
  assert 'dbDeleteCellView' not in skill
- assert 'unless(ddGetObj("tr" "amp_tb__analog_opt_deadbeef00")' in skill
+ assert 'when(ddGetObj("tr" "amp_tb__analog_opt_deadbeef00")' in skill
 
 
 def test_dedicated_tb_is_deleted_after_export(tmp_path):

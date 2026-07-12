@@ -120,7 +120,7 @@ class NetlistAdapter:
  def _delete_tb(self,tb):
   if not tb.startswith(self.source_tb+'__analog_opt_'): raise RuntimeError('refusing to delete non-dedicated testbench')
   skill=('let((obj ok) obj=ddGetObj("%s" "%s") unless(obj error("dedicated TB missing")) ok=ddDeleteObj(obj) '
-         'unless(ok error("dedicated TB cleanup failed")) unless(ddGetObj("%s" "%s") error("dedicated TB still exists")) "ANALOG_OPT_TB_DELETE_OK")')%(self.library,tb,self.library,tb)
+         'unless(ok error("dedicated TB cleanup failed")) when(ddGetObj("%s" "%s") error("dedicated TB still exists")) "ANALOG_OPT_TB_DELETE_OK")')%(self.library,tb,self.library,tb)
   self._tb_step(skill,'ANALOG_OPT_TB_DELETE_OK')
  def _source_values(self):
   values={}
