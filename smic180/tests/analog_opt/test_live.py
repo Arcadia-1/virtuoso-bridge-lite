@@ -26,6 +26,13 @@ def test_tb_step_decodes_quoted_snapshot_output(tmp_path):
  assert output=='ANALOG_OPT_TB_SNAPSHOT|((2.5 0.0) "R0" 1.0)|nil|nil'
 
 
+def test_tb_snapshot_literals_are_quoted_before_reuse(tmp_path):
+ client=Client(); adapter=NetlistAdapter(client,Site(),library='tr',source_tb='tb',work_cell='work',exporter=lambda *a:None,base_deck_factory=lambda **k:None)
+ adapter._prepare_tb(); joined='\n'.join(client.skills)
+ assert 'transform=quote(((2.5 0.0) "R0" 1.0))' in joined
+ assert 'props=quote(nil)' in joined and 'pairs=quote(nil)' in joined
+
+
 def test_tb_create_uses_verified_ic618_dbcreateinst_signature(tmp_path):
  client=Client(); adapter=NetlistAdapter(client,Site(),library='tr',source_tb='tb',work_cell='work',exporter=lambda *a:None,base_deck_factory=lambda **k:None)
  adapter._prepare_tb(); create=next(s for s in client.skills if 'ANALOG_OPT_TB_CREATE_DUT_OK' in s)

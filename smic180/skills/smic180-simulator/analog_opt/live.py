@@ -94,17 +94,17 @@ class NetlistAdapter:
            'dbDeleteObject(dut) unless(dbSave(cv) error("DUT delete save failed")) when(cv dbClose(cv)) "ANALOG_OPT_TB_DELETE_DUT_OK")')%(self.library,tb)
    self._tb_step(delete,'ANALOG_OPT_TB_DELETE_DUT_OK')
    create=('let((cv master transform newDut) cv=dbOpenCellViewByType("%s" "%s" "schematic" "schematic" "a") unless(cv error("dedicated TB open failed")) '
-           'master=dbOpenCellViewByType("%s" "%s" "symbol" nil "r") unless(master error("work symbol missing")) transform=%s '
+           'master=dbOpenCellViewByType("%s" "%s" "symbol" nil "r") unless(master error("work symbol missing")) transform=quote(%s) '
            'newDut=dbCreateInst(cv master "DUT" car(transform) cadr(transform)) unless(newDut error("DUT rebuild failed")) '
            'unless(dbSave(cv) error("DUT create save failed")) when(master dbClose(master)) when(cv dbClose(cv)) "ANALOG_OPT_TB_CREATE_DUT_OK")')%(self.library,tb,self.library,self.work_cell,transform)
    self._tb_step(create,'ANALOG_OPT_TB_CREATE_DUT_OK')
    restore_props=('let((cv dut props) cv=dbOpenCellViewByType("%s" "%s" "schematic" "schematic" "a") unless(cv error("dedicated TB open failed")) '
-                  'dut=car(setof(i cv~>instances i~>name=="DUT")) unless(dut error("rebuilt DUT missing")) props=%s '
+                  'dut=car(setof(i cv~>instances i~>name=="DUT")) unless(dut error("rebuilt DUT missing")) props=quote(%s) '
                   'foreach(pair props dbCreateProp(dut car(pair) cadr(pair) caddr(pair))) unless(dbSave(cv) error("property restore save failed")) '
                   'when(cv dbClose(cv)) "ANALOG_OPT_TB_RESTORE_PROPS_OK")')%(self.library,tb,props)
    self._tb_step(restore_props,'ANALOG_OPT_TB_RESTORE_PROPS_OK')
    restore_cdf=('let((cv dut pairs param) cv=dbOpenCellViewByType("%s" "%s" "schematic" "schematic" "a") unless(cv error("dedicated TB open failed")) '
-                'dut=car(setof(i cv~>instances i~>name=="DUT")) unless(dut error("rebuilt DUT missing")) pairs=%s '
+                'dut=car(setof(i cv~>instances i~>name=="DUT")) unless(dut error("rebuilt DUT missing")) pairs=quote(%s) '
                 'foreach(pair pairs param=car(setof(p cdfGetInstCDF(dut)~>parameters p~>name==car(pair))) when(param param~>value=cadr(pair))) '
                 'unless(dbSave(cv) error("CDF restore save failed")) when(cv dbClose(cv)) "ANALOG_OPT_TB_RESTORE_CDF_OK")')%(self.library,tb,cdf)
    self._tb_step(restore_cdf,'ANALOG_OPT_TB_RESTORE_CDF_OK')
