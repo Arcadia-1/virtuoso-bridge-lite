@@ -183,7 +183,7 @@ def test_dedicated_tb_copies_properties_and_cdf_without_sharing_inst_header(tmp_
 def test_live_factory_uses_safe_mixed_corner_patcher_source():
  import inspect,analog_opt.live as live
  source=inspect.getsource(live._build_runtime_adapters)
- assert 'corner_patcher=lambda' in source and 'core_model_include=site.pdk_spectre_include' in source
+ assert 'corner_patcher=lambda' in source and 'core_model_include=site.pdk_core_spectre_include' in source
 
 def test_dc_op_deck_requests_real_device_oppoint_output(tmp_path):
  raw=tmp_path/'raw.scs'; raw.write_text('subckt amp_work A\nM1 (A 0 0 0) nch w=10u l=180n\nends amp_work\nDUT (A) amp_work\n')
@@ -271,4 +271,4 @@ def test_runtime_adapter_binds_site_core_model_identity():
  import inspect
  from analog_opt.live import _build_runtime_adapters
  source=inspect.getsource(_build_runtime_adapters)
- assert 'site.pdk_spectre_include' in source and 'core_model_include' in source
+ assert 'site.pdk_core_spectre_include' in source and 'core_model_include' in source

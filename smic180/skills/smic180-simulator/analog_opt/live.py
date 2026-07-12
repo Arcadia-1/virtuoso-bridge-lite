@@ -236,7 +236,7 @@ def _build_runtime_adapters(client,config,specs,run_dir):
  from sim_io.site_config import SiteConfig
  from sim_io.sim.run import export_netlist,run_spectre
  from sim_io.sim.config import resolve_sim_config
- site=SiteConfig.from_env(); netlist=NetlistAdapter(client,site,library=config.design.library,source_tb=config.design.testbench_cell,work_cell=config.design.work_cell,exporter=export_netlist,base_deck_factory=lambda **k:resolve_sim_config(run_dir=run_dir,lib=k['library'],cell=k['cell']),corner_patcher=lambda deck,corner:patch_smic180_corner(deck,corner,core_model_include=site.pdk_spectre_include)); netlist.analyses=config.analyses
+ site=SiteConfig.from_env(); netlist=NetlistAdapter(client,site,library=config.design.library,source_tb=config.design.testbench_cell,work_cell=config.design.work_cell,exporter=export_netlist,base_deck_factory=lambda **k:resolve_sim_config(run_dir=run_dir,lib=k['library'],cell=k['cell']),corner_patcher=lambda deck,corner:patch_smic180_corner(deck,corner,core_model_include=site.pdk_core_spectre_include)); netlist.analyses=config.analyses
  runner=AnalysisRunner(lambda path,directory:run_spectre(path,directory,site=site,client=client))
  return VirtuosoApplier(client),netlist,runner,MetricsAdapter(config.analyses)
 
