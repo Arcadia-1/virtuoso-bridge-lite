@@ -65,7 +65,8 @@ class NetlistAdapter:
          'foreach(pair cdfPairs param=car(setof(p cdfGetInstCDF(newDut)~>parameters p~>name==car(pair))) when(param param~>value=cadr(pair))) '
          'unless(schCheck(dst) error("dedicated TB schCheck failed")) unless(dbSave(dst) error("dedicated TB save failed")) "ANALOG_OPT_TB_OK") '
          'when(src dbClose(src)) when(master dbClose(master)) when(dst dbClose(dst))))')%(self.library,self.source_tb,self.library,tb,self.library,self.work_cell)
-  result=self.client.execute_skill("progn(\n"+skill+"\n)",timeout=30)
+  formatted=skill.replace(') ',')\n').replace(' unless','\nunless').replace(' foreach','\nforeach').replace(' when','\nwhen').replace(' dst=','\ndst=').replace(' dut=','\ndut=').replace(' master=','\nmaster=').replace(' dbDeleteObject','\ndbDeleteObject').replace(' newDut=','\nnewDut=')
+  result=self.client.execute_skill("progn(\n"+formatted+"\n)",timeout=30)
   output=(getattr(result,'output','') or '').strip().strip('"')
   errors=getattr(result,'errors',None) or ()
   if errors or output!='ANALOG_OPT_TB_OK': raise RuntimeError('dedicated work-cell testbench creation failed: errors=%r output=%r'%(errors,getattr(result,'output','') or ''))
