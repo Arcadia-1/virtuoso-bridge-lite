@@ -9,11 +9,15 @@ from virtuoso_bridge.virtuoso.symbol.editor import SymbolEditor
 from virtuoso_bridge.virtuoso.symbol.ops import (
     symbol_check,
     symbol_create_ellipse,
+    symbol_create_instance_label,
     symbol_create_label,
     symbol_create_line,
+    symbol_create_logical_label,
     symbol_create_pin,
+    symbol_create_pin_name,
     symbol_create_polygon,
     symbol_create_rect,
+    symbol_create_selection_box,
     symbol_set_term_order,
 )
 
@@ -59,6 +63,56 @@ def test_symbol_create_label_sets_optional_label_type_and_escapes_text() -> None
     assert skill.endswith("rbLabel)")
 
 
+def test_symbol_create_semantic_labels_use_native_label_choices() -> None:
+    pin_name = symbol_create_pin_name("A", 1, 2)
+    instance_name = symbol_create_instance_label(0, 1)
+    logical_name = symbol_create_logical_label(0, -1)
+
+    assert (
+        'schCreateSymbolLabel(cv \'(1.000 2.000) "pin name" "A" '
+        '"centerLeft" "R0" "stick" 0.0625 "normalLabel")'
+    ) in pin_name
+    assert 'error("semantic label not created: pin name")' in pin_name
+    assert (
+        'schCreateSymbolLabel(cv \'(0.000 1.000) "instance label" '
+        '"[@instanceName]" "centerLeft" "R0" "stick" 0.0625 "NLPLabel")'
+    ) in instance_name
+    assert 'error("semantic label not created: instance label")' in instance_name
+    assert (
+        'schCreateSymbolLabel(cv \'(0.000 -1.000) "logical label" '
+        '"[@partName]" "centerCenter" "R0" "stick" 0.0625 "NLPLabel")'
+    ) in logical_name
+    assert 'error("semantic label not created: logical label")' in logical_name
+
+
+def test_symbol_create_semantic_labels_escape_custom_text_and_attributes() -> None:
+    skill = symbol_create_instance_label(
+        1,
+        2,
+        text='[@foo:"x"]',
+        justification='center"Left',
+        rotation="R90",
+        font="fixed",
+        height=0.125,
+        cv_expr="symbolCv",
+    )
+
+    assert (
+        'schCreateSymbolLabel(symbolCv \'(1.000 2.000) "instance label" '
+        '"[@foo:\\"x\\"]" "center\\"Left" "R90" "fixed" 0.125 "NLPLabel")'
+    ) in skill
+
+
+def test_symbol_create_selection_box_uses_instance_drawing() -> None:
+    skill = symbol_create_selection_box(-1, -0.5, 2, 0.5)
+
+    assert (
+        'dbCreateRect(cv list("instance" "drawing") '
+        "list(list(-1 -0.5) list(2 0.5)))"
+    ) in skill
+    assert 'error("selection box not created")' in skill
+
+
 def test_symbol_create_pin_creates_net_term_pin_rect_and_label() -> None:
     skill = symbol_create_pin(
         "A",
@@ -82,9 +136,10 @@ def test_symbol_create_pin_creates_net_term_pin_rect_and_label() -> None:
     ) in skill
     assert 'rbPin = dbCreatePin(rbNet rbRect "A" rbTerm)' in skill
     assert (
-        'rbLabel = dbCreateLabel(cv list("pin" "drawing") \'(1.250 2.000) '
-        '"A" "centerLeft" "R0" "stick" 0.0625)'
+        'schCreateSymbolLabel(cv \'(1.250 2.000) "pin name" "A" '
+        '"centerLeft" "R0" "stick" 0.0625 "normalLabel")'
     ) in skill
+    assert 'error("semantic label not created: pin name")' in skill
     assert skill.endswith("rbPin)")
 
 

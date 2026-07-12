@@ -23,6 +23,13 @@ def test_symbol_read_ports_skill_opens_symbol_and_reports_terms_labels_and_order
     assert "list(xCoord(cadr(fig~>bBox)) yCoord(cadr(fig~>bBox))))" in skill
     assert 'result = cons(list("label"' in skill
     assert "xy = list(xCoord(label~>xy) yCoord(label~>xy))" in skill
+    assert "if(label~>layerName label~>layerName \"\")" in skill
+    assert "if(label~>purpose label~>purpose \"\")" in skill
+    assert "if(label~>justify label~>justify \"\")" in skill
+    assert "if(label~>orient label~>orient \"\")" in skill
+    assert "if(label~>font label~>font \"\")" in skill
+    assert "if(label~>height label~>height 0) bbox" in skill
+    assert 'result = cons(list("selectionBox" bbox) result)' in skill
     assert "unwindProtect(" in skill
     assert 'result = cons(list("pinOrder" schGetPinOrder(cv)) result)' in skill
     assert 'result = cons(list("portOrder" cv~>portOrder) result)' in skill
@@ -93,6 +100,32 @@ def test_parse_symbol_ports_output_preserves_label_delimiters_from_sexpr() -> No
     assert parsed["pinOrder"] == ["A", "Y"]
     assert parsed["portOrder"] == ["Y", "A"]
     assert parsed["termOrder"] == ["A", "Y"]
+
+
+def test_parse_symbol_ports_output_reports_label_semantics_and_selection_box() -> None:
+    parsed = parse_symbol_ports_output(
+        '(("label" "[@instanceName]" "NLPLabel" (0 1) '
+        '"instance" "label" "centerLeft" "R0" "stick" 0.0625 '
+        '((-0.1 0.9) (0.8 1.1))) '
+        '("selectionBox" ((-1 -0.5) (2 0.5))) '
+        '("termOrder" ("A")))'
+    )
+
+    assert parsed["labels"] == [
+        {
+            "text": "[@instanceName]",
+            "labelType": "NLPLabel",
+            "xy": [0.0, 1.0],
+            "layerName": "instance",
+            "purpose": "label",
+            "justify": "centerLeft",
+            "orient": "R0",
+            "font": "stick",
+            "height": 0.0625,
+            "bbox": [[-0.1, 0.9], [0.8, 1.1]],
+        }
+    ]
+    assert parsed["selectionBoxes"] == [[[-1.0, -0.5], [2.0, 0.5]]]
 
 
 def test_read_symbol_ports_executes_skill() -> None:
