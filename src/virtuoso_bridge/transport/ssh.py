@@ -18,8 +18,9 @@ import subprocess
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, NamedTuple
+from typing import Any, Callable, NamedTuple
 
 from virtuoso_bridge.env import load_vb_env
 from virtuoso_bridge.profile import resolve_profile
@@ -117,6 +118,33 @@ class CommandResult(NamedTuple):
     returncode: int
     stdout: str
     stderr: str
+
+
+@dataclass(frozen=True)
+class _TimeoutBudget:
+    timeout: float
+    deadline: float
+
+    @classmethod
+    def start(
+        cls,
+        timeout: float | None,
+        default: float,
+    ) -> "_TimeoutBudget":
+        effective_timeout = float(default if timeout is None else timeout)
+        return cls(
+            timeout=effective_timeout,
+            deadline=time.monotonic() + effective_timeout,
+        )
+
+    def available(self) -> float:
+        return max(0.0, self.deadline - time.monotonic())
+
+    def remaining(self, command: object) -> float:
+        remaining = self.available()
+        if remaining <= 0.0:
+            raise subprocess.TimeoutExpired(command, self.timeout)
+        return remaining
 
 
 def _tool_override_from_env(var_name: str) -> str | None:
@@ -476,9 +504,9 @@ class SSHRunner:
 
     # -- connection test -------------------------------------------------------
 
-    def test_connection(self, timeout: int | None = None) -> bool:
+    def test_connection(self, timeout: float | None = None) -> bool:
         """Test SSH connectivity to the remote host."""
-        effective_timeout = timeout or self._connect_timeout
+        budget = _TimeoutBudget.start(timeout, self._connect_timeout)
         cmd = self._build_ssh_base() + ["-T", "exit", "0"]
         logger.debug("Testing SSH connection: %s", cmd)
         try:
@@ -486,7 +514,7 @@ class SSHRunner:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=effective_timeout,
+                timeout=budget.remaining(cmd),
                 **_windows_no_window_kwargs(),
             )
             success = result.returncode == 0
@@ -502,7 +530,11 @@ class SSHRunner:
                 )
             return success
         except subprocess.TimeoutExpired:
-            logger.warning("SSH connection to %s timed out after %ds", self._host, effective_timeout)
+            logger.warning(
+                "SSH connection to %s timed out after %gs",
+                self._host,
+                budget.timeout,
+            )
             return False
         except FileNotFoundError:
             logger.error("SSH executable not found: %s", self._ssh_cmd)
@@ -511,17 +543,21 @@ class SSHRunner:
             logger.error("SSH connection error: %s", exc)
             return False
 
-    def run_command(self, command: str, timeout: int | None = None) -> CommandResult:
+    def run_command(self, command: str, timeout: float | None = None) -> CommandResult:
         """Execute a command on the remote host via SSH."""
+        budget = _TimeoutBudget.start(timeout, self._timeout)
         if self._persistent_shell_enabled:
             try:
-                return self._run_via_persistent_shell_with_retry(command, timeout=timeout)
+                return self._run_via_persistent_shell_with_retry(
+                    command,
+                    _budget=budget,
+                )
             except subprocess.TimeoutExpired:
                 raise
             except Exception as exc:  # noqa: BLE001
                 self._log_persistent_shell_fallback("Persistent SSH shell failed", exc)
 
-        return self._run_command_once(command, timeout=timeout)
+        return self._run_command_once(command, _budget=budget)
 
     def _print_cmd(self, cmd: list[str]) -> None:
         logger.info("[local] %s", " ".join(cmd))
@@ -591,8 +627,10 @@ class SSHRunner:
 
     def _attempt_with_cm_fallback(
         self,
-        run_one: "Callable[[], tuple[int, bytes, bytes]]",
+        run_one: Callable[[], tuple[int, bytes, bytes]],
         *,
+        budget: _TimeoutBudget,
+        command: object,
         max_attempts: int = 3,
     ) -> tuple[int, bytes, bytes]:
         """Repeatedly call ``run_one`` (which builds + runs one ssh/scp/tar
@@ -616,6 +654,7 @@ class SSHRunner:
         out: bytes = b""
         err: bytes = b""
         for attempt in range(max_attempts):
+            budget.remaining(command)
             rc, out, err = run_one()
             if rc == 0:
                 return rc, out, err
@@ -634,8 +673,14 @@ class SSHRunner:
             break
         return rc, out, err
 
-    def _run_command_once(self, command: str, timeout: int | None = None) -> CommandResult:
-        effective_timeout = timeout or self._timeout
+    def _run_command_once(
+        self,
+        command: str,
+        timeout: float | None = None,
+        *,
+        _budget: _TimeoutBudget | None = None,
+    ) -> CommandResult:
+        budget = _budget or _TimeoutBudget.start(timeout, self._timeout)
         # Pipe the command to `ssh host sh -l` via stdin so it always runs in
         # a POSIX login shell regardless of the remote user's login shell
         # (which may be csh).  Using -l (login) sources /etc/profile and
@@ -671,7 +716,7 @@ class SSHRunner:
                 input=command.encode("utf-8"),
                 capture_output=True,
                 text=False,
-                timeout=effective_timeout,
+                timeout=budget.remaining(cmd),
                 **_windows_no_window_kwargs(),
             )
             stderr_text = last.stderr.decode("utf-8", errors="replace")
@@ -707,14 +752,18 @@ class SSHRunner:
         local_path: Path,
         remote_path: str,
         recursive: bool = False,
-        timeout: int | None = None,
+        timeout: float | None = None,
     ) -> CommandResult:
         """Upload a file or directory to the remote host via tar pipe."""
+        budget = _TimeoutBudget.start(timeout, self._timeout)
         if not local_path.exists():
             raise FileNotFoundError(f"Local path not found: {local_path}")
 
-        effective_timeout = timeout or self._timeout
-        result = self._upload_via_tar(local_path, remote_path, timeout=effective_timeout)
+        result = self._upload_via_tar(
+            local_path,
+            remote_path,
+            _budget=budget,
+        )
         if result.returncode != 0:
             logger.warning("tar upload failed (rc=%d): %s", result.returncode, result.stderr.strip())
         else:
@@ -724,13 +773,13 @@ class SSHRunner:
     def upload_batch(
         self,
         files: list[tuple[Path, str]],
-        timeout: int | None = None,
+        timeout: float | None = None,
     ) -> CommandResult:
         """Upload multiple files in a single tar pipe (all to the same remote dir)."""
         if not files:
             return CommandResult(returncode=0, stdout="", stderr="")
 
-        effective_timeout = timeout or self._timeout
+        budget = _TimeoutBudget.start(timeout, self._timeout)
 
         # Group by remote directory (usually all the same)
         by_remote_dir: dict[str, list[tuple[Path, str]]] = {}
@@ -782,28 +831,36 @@ class SSHRunner:
                 tar_cmd += ["-C", str(local_path.resolve().parent).replace("\\", "/"), local_path.name]
 
             logger.debug("Batch tar upload: %d file(s) -> %s:%s", len(entries), self._host, remote_dir)
+            budget.remaining(tar_cmd)
             tar_proc = subprocess.Popen(
                 tar_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 **_windows_no_window_kwargs(),
             )
-            ssh_proc = subprocess.Popen(
-                ssh_cmd,
-                stdin=tar_proc.stdout,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                **_windows_no_window_kwargs(),
-            )
+            try:
+                budget.remaining(ssh_cmd)
+                ssh_proc = subprocess.Popen(
+                    ssh_cmd,
+                    stdin=tar_proc.stdout,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    **_windows_no_window_kwargs(),
+                )
+            except Exception:
+                tar_proc.kill()
+                raise
             if tar_proc.stdout:
                 tar_proc.stdout.close()
             try:
-                ssh_out, ssh_err = ssh_proc.communicate(timeout=effective_timeout)
+                ssh_out, ssh_err = ssh_proc.communicate(
+                    timeout=budget.remaining(ssh_cmd)
+                )
+                tar_proc.wait(timeout=budget.remaining(tar_cmd))
             except subprocess.TimeoutExpired:
                 ssh_proc.kill()
                 tar_proc.kill()
                 raise
-            tar_proc.wait()
 
             if ssh_proc.returncode != 0:
                 stderr_text = _as_text(ssh_err)
@@ -816,8 +873,9 @@ class SSHRunner:
 
         return CommandResult(returncode=0, stdout="", stderr="")
 
-    def upload_text(self, text: str, remote_path: str, timeout: int | None = None) -> CommandResult:
+    def upload_text(self, text: str, remote_path: str, timeout: float | None = None) -> CommandResult:
         """Upload a UTF-8 text string as a file to the remote host via SSH."""
+        budget = _TimeoutBudget.start(timeout, self._timeout)
         if self._persistent_shell_enabled:
             if not text.endswith("\n"):
                 text = text + "\n"
@@ -832,13 +890,15 @@ class SSHRunner:
                 f"{payload_token}\n"
             )
             try:
-                return self._run_via_persistent_shell_with_retry(command, timeout=timeout)
+                return self._run_via_persistent_shell_with_retry(
+                    command,
+                    _budget=budget,
+                )
             except subprocess.TimeoutExpired:
                 raise
             except Exception as exc:  # noqa: BLE001
                 self._log_persistent_shell_fallback("Persistent SSH text upload failed", exc)
 
-        effective_timeout = timeout or self._timeout
         remote_dir = str(Path(remote_path).parent).replace("\\", "/")
         quoted_dir = shlex.quote(remote_dir)
         quoted_path = shlex.quote(remote_path.replace("\\", "/"))
@@ -862,12 +922,16 @@ class SSHRunner:
                 input=text_bytes,
                 capture_output=True,
                 text=False,
-                timeout=effective_timeout,
+                timeout=budget.remaining(cmd),
                 **_windows_no_window_kwargs(),
             )
             return r.returncode, r.stdout or b"", r.stderr or b""
 
-        rc, out, err = self._attempt_with_cm_fallback(_attempt)
+        rc, out, err = self._attempt_with_cm_fallback(
+            _attempt,
+            budget=budget,
+            command=remote_cmd,
+        )
         if rc != 0:
             err_text = _as_text(err).strip()
             logger.warning("SSH text upload failed (rc=%d): %s", rc, err_text)
@@ -880,13 +944,17 @@ class SSHRunner:
         remote_path: str,
         local_path: Path,
         recursive: bool = False,
-        timeout: int | None = None,
+        timeout: float | None = None,
     ) -> CommandResult:
         """Download a file or directory from the remote host via tar pipe or scp."""
-        effective_timeout = timeout or self._timeout
+        budget = _TimeoutBudget.start(timeout, self._timeout)
 
         if recursive:
-            return self._download_via_tar(remote_path, local_path, timeout=effective_timeout)
+            return self._download_via_tar(
+                remote_path,
+                local_path,
+                _budget=budget,
+            )
 
         local_path.parent.mkdir(parents=True, exist_ok=True)
         logger.debug("Downloading via scp %s:%s -> %s", self._host, remote_path, local_path)
@@ -901,12 +969,16 @@ class SSHRunner:
                 cmd,
                 capture_output=True,
                 text=False,         # bytes for the helper
-                timeout=effective_timeout,
+                timeout=budget.remaining(cmd),
                 **_windows_no_window_kwargs(),
             )
             return r.returncode, r.stdout or b"", r.stderr or b""
 
-        rc, out, err = self._attempt_with_cm_fallback(_attempt)
+        rc, out, err = self._attempt_with_cm_fallback(
+            _attempt,
+            budget=budget,
+            command=remote_path,
+        )
         if rc != 0:
             err_text = _as_text(err).strip()
             logger.warning("download (scp) failed (rc=%d): %s", rc, err_text)
@@ -919,9 +991,11 @@ class SSHRunner:
         remote_path: str,
         local_path: Path,
         *,
-        timeout: int,
+        timeout: float | None = None,
+        _budget: _TimeoutBudget | None = None,
     ) -> CommandResult:
         """Download a directory recursively using tar czf piped over SSH."""
+        budget = _budget or _TimeoutBudget.start(timeout, self._timeout)
         # Extract into a sibling staging directory first; replace the requested
         # target only after both SSH and local tar have succeeded.  The archive
         # contains the remote directory itself rather than "." so BSD tar does
@@ -951,26 +1025,35 @@ class SSHRunner:
             print(f"[cmd] {' '.join(ssh_cmd)} | {' '.join(tar_cmd)}  # download {remote_path} -> {local_path}", flush=True)
         logger.debug("Downloading via tar pipe %s:%s -> %s", self._host, remote_path, local_path)
 
+        budget.remaining(ssh_cmd)
         ssh_proc = subprocess.Popen(
             ssh_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             **_windows_no_window_kwargs(),
         )
-        tar_proc = subprocess.Popen(
-            tar_cmd,
-            stdin=ssh_proc.stdout,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=stage_path,
-            **_windows_no_window_kwargs(),
-        )
+        try:
+            budget.remaining(tar_cmd)
+            tar_proc = subprocess.Popen(
+                tar_cmd,
+                stdin=ssh_proc.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=stage_path,
+                **_windows_no_window_kwargs(),
+            )
+        except Exception:
+            ssh_proc.kill()
+            shutil.rmtree(stage_path, ignore_errors=True)
+            raise
         if ssh_proc.stdout:
             ssh_proc.stdout.close()
 
         try:
-            tar_out, tar_err = tar_proc.communicate(timeout=timeout)
-            ssh_proc.wait(timeout=timeout)
+            tar_out, tar_err = tar_proc.communicate(
+                timeout=budget.remaining(tar_cmd)
+            )
+            ssh_proc.wait(timeout=budget.remaining(ssh_cmd))
         except subprocess.TimeoutExpired:
             ssh_proc.kill()
             tar_proc.kill()
@@ -1023,8 +1106,10 @@ class SSHRunner:
         local_path: Path,
         remote_path: str,
         *,
-        timeout: int,
+        timeout: float | None = None,
+        _budget: _TimeoutBudget | None = None,
     ) -> CommandResult:
+        budget = _budget or _TimeoutBudget.start(timeout, self._timeout)
         remote_dir = str(Path(remote_path).parent).replace("\\", "/")
         remote_dir_q = shlex.quote(remote_dir)
         local_basename = local_path.name
@@ -1055,50 +1140,69 @@ class SSHRunner:
                     f"  # upload {local_path} -> {remote_path}",
                     flush=True,
                 )
+            budget.remaining(tar_cmd)
             tar_proc = subprocess.Popen(
                 tar_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 **_windows_no_window_kwargs(),
             )
-            ssh_proc = subprocess.Popen(
-                ssh_cmd,
-                stdin=tar_proc.stdout,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                **_windows_no_window_kwargs(),
-            )
+            try:
+                budget.remaining(ssh_cmd)
+                ssh_proc = subprocess.Popen(
+                    ssh_cmd,
+                    stdin=tar_proc.stdout,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    **_windows_no_window_kwargs(),
+                )
+            except Exception:
+                tar_proc.kill()
+                raise
             if tar_proc.stdout:
                 tar_proc.stdout.close()
             try:
-                ssh_out, ssh_err = ssh_proc.communicate(timeout=timeout)
+                ssh_out, ssh_err = ssh_proc.communicate(
+                    timeout=budget.remaining(ssh_cmd)
+                )
+                tar_proc.wait(timeout=budget.remaining(tar_cmd))
             except subprocess.TimeoutExpired:
                 ssh_proc.kill()
                 tar_proc.kill()
                 raise
-            tar_proc.wait()
             return ssh_proc.returncode, ssh_out or b"", ssh_err or b""
 
-        rc, out, err = self._attempt_with_cm_fallback(_attempt)
+        rc, out, err = self._attempt_with_cm_fallback(
+            _attempt,
+            budget=budget,
+            command=remote_path,
+        )
         return CommandResult(
             returncode=rc,
             stdout=_as_text(out),
             stderr=_as_text(err),
         )
 
-    def ensure_persistent_shell(self, timeout: int | None = None) -> None:
+    def ensure_persistent_shell(
+        self,
+        timeout: float | None = None,
+        *,
+        _budget: _TimeoutBudget | None = None,
+    ) -> None:
         """Start the reusable SSH shell on first use."""
         if not self._persistent_shell_enabled:
             return
 
+        budget = _budget or _TimeoutBudget.start(timeout, self._connect_timeout)
         with self._shell_lock:
             if self._shell_proc is not None and self._shell_proc.poll() is None:
                 return
 
-            self._close_persistent_shell_locked()
+            self._close_persistent_shell_locked(_budget=budget)
             cmd = self._build_ssh_base() + ["sh", "-l", "-s"]
             logger.info("Starting persistent SSH shell: %s", " ".join(cmd))
             self._print_cmd(cmd)
+            budget.remaining(cmd)
             proc = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
@@ -1122,15 +1226,17 @@ class SSHRunner:
             )
             self._shell_reader.start()
 
-            probe_timeout = timeout or self._connect_timeout
             try:
-                probe = self._run_command_via_persistent_shell_locked(":", probe_timeout)
+                probe = self._run_command_via_persistent_shell_locked(
+                    ":",
+                    _budget=budget,
+                )
             except Exception:
-                self._close_persistent_shell_locked()
+                self._close_persistent_shell_locked(_budget=budget)
                 raise
 
             if probe.returncode != 0:
-                self._close_persistent_shell_locked()
+                self._close_persistent_shell_locked(_budget=budget)
                 details = self._summarize_ssh_transport_error(probe.stderr.strip() or probe.stdout.strip())
                 raise RuntimeError(
                     f"Persistent SSH shell probe failed: {details}"
@@ -1215,20 +1321,27 @@ class SSHRunner:
     def _run_via_persistent_shell_with_retry(
         self,
         command: str,
-        timeout: int | None = None,
+        timeout: float | None = None,
+        *,
+        _budget: _TimeoutBudget | None = None,
     ) -> CommandResult:
+        budget = _budget or _TimeoutBudget.start(timeout, self._timeout)
         last_exc: Exception | None = None
         for attempt in range(2):
+            budget.remaining(command)
             try:
                 with self._shell_lock:
-                    self.ensure_persistent_shell(timeout=timeout)
-                    return self._run_command_via_persistent_shell_locked(command, timeout=timeout)
+                    self.ensure_persistent_shell(_budget=budget)
+                    return self._run_command_via_persistent_shell_locked(
+                        command,
+                        _budget=budget,
+                    )
             except subprocess.TimeoutExpired:
                 raise
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 with self._shell_lock:
-                    self._close_persistent_shell_locked()
+                    self._close_persistent_shell_locked(_budget=budget)
                 if attempt == 0 and self._is_retryable_persistent_shell_error(exc):
                     logger.info(
                         "Retrying persistent SSH shell for %s after recoverable protocol error: %s",
@@ -1251,8 +1364,13 @@ class SSHRunner:
             out_queue.put(None)
 
     def _run_command_via_persistent_shell_locked(
-        self, command: str, timeout: int | None = None
+        self,
+        command: str,
+        timeout: float | None = None,
+        *,
+        _budget: _TimeoutBudget | None = None,
     ) -> CommandResult:
+        budget = _budget or _TimeoutBudget.start(timeout, self._timeout)
         proc = self._shell_proc
         out_queue = self._shell_queue
         if proc is None or proc.stdin is None or proc.poll() is not None or out_queue is None:
@@ -1292,14 +1410,13 @@ class SSHRunner:
             "rm -f \"$__vb_stdout\" \"$__vb_stderr\"\n"
         )
 
+        budget.remaining(command)
         try:
             proc.stdin.write(script.encode("utf-8"))
             proc.stdin.flush()
         except OSError as exc:
             raise RuntimeError(f"Failed to write to persistent SSH shell: {exc}") from exc
 
-        effective_timeout = timeout or self._timeout
-        deadline = time.monotonic() + effective_timeout
         stdout_b64 = None
         stderr_b64 = None
         rc = None
@@ -1307,18 +1424,18 @@ class SSHRunner:
         preamble: list[str] = []
 
         while True:
-            remaining = deadline - time.monotonic()
+            remaining = budget.available()
             if remaining <= 0:
-                self._close_persistent_shell_locked()
-                raise subprocess.TimeoutExpired(cmd=command, timeout=effective_timeout)
+                self._close_persistent_shell_locked(_budget=budget)
+                raise subprocess.TimeoutExpired(cmd=command, timeout=budget.timeout)
             try:
                 line = out_queue.get(timeout=remaining)
             except queue.Empty as exc:
-                self._close_persistent_shell_locked()
-                raise subprocess.TimeoutExpired(cmd=command, timeout=effective_timeout) from exc
+                self._close_persistent_shell_locked(_budget=budget)
+                raise subprocess.TimeoutExpired(cmd=command, timeout=budget.timeout) from exc
 
             if line is None:
-                self._close_persistent_shell_locked()
+                self._close_persistent_shell_locked(_budget=budget)
                 raise RuntimeError("Persistent SSH shell exited unexpectedly.")
 
             stripped = line.rstrip("\r\n")
@@ -1369,7 +1486,11 @@ class SSHRunner:
         except (binascii.Error, ValueError) as exc:
             raise RuntimeError(f"Persistent SSH shell returned invalid base64 payload: {exc}") from exc
 
-    def _close_persistent_shell_locked(self) -> None:
+    def _close_persistent_shell_locked(
+        self,
+        *,
+        _budget: _TimeoutBudget | None = None,
+    ) -> None:
         proc = self._shell_proc
         reader = self._shell_reader
         if proc is not None and proc.poll() is None:
@@ -1380,9 +1501,13 @@ class SSHRunner:
             except OSError:
                 pass
             proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
+            wait_timeout = 5.0 if _budget is None else min(5.0, _budget.available())
+            if wait_timeout > 0.0:
+                try:
+                    proc.wait(timeout=wait_timeout)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+            else:
                 proc.kill()
         if proc is not None and proc.stdout is not None:
             try:
@@ -1390,7 +1515,9 @@ class SSHRunner:
             except OSError:
                 pass
         if reader is not None and reader.is_alive():
-            reader.join(timeout=1)
+            join_timeout = 1.0 if _budget is None else min(1.0, _budget.available())
+            if join_timeout > 0.0:
+                reader.join(timeout=join_timeout)
         self._shell_proc = None
         self._shell_queue = None
         self._shell_reader = None
@@ -1443,9 +1570,20 @@ class SSHRunner:
         return cmd
 
     def _remote_scp_target(self, remote_path: str) -> str:
+        if any(
+            ord(character) < 32 or ord(character) == 127
+            for character in remote_path
+        ):
+            raise ValueError("remote SCP path contains unsupported control characters")
+        quoted_path = "".join(
+            character
+            if character.isalnum() or character in "/._-~"
+            else f"\\{character}"
+            for character in remote_path
+        )
         if self._user:
-            return f"{self._user}@{self._host}:{remote_path}"
-        return f"{self._host}:{remote_path}"
+            return f"{self._user}@{self._host}:{quoted_path}"
+        return f"{self._host}:{quoted_path}"
 
 class RemoteTaskResult(NamedTuple):
     """Result of a generic remote task (upload + run + optional cleanup)."""

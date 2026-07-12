@@ -302,42 +302,62 @@ class VirtuosoClient(VirtuosoInterface):
 
     # -- SKILL execution ----------------------------------------------------
 
-    def execute_skill(self, skill_code: str, timeout: int | None = None) -> VirtuosoResult:
+    def execute_skill(
+        self,
+        skill_code: str,
+        timeout: float | None = None,
+    ) -> VirtuosoResult:
         """Execute SKILL code in Virtuoso via the RAMIC Bridge daemon."""
         effective_timeout = timeout if timeout is not None else self._timeout
 
         start_time = time.monotonic()
+        deadline = start_time + effective_timeout
         connect_deadline = start_time
         if self._has_jump_host:
-            connect_deadline = start_time + _TUNNEL_CONNECT_GRACE_SECONDS
+            connect_deadline = min(
+                deadline,
+                start_time + _TUNNEL_CONNECT_GRACE_SECONDS,
+            )
 
-        logger.debug("execute_skill %s:%d timeout=%d skill=%s",
+        logger.debug("execute_skill %s:%d timeout=%g skill=%s",
                       self._host, self._port, effective_timeout, skill_code[:120])
 
         try:
             while True:
+                if time.monotonic() >= deadline:
+                    raise socket.timeout
                 try:
-                    raw_response = self._execute_skill_once(skill_code, effective_timeout)
+                    raw_response = self._execute_skill_once(
+                        skill_code,
+                        effective_timeout,
+                        deadline,
+                    )
                     elapsed = time.monotonic() - start_time
                     result = self._parse_response(raw_response, elapsed)
                     logger.debug("execute_skill OK (%.3fs)", elapsed)
                     return result
                 except ConnectionRefusedError:
-                    if time.monotonic() >= connect_deadline:
+                    now = time.monotonic()
+                    if now >= deadline:
+                        raise socket.timeout
+                    if now >= connect_deadline:
                         raise
                     logger.debug("Connection refused, retrying (deadline in %.1fs)",
-                                 connect_deadline - time.monotonic())
-                    time.sleep(_TUNNEL_CONNECT_RETRY_DELAY)
+                                 connect_deadline - now)
+                    time.sleep(min(_TUNNEL_CONNECT_RETRY_DELAY, connect_deadline - now))
                 except OSError as exc:
-                    if not self._should_retry_tunnel_connect(exc, time.monotonic(), connect_deadline):
+                    now = time.monotonic()
+                    if now >= deadline:
+                        raise socket.timeout from exc
+                    if not self._should_retry_tunnel_connect(exc, now, connect_deadline):
                         raise
                     logger.debug("OSError %s, retrying (deadline in %.1fs)",
-                                 exc, connect_deadline - time.monotonic())
-                    time.sleep(_TUNNEL_CONNECT_RETRY_DELAY)
+                                 exc, connect_deadline - now)
+                    time.sleep(min(_TUNNEL_CONNECT_RETRY_DELAY, connect_deadline - now))
 
         except socket.timeout:
             elapsed = time.monotonic() - start_time
-            logger.warning("Socket timeout connecting to %s:%d after %ds",
+            logger.warning("Socket timeout connecting to %s:%d after %gs",
                            self._host, self._port, effective_timeout)
             return VirtuosoResult(
                 status=ExecutionStatus.ERROR,
@@ -1392,17 +1412,25 @@ let((result winName ciwNum)
             return remote_posix, True
         return _path_to_posix(p), False
 
-    def _execute_skill_once(self, skill_code: str, timeout: int) -> str:
+    def _execute_skill_once(
+        self,
+        skill_code: str,
+        timeout: float,
+        deadline: float,
+    ) -> str:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(timeout)
+            s.settimeout(self._remaining_timeout(deadline))
             logger.debug("TCP connect %s:%d", self._host, self._port)
             s.connect((self._host, self._port))
             logger.debug("TCP connected, sending %d-byte payload", len(skill_code))
-            payload = json.dumps({"skill": skill_code, "timeout": timeout}).encode("utf-8")
+            request_timeout = min(timeout, self._remaining_timeout(deadline))
+            payload = json.dumps({"skill": skill_code, "timeout": request_timeout}).encode("utf-8")
+            s.settimeout(self._remaining_timeout(deadline))
             s.sendall(payload)
             s.shutdown(socket.SHUT_WR)
             chunks: list[bytes] = []
             while True:
+                s.settimeout(self._remaining_timeout(deadline))
                 chunk = s.recv(_RECV_BUF_SIZE)
                 if not chunk:
                     break
@@ -1410,6 +1438,13 @@ let((result winName ciwNum)
             raw = b"".join(chunks).decode("utf-8", errors="ignore")
             logger.debug("TCP received %d bytes", len(raw))
             return raw
+
+    @staticmethod
+    def _remaining_timeout(deadline: float) -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            raise socket.timeout
+        return remaining
 
     @staticmethod
     def _should_retry_tunnel_connect(exc: OSError, now: float, connect_deadline: float) -> bool:

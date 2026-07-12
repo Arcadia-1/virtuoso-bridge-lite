@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING
+from pathlib import Path
+from typing import Any, Callable, Literal, TYPE_CHECKING
 
 from virtuoso_bridge.virtuoso.layout.editor import LayoutEditor
 from virtuoso_bridge.virtuoso.layout.reader import parse_layout_geometry_output
@@ -35,6 +36,18 @@ from virtuoso_bridge.virtuoso.layout.ops import (
     layout_create_via,
     layout_via_def_expr_from_name,
 )
+from virtuoso_bridge.virtuoso.layout.streamout import (
+    GdsExportReason,
+    GdsExportResult,
+    export_gds,
+)
+from virtuoso_bridge.virtuoso.layout.xstream import (
+    XStreamExportRequest,
+    XStreamLogResult,
+    XStreamTranslatedStructure,
+    parse_xstream_log,
+    xstream_export_gds_skill,
+)
 
 if TYPE_CHECKING:
     from virtuoso_bridge import VirtuosoClient
@@ -51,10 +64,51 @@ class LayoutOps:
         """Return a LayoutEditor context manager."""
         return LayoutEditor(self._owner, lib, cell, view=view, mode=mode, timeout=timeout)
 
+    def export_gds(
+        self,
+        library: str,
+        cell: str,
+        output_path: str | Path,
+        *,
+        stream_map: str | Path,
+        view: str = "layout",
+        log_path: str | Path | None = None,
+        timeout: float = 300.0,
+        poll_interval: float = 0.5,
+        skill_timeout: float = 30.0,
+        finalization_reserve: float = 30.0,
+        cleanup_policy: Literal["success", "always", "never"] = "success",
+        recovery_hook: Callable[[], object] | None = None,
+    ) -> GdsExportResult:
+        """Export one layout to GDS using XStream Out."""
+        return export_gds(
+            self._owner,
+            library,
+            cell,
+            output_path,
+            stream_map=stream_map,
+            view=view,
+            log_path=log_path,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            skill_timeout=skill_timeout,
+            finalization_reserve=finalization_reserve,
+            cleanup_policy=cleanup_policy,
+            recovery_hook=recovery_hook,
+        )
+
 
 __all__ = [
     "LayoutOps",
     "LayoutEditor",
+    "XStreamExportRequest",
+    "XStreamTranslatedStructure",
+    "XStreamLogResult",
+    "GdsExportReason",
+    "GdsExportResult",
+    "xstream_export_gds_skill",
+    "parse_xstream_log",
+    "export_gds",
     "parse_layout_geometry_output",
     "layout_bind_current_or_open_cell_view",
     "close_current_cellview",

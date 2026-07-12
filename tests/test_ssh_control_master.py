@@ -110,6 +110,78 @@ def test_macos_unix_listener_path_too_long_is_controlmaster_failure() -> None:
     assert not SSHRunner._is_cm_failure(0, stderr)
 
 
+def test_remote_scp_target_quotes_legacy_shell_metacharacters() -> None:
+    runner = SSHRunner(host="eda-host", user="designer", ssh_cmd="ssh")
+    remote_path = "/scratch root/$(touch PWNED);'quoted'[1].gds"
+    escaped_path = (
+        r"/scratch\ root/\$\(touch\ PWNED\)\;\'quoted\'\[1\].gds"
+    )
+
+    target = runner._remote_scp_target(remote_path)
+    host, separator, quoted_path = target.partition(":")
+
+    assert host == "designer@eda-host"
+    assert separator == ":"
+    assert quoted_path == escaped_path
+    assert shlex.split(quoted_path) == [remote_path]
+
+
+def test_remote_scp_target_preserves_simple_paths_and_rejects_controls() -> None:
+    runner = SSHRunner(host="eda-host", user=None, ssh_cmd="ssh")
+
+    assert runner._remote_scp_target("/tmp/result.gds") == (
+        "eda-host:/tmp/result.gds"
+    )
+    for remote_path in (
+        "/tmp/bad\x00name",
+        "/tmp/bad\tname",
+        "/tmp/bad\nname",
+        "/tmp/bad\rname",
+        "/tmp/bad\x7fname",
+    ):
+        with pytest.raises(ValueError, match="remote SCP path"):
+            runner._remote_scp_target(remote_path)
+
+
+@pytest.mark.parametrize(
+    ("remote_path", "escaped_path"),
+    [
+        ("/tmp/result.gds", "/tmp/result.gds"),
+        (
+            r"/scratch root/result\copy[1].gds",
+            r"/scratch\ root/result\\copy\[1\].gds",
+        ),
+    ],
+)
+def test_nonrecursive_download_selects_safe_scp_mode(
+    monkeypatch,
+    tmp_path: Path,
+    remote_path: str,
+    escaped_path: str,
+) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh._setup_command_log", lambda: None)
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs) -> subprocess.CompletedProcess:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.ssh.subprocess.run",
+        fake_run,
+    )
+    runner = SSHRunner(host="eda-host", user="designer", ssh_cmd="ssh")
+
+    result = runner.download(remote_path, tmp_path / "result.gds")
+
+    assert result.returncode == 0
+    assert "-O" not in commands[0]
+    target = commands[0][-2]
+    assert target == f"designer@eda-host:{escaped_path}"
+    assert shlex.split(target.partition(":")[2]) == [remote_path]
+
+
 def test_remote_python_detection_error_includes_ssh_stderr() -> None:
     class _FakeRunner:
         def run_command(self, command: str, timeout=None) -> CommandResult:
@@ -426,3 +498,300 @@ def test_recursive_download_restores_existing_target_when_install_rename_fails(
 
     assert existing.is_dir()
     assert (existing / "input.scs").read_text(encoding="utf-8") == "old netlist\n"
+
+
+class _DeadlineClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def consume(
+        self,
+        duration: float,
+        timeout: float,
+        command: object,
+    ) -> None:
+        if timeout < duration:
+            self.now += timeout
+            raise subprocess.TimeoutExpired(command, timeout)
+        self.now += duration
+
+
+def _configure_deadline_runner(monkeypatch, clock: _DeadlineClock) -> SSHRunner:
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh._setup_command_log", lambda: None)
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.time.monotonic", clock)
+    return SSHRunner(host="eda-host", user="designer", ssh_cmd="ssh")
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["run_command", "scp_download", "upload_text"],
+)
+def test_retrying_public_calls_share_one_timeout_budget(
+    monkeypatch,
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    clock = _DeadlineClock()
+    runner = _configure_deadline_runner(monkeypatch, clock)
+    attempt_timeouts: list[float] = []
+
+    def fake_run(command: list[str], **kwargs) -> subprocess.CompletedProcess:
+        attempt_timeout = kwargs["timeout"]
+        attempt_timeouts.append(attempt_timeout)
+        clock.consume(0.04, attempt_timeout, command)
+        return subprocess.CompletedProcess(
+            command,
+            255,
+            b"",
+            b"Connection reset by peer",
+        )
+
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.ssh.subprocess.run",
+        fake_run,
+    )
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        if operation == "run_command":
+            runner.run_command("printf ok", timeout=0.05)
+        elif operation == "scp_download":
+            runner.download(
+                "/remote/result.gds",
+                tmp_path / "result.gds",
+                timeout=0.05,
+            )
+        else:
+            runner.upload_text("payload", "/remote/input.txt", timeout=0.05)
+
+    assert attempt_timeouts == pytest.approx([0.05, 0.01])
+    assert clock.now == pytest.approx(0.05)
+
+
+def test_scp_download_cm_fallback_uses_remaining_timeout(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    clock = _DeadlineClock()
+    runner = _configure_deadline_runner(monkeypatch, clock)
+    attempt_timeouts: list[float] = []
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs) -> subprocess.CompletedProcess:
+        attempt_timeout = kwargs["timeout"]
+        attempt_timeouts.append(attempt_timeout)
+        commands.append(command)
+        if len(commands) == 1:
+            clock.consume(0.02, attempt_timeout, command)
+            return subprocess.CompletedProcess(
+                command,
+                255,
+                b"",
+                b"mux_client_request_session: master session id: 2",
+            )
+        clock.consume(0.01, attempt_timeout, command)
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.ssh.subprocess.run",
+        fake_run,
+    )
+
+    result = runner.download(
+        "/remote/result.gds",
+        tmp_path / "result.gds",
+        timeout=0.05,
+    )
+
+    assert result.returncode == 0
+    assert attempt_timeouts == pytest.approx([0.05, 0.03])
+    assert any("ControlMaster=auto" in part for part in commands[0])
+    assert not any("ControlMaster=auto" in part for part in commands[1])
+    assert runner._use_control_master is False
+
+
+def test_tar_upload_retries_share_one_timeout_budget(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    clock = _DeadlineClock()
+    runner = _configure_deadline_runner(monkeypatch, clock)
+    communicate_timeouts: list[float] = []
+
+    class _UploadProcess:
+        def __init__(self, command: list[str], **_kwargs) -> None:
+            self.command = command
+            self.is_tar = Path(command[0]).stem.lower() == "tar"
+            self.returncode = 0 if self.is_tar else 255
+            self.stdout = _Pipe()
+            self.stderr = _Stderr(b"Connection reset by peer")
+
+        def communicate(self, timeout=None):
+            assert timeout is not None
+            communicate_timeouts.append(timeout)
+            clock.consume(0.04, timeout, self.command)
+            return b"", b"Connection reset by peer"
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.ssh.subprocess.Popen",
+        _UploadProcess,
+    )
+    local_path = tmp_path / "input.txt"
+    local_path.write_text("payload", encoding="utf-8")
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        runner.upload(local_path, "/remote/input.txt", timeout=0.05)
+
+    assert communicate_timeouts == pytest.approx([0.05, 0.01])
+    assert clock.now == pytest.approx(0.05)
+
+
+def test_batch_upload_groups_share_one_timeout_budget(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    clock = _DeadlineClock()
+    runner = _configure_deadline_runner(monkeypatch, clock)
+    communicate_timeouts: list[float] = []
+
+    class _BatchUploadProcess:
+        def __init__(self, command: list[str], **_kwargs) -> None:
+            self.command = command
+            self.is_tar = Path(command[0]).stem.lower() == "tar"
+            self.returncode = 0
+            self.stdout = _Pipe()
+            self.stderr = _Stderr()
+
+        def communicate(self, timeout=None):
+            assert not self.is_tar
+            assert timeout is not None
+            communicate_timeouts.append(timeout)
+            clock.consume(0.04, timeout, self.command)
+            return b"", b""
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.ssh.subprocess.Popen",
+        _BatchUploadProcess,
+    )
+    first = tmp_path / "first.txt"
+    second = tmp_path / "second.txt"
+    first.write_text("first", encoding="utf-8")
+    second.write_text("second", encoding="utf-8")
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        runner.upload_batch(
+            [
+                (first, "/remote/a/first.txt"),
+                (second, "/remote/b/second.txt"),
+            ],
+            timeout=0.05,
+        )
+
+    assert communicate_timeouts == pytest.approx([0.05, 0.01])
+    assert clock.now == pytest.approx(0.05)
+
+
+def test_recursive_download_pipeline_shares_one_timeout_budget(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    clock = _DeadlineClock()
+    runner = _configure_deadline_runner(monkeypatch, clock)
+    tar_timeouts: list[float] = []
+    ssh_timeouts: list[float] = []
+
+    class _DownloadProcess:
+        def __init__(self, command: list[str], **kwargs) -> None:
+            self.command = command
+            self.cwd = kwargs.get("cwd")
+            self.is_tar = Path(command[0]).stem.lower() == "tar"
+            self.returncode = 0
+            self.stdout = _Pipe()
+            self.stderr = _Stderr()
+
+        def communicate(self, timeout=None):
+            assert self.is_tar
+            assert timeout is not None
+            tar_timeouts.append(timeout)
+            clock.consume(0.04, timeout, self.command)
+            extracted = Path(self.cwd) / "netlist"
+            extracted.mkdir()
+            return b"", b""
+
+        def wait(self, timeout=None):
+            assert not self.is_tar
+            assert timeout is not None
+            ssh_timeouts.append(timeout)
+            clock.consume(0.04, timeout, self.command)
+            return 0
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.ssh.subprocess.Popen",
+        _DownloadProcess,
+    )
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        runner.download(
+            "/remote/netlist",
+            tmp_path / "netlist",
+            recursive=True,
+            timeout=0.05,
+        )
+
+    assert tar_timeouts == pytest.approx([0.05])
+    assert ssh_timeouts == pytest.approx([0.01])
+    assert clock.now == pytest.approx(0.05)
+
+
+def test_persistent_shell_probe_and_command_share_one_timeout_budget(
+    monkeypatch,
+) -> None:
+    clock = _DeadlineClock()
+    runner = _configure_deadline_runner(monkeypatch, clock)
+    runner._persistent_shell_enabled = True
+    command_timeouts: list[float] = []
+
+    def fake_ensure(timeout=None, **kwargs) -> None:
+        budget = kwargs.get("_budget")
+        remaining = budget.remaining("persistent-shell probe") if budget else timeout
+        assert remaining is not None
+        clock.consume(0.04, remaining, "persistent-shell probe")
+
+    def fake_command(command: str, timeout=None, **kwargs) -> CommandResult:
+        budget = kwargs.get("_budget")
+        remaining = budget.remaining(command) if budget else timeout
+        assert remaining is not None
+        command_timeouts.append(remaining)
+        clock.consume(0.04, remaining, command)
+        return CommandResult(0, "ok", "")
+
+    monkeypatch.setattr(runner, "ensure_persistent_shell", fake_ensure)
+    monkeypatch.setattr(
+        runner,
+        "_run_command_via_persistent_shell_locked",
+        fake_command,
+    )
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        runner.run_command("printf ok", timeout=0.05)
+
+    assert command_timeouts == pytest.approx([0.01])
+    assert clock.now == pytest.approx(0.05)
