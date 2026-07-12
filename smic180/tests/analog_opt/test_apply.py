@@ -127,8 +127,8 @@ def test_fresh_copy_is_deterministic_and_has_no_helper_cells():
     assert s1 == s2 and "__analog_opt_tmp_" not in s1
     assert "dbDeleteCellView" in s1
     assert "errset(progn(" in s1
-    assert "tempCreated" in s1 and "symbolTxn" in s1
-    assert "temporary cleanup failed" in s1 and "symbol publish failed; new destination removed" in s1
+    assert "createdSchematic" in s1 and "createdSymbol" in s1
+    assert "fresh publication failed; partial destination removed" in s1
 
 
 def test_helper_cleanup_is_gated_by_confirmed_creation_flags():
