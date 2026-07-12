@@ -118,6 +118,31 @@ class VirtuosoApplier:
         destination = _identifier(destination, "destination cell")
         if source == destination:
             raise ApplyError("source and destination cells must be distinct")
+        if not replace:
+            lib, src, dst = map(_quote, (library, source, destination))
+            prefix = "ANALOG_OPT_OK:%s" % operation
+            skill = (
+                f'let((srcCv srcSym dstCv dstSym txn createdSchematic createdSymbol) '
+                f'when(ddGetObj({lib} {dst}) error("destination cell already exists")) '
+                f'txn=errset(progn(srcCv=dbOpenCellViewByType({lib} {src} "schematic" "schematic" "r") '
+                f'unless(srcCv error("source schematic missing")) srcSym=dbOpenCellViewByType({lib} {src} "symbol" nil "r") '
+                f'unless(srcSym error("source symbol missing")) dstCv=dbCopyCellView(srcCv {lib} {dst} "schematic") '
+                f'unless(dstCv error("schematic copy failed")) createdSchematic=t unless(dbSave(dstCv) error("schematic save failed")) '
+                f'dstSym=dbCopyCellView(srcSym {lib} {dst} "symbol") unless(dstSym error("symbol copy failed")) createdSymbol=t '
+                f'unless(dbSave(dstSym) error("symbol save failed")) unless(ddGetObj({lib} {dst} "schematic") error("destination schematic missing")) '
+                f'unless(ddGetObj({lib} {dst} "symbol") error("destination symbol missing")) t) t) '
+                f'when(dstCv dbClose(dstCv)) when(dstSym dbClose(dstSym)) when(srcCv dbClose(srcCv)) when(srcSym dbClose(srcSym)) '
+                f'unless(txn progn(when(createdSymbol errset(dbDeleteCellView({lib} {dst} "symbol") t)) '
+                f'when(createdSchematic errset(dbDeleteCellView({lib} {dst} "schematic") t)) error("fresh publication failed; partial destination removed"))) '
+                f'"{prefix}:CREATED")'
+            )
+            output = self._execute(skill, prefix + ":")
+            normalized = [line.strip().strip("\"") for line in output.splitlines()]
+            if prefix + ":EXISTS" in normalized:
+                raise ApplyError("destination cell already exists")
+            if prefix + ":CREATED" not in normalized:
+                raise ApplyError("bridge did not confirm destination publication")
+            return
         nonce = uuid.uuid4().hex[:12]
 
         temp = _identifier(destination + "__analog_opt_tmp_" + nonce, "temporary cell")

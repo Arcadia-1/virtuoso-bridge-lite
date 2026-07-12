@@ -48,7 +48,7 @@ def test_copy_closes_all_source_and_destination_views_without_deleting():
     c=RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")]); VirtuosoApplier(c).create_work_cell("tr","amp","work",False); s=c.calls[0][0]
     assert 'dbOpenCellViewByType("tr" "amp" "schematic" "schematic" "r")' in s and "dbCopyCellView" in s
     assert all(text in s for text in ("when(srcCv dbClose(srcCv))", "when(srcSym dbClose(srcSym))", "when(dstCv dbClose(dstCv))", "when(dstSym dbClose(dstSym))"))
-    assert "prog(" in s and "tempCreated" in s and "backupSafe" in s
+    assert "errset(progn(" in s and "createdSchematic" in s and "createdSymbol" in s
 
 def test_create_existing_without_replace_is_rejected():
     with pytest.raises(ApplyError, match="already exists"):
@@ -124,9 +124,9 @@ def test_fresh_copy_is_deterministic_and_has_no_helper_cells():
     VirtuosoApplier(c1).create_work_cell("tr", "amp", "work", False)
     VirtuosoApplier(c2).create_work_cell("tr", "amp", "work", False)
     s1, s2 = c1.calls[0][0], c2.calls[0][0]
-    assert s1 != s2 and "__analog_opt_tmp_" in s1 and "__analog_opt_tmp_" in s2
+    assert s1 == s2 and "__analog_opt_tmp_" not in s1
     assert "dbDeleteCellView" in s1
-    assert "unwindProtect" in s1
+    assert "errset(progn(" in s1
     assert "tempCreated" in s1 and "symbolTxn" in s1
     assert "temporary cleanup failed" in s1 and "symbol publish failed; new destination removed" in s1
 
@@ -216,14 +216,14 @@ def test_execute_accepts_quoted_file_channel_sentinel():
 def test_fresh_copy_returns_sentinel_as_final_expression():
     c = RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])
     VirtuosoApplier(c).create_work_cell("tr", "amp", "work", False)
-    assert 'status="CREATED"' in c.calls[0][0] and "symbol publish copy failed" in c.calls[0][0]
+    assert '"ANALOG_OPT_OK:create:CREATED"' in c.calls[0][0] and "partial destination removed" in c.calls[0][0]
 
 
 def test_new_destination_uses_non_destructive_copy_transaction():
     c = RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])
     VirtuosoApplier(c).create_work_cell("tr", "amp", "work", False)
     skill = c.calls[0][0]
-    assert "tempCreated" in skill and "symbolTxn" in skill
+    assert "txn=errset" in skill and "partial destination removed" in skill
     assert "source schematic missing" in skill
     assert "destination symbol missing" in skill
 
@@ -249,7 +249,7 @@ def test_existing_work_cell_without_replace_never_enters_symbol_mutation():
  c=RecordingClient([Result("ANALOG_OPT_OK:create:EXISTS")])
  with pytest.raises(ApplyError,match='exists'): VirtuosoApplier(c).create_work_cell('tr','amp','work',False)
  skill=c.calls[0][0]
- assert "tempCreated" in skill and "backupSafe" in skill
+ assert "createdSchematic" in skill and "createdSymbol" in skill
 
 
 def test_replace_backs_up_and_rolls_back_schematic_and_symbol_as_one_transaction():
@@ -341,5 +341,5 @@ def test_fresh_copy_skill_is_balanced_and_marks_completion_before_sentinel():
     VirtuosoApplier(c).create_work_cell("tr", "amp", "work", False)
     skill = c.calls[0][0]
     assert skill.count("(") == skill.count(")")
-    assert 'status="CREATED"' in skill
-    assert 'when(tempCreated' in skill and 'when(backupSafe&&cleanupBackup' in skill
+    assert '"ANALOG_OPT_OK:create:CREATED"' in skill
+    assert 'unless(txn progn(' in skill
