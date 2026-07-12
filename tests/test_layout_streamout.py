@@ -606,25 +606,29 @@ def test_remote_finalization_sentinel_uses_sha256_fallbacks(
         "p=sys.argv[-1]; "
         "digest=hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest(); "
     )
+    digest_output_code = hash_code + 'print(digest + "  " + p)'
+    openssl_output_code = (
+        hash_code + 'print("SHA2-256(" + p + ")= " + digest)'
+    )
     if digest_tool == "sha256sum":
         script = (
             "#!/bin/sh\n"
             f"exec {shlex.quote(sys.executable)} -c "
-            f"{shlex.quote(hash_code + 'print(digest + \"  \" + p)')} "
+            f"{shlex.quote(digest_output_code)} "
             '"$@"\n'
         )
     elif digest_tool == "shasum":
         script = (
             "#!/bin/sh\n"
             f"exec {shlex.quote(sys.executable)} -c "
-            f"{shlex.quote(hash_code + 'print(digest + \"  \" + p)')} "
+            f"{shlex.quote(digest_output_code)} "
             '"$@"\n'
         )
     else:
         script = (
             "#!/bin/sh\n"
             f"exec {shlex.quote(sys.executable)} -c "
-            f"{shlex.quote(hash_code + 'print(\"SHA2-256(\" + p + \")= \" + digest)')} "
+            f"{shlex.quote(openssl_output_code)} "
             '"$@"\n'
         )
     tool.write_text(script, encoding="utf-8")
