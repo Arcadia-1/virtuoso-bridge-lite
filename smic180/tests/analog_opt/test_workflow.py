@@ -211,3 +211,9 @@ def test_backend_confirms_smic_total_width_via_finger_width_netlist(tmp_path):
  backend.applier=WidthApplier(log); backend.netlist=WidthNetlist(log)
  result=backend({'W':1e-3},tmp_path)
  assert result['success'] is True
+
+
+def test_backend_compares_process_corner_case_insensitively(tmp_path):
+ log=Log(); backend=make_backend(tmp_path,log,confirm={'gain':4.,'VBIAS':1.2,'VDD':3.3,'corner':'TT','temperature':27.})
+ result=backend(CANDIDATE,tmp_path,{'corner':'tt','temperature':27.})
+ assert result['success'] is True

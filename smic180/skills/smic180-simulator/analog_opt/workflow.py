@@ -98,7 +98,8 @@ class AnalogSimulationBackend:
      if name not in actual: raise ValueError('analysis %s missing confirmation for %s'%(analysis_name,name))
      got=actual[name]
      if isinstance(want,str):
-      if got!=want: raise ValueError('analysis %s physical value mismatch for %s'%(analysis_name,name))
+      matches=str(got).lower()==want.lower() if name=='corner' else got==want
+      if not matches: raise ValueError('analysis %s physical value mismatch for %s'%(analysis_name,name))
      elif isinstance(got,bool) or not isinstance(got,(int,float)) or not math.isfinite(float(got)) or not math.isclose(float(got),float(want),rel_tol=self.rtol,abs_tol=self.atol): raise ValueError('analysis %s physical value mismatch for %s'%(analysis_name,name))
   except Exception as exc: raise EvaluationFailure('confirmation',str(exc)) from exc
   return {'objective':objective,'success':True,'metrics':metrics,'specs':spec_results,'metadata':{'physical_candidate':dict(candidate),'specs_passed':passed,'netlist':str(deck),'artifacts':dict(metrics.get('artifacts',{})) if isinstance(metrics,Mapping) else {}}}
