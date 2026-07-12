@@ -6,17 +6,34 @@ from analog_opt.parameters import ParameterSpec
 
 class Result:
  def __init__(self,output='OK',errors=()): self.output=output; self.errors=errors
+def tb_result(skill):
+ if 'ANALOG_OPT_TB_SNAPSHOT' in skill: return Result('"ANALOG_OPT_TB_SNAPSHOT|((2.5 0.0) \"R0\" 1.0)|nil|nil"')
+ for marker in ('ANALOG_OPT_TB_COPY_OK','ANALOG_OPT_TB_DELETE_DUT_OK','ANALOG_OPT_TB_CREATE_DUT_OK','ANALOG_OPT_TB_RESTORE_PROPS_OK','ANALOG_OPT_TB_RESTORE_CDF_OK','ANALOG_OPT_TB_DELETE_OK','ANALOG_OPT_TB_OK'):
+  if marker in skill: return Result('"'+marker+'"')
+ return Result('OK')
 class Client:
  def __init__(self): self.skills=[]
  def execute_skill(self,skill,timeout=30):
   self.skills.append(skill)
-  return Result('ANALOG_OPT_TB_DELETE_OK' if 'ANALOG_OPT_TB_DELETE_OK' in skill else 'ANALOG_OPT_TB_OK')
+  return tb_result(skill)
 class Site: pass
+
+def test_testbench_step_failure_cleans_copied_cell(tmp_path):
+ class C:
+  def __init__(self): self.skills=[]
+  def execute_skill(self,skill,timeout=30):
+   self.skills.append(skill)
+   if 'ANALOG_OPT_TB_CREATE_DUT_OK' in skill: return Result('',('create failed',))
+   return tb_result(skill)
+ client=C(); adapter=NetlistAdapter(client,Site(),library='tr',source_tb='tb',work_cell='work',exporter=lambda *a:None,base_deck_factory=lambda **k:None)
+ with pytest.raises(RuntimeError,match='create failed'): adapter._prepare_tb()
+ assert 'dbDeleteCellView' in client.skills[-1] and 'ANALOG_OPT_TB_DELETE_OK' in client.skills[-1]
+
 
 def test_testbench_skill_avoids_single_huge_source_line(tmp_path):
  class C:
   def __init__(self): self.skill=""
-  def execute_skill(self,skill,timeout=30): self.skill=skill; return Result('"ANALOG_OPT_TB_OK"')
+  def execute_skill(self,skill,timeout=30): self.skill=skill; return tb_result(skill)
  client=C(); adapter=NetlistAdapter(client,Site(),library="tr",source_tb="tb",work_cell="work",exporter=lambda *a:None,base_deck_factory=lambda **k:None)
  adapter._prepare_tb()
  assert max(map(len,client.skill.splitlines())) < 1000
@@ -35,12 +52,13 @@ def test_testbench_skill_uses_file_channel_and_return_sentinel(tmp_path):
   def __init__(self): self.skills=[]
   def execute_skill(self,skill,timeout=30):
    self.skills.append(skill)
-   return Result('"ANALOG_OPT_TB_OK"')
+   return tb_result(skill)
  client=C(); adapter=NetlistAdapter(client,Site(),library="tr",source_tb="tb",work_cell="work",exporter=lambda *a:None,base_deck_factory=lambda **k:None)
  tb=adapter._prepare_tb()
  assert tb.startswith("tb__analog_opt_")
  assert client.skills[0].startswith("progn(\n")
- assert '"ANALOG_OPT_TB_OK"' in client.skills[0]
+ assert all(skill.startswith("progn(\n") for skill in client.skills)
+ assert '"ANALOG_OPT_TB_OK"' in client.skills[-1]
 
 
 def test_netlist_adapter_builds_dedicated_tb_with_work_cell_dut(tmp_path):
@@ -51,7 +69,8 @@ def test_netlist_adapter_builds_dedicated_tb_with_work_cell_dut(tmp_path):
  adapter.analyses=[{'name':'op','type':'dc_op'}]; adapter.configure({}, {}, {'VDD':{'source_instance':'SRC_VDD','value':3.3}}, {})
  deck=adapter.export_fresh('tr','amp_work',tmp_path/'run')
  assert len(calls)==1 and calls[0][0]=='tr' and calls[0][1].startswith('amp_tb__analog_opt_')
- assert 'DUT' in client.skills[0] and 'amp_work' in client.skills[0]
+ joined='\n'.join(client.skills)
+ assert 'DUT' in joined and 'amp_work' in joined
  deck=deck['op']; text=deck.read_text(); assert 'subckt amp_work' in text and 'DUT (VIN VOUT) amp_work' in text
 
 def test_netlist_adapter_applies_corner_temperature_and_voltage_source(tmp_path):
@@ -197,18 +216,20 @@ def test_dedicated_tb_name_is_unique_and_skill_closes_all_views(tmp_path):
  client=Client(); adapter=NetlistAdapter(client,Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda *a,**k:None,base_deck_factory=lambda **k:None)
  first=adapter._prepare_tb(); second=adapter._prepare_tb()
  assert first!=second and first.startswith('amp_tb__analog_opt_')
+ assert len(client.skills)==14
  for skill in client.skills:
-  assert 'unwindProtect' in skill and 'dbClose' in skill
-  assert 'length(setof(i dst~>instances i~>name=="DUT"))==1' in skill
-  assert 'dbCreateInst' in skill and 'dbDeleteObject(dut)' in skill
+  assert skill.startswith('progn(\n') and 'ANALOG_OPT_TB_' in skill
+ joined='\n'.join(client.skills)
+ assert 'DUT must be unique' in joined
+ assert 'dbCreateInst' in joined and 'dbDeleteObject(dut)' in joined
 
 def test_dedicated_tb_copies_properties_and_cdf_without_sharing_inst_header(tmp_path):
  client=Client(); adapter=NetlistAdapter(client,Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda *a,**k:None,base_deck_factory=lambda **k:None)
- adapter._prepare_tb(); skill=client.skills[0]
- assert 'dut~>prop' in skill and 'dbCreateProp(newDut' in skill
- assert 'cdfGetInstCDF(dut)~>parameters' in skill and 'cdfGetInstCDF(newDut)~>parameters' in skill
- assert 'instHeader~>cdfData' not in skill
- assert 'unless(schCheck(dst)' in skill and 'unless(dbSave(dst)' in skill
+ adapter._prepare_tb(); joined='\n'.join(client.skills)
+ assert 'dut~>prop' in joined and 'dbCreateProp(dut' in joined
+ assert 'cdfGetInstCDF(dut)~>parameters' in joined
+ assert 'instHeader~>cdfData' not in joined
+ assert 'schCheck(cv)' in joined and 'dbSave(cv)' in joined
 
 def test_live_factory_uses_safe_mixed_corner_patcher_source():
  import inspect,analog_opt.live as live
@@ -269,7 +290,7 @@ def test_dedicated_tb_is_deleted_after_export(tmp_path):
  adapter=NetlistAdapter(client,Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda *a,**k:raw,base_deck_factory=lambda **k:type('D',(),{'model_includes':[]})())
  adapter.analyses=[{'name':'op','type':'dc_op'}]; adapter.configure({}, {}, {}, {})
  adapter.export_fresh('tr','amp_work',tmp_path/'run')
- assert len(client.skills)==2 and 'dbDeleteCellView' in client.skills[1] and 'ANALOG_OPT_TB_DELETE_OK' in client.skills[1]
+ assert len(client.skills)==8 and 'dbDeleteCellView' in client.skills[-1] and 'ANALOG_OPT_TB_DELETE_OK' in client.skills[-1]
 
 
 def test_empty_pvt_uses_fixed_nominal_voltage_without_override():

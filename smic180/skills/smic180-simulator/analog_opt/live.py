@@ -49,33 +49,75 @@ def patch_smic180_corner(deck,corner,core_model_include=None):
 class NetlistAdapter:
  def __init__(self,client,site,*,library,source_tb,work_cell,exporter,base_deck_factory,corner_patcher=None): self.client=client; self.site=site; self.library=library; self.source_tb=source_tb; self.work_cell=work_cell; self.exporter=exporter; self.base_deck_factory=base_deck_factory; self.corner_patcher=corner_patcher or (lambda d,c:d); self.analyses=[]; self.variables={}; self.biases={}; self.stimuli={}; self.conditions={}
  def configure(self,design_variables,biases,stimuli,conditions): self.variables=dict(design_variables); self.biases=dict(biases); self.stimuli=dict(stimuli); self.conditions=dict(conditions)
- def _prepare_tb(self):
-  tb=self.source_tb+'__analog_opt_'+uuid.uuid4().hex[:10]
-  skill=('let((src dst dut master newDut transform props cdfPairs prop pair param) unwindProtect(progn('
-         'src=dbOpenCellViewByType("%s" "%s" "schematic" "schematic" "r") '
-         'unless(src error("source TB missing")) dst=dbCopyCellView(src "%s" "%s" "schematic") '
-         'unless(dst error("dedicated TB copy failed")) '
-         'unless(length(setof(i dst~>instances i~>name=="DUT"))==1 error("DUT must be unique")) '
-         'dut=car(setof(i dst~>instances i~>name=="DUT")) transform=dut~>transform props=dut~>prop cdfPairs=nil '
-         'foreach(param cdfGetInstCDF(dut)~>parameters cdfPairs=cons(list(param~>name param~>value) cdfPairs)) '
-         'master=dbOpenCellViewByType("%s" "%s" "symbol" nil "r") unless(master error("work symbol missing")) '
-         'dbDeleteObject(dut) newDut=dbCreateInst(dst master "DUT" car(transform) cadr(transform) caddr(transform)) '
-         'unless(newDut error("DUT rebuild failed")) '
-         'foreach(prop props dbCreateProp(newDut prop~>name prop~>valueType prop~>value)) '
-         'foreach(pair cdfPairs param=car(setof(p cdfGetInstCDF(newDut)~>parameters p~>name==car(pair))) when(param param~>value=cadr(pair))) '
-         'unless(schCheck(dst) error("dedicated TB schCheck failed")) unless(dbSave(dst) error("dedicated TB save failed")) "ANALOG_OPT_TB_OK") '
-         'when(src dbClose(src)) when(master dbClose(master)) when(dst dbClose(dst))))')%(self.library,self.source_tb,self.library,tb,self.library,self.work_cell)
-  formatted=skill.replace(') ',')\n').replace(' unless','\nunless').replace(' foreach','\nforeach').replace(' when','\nwhen').replace(' dst=','\ndst=').replace(' dut=','\ndut=').replace(' master=','\nmaster=').replace(' dbDeleteObject','\ndbDeleteObject').replace(' newDut=','\nnewDut=')
-  result=self.client.execute_skill("progn(\n"+formatted+"\n)",timeout=30)
-  output=(getattr(result,'output','') or '').strip().strip('"')
+ def _tb_step(self,skill,sentinel):
+  result=self.client.execute_skill("progn(\n"+skill+"\n)",timeout=30)
   errors=getattr(result,'errors',None) or ()
-  if errors or output!='ANALOG_OPT_TB_OK': raise RuntimeError('dedicated work-cell testbench creation failed: errors=%r output=%r'%(errors,getattr(result,'output','') or ''))
-  return tb
+  output=(getattr(result,'output','') or '').strip().strip('"')
+  if errors or not output.startswith(sentinel): raise RuntimeError('%s failed: errors=%r output=%r'%(sentinel,errors,getattr(result,'output','') or ''))
+  return output
+ def _tb_literal(self,value,label):
+  value=value.strip()
+  if not value or len(value)>20000 or '\n' in value or '\r' in value or ';' in value: raise RuntimeError('invalid '+label+' snapshot')
+  depth=0; quoted=False; escaped=False
+  for char in value:
+   if quoted:
+    if escaped: escaped=False
+    elif char=='\\': escaped=True
+    elif char=='"': quoted=False
+   elif char=='"': quoted=True
+   elif char=='(': depth+=1
+   elif char==')':
+    depth-=1
+    if depth<0: raise RuntimeError('invalid '+label+' snapshot')
+  if quoted or depth!=0: raise RuntimeError('invalid '+label+' snapshot')
+  return value
+ def _prepare_tb(self):
+  tb=self.source_tb+'__analog_opt_'+uuid.uuid4().hex[:10]; copied=False
+  try:
+   copy=('let((src dst) when(ddGetObj("%s" "%s") error("dedicated TB already exists")) '
+         'src=dbOpenCellViewByType("%s" "%s" "schematic" "schematic" "r") unless(src error("source TB missing")) '
+         'dst=dbCopyCellView(src "%s" "%s" "schematic") unless(dst error("dedicated TB copy failed")) '
+         'unless(dbSave(dst) error("dedicated TB copy save failed")) when(src dbClose(src)) when(dst dbClose(dst)) "ANALOG_OPT_TB_COPY_OK")')%(self.library,tb,self.library,self.source_tb,self.library,tb)
+   self._tb_step(copy,'ANALOG_OPT_TB_COPY_OK'); copied=True
+   snapshot=('let((cv dut props cdfPairs) cv=dbOpenCellViewByType("%s" "%s" "schematic" "schematic" "r") '
+             'unless(cv error("dedicated TB open failed")) unless(length(setof(i cv~>instances i~>name=="DUT"))==1 error("DUT must be unique")) '
+             'dut=car(setof(i cv~>instances i~>name=="DUT")) props=mapcar(lambda((p) list(p~>name p~>valueType p~>value)) dut~>prop) '
+             'cdfPairs=mapcar(lambda((p) list(p~>name p~>value)) cdfGetInstCDF(dut)~>parameters) '
+             'prog1(sprintf(nil "ANALOG_OPT_TB_SNAPSHOT|%%L|%%L|%%L" dut~>transform props cdfPairs) dbClose(cv)))')%(self.library,tb)
+   raw=self._tb_step(snapshot,'ANALOG_OPT_TB_SNAPSHOT|'); parts=raw.split('|',3)
+   if len(parts)!=4: raise RuntimeError('invalid dedicated TB snapshot')
+   transform=self._tb_literal(parts[1],'transform'); props=self._tb_literal(parts[2],'property'); cdf=self._tb_literal(parts[3],'CDF')
+   delete=('let((cv dut) cv=dbOpenCellViewByType("%s" "%s" "schematic" "schematic" "a") unless(cv error("dedicated TB open failed")) '
+           'unless(length(setof(i cv~>instances i~>name=="DUT"))==1 error("DUT must be unique")) dut=car(setof(i cv~>instances i~>name=="DUT")) '
+           'dbDeleteObject(dut) unless(dbSave(cv) error("DUT delete save failed")) when(cv dbClose(cv)) "ANALOG_OPT_TB_DELETE_DUT_OK")')%(self.library,tb)
+   self._tb_step(delete,'ANALOG_OPT_TB_DELETE_DUT_OK')
+   create=('let((cv master transform newDut) cv=dbOpenCellViewByType("%s" "%s" "schematic" "schematic" "a") unless(cv error("dedicated TB open failed")) '
+           'master=dbOpenCellViewByType("%s" "%s" "symbol" nil "r") unless(master error("work symbol missing")) transform=%s '
+           'newDut=dbCreateInst(cv master "DUT" car(transform) cadr(transform) caddr(transform)) unless(newDut error("DUT rebuild failed")) '
+           'unless(dbSave(cv) error("DUT create save failed")) when(master dbClose(master)) when(cv dbClose(cv)) "ANALOG_OPT_TB_CREATE_DUT_OK")')%(self.library,tb,self.library,self.work_cell,transform)
+   self._tb_step(create,'ANALOG_OPT_TB_CREATE_DUT_OK')
+   restore_props=('let((cv dut props) cv=dbOpenCellViewByType("%s" "%s" "schematic" "schematic" "a") unless(cv error("dedicated TB open failed")) '
+                  'dut=car(setof(i cv~>instances i~>name=="DUT")) unless(dut error("rebuilt DUT missing")) props=%s '
+                  'foreach(pair props dbCreateProp(dut car(pair) cadr(pair) caddr(pair))) unless(dbSave(cv) error("property restore save failed")) '
+                  'when(cv dbClose(cv)) "ANALOG_OPT_TB_RESTORE_PROPS_OK")')%(self.library,tb,props)
+   self._tb_step(restore_props,'ANALOG_OPT_TB_RESTORE_PROPS_OK')
+   restore_cdf=('let((cv dut pairs param) cv=dbOpenCellViewByType("%s" "%s" "schematic" "schematic" "a") unless(cv error("dedicated TB open failed")) '
+                'dut=car(setof(i cv~>instances i~>name=="DUT")) unless(dut error("rebuilt DUT missing")) pairs=%s '
+                'foreach(pair pairs param=car(setof(p cdfGetInstCDF(dut)~>parameters p~>name==car(pair))) when(param param~>value=cadr(pair))) '
+                'unless(dbSave(cv) error("CDF restore save failed")) when(cv dbClose(cv)) "ANALOG_OPT_TB_RESTORE_CDF_OK")')%(self.library,tb,cdf)
+   self._tb_step(restore_cdf,'ANALOG_OPT_TB_RESTORE_CDF_OK')
+   final=('let((cv) cv=dbOpenCellViewByType("%s" "%s" "schematic" "schematic" "a") unless(cv error("dedicated TB open failed")) '
+          'unless(length(setof(i cv~>instances i~>name=="DUT"))==1 error("rebuilt DUT must be unique")) unless(schCheck(cv) error("dedicated TB schCheck failed")) '
+          'unless(dbSave(cv) error("dedicated TB save failed")) when(cv dbClose(cv)) "ANALOG_OPT_TB_OK")')%(self.library,tb)
+   self._tb_step(final,'ANALOG_OPT_TB_OK'); return tb
+  except Exception:
+   if copied:
+    try: self._delete_tb(tb)
+    except Exception: pass
+   raise
  def _delete_tb(self,tb):
   skill=('let((ok) ok=dbDeleteCellView("%s" "%s" "schematic") if(ok then "ANALOG_OPT_TB_DELETE_OK" else error("dedicated TB cleanup failed")))')%(self.library,tb)
-  result=self.client.execute_skill("progn(\n"+skill+"\n)",timeout=30)
-  output=(getattr(result,'output','') or '').strip().strip('"')
-  if getattr(result,'errors',None) or output!='ANALOG_OPT_TB_DELETE_OK': raise RuntimeError('dedicated testbench cleanup failed; retained cell: '+tb)
+  self._tb_step(skill,'ANALOG_OPT_TB_DELETE_OK')
  def _source_values(self):
   values={}
   for name,item in self.stimuli.items():
