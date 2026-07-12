@@ -197,7 +197,7 @@ def test_export_builds_one_deck_per_analysis_and_parameterizes_dc_source(tmp_pat
 def test_dc_sweep_declares_parameter_before_parameterized_source(tmp_path):
  raw=tmp_path/'raw.scs'; raw.write_text('subckt amp_work A\nends amp_work\nDUT (A) amp_work\nSRC_VDD (VDD 0) vsource type=dc dc=3.3\n')
  adapter=NetlistAdapter(Client(),Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda *a,**k:raw,base_deck_factory=lambda **k:type('D',(),{'model_includes':[]})())
- adapter.analyses=[{'name':'line','type':'dc_sweep','source':'VDD','parameter':'VDD_SWEEP','start':2.7,'stop':3.6,'points':10}]
+ adapter.analyses=[{'name':'line','type':'dc_sweep','source':'VDD','parameter':'VDD_SWEEP','start':'2.7V','stop':'3.6V','points':10}]
  adapter.configure({}, {}, {'VDD':{'source_instance':'SRC_VDD','value':3.3}}, {})
  text=adapter.export_fresh('tr','amp_work',tmp_path/'run')['line'].read_text()
  declaration='parameters VDD_SWEEP=2.7'
