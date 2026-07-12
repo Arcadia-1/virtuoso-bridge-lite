@@ -198,3 +198,16 @@ def test_real_load_create_workflow_interruption_writes_reloadable_resolved_confi
  manifest=json.loads((run_dir/'run_manifest.json').read_text())
  reloaded=load_config(run_dir/manifest['config'])
  assert reloaded==config
+
+
+def test_backend_confirms_smic_total_width_via_finger_width_netlist(tmp_path):
+ log=Log(); backend=make_backend(tmp_path,log)
+ class WidthApplier(Applier):
+  def read_cdf(self,lib,cell,specs):
+   return {'W':10e-6 if specs[0].property=='fw' else 1e-3}
+ class WidthNetlist(Netlist):
+  def confirm_cdf(self,path,specs): return {'W':10e-6}
+ backend.parameter_specs=(ParameterSpec('W','virtuoso_cdf',.0008,.0012,instance='M7',property='w',unit='m'),)
+ backend.applier=WidthApplier(log); backend.netlist=WidthNetlist(log)
+ result=backend({'W':1e-3},tmp_path)
+ assert result['success'] is True
