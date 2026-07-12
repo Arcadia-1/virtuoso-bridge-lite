@@ -206,13 +206,13 @@ def test_create_work_cell_copies_and_verifies_symbol_view():
  assert 'ddGetObj("tr" "work" "symbol")' in skill
  assert 'when(srcSym dbClose(srcSym))' in skill and 'when(dstSym dbClose(dstSym))' in skill
 
-def test_copy_transaction_wraps_let_body_in_single_progn_expression():
+def test_copy_transaction_uses_bridge_stable_prog_body():
     c = RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])
     VirtuosoApplier(c).create_work_cell("tr", "amp", "work", False)
     skill = c.calls[0][0]
-    declaration_end = skill.index(") ", skill.index("let((")) + 2
-    assert skill[declaration_end:].startswith("progn(")
-    assert "progn(status=\"FAILED\" tempCreated=nil" in skill
+    assert skill.startswith("prog((srcCv tmpCv")
+    assert not skill.startswith("let((")
+    assert "status=\"FAILED\" tempCreated=nil" in skill
 
 
 def test_existing_work_cell_without_replace_never_enters_symbol_mutation():
