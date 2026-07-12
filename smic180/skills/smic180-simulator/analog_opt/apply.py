@@ -118,31 +118,8 @@ class VirtuosoApplier:
         destination = _identifier(destination, "destination cell")
         if source == destination:
             raise ApplyError("source and destination cells must be distinct")
-        if not replace:
-            lib, src, dst = map(_quote, (library, source, destination))
-            prefix = "ANALOG_OPT_OK:%s" % operation
-            skill = (
-                f'let((srcCv srcSym dstCv dstSym createdSchematic createdSymbol completed) '
-                f'when(ddGetObj({lib} {dst}) error("destination cell already exists")) '
-                f'unwindProtect(progn(srcCv=dbOpenCellViewByType({lib} {src} "schematic" "schematic" "r") '
-                f'unless(srcCv error("source schematic missing")) srcSym=dbOpenCellViewByType({lib} {src} "symbol" nil "r") '
-                f'unless(srcSym error("source symbol missing")) dstCv=dbCopyCellView(srcCv {lib} {dst} "schematic") '
-                f'unless(dstCv error("schematic copy failed")) createdSchematic=t unless(dbSave(dstCv) error("schematic save failed")) '
-                f'dstSym=dbCopyCellView(srcSym {lib} {dst} "symbol") unless(dstSym error("symbol copy failed")) createdSymbol=t '
-                f'unless(dbSave(dstSym) error("symbol save failed")) unless(ddGetObj({lib} {dst} "schematic") error("destination schematic missing")) '
-                f'unless(ddGetObj({lib} {dst} "symbol") error("destination symbol missing")) completed=t "{prefix}:CREATED") '
-                f'progn(when(dstCv dbClose(dstCv)) when(dstSym dbClose(dstSym)) when(srcCv dbClose(srcCv)) when(srcSym dbClose(srcSym)) '
-                f'when(completed==nil progn(when(createdSymbol unless(dbDeleteCellView({lib} {dst} "symbol") error("fresh publication cleanup failed"))) '
-                f'when(createdSchematic unless(dbDeleteCellView({lib} {dst} "schematic") error("fresh publication cleanup failed"))))))))'
-            )
-            output = self._execute(skill, prefix + ":")
-            normalized = [line.strip().strip("\"") for line in output.splitlines()]
-            if prefix + ":EXISTS" in normalized:
-                raise ApplyError("destination cell already exists")
-            if prefix + ":CREATED" not in normalized:
-                raise ApplyError("bridge did not confirm destination publication")
-            return
         nonce = uuid.uuid4().hex[:12]
+
         temp = _identifier(destination + "__analog_opt_tmp_" + nonce, "temporary cell")
         backup = _identifier(destination + "__analog_opt_backup_" + nonce, "backup cell")
         if len({source, destination, temp, backup}) != 4:
@@ -214,7 +191,7 @@ class VirtuosoApplier:
             f'when(srcCv dbClose(srcCv)) when(tmpCv dbClose(tmpCv)) when(oldCv dbClose(oldCv)) when(srcSym dbClose(srcSym)) when(oldSym dbClose(oldSym)) when(dstSym dbClose(dstSym)) '
             f'when(backupCv dbClose(backupCv)) when(backupSym dbClose(backupSym)) when(dstCv dbClose(dstCv)) when(restoreCv dbClose(restoreCv)) when(restoreSym dbClose(restoreSym)) '
             f'when(tempCreated unless(dbDeleteCellView({lib} {tmp} "schematic") error("temporary cleanup failed"))) '
-            f'when(backupSafe&&cleanupBackup progn(unless(dbDeleteCellView({lib} {bak} "schematic") error("backup cleanup failed")) unless(dbDeleteCellView({lib} {bak} "symbol") error("symbol backup cleanup failed"))))))'
+            f'when(backupSafe&&cleanupBackup progn(unless(dbDeleteCellView({lib} {bak} "schematic") error("backup cleanup failed")) unless(dbDeleteCellView({lib} {bak} "symbol") error("symbol backup cleanup failed"))))))))'
         )
         output = self._execute(skill, prefix + ":")
         if any(line.strip() == prefix + ":EXISTS" for line in output.splitlines()):
