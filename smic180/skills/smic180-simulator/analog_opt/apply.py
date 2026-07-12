@@ -63,7 +63,8 @@ class VirtuosoApplier:
 
     def _execute(self, skill: str, sentinel: str) -> str:
         try:
-            result = self.client.execute_skill(skill, timeout=self.timeout)
+            transmitted = "progn(\n%s\n)" % skill
+            result = self.client.execute_skill(transmitted, timeout=self.timeout)
         except Exception as exc:
             raise ApplyError("bridge execution failed: %s" % exc) from exc
         errors = getattr(result, "errors", ()) or ()

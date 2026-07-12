@@ -206,12 +206,21 @@ def test_create_work_cell_copies_and_verifies_symbol_view():
  assert 'ddGetObj("tr" "work" "symbol")' in skill
  assert 'when(srcSym dbClose(srcSym))' in skill and 'when(dstSym dbClose(dstSym))' in skill
 
+def test_execute_uses_multiline_skill_file_channel():
+    c = RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])
+    VirtuosoApplier(c).create_work_cell("tr", "amp", "work", False)
+    transmitted = c.calls[0][0]
+    assert transmitted.startswith("progn(\n")
+    assert transmitted.endswith("\n)")
+    assert "\n" in transmitted
+
+
 def test_copy_transaction_uses_bridge_stable_prog_body():
     c = RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])
     VirtuosoApplier(c).create_work_cell("tr", "amp", "work", False)
     skill = c.calls[0][0]
-    assert skill.startswith("prog((srcCv tmpCv")
-    assert not skill.startswith("let((")
+    assert "\nprog((srcCv tmpCv" in skill
+    assert "\nlet((" not in skill
     assert "status=\"FAILED\" tempCreated=nil" in skill
 
 
