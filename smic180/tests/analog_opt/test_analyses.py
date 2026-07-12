@@ -20,7 +20,7 @@ def test_builds_supported_spectre_analysis_lines():
     ]
     assert build_analysis_lines(analyses) == [
         "op dc",
-        "vdd dc param=VDD_SWEEP start=2.7 stop=3.6 lin=91",
+        "vdd dc param=VDD_SWEEP start=2.7 stop=3.6 lin=90",
         "ac_main ac start=1 stop=1000000000 dec=100",
         "onoise (VOUT 0) noise iprobe=VIN start=1 stop=100000000 dec=50",
         "step tran stop=2e-05 maxstep=1e-08 errpreset=conservative",

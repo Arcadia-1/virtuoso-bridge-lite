@@ -119,7 +119,7 @@ def build_analysis_lines(analyses: Iterable[Mapping[str, Any]]) -> List[str]:
             points = _integer(analysis, "points", 2)
             lines.append(
                 f"{name} dc param={parameter} start={_format(start)} "
-                f"stop={_format(stop)} lin={points}"
+                f"stop={_format(stop)} lin={points - 1}"
             )
         elif analysis_type == "ac":
             start, stop, points = _frequency_sweep(analysis)
