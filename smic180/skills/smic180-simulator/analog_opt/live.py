@@ -219,7 +219,8 @@ class NetlistAdapter:
   for spec in specs:
    line=re.search(r'(?mi)^\s*%s\b([^\n]*)'%re.escape(spec.instance),block.group(0))
    if line:
-    value=re.search(r'\b%s\s*=\s*(\([^\n]*?\)|[^\s]+)'%re.escape(spec.property),line.group(1),re.I)
+    deck_property='w' if spec.property=='fw' else spec.property
+    value=re.search(r'\b%s\s*=\s*(\([^\n]*?\)|[^\s]+)'%re.escape(deck_property),line.group(1),re.I)
     if value: result[spec.name]=_spectre_number(value.group(1),'length' if spec.unit in ('m','mm','um','nm') else 'scalar')
   if set(result)!={spec.name for spec in specs}: raise ValueError('complete CDF parameter set unavailable in DUT subckt')
   return result
