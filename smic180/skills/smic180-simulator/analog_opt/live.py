@@ -118,7 +118,9 @@ class NetlistAdapter:
     except Exception: pass
    raise
  def _delete_tb(self,tb):
-  skill=('let((ok) ok=dbDeleteCellView("%s" "%s" "schematic") if(ok then "ANALOG_OPT_TB_DELETE_OK" else error("dedicated TB cleanup failed")))')%(self.library,tb)
+  if not tb.startswith(self.source_tb+'__analog_opt_'): raise RuntimeError('refusing to delete non-dedicated testbench')
+  skill=('let((obj ok) obj=ddGetObj("%s" "%s") unless(obj error("dedicated TB missing")) ok=ddDeleteObj(obj) '
+         'unless(ok error("dedicated TB cleanup failed")) unless(ddGetObj("%s" "%s") error("dedicated TB still exists")) "ANALOG_OPT_TB_DELETE_OK")')%(self.library,tb,self.library,tb)
   self._tb_step(skill,'ANALOG_OPT_TB_DELETE_OK')
  def _source_values(self):
   values={}

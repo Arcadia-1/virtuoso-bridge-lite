@@ -49,7 +49,7 @@ def test_testbench_step_failure_cleans_copied_cell(tmp_path):
    return tb_result(skill)
  client=C(); adapter=NetlistAdapter(client,Site(),library='tr',source_tb='tb',work_cell='work',exporter=lambda *a:None,base_deck_factory=lambda **k:None)
  with pytest.raises(RuntimeError,match='create failed'): adapter._prepare_tb()
- assert 'dbDeleteCellView' in client.skills[-1] and 'ANALOG_OPT_TB_DELETE_OK' in client.skills[-1]
+ assert 'ddDeleteObj' in client.skills[-1] and 'ANALOG_OPT_TB_DELETE_OK' in client.skills[-1]
 
 
 def test_testbench_skill_avoids_single_huge_source_line(tmp_path):
@@ -307,12 +307,21 @@ def test_metrics_adapter_rejects_invalid_dc_curve(tmp_path,x,y):
   MetricsAdapter([{'name':'line','type':'dc_sweep','parameter':'VDD_SWEEP','signal':'VOUT','points':2}])({'line':result})
 
 
+def test_dedicated_tb_cleanup_uses_available_dd_delete_obj(tmp_path):
+ client=Client(); adapter=NetlistAdapter(client,Site(),library='tr',source_tb='amp_tb',work_cell='work',exporter=lambda *a:None,base_deck_factory=lambda **k:None)
+ adapter._delete_tb('amp_tb__analog_opt_deadbeef00')
+ skill=client.skills[-1]
+ assert 'ok=ddDeleteObj(obj)' in skill and 'obj=ddGetObj("tr" "amp_tb__analog_opt_deadbeef00")' in skill
+ assert 'dbDeleteCellView' not in skill
+ assert 'unless(ddGetObj("tr" "amp_tb__analog_opt_deadbeef00")' in skill
+
+
 def test_dedicated_tb_is_deleted_after_export(tmp_path):
  client=Client(); raw=tmp_path/'raw.scs'; raw.write_text('subckt amp_work A\nends amp_work\nDUT (A) amp_work\n')
  adapter=NetlistAdapter(client,Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda *a,**k:raw,base_deck_factory=lambda **k:type('D',(),{'model_includes':[]})())
  adapter.analyses=[{'name':'op','type':'dc_op'}]; adapter.configure({}, {}, {}, {})
  adapter.export_fresh('tr','amp_work',tmp_path/'run')
- assert len(client.skills)==8 and 'dbDeleteCellView' in client.skills[-1] and 'ANALOG_OPT_TB_DELETE_OK' in client.skills[-1]
+ assert len(client.skills)==8 and 'ddDeleteObj' in client.skills[-1] and 'ANALOG_OPT_TB_DELETE_OK' in client.skills[-1]
 
 
 def test_empty_pvt_uses_fixed_nominal_voltage_without_override():
