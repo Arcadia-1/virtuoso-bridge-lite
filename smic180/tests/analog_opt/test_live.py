@@ -33,6 +33,13 @@ def test_tb_snapshot_literals_are_quoted_before_reuse(tmp_path):
  assert 'props=quote(nil)' in joined and 'pairs=quote(nil)' in joined
 
 
+def test_dedicated_tb_uses_configured_dut_instance(tmp_path):
+ client=Client(); adapter=NetlistAdapter(client,Site(),library='tr',source_tb='tb',work_cell='work',dut_instance='XDUT',exporter=lambda *a:None,base_deck_factory=lambda **k:None)
+ adapter._prepare_tb(); joined='\n'.join(client.skills)
+ assert 'i~>name=="XDUT"' in joined
+ assert 'dbCreateInst(cv master "XDUT"' in joined
+
+
 def test_tb_create_uses_verified_ic618_dbcreateinst_signature(tmp_path):
  client=Client(); adapter=NetlistAdapter(client,Site(),library='tr',source_tb='tb',work_cell='work',exporter=lambda *a:None,base_deck_factory=lambda **k:None)
  adapter._prepare_tb(); create=next(s for s in client.skills if 'ANALOG_OPT_TB_CREATE_DUT_OK' in s)
@@ -138,6 +145,17 @@ def test_publication_confirmation_reads_result_cdf_and_cell_exists(tmp_path):
  specs=[ParameterSpec('W','virtuoso_cdf',1e-6,2e-5,instance='M1',property='w',unit='m')]
  adapter=PublicationAdapter(A(),tmp_path,specs,lambda:{'W':1e-5})
  assert adapter.confirm_result_cell('tr','amp_opt','hash') is True
+
+
+def test_publication_confirmation_requires_openable_schematic_and_symbol(tmp_path):
+ class Client:
+  def execute_skill(self,*args,**kwargs): return Result('\"nil\"')
+ class A:
+  client=Client()
+  def read_cdf(self,lib,cell,specs): return {'W':1e-5}
+ specs=[ParameterSpec('W','virtuoso_cdf',1e-6,2e-5,instance='M1',property='w',unit='m')]
+ adapter=PublicationAdapter(A(),tmp_path,specs,lambda:{'W':1e-5})
+ assert adapter.confirm_result_cell('tr','amp_opt','hash') is False
  class Bad(A):
   def read_cdf(self,*a): return {'W':1.1e-5}
  assert PublicationAdapter(Bad(),tmp_path,specs,lambda:{'W':1e-5}).confirm_result_cell('tr','amp_opt','hash') is False

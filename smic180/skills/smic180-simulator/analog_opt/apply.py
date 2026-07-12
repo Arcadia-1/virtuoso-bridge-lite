@@ -122,23 +122,17 @@ class VirtuosoApplier:
             lib, src, dst = map(_quote, (library, source, destination))
             prefix = "ANALOG_OPT_OK:%s" % operation
             skill = (
-                f'let((srcCv srcSym dstCv dstSym) '
+                f'let((srcCv srcSym dstCv dstSym createdSchematic createdSymbol completed) '
                 f'when(ddGetObj({lib} {dst}) error("destination cell already exists")) '
-                f'srcCv=dbOpenCellViewByType({lib} {src} "schematic" "schematic" "r") '
-                f'unless(srcCv error("source schematic missing")) '
-                f'srcSym=dbOpenCellViewByType({lib} {src} "symbol" nil "r") '
-                f'unless(srcSym error("source symbol missing")) '
-                f'dstCv=dbCopyCellView(srcCv {lib} {dst} "schematic") '
-                f'unless(dstCv error("schematic copy failed")) '
-                f'unless(dbSave(dstCv) error("schematic save failed")) '
-                f'dstSym=dbCopyCellView(srcSym {lib} {dst} "symbol") '
-                f'unless(dstSym error("symbol copy failed")) '
-                f'unless(dbSave(dstSym) error("symbol save failed")) '
-                f'unless(ddGetObj({lib} {dst} "schematic") error("destination schematic missing")) '
-                f'unless(ddGetObj({lib} {dst} "symbol") error("destination symbol missing")) '
-                f'when(srcCv dbClose(srcCv)) when(srcSym dbClose(srcSym)) '
-                f'when(dstCv dbClose(dstCv)) when(dstSym dbClose(dstSym)) '
-                f'"{prefix}:CREATED")'
+                f'unwindProtect(progn(srcCv=dbOpenCellViewByType({lib} {src} "schematic" "schematic" "r") '
+                f'unless(srcCv error("source schematic missing")) srcSym=dbOpenCellViewByType({lib} {src} "symbol" nil "r") '
+                f'unless(srcSym error("source symbol missing")) dstCv=dbCopyCellView(srcCv {lib} {dst} "schematic") '
+                f'unless(dstCv error("schematic copy failed")) createdSchematic=t unless(dbSave(dstCv) error("schematic save failed")) '
+                f'dstSym=dbCopyCellView(srcSym {lib} {dst} "symbol") unless(dstSym error("symbol copy failed")) createdSymbol=t '
+                f'unless(dbSave(dstSym) error("symbol save failed")) unless(ddGetObj({lib} {dst} "schematic") error("destination schematic missing")) '
+                f'unless(ddGetObj({lib} {dst} "symbol") error("destination symbol missing")) "{prefix}:CREATED") '
+                f'progn(when(dstCv dbClose(dstCv)) when(dstSym dbClose(dstSym)) when(srcCv dbClose(srcCv)) when(srcSym dbClose(srcSym)) '
+                f'when(completed==nil progn(when(createdSymbol unless(dbDeleteCellView({lib} {dst} "symbol") error("fresh publication cleanup failed"))) when(createdSchematic unless(dbDeleteCellView({lib} {dst} "schematic") error("fresh publication cleanup failed")))))'
             )
             output = self._execute(skill, prefix + ":")
             normalized = [line.strip().strip("\"") for line in output.splitlines()]

@@ -24,6 +24,7 @@ class DesignConfig:
     work_cell: str
     result_cell: str
     testbench_cell: str
+    dut_instance: str = "DUT"
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,7 @@ def _parse_design(value: Any) -> DesignConfig:
         key: _nonempty_string(data[key], f"design.{key}")
         for key in _REQUIRED_DESIGN
     }
+    fields["dut_instance"] = _nonempty_string(data.get("dut_instance", "DUT"), "design.dut_instance")
     cells = [fields["cell"], fields["work_cell"], fields["result_cell"]]
     if len(set(cells)) != len(cells):
         raise ConfigError("design source, work, and result cells must be distinct")

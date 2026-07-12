@@ -47,7 +47,7 @@ def patch_smic180_corner(deck,corner,core_model_include=None):
  return patched
 
 class NetlistAdapter:
- def __init__(self,client,site,*,library,source_tb,work_cell,exporter,base_deck_factory,corner_patcher=None): self.client=client; self.site=site; self.library=library; self.source_tb=source_tb; self.work_cell=work_cell; self.exporter=exporter; self.base_deck_factory=base_deck_factory; self.corner_patcher=corner_patcher or (lambda d,c:d); self.analyses=[]; self.variables={}; self.biases={}; self.stimuli={}; self.conditions={}
+ def __init__(self,client,site,*,library,source_tb,work_cell,dut_instance="DUT",exporter,base_deck_factory,corner_patcher=None): self.client=client; self.site=site; self.library=library; self.source_tb=source_tb; self.work_cell=work_cell; self.dut_instance=dut_instance; self.exporter=exporter; self.base_deck_factory=base_deck_factory; self.corner_patcher=corner_patcher or (lambda d,c:d); self.analyses=[]; self.variables={}; self.biases={}; self.stimuli={}; self.conditions={}
  def configure(self,design_variables,biases,stimuli,conditions): self.variables=dict(design_variables); self.biases=dict(biases); self.stimuli=dict(stimuli); self.conditions=dict(conditions)
  def _tb_step(self,skill,sentinel):
   result=self.client.execute_skill("progn(\n"+skill+"\n)",timeout=30)
@@ -82,40 +82,41 @@ class NetlistAdapter:
          'unless(dbSave(dst) error("dedicated TB copy save failed")) when(src dbClose(src)) when(dst dbClose(dst)) "ANALOG_OPT_TB_COPY_OK")')%(self.library,tb,self.library,self.source_tb,self.library,tb)
    self._tb_step(copy,'ANALOG_OPT_TB_COPY_OK'); copied=True
    snapshot=('let((cv dut props cdfPairs) cv=dbOpenCellViewByType("%s" "%s" "schematic" "schematic" "r") '
-             'unless(cv error("dedicated TB open failed")) unless(length(setof(i cv~>instances i~>name=="DUT"))==1 error("DUT must be unique")) '
-             'dut=car(setof(i cv~>instances i~>name=="DUT")) props=mapcar(lambda((p) list(p~>name p~>valueType p~>value)) dut~>prop) '
+             'unless(cv error("dedicated TB open failed")) unless(length(setof(i cv~>instances i~>name=="%s"))==1 error("DUT must be unique")) '
+             'dut=car(setof(i cv~>instances i~>name=="%s")) props=mapcar(lambda((p) list(p~>name p~>valueType p~>value)) dut~>prop) '
              'cdfPairs=mapcar(lambda((p) list(p~>name p~>value)) cdfGetInstCDF(dut)~>parameters) '
-             'prog1(sprintf(nil "ANALOG_OPT_TB_SNAPSHOT|%%L|%%L|%%L" dut~>transform props cdfPairs) dbClose(cv)))')%(self.library,tb)
+             'prog1(sprintf(nil "ANALOG_OPT_TB_SNAPSHOT|%%L|%%L|%%L" dut~>transform props cdfPairs) dbClose(cv)))')%(self.library,tb,self.dut_instance,self.dut_instance)
    raw=self._tb_step(snapshot,'ANALOG_OPT_TB_SNAPSHOT|'); parts=raw.split('|',3)
    if len(parts)!=4: raise RuntimeError('invalid dedicated TB snapshot')
    transform=self._tb_literal(parts[1],'transform'); props=self._tb_literal(parts[2],'property'); cdf=self._tb_literal(parts[3],'CDF')
    delete=('let((cv dut) cv=dbOpenCellViewByType("%s" "%s" "schematic" "schematic" "a") unless(cv error("dedicated TB open failed")) '
-           'unless(length(setof(i cv~>instances i~>name=="DUT"))==1 error("DUT must be unique")) dut=car(setof(i cv~>instances i~>name=="DUT")) '
-           'dbDeleteObject(dut) unless(dbSave(cv) error("DUT delete save failed")) when(cv dbClose(cv)) "ANALOG_OPT_TB_DELETE_DUT_OK")')%(self.library,tb)
+           'unless(length(setof(i cv~>instances i~>name=="%s"))==1 error("DUT must be unique")) dut=car(setof(i cv~>instances i~>name=="%s")) '
+           'dbDeleteObject(dut) unless(dbSave(cv) error("DUT delete save failed")) when(cv dbClose(cv)) "ANALOG_OPT_TB_DELETE_DUT_OK")')%(self.library,tb,self.dut_instance,self.dut_instance)
    self._tb_step(delete,'ANALOG_OPT_TB_DELETE_DUT_OK')
    create=('let((cv master transform newDut) cv=dbOpenCellViewByType("%s" "%s" "schematic" "schematic" "a") unless(cv error("dedicated TB open failed")) '
            'master=dbOpenCellViewByType("%s" "%s" "symbol" nil "r") unless(master error("work symbol missing")) transform=quote(%s) '
-           'newDut=dbCreateInst(cv master "DUT" car(transform) cadr(transform)) unless(newDut error("DUT rebuild failed")) '
-           'unless(dbSave(cv) error("DUT create save failed")) when(master dbClose(master)) when(cv dbClose(cv)) "ANALOG_OPT_TB_CREATE_DUT_OK")')%(self.library,tb,self.library,self.work_cell,transform)
+           'newDut=dbCreateInst(cv master "%s" car(transform) cadr(transform)) unless(newDut error("DUT rebuild failed")) '
+           'unless(dbSave(cv) error("DUT create save failed")) when(master dbClose(master)) when(cv dbClose(cv)) "ANALOG_OPT_TB_CREATE_DUT_OK")')%(self.library,tb,self.library,self.work_cell,transform,self.dut_instance)
    self._tb_step(create,'ANALOG_OPT_TB_CREATE_DUT_OK')
    restore_props=('let((cv dut props) cv=dbOpenCellViewByType("%s" "%s" "schematic" "schematic" "a") unless(cv error("dedicated TB open failed")) '
-                  'dut=car(setof(i cv~>instances i~>name=="DUT")) unless(dut error("rebuilt DUT missing")) props=quote(%s) '
+                  'dut=car(setof(i cv~>instances i~>name=="%s")) unless(dut error("rebuilt DUT missing")) props=quote(%s) '
                   'foreach(pair props dbCreateProp(dut car(pair) cadr(pair) caddr(pair))) unless(dbSave(cv) error("property restore save failed")) '
-                  'when(cv dbClose(cv)) "ANALOG_OPT_TB_RESTORE_PROPS_OK")')%(self.library,tb,props)
+                  'when(cv dbClose(cv)) "ANALOG_OPT_TB_RESTORE_PROPS_OK")')%(self.library,tb,self.dut_instance,props)
    self._tb_step(restore_props,'ANALOG_OPT_TB_RESTORE_PROPS_OK')
    restore_cdf=('let((cv dut pairs param) cv=dbOpenCellViewByType("%s" "%s" "schematic" "schematic" "a") unless(cv error("dedicated TB open failed")) '
-                'dut=car(setof(i cv~>instances i~>name=="DUT")) unless(dut error("rebuilt DUT missing")) pairs=quote(%s) '
+                'dut=car(setof(i cv~>instances i~>name=="%s")) unless(dut error("rebuilt DUT missing")) pairs=quote(%s) '
                 'foreach(pair pairs param=car(setof(p cdfGetInstCDF(dut)~>parameters p~>name==car(pair))) when(param param~>value=cadr(pair))) '
-                'unless(dbSave(cv) error("CDF restore save failed")) when(cv dbClose(cv)) "ANALOG_OPT_TB_RESTORE_CDF_OK")')%(self.library,tb,cdf)
+                'unless(dbSave(cv) error("CDF restore save failed")) when(cv dbClose(cv)) "ANALOG_OPT_TB_RESTORE_CDF_OK")')%(self.library,tb,self.dut_instance,cdf)
    self._tb_step(restore_cdf,'ANALOG_OPT_TB_RESTORE_CDF_OK')
    final=('let((cv) cv=dbOpenCellViewByType("%s" "%s" "schematic" "schematic" "a") unless(cv error("dedicated TB open failed")) '
-          'unless(length(setof(i cv~>instances i~>name=="DUT"))==1 error("rebuilt DUT must be unique")) unless(schCheck(cv) error("dedicated TB schCheck failed")) '
-          'unless(dbSave(cv) error("dedicated TB save failed")) when(cv dbClose(cv)) "ANALOG_OPT_TB_OK")')%(self.library,tb)
+          'unless(length(setof(i cv~>instances i~>name=="%s"))==1 error("rebuilt DUT must be unique")) unless(schCheck(cv) error("dedicated TB schCheck failed")) '
+          'unless(dbSave(cv) error("dedicated TB save failed")) when(cv dbClose(cv)) "ANALOG_OPT_TB_OK")')%(self.library,tb,self.dut_instance)
    self._tb_step(final,'ANALOG_OPT_TB_OK'); return tb
   except Exception:
    if copied:
     try: self._delete_tb(tb)
-    except Exception: pass
+    except Exception as cleanup_error:
+     raise RuntimeError("dedicated TB cleanup failed; cell retained: %s (%s)"%(tb,cleanup_error)) from cleanup_error
    raise
  def _delete_tb(self,tb):
   if not tb.startswith(self.source_tb+'__analog_opt_'): raise RuntimeError('refusing to delete non-dedicated testbench')
@@ -142,7 +143,7 @@ class NetlistAdapter:
    circuit=_logical_text(Path(raw).read_text(encoding='utf-8',errors='replace'))
   finally:
    self._delete_tb(tb)
-  if not re.search(r'(?mi)^\s*subckt\s+%s\b'%re.escape(work_cell),circuit) or not re.search(r'(?mi)^\s*DUT\s*\([^\n]*\)\s+%s\b'%re.escape(work_cell),circuit): raise RuntimeError('fresh export does not contain DUT work-cell subckt')
+  if not re.search(r'(?mi)^\s*%s\s*\([^\n]*\)\s+%s\b'%(re.escape(self.dut_instance),re.escape(work_cell)),circuit) or not re.search(r'(?mi)^\s*%s\s*\([^\n]*\)\s+%s\b'%(re.escape(self.dut_instance),re.escape(work_cell)),circuit): raise RuntimeError('fresh export does not contain DUT work-cell subckt')
   source_values=self._source_values(); decks={}
   for analysis in self.analyses:
    text=circuit
@@ -170,7 +171,7 @@ class NetlistAdapter:
    if self.variables: lines.append('parameters '+' '.join('%s=%s'%(k,_num(v)) for k,v in sorted(self.variables.items())))
    analysis_lines=build_analysis_lines([analysis])
    if analysis.get('type')=='dc_op' and analysis.get('instances'):
-    analysis_lines=[*(f"save DUT.{instance}:oppoint" for instance in analysis['instances']),*analysis_lines,'opInfo info what=oppoint where=rawfile']
+    analysis_lines=[*(f"save {self.dut_instance}.{instance}:oppoint" for instance in analysis['instances']),*analysis_lines,'opInfo info what=oppoint where=rawfile']
    lines.extend(analysis_lines); target=directory/analysis['name']; target.mkdir(parents=True,exist_ok=True); deck=target/'analog_opt.scs'; deck.write_text(text.rstrip()+'\n'+'\n'.join(lines)+'\n',encoding='utf-8'); decks[analysis['name']]=deck
   return decks
 
@@ -194,7 +195,7 @@ class NetlistAdapter:
      match=re.search(r'\btemp\s*=\s*([^\s]+)',text); result[name]=float(match.group(1)) if match else None
     elif name=='corner':
      sections=re.findall(r'\bsection\s*=\s*([A-Za-z0-9_]+)',text); result[name]=str(want).upper() if any(x.lower()==str(want).lower() for x in sections) else None
-    elif name=='dut_cell': result[name]=self.work_cell if re.search(r'(?m)^\s*DUT\b[^\n]*\s%s\s*$'%re.escape(self.work_cell),text) else None
+    elif name=='dut_cell': result[name]=self.work_cell if re.search(r'(?m)^\s*%s\b[^\n]*\s%s\s*$'%(re.escape(self.dut_instance),re.escape(self.work_cell)),text) else None
     elif name in self.variables:
      match=re.search(r'\b%s\s*=\s*([^\s]+)'%re.escape(name),text); result[name]=float(match.group(1)) if match else None
    output[analysis_name]={k:v for k,v in result.items() if v is not None}
@@ -266,11 +267,12 @@ class PublicationAdapter:
   intent=json.loads((self.run_dir/'publication.json').read_text(encoding='utf-8')); atomic_write_json(self.run_dir/'publication.confirmed.json',{'candidate_hash':intent['candidate_hash']})
  def confirm_result_cell(self,library,result_cell,candidate_hash):
   try:
-   if hasattr(self._applier,'cell_exists'):
-    exists=self._applier.cell_exists(library,result_cell)
-   else:
-    bridge=self._applier.client.execute_skill('if(ddGetObj(\"%s\" \"%s\") t nil)'%(library,result_cell),timeout=30)
+   if hasattr(self._applier,'client'):
+    bridge=self._applier.client.execute_skill('let((schematic symbol) schematic=dbOpenCellViewByType(\"%s\" \"%s\" \"schematic\" \"schematic\" \"r\") symbol=dbOpenCellViewByType(\"%s\" \"%s\" \"symbol\" nil \"r\") prog1(if(schematic&&symbol t nil) progn(when(schematic dbClose(schematic)) when(symbol dbClose(symbol)))))'%(library,result_cell,library,result_cell),timeout=30)
     exists=not getattr(bridge,'errors',None) and (getattr(bridge,'output','') or '').strip().strip('\"').lower()=='t'
+   elif hasattr(self._applier,'cell_exists'):
+    exists=self._applier.cell_exists(library,result_cell)
+   else: exists=False
    if exists is not True: return False
    candidate=self.candidate_provider()
    if not self.specs:
@@ -294,7 +296,7 @@ def _build_runtime_adapters(client,config,specs,run_dir):
  from sim_io.site_config import SiteConfig
  from sim_io.sim.run import export_netlist,run_spectre
  from sim_io.sim.config import resolve_sim_config
- site=SiteConfig.from_env(); netlist=NetlistAdapter(client,site,library=config.design.library,source_tb=config.design.testbench_cell,work_cell=config.design.work_cell,exporter=export_netlist,base_deck_factory=lambda **k:resolve_sim_config(run_dir=run_dir,lib=k['library'],cell=k['cell']),corner_patcher=lambda deck,corner:patch_smic180_corner(deck,corner,core_model_include=site.pdk_core_spectre_include)); netlist.analyses=config.analyses
+ site=SiteConfig.from_env(); netlist=NetlistAdapter(client,site,library=config.design.library,source_tb=config.design.testbench_cell,work_cell=config.design.work_cell,dut_instance=config.design.dut_instance,exporter=export_netlist,base_deck_factory=lambda **k:resolve_sim_config(run_dir=run_dir,lib=k['library'],cell=k['cell']),corner_patcher=lambda deck,corner:patch_smic180_corner(deck,corner,core_model_include=site.pdk_core_spectre_include)); netlist.analyses=config.analyses
  runner=AnalysisRunner(lambda path,directory:run_spectre(path,directory,site=site,client=client))
  return VirtuosoApplier(client),netlist,runner,MetricsAdapter(config.analyses)
 

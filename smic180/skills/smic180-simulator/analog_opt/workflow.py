@@ -1,7 +1,7 @@
 """Strict injected backend and recoverable analog optimization workflow."""
 from __future__ import annotations
 import hashlib,json,math
-from dataclasses import asdict,is_dataclass,replace
+from dataclasses import asdict,is_dataclass
 from pathlib import Path
 from typing import Any,Callable,Mapping,Sequence
 from analog_opt.evaluator import CandidateEvaluator,EvaluationFailure,EvaluationResult,atomic_write_json
@@ -72,11 +72,6 @@ class AnalogSimulationBackend:
     specs_by_name={spec.name:spec for spec in cdf_specs}
     for name,value in deck_cdf.items():
      if name not in observed or math.isclose(float(observed[name]),float(value),rel_tol=self.rtol,abs_tol=self.atol): continue
-     spec=specs_by_name[name]
-     if spec.property=='w':
-      finger_spec=replace(spec,property='fw',sync_property=None)
-      finger_value=self.applier.read_cdf(self.library,self.work_cell,[finger_spec]).get(name)
-      if finger_value is not None and math.isclose(float(finger_value),float(value),rel_tol=self.rtol,abs_tol=self.atol): continue
      raise ValueError('%s final deck CDF mismatch'%name)
    base_requested=dict(variables); base_requested.update(biases); base_requested.update({name:_stimulus(item)[0] for name,item in fixed.items()}); base_requested['dut_cell']=self.work_cell
    if conditions:

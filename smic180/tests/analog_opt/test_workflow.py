@@ -200,17 +200,28 @@ def test_real_load_create_workflow_interruption_writes_reloadable_resolved_confi
  assert reloaded==config
 
 
-def test_backend_confirms_smic_total_width_via_finger_width_netlist(tmp_path):
+def test_backend_rejects_total_width_when_final_deck_only_matches_finger_width(tmp_path):
  log=Log(); backend=make_backend(tmp_path,log)
  class WidthApplier(Applier):
-  def read_cdf(self,lib,cell,specs):
-   return {'W':10e-6 if specs[0].property=='fw' else 1e-3}
+  def read_cdf(self,lib,cell,specs): return {'W':1e-3}
  class WidthNetlist(Netlist):
   def confirm_cdf(self,path,specs): return {'W':10e-6}
  backend.parameter_specs=(ParameterSpec('W','virtuoso_cdf',.0008,.0012,instance='M7',property='w',unit='m'),)
  backend.applier=WidthApplier(log); backend.netlist=WidthNetlist(log)
- result=backend({'W':1e-3},tmp_path)
- assert result['success'] is True
+ with pytest.raises(EvaluationFailure,match='final deck CDF mismatch'):
+  backend({'W':1e-3},tmp_path)
+
+
+def test_backend_confirms_explicit_finger_width_without_double_scaling(tmp_path):
+ log=Log(); backend=make_backend(tmp_path,log)
+ class WidthApplier(Applier):
+  def read_cdf(self,lib,cell,specs): return {'FW':11e-6}
+ class WidthNetlist(Netlist):
+  def confirm_cdf(self,path,specs): return {'FW':11e-6}
+ backend.parameter_specs=(ParameterSpec('FW','virtuoso_cdf',8e-6,12e-6,instance='M7',property='fw',unit='m'),)
+ backend.applier=WidthApplier(log); backend.netlist=WidthNetlist(log)
+ result=backend({'FW':11e-6},tmp_path)
+ assert result['metadata']['physical_candidate']['FW']==11e-6
 
 
 def test_backend_compares_process_corner_case_insensitively(tmp_path):

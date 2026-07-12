@@ -48,7 +48,7 @@ def test_copy_closes_all_source_and_destination_views_without_deleting():
     c=RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")]); VirtuosoApplier(c).create_work_cell("tr","amp","work",False); s=c.calls[0][0]
     assert 'dbOpenCellViewByType("tr" "amp" "schematic" "schematic" "r")' in s and "dbCopyCellView" in s
     assert all(text in s for text in ("when(srcCv dbClose(srcCv))", "when(srcSym dbClose(srcSym))", "when(dstCv dbClose(dstCv))", "when(dstSym dbClose(dstSym))"))
-    assert "ddDeleteCell" not in s and "dbDeleteCellView" not in s and "__analog_opt_tmp" not in s
+    assert "ddDeleteCell" not in s and "createdSchematic" in s and "createdSymbol" in s and "__analog_opt_tmp" not in s
 
 def test_create_existing_without_replace_is_rejected():
     with pytest.raises(ApplyError, match="already exists"):
@@ -126,7 +126,10 @@ def test_fresh_copy_is_deterministic_and_has_no_helper_cells():
     s1, s2 = c1.calls[0][0], c2.calls[0][0]
     assert s1 == s2
     assert "__analog_opt_tmp_" not in s1 and "__analog_opt_backup_" not in s1
-    assert "dbDeleteCellView" not in s1
+    assert "dbDeleteCellView" in s1
+    assert "unwindProtect" in s1
+    assert "createdSchematic" in s1 and "createdSymbol" in s1
+    assert "fresh publication cleanup failed" in s1
 
 
 def test_helper_cleanup_is_gated_by_confirmed_creation_flags():
@@ -214,14 +217,14 @@ def test_execute_accepts_quoted_file_channel_sentinel():
 def test_fresh_copy_returns_sentinel_as_final_expression():
     c = RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])
     VirtuosoApplier(c).create_work_cell("tr", "amp", "work", False)
-    assert '"ANALOG_OPT_OK:create:CREATED")\n)' in c.calls[0][0]
+    assert '"ANALOG_OPT_OK:create:CREATED")' in c.calls[0][0] and "fresh publication cleanup failed" in c.calls[0][0]
 
 
 def test_new_destination_uses_non_destructive_copy_transaction():
     c = RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])
     VirtuosoApplier(c).create_work_cell("tr", "amp", "work", False)
     skill = c.calls[0][0]
-    assert "dbDeleteCellView" not in skill
+    assert "createdSchematic" in skill and "createdSymbol" in skill
     assert "__analog_opt_backup_" not in skill
     assert "source schematic missing" in skill
     assert "destination symbol missing" in skill
@@ -248,7 +251,7 @@ def test_existing_work_cell_without_replace_never_enters_symbol_mutation():
  c=RecordingClient([Result("ANALOG_OPT_OK:create:EXISTS")])
  with pytest.raises(ApplyError,match='exists'): VirtuosoApplier(c).create_work_cell('tr','amp','work',False)
  skill=c.calls[0][0]
- assert "dbDeleteCellView" not in skill and "__analog_opt_backup_" not in skill
+ assert "createdSchematic" in skill and "createdSymbol" in skill and "__analog_opt_backup_" not in skill
 
 
 def test_replace_backs_up_and_rolls_back_schematic_and_symbol_as_one_transaction():

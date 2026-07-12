@@ -48,6 +48,14 @@ def test_loads_v2_config_as_dataclasses(tmp_path):
     assert isinstance(config.design, DesignConfig)
     assert isinstance(config.stimuli["VDD"], StimulusConfig)
     assert config.version == 2
+    assert config.design.dut_instance == "DUT"
+
+
+def test_design_accepts_explicit_dut_instance(tmp_path):
+    data = minimal_config()
+    data["design"]["dut_instance"] = "XDUT"
+    config = load_config(write_config(tmp_path, data))
+    assert config.design.dut_instance == "XDUT"
 
 
 @pytest.mark.parametrize("version", [1, 2.0, True, False, "2"])
