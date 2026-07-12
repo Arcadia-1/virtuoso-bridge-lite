@@ -403,3 +403,30 @@ def test_publication_confirmation_accepts_quoted_bridge_true(tmp_path):
  specs=[ParameterSpec('W','virtuoso_cdf',1e-6,2e-5,instance='M1',property='w',unit='m')]
  adapter=PublicationAdapter(A(),tmp_path,specs,lambda:{'W':1e-5})
  assert adapter.confirm_result_cell('tr','amp_opt','hash') is True
+
+
+def _model_adapter(tmp_path, raw_text, corner='TT', models=None):
+ raw=tmp_path/'raw.scs'; raw.write_text(raw_text)
+ cfg=type('D',(),{'model_includes':models or []})()
+ a=NetlistAdapter(Client(),Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda *a,**k:raw,base_deck_factory=lambda **k:cfg,corner_patcher=__import__('analog_opt.live',fromlist=['patch_smic180_corner']).patch_smic180_corner)
+ a.analyses=[{'name':'op','type':'dc_op'}]; a.configure({}, {}, {}, {'corner':corner}); return a
+
+def test_export_does_not_duplicate_existing_tt_core_include(tmp_path):
+ models=[type('M',(),{'path':'/home/pdk/core.scs','section':'tt'})(),type('M',(),{'path':'/home/pdk/passive.scs','section':'tt_res'})()]
+ a=_model_adapter(tmp_path,'include "/home/pdk/core.scs" section=tt\ninclude "/home/pdk/passive.scs" section=tt_res\nsubckt amp_work A\nends amp_work\nDUT (A) amp_work\n',models=models)
+ text=a.export_fresh('tr','amp_work',tmp_path/'run')['op'].read_text()
+ assert text.count('include "/home/pdk/core.scs"')==1
+ assert text.count('include "/home/pdk/passive.scs"')==1
+
+def test_export_replaces_only_existing_core_section_for_ff(tmp_path):
+ models=[type('M',(),{'path':'/home/pdk/core.scs','section':'tt'})(),type('M',(),{'path':'/home/pdk/passive.scs','section':'tt_res'})()]
+ a=_model_adapter(tmp_path,'include "/home/pdk/core.scs" section=tt\ninclude "/home/pdk/passive.scs" section=tt_res\nsubckt amp_work A\nends amp_work\nDUT (A) amp_work\n',corner='FF',models=models)
+ text=a.export_fresh('tr','amp_work',tmp_path/'run')['op'].read_text()
+ assert 'include "/home/pdk/core.scs" section=ff' in text and 'section=tt\n' not in text
+ assert 'include "/home/pdk/passive.scs" section=tt_res' in text
+
+def test_export_adds_site_core_only_when_export_has_no_core_include(tmp_path):
+ models=[type('M',(),{'path':'/home/pdk/core.scs','section':'tt'})()]
+ a=_model_adapter(tmp_path,'include "/home/pdk/passive.scs" section=tt_res\nsubckt amp_work A\nends amp_work\nDUT (A) amp_work\n',models=models)
+ text=a.export_fresh('tr','amp_work',tmp_path/'run')['op'].read_text()
+ assert text.count('include "/home/pdk/core.scs"')==1

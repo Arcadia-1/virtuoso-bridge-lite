@@ -163,9 +163,21 @@ class NetlistAdapter:
    deck_cfg=self.base_deck_factory(library=library,cell=tb); corner=self.conditions.get('corner')
    if corner: deck_cfg=self.corner_patcher(deck_cfg,str(corner).lower())
    lines=['','simulator lang=spectre']
+   core_path=str(getattr(self.site,'pdk_core_spectre_include','') or '').replace('\\','/').lower()
+   seen_paths=set()
    for model in getattr(deck_cfg,'model_includes',[]):
-    text=re.sub(r'(?mi)^\s*include\s+["\']%s["\'][^\n]*\n?'%re.escape(str(model.path)),'',text)
-    lines.append('include "%s"%s'%(model.path,' section='+model.section if model.section else ''))
+    path=str(model.path); norm=path.replace('\\','/').lower(); section=str(getattr(model,'section','')).lower(); is_core=(bool(core_path) and norm==core_path) or (not core_path and ('core' in norm or 'mos' in norm))
+    if norm in seen_paths: continue
+    seen_paths.add(norm)
+    pattern=r'(?mi)^\s*include\s+["\']%s["\'][^\n]*\n?'%re.escape(path)
+    found=re.search(pattern,text)
+    if found:
+     if is_core and model.section:
+      replacement=re.sub(r'(?i)\bsection\s*=\s*[A-Za-z0-9_]+','section='+str(model.section),found.group(0),count=1)
+      text=text[:found.start()]+replacement+text[found.end():]
+     continue
+    if is_core or not core_path:
+     lines.append('include "%s"%s'%(model.path,' section='+model.section if model.section else ''))
    temp=self.conditions.get('temperature')
    if temp is not None: lines.append('simulatorOptions options temp=%s'%_num(temp))
    if self.variables: lines.append('parameters '+' '.join('%s=%s'%(k,_num(v)) for k,v in sorted(self.variables.items())))
