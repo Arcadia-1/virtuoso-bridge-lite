@@ -111,7 +111,7 @@ def _load_primary_psf_data(run_dir: Path, deck_path: Path) -> dict:
                 if isinstance(parsed, ACSweepData):
                     merged["freq"] = parsed.freq
                     for sig_name, values in parsed.signals.items():
-                        merged[f"ac:{sig_name}"] = values
+                        merged[f"ac:{sig_name}"] = [complex(*value) if isinstance(value, tuple) else value for value in values]
             except Exception:
                 continue
 

@@ -56,3 +56,18 @@ END
 ''')
  data=_load_primary_psf_data(tmp_path,deck)
  assert data['op:M7']=={'id':3.861e-3,'vds':0.709,'vdsat':0.123,'gm':0.109,'gds':8.04e-3}
+
+
+def test_ac_psf_loader_normalizes_pairs_to_complex(tmp_path):
+ raw=tmp_path/'deck.raw'; raw.mkdir(); deck=tmp_path/'deck.scs'; deck.write_text('// deck')
+ (raw/'ac_main.ac').write_text('''HEADER
+"analysis type" "ac"
+VALUE
+"freq" 1
+"VOUT" (1.5 -0.25)
+"freq" 10
+"VOUT" (2.0 0.5)
+END
+''')
+ data=_load_primary_psf_data(tmp_path,deck)
+ assert data['ac:VOUT']==[1.5-0.25j,2.0+0.5j]
