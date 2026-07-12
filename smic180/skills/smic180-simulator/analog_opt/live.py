@@ -44,7 +44,6 @@ def patch_smic180_corner(deck,corner,core_model_include=None):
   if re.search(r'(^|_)tt($|_)',section,re.I) and (explicit_core or legacy_core):
    model.section=re.sub(r'(^|_)tt(?=$|_)',lambda m:m.group(1)+target,section,flags=re.I)
  return patched
- return patched
 class NetlistAdapter:
  def __init__(self,client,site,*,library,source_tb,work_cell,dut_instance="DUT",exporter,base_deck_factory,corner_patcher=None): self.client=client; self.site=site; self.library=library; self.source_tb=source_tb; self.work_cell=work_cell; self.dut_instance=dut_instance; self.exporter=exporter; self.base_deck_factory=base_deck_factory; self.corner_patcher=corner_patcher or (lambda d,c:d); self.analyses=[]; self.variables={}; self.biases={}; self.stimuli={}; self.conditions={}
  def configure(self,design_variables,biases,stimuli,conditions): self.variables=dict(design_variables); self.biases=dict(biases); self.stimuli=dict(stimuli); self.conditions=dict(conditions)
