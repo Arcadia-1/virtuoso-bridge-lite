@@ -26,6 +26,13 @@ def test_tb_step_decodes_quoted_snapshot_output(tmp_path):
  assert output=='ANALOG_OPT_TB_SNAPSHOT|((2.5 0.0) "R0" 1.0)|nil|nil'
 
 
+def test_tb_create_uses_verified_ic618_dbcreateinst_signature(tmp_path):
+ client=Client(); adapter=NetlistAdapter(client,Site(),library='tr',source_tb='tb',work_cell='work',exporter=lambda *a:None,base_deck_factory=lambda **k:None)
+ adapter._prepare_tb(); create=next(s for s in client.skills if 'ANALOG_OPT_TB_CREATE_DUT_OK' in s)
+ assert 'dbCreateInst(cv master "DUT" car(transform) cadr(transform))' in create
+ assert 'caddr(transform)' not in create
+
+
 def test_testbench_step_failure_cleans_copied_cell(tmp_path):
  class C:
   def __init__(self): self.skills=[]

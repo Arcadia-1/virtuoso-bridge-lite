@@ -95,7 +95,7 @@ class NetlistAdapter:
    self._tb_step(delete,'ANALOG_OPT_TB_DELETE_DUT_OK')
    create=('let((cv master transform newDut) cv=dbOpenCellViewByType("%s" "%s" "schematic" "schematic" "a") unless(cv error("dedicated TB open failed")) '
            'master=dbOpenCellViewByType("%s" "%s" "symbol" nil "r") unless(master error("work symbol missing")) transform=%s '
-           'newDut=dbCreateInst(cv master "DUT" car(transform) cadr(transform) caddr(transform)) unless(newDut error("DUT rebuild failed")) '
+           'newDut=dbCreateInst(cv master "DUT" car(transform) cadr(transform)) unless(newDut error("DUT rebuild failed")) '
            'unless(dbSave(cv) error("DUT create save failed")) when(master dbClose(master)) when(cv dbClose(cv)) "ANALOG_OPT_TB_CREATE_DUT_OK")')%(self.library,tb,self.library,self.work_cell,transform)
    self._tb_step(create,'ANALOG_OPT_TB_CREATE_DUT_OK')
    restore_props=('let((cv dut props) cv=dbOpenCellViewByType("%s" "%s" "schematic" "schematic" "a") unless(cv error("dedicated TB open failed")) '
