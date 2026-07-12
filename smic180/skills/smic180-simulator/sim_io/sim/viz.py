@@ -70,7 +70,7 @@ def parse_psf_ascii(path: str | Path) -> DCSweepData | ACSweepData | TranData | 
         return _parse_tran_psf(text)
     elif analysis_type == "noise":
         return _parse_noise_psf(text)
-    elif analysis_type.lower() in ("dcop", "op"):
+    elif analysis_type.lower() in ("dcop", "op") or (analysis_type.lower() == "info" and re.search(r'"AnalysisType"\s+"op"', text, re.I)):
         return _parse_oppoint_psf(text)
     else:
         raise ValueError(f"Unsupported analysis type: {analysis_type}")
@@ -118,22 +118,72 @@ def _parse_noise_psf(text: str) -> NoiseData:
 
 def _parse_oppoint_psf(text: str) -> OperatingPointData:
     data = OperatingPointData()
+    struct_fields: dict[str, list[str]] = {}
+    lines = [line.strip() for line in text.splitlines()]
+    in_type = False
+    model_name = None
+    depth = 0
+    for line in lines:
+        if line == "TYPE":
+            in_type = True
+            continue
+        if line == "VALUE":
+            break
+        if not in_type:
+            continue
+        model = re.match(r'^"([^"]+)"\s+STRUCT\($', line)
+        if model and depth == 0:
+            model_name = model.group(1)
+            struct_fields[model_name] = []
+            depth = 1
+            continue
+        if model_name is not None and depth == 1:
+            field_match = re.match(r'^"([^"]+)"\s+(?:FLOAT|INT|STRING)\b', line)
+            if field_match:
+                field_name = field_match.group(1).lower()
+                struct_fields[model_name].append("id" if field_name == "ids" else field_name)
+        depth += line.count('(') - line.count(')')
+        if model_name is not None and depth == 0:
+            model_name = None
+
     in_value = False
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
         if line == "VALUE":
             in_value = True
+            index += 1
             continue
         if line == "END":
             break
         if not in_value:
+            index += 1
             continue
-        match = re.match(r'^"([^"]+):([^"\s]+)"(?:\s+"[^"]+")?\s+([\d.eE+\-]+)', line)
-        if match:
-            instance, field_name, value = match.groups()
+        scalar = re.match(r'^"([^"]+):([^"\s]+)"(?:\s+"[^"]+")?\s+([\d.eE+\-]+)', line)
+        if scalar:
+            instance, field_name, value = scalar.groups()
             instance = re.sub(r'^DUT[./]', '', instance, flags=re.I)
             data.instances.setdefault(instance, {})[field_name.lower()] = float(value)
+            index += 1
+            continue
+        record = re.match(r'^"([^"]+)"\s+"([^"]+)"\s+\($', line)
+        if not record:
+            index += 1
+            continue
+        instance, record_type = record.groups()
+        values = []
+        index += 1
+        while index < len(lines) and not lines[index].startswith(')'):
+            if re.fullmatch(r'(?:NaN|[\d.eE+\-]+)', lines[index], re.I):
+                values.append(float(lines[index]))
+            index += 1
+        fields = struct_fields.get(record_type, [])
+        instance = re.sub(r'^DUT[./]', '', instance, flags=re.I)
+        data.instances.setdefault(instance, {}).update(dict(zip(fields, values)))
+        index += 1
     return data
+
+
 def _parse_dc_psf(text: str) -> DCSweepData:
     # Extract sweep variable name from SWEEP section
     sweep_var = "VDD"

@@ -77,7 +77,7 @@ def _load_primary_psf_data(run_dir: Path, deck_path: Path) -> dict:
     dc_files = [p for p in files if "dc" in p.name.lower()]
     ac_files = [p for p in files if "ac" in p.name.lower()]
     noise_files = [p for p in files if "noise" in p.name.lower()]
-    op_files = [p for p in files if "dcop" in p.name.lower() or p.name.lower().startswith("op.")]
+    op_files = [p for p in files if "dcop" in p.name.lower() or p.name.lower().startswith("op.") or p.name.lower() == "opinfo.info"]
 
     # Load all PSF files into a single merged dict
     merged = {}

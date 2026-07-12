@@ -146,6 +146,8 @@ class NetlistAdapter:
   source_values=self._source_values(); decks={}
   for analysis in self.analyses:
    text=circuit
+   if analysis.get('type')=='dc_sweep' and analysis.get('parameter'):
+    text='parameters %s=%s\n'%(analysis['parameter'],_num(analysis['start']))+text
    for stimulus,(instance,value) in source_values.items():
     replacement_value=analysis['parameter'] if analysis['type']=='dc_sweep' and analysis.get('source')==stimulus else _num(value)
     pattern=r'(?mi)^(\s*%s\s*\([^\n]*\)\s+[vi]source\b)([^\n]*)$'%re.escape(instance)

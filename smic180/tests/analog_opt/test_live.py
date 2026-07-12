@@ -193,6 +193,17 @@ def test_export_builds_one_deck_per_analysis_and_parameterizes_dc_source(tmp_pat
  assert 'line dc param=VDD_SWEEP' in decks['line'].read_text() and 'ac_main ac' not in decks['line'].read_text()
  assert 'ac_main ac' in decks['ac_main'].read_text()
 
+
+def test_dc_sweep_declares_parameter_before_parameterized_source(tmp_path):
+ raw=tmp_path/'raw.scs'; raw.write_text('subckt amp_work A\nends amp_work\nDUT (A) amp_work\nSRC_VDD (VDD 0) vsource type=dc dc=3.3\n')
+ adapter=NetlistAdapter(Client(),Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda *a,**k:raw,base_deck_factory=lambda **k:type('D',(),{'model_includes':[]})())
+ adapter.analyses=[{'name':'line','type':'dc_sweep','source':'VDD','parameter':'VDD_SWEEP','start':2.7,'stop':3.6,'points':10}]
+ adapter.configure({}, {}, {'VDD':{'source_instance':'SRC_VDD','value':3.3}}, {})
+ text=adapter.export_fresh('tr','amp_work',tmp_path/'run')['line'].read_text()
+ declaration='parameters VDD_SWEEP=2.7'
+ assert declaration in text
+ assert text.index(declaration)<text.index('SRC_VDD')
+
 def test_source_parser_handles_continuation_case_and_expression(tmp_path):
  raw=tmp_path/'raw.scs'; raw.write_text('subckt amp_work A\nends amp_work\nDUT (A) amp_work\nsupply_main (VDD 0) VSOURCE type=dc \\\n  dc=(3.0+0.3)\n')
  adapter=NetlistAdapter(Client(),Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda *a,**k:raw,base_deck_factory=lambda **k:type('D',(),{'model_includes':[]})())
