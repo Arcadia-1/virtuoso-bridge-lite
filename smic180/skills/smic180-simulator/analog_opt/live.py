@@ -148,8 +148,14 @@ class NetlistAdapter:
    text=circuit
    for stimulus,(instance,value) in source_values.items():
     replacement_value=analysis['parameter'] if analysis['type']=='dc_sweep' and analysis.get('source')==stimulus else _num(value)
-    pattern=r'(?mi)^(\s*%s\s*\([^\n]*\)\s+[vi]source\b[^\n]*?\bdc\s*=\s*)(\([^\n]*?\)|[^\s]+)'%re.escape(instance)
-    text,count=re.subn(pattern,lambda m:m.group(1)+replacement_value,text,count=1)
+    pattern=r'(?mi)^(\s*%s\s*\([^\n]*\)\s+[vi]source\b)([^\n]*)$'%re.escape(instance)
+    def patch_source(match):
+     tail=re.sub(r'\btype\s*=\s*[^\s]+','type=dc',match.group(2),count=1,flags=re.I)
+     if re.search(r'\bdc\s*=',tail,re.I):
+      tail=re.sub(r'(\bdc\s*=\s*)(\([^\n]*?\)|[^\s]+)',lambda item:item.group(1)+replacement_value,tail,count=1,flags=re.I)
+     else: tail=tail.rstrip()+' dc='+replacement_value
+     return match.group(1)+tail
+    text,count=re.subn(pattern,patch_source,text,count=1)
     if count!=1: raise RuntimeError('source instance not found in fresh netlist: '+instance)
    deck_cfg=self.base_deck_factory(library=library,cell=tb); corner=self.conditions.get('corner')
    if corner: deck_cfg=self.corner_patcher(deck_cfg,str(corner).lower())

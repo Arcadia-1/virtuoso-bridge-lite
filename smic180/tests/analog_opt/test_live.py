@@ -95,6 +95,15 @@ def test_netlist_adapter_builds_dedicated_tb_with_work_cell_dut(tmp_path):
  assert 'DUT' in joined and 'amp_work' in joined
  deck=deck['op']; text=deck.read_text(); assert 'subckt amp_work' in text and 'DUT (VIN VOUT) amp_work' in text
 
+def test_source_patch_adds_missing_dc_and_normalizes_source_type(tmp_path):
+ raw=tmp_path/'raw.scs'; raw.write_text('subckt work A B\nends work\nDUT (A B) work\nSRC_Vref (A 0) vsource mag=1 phase=0 type=dc\nSRC_IBIAS (B 0) isource type=sine\n')
+ adapter=NetlistAdapter(Client(),Site(),library='tr',source_tb='tb',work_cell='work',exporter=lambda *a,**k:raw,base_deck_factory=lambda **k:type('D',(),{'model_includes':[]})())
+ adapter.analyses=[{'name':'op','type':'dc_op'}]; adapter.configure({}, {}, {'Vref':{'source_instance':'SRC_Vref','value':1.22},'IBIAS':{'source_instance':'SRC_IBIAS','value':-10e-6}}, {})
+ text=adapter.export_fresh('tr','work',tmp_path/'run')['op'].read_text()
+ assert 'SRC_Vref (A 0) vsource mag=1 phase=0 type=dc dc=1.22' in text
+ assert 'SRC_IBIAS (B 0) isource type=dc dc=-1.' in text and 'e-05' in text
+
+
 def test_netlist_adapter_applies_corner_temperature_and_voltage_source(tmp_path):
  raw=tmp_path/'raw.scs'; raw.write_text('subckt amp_work A\nends amp_work\nDUT (A) amp_work\nSUPPLY_MAIN (VDD 0) vsource type=dc dc=3.3\n')
  deck_cfg=type('D',(),{'model_includes':[type('M',(),{'path':'models.scs','section':'tt'})()]})()
