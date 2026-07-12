@@ -270,7 +270,7 @@ class PublicationAdapter:
     exists=self._applier.cell_exists(library,result_cell)
    else:
     bridge=self._applier.client.execute_skill('if(ddGetObj(\"%s\" \"%s\") t nil)'%(library,result_cell),timeout=30)
-    exists=not getattr(bridge,'errors',None) and (getattr(bridge,'output','') or '').strip().lower()=='t'
+    exists=not getattr(bridge,'errors',None) and (getattr(bridge,'output','') or '').strip().strip('\"').lower()=='t'
    if exists is not True: return False
    candidate=self.candidate_provider()
    if not self.specs:

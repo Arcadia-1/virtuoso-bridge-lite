@@ -374,3 +374,14 @@ def test_runtime_adapter_binds_site_core_model_identity():
  from analog_opt.live import _build_runtime_adapters
  source=inspect.getsource(_build_runtime_adapters)
  assert 'site.pdk_core_spectre_include' in source and 'core_model_include' in source
+
+
+def test_publication_confirmation_accepts_quoted_bridge_true(tmp_path):
+ class Client:
+  def execute_skill(self,*args,**kwargs): return type('R',(),{'output':'"t"','errors':[]})()
+ class A:
+  client=Client()
+  def read_cdf(self,lib,cell,specs): return {'W':1e-5}
+ specs=[ParameterSpec('W','virtuoso_cdf',1e-6,2e-5,instance='M1',property='w',unit='m')]
+ adapter=PublicationAdapter(A(),tmp_path,specs,lambda:{'W':1e-5})
+ assert adapter.confirm_result_cell('tr','amp_opt','hash') is True
