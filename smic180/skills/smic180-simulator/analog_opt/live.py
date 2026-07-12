@@ -164,20 +164,28 @@ class NetlistAdapter:
    if corner: deck_cfg=self.corner_patcher(deck_cfg,str(corner).lower())
    lines=['','simulator lang=spectre']
    core_path=str(getattr(self.site,'pdk_core_spectre_include','') or '').replace('\\','/').lower()
-   seen_paths=set()
+   seen_sections=set()
    for model in getattr(deck_cfg,'model_includes',[]):
-    path=str(model.path); norm=path.replace('\\','/').lower(); section=str(getattr(model,'section','')).lower(); is_core=(bool(core_path) and norm==core_path) or (not core_path and ('core' in norm or 'mos' in norm))
-    if norm in seen_paths: continue
-    seen_paths.add(norm)
+    path=str(model.path); norm=path.replace('\\','/').lower(); section=str(getattr(model,'section','') or '')
+    is_core=(bool(core_path) and norm==core_path) or ('core' in Path(norm).name or 'mos' in Path(norm).name)
+    key=(norm,section.lower())
+    if key in seen_sections: continue
+    seen_sections.add(key)
     pattern=r'(?mi)^\s*include\s+["\']%s["\'][^\n]*\n?'%re.escape(path)
-    found=re.search(pattern,text)
-    if found:
-     if is_core and model.section:
-      replacement=re.sub(r'(?i)\bsection\s*=\s*[A-Za-z0-9_]+','section='+str(model.section),found.group(0),count=1)
-      text=text[:found.start()]+replacement+text[found.end():]
+    matches=list(re.finditer(pattern,text))
+    existing_section=None
+    for match in matches:
+     existing_section_match=re.search(r'(?i)\bsection\s*=\s*([A-Za-z0-9_]+)',match.group(0))
+     if existing_section_match: existing_section=existing_section_match.group(1).lower()
+    if matches and ((not is_core) or existing_section==section.lower()):
+     continue
+    if matches and is_core and section and existing_section and existing_section.split('_',1)[0] in ('tt','ff','ss','fnsp','snfp'):
+     match=matches[0]
+     replacement=re.sub(r'(?i)\bsection\s*=\s*[A-Za-z0-9_]+','section='+section,match.group(0),count=1)
+     text=text[:match.start()]+replacement+text[match.end():]
      continue
     if is_core or not core_path:
-     lines.append('include "%s"%s'%(model.path,' section='+model.section if model.section else ''))
+     lines.append('include "%s"%s'%(model.path,' section='+section if section else ''))
    temp=self.conditions.get('temperature')
    if temp is not None: lines.append('simulatorOptions options temp=%s'%_num(temp))
    if self.variables: lines.append('parameters '+' '.join('%s=%s'%(k,_num(v)) for k,v in sorted(self.variables.items())))
