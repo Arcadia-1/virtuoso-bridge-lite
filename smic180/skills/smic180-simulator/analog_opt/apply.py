@@ -116,7 +116,7 @@ class VirtuosoApplier:
                 f'unless(ddGetObj({lib} {dst} "symbol") error("destination symbol missing")) '
                 f'when(srcCv dbClose(srcCv)) when(srcSym dbClose(srcSym)) '
                 f'when(dstCv dbClose(dstCv)) when(dstSym dbClose(dstSym)) '
-                f'printf("{prefix}:CREATED"))'
+                f'printf("{prefix}:CREATED\\n"))'
             )
             output = self._execute(skill, prefix + ":")
             if any(line.strip() == prefix + ":EXISTS" for line in output.splitlines()):

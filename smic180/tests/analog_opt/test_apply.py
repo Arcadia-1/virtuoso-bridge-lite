@@ -204,6 +204,12 @@ def test_create_work_cell_copies_and_verifies_symbol_view():
  assert 'ddGetObj("tr" "work" "symbol")' in skill
  assert 'when(srcSym dbClose(srcSym))' in skill and 'when(dstSym dbClose(dstSym))' in skill
 
+def test_fresh_copy_sentinel_is_newline_terminated():
+    c = RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])
+    VirtuosoApplier(c).create_work_cell("tr", "amp", "work", False)
+    assert 'printf("ANALOG_OPT_OK:create:CREATED\\n")' in c.calls[0][0]
+
+
 def test_new_destination_uses_non_destructive_copy_transaction():
     c = RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])
     VirtuosoApplier(c).create_work_cell("tr", "amp", "work", False)
