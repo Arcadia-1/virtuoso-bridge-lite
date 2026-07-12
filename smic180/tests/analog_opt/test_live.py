@@ -433,7 +433,7 @@ def test_export_adds_site_core_only_when_export_has_no_core_include(tmp_path):
 
 def test_confirm_cdf_maps_explicit_smic_finger_width_to_deck_w(tmp_path):
  deck=tmp_path/'deck.scs'
- deck.write_text('subckt amp_work A B\nM7 (A B 0 0) n33e2r w=(9.89828271475u) l=800n m=(20)*(100)\nends amp_work\nDUT (A B) amp_work\n')
+ deck.write_text('subckt amp_work A B\nM7 (A B 0 0) n33e2r w=(0.00989828271475mm) l=800n m=(20)*(100)\nends amp_work\nDUT (A B) amp_work\n')
  specs=[ParameterSpec('M7_FW','virtuoso_cdf',8e-6,12e-6,instance='M7',property='fw',unit='m')]
  adapter=NetlistAdapter(Client(),Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=None,base_deck_factory=None)
  assert adapter.confirm_cdf(deck,specs)['M7_FW']==pytest.approx(9.89828271475e-6)

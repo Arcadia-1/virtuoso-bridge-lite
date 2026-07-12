@@ -24,6 +24,7 @@ def _logical_text(text):
  return re.sub(r'\\\s*\n\s*',' ',text)
 def _spectre_number(token,dimension='length'):
  token=token.strip().strip('()')
+ if dimension=='length' and re.fullmatch(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?(?:mm|um|nm)',token,re.I): return parse_quantity(token.lower(),dimension)
  try: return float(token)
  except ValueError: pass
  suffix={'t':1e12,'g':1e9,'meg':1e6,'k':1e3,'m':1e-3,'u':1e-6,'n':1e-9,'p':1e-12,'f':1e-15}
