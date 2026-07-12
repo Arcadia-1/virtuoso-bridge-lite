@@ -1,6 +1,7 @@
 """Safe Virtuoso cell copying and CDF parameter application."""
 from __future__ import annotations
 
+import json
 import math
 import re
 import uuid
@@ -54,6 +55,19 @@ def _number(value: Any, spec: ParameterSpec) -> Real:
     return result
 
 
+def _parse_cdf_quantity(text: str, dimension: str) -> float:
+    match = re.fullmatch(r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)([TGMkmunpf])", text)
+    if match is not None:
+        base_unit = {
+            "voltage": "V", "current": "A", "capacitance": "F",
+            "resistance": "Ohm", "frequency": "Hz", "time": "s",
+            "length": "m", "power": "W",
+        }.get(dimension)
+        if base_unit is not None:
+            return parse_quantity("".join(match.groups()) + base_unit, dimension)
+    return parse_quantity(text, dimension)
+
+
 class VirtuosoApplier:
     """Apply validated physical candidates through machine-readable SKILL calls."""
 
@@ -71,6 +85,13 @@ class VirtuosoApplier:
         if errors:
             raise ApplyError("bridge rejected SKILL: %s" % (errors,))
         output = getattr(result, "output", "") or ""
+        if output.startswith('"') and output.endswith('"'):
+            try:
+                decoded = json.loads(output)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                decoded = None
+            if isinstance(decoded, str):
+                output = decoded
         normalized_lines = [line.strip().strip("\"") for line in output.splitlines()]
         if not any(line.startswith(sentinel) for line in normalized_lines):
             raise ApplyError("bridge response missing sentinel %s" % sentinel)
@@ -257,12 +278,13 @@ class VirtuosoApplier:
             rows.append(
                 "inst=nil param=nil foreach(x cv~>instances when(x~>name==%s inst=x)) unless(inst error(\"instance not found\")) "
                 "foreach(p cdfGetInstCDF(inst)~>parameters when(p~>name==%s param=p)) "
-                "unless(param error(\"CDF parameter missing\")) printf(\"\\n%s\\t%%s\" param~>value)"
+                "unless(param error(\"CDF parameter missing\")) out=strcat(out sprintf(nil \"\\n%s\\t%%s\" param~>value))"
                 % (_quote(spec.instance), _quote(spec.property), spec.name)
             )
         skill = (
-            "let((cv inst x p param) cv=dbOpenCellViewByType(%s %s \"schematic\" \"schematic\" \"r\") "
-            "unless(cv error(\"schematic missing\")) unwindProtect(progn(printf(\"ANALOG_OPT_OK:read\") %s) when(cv dbClose(cv))))"
+            "let((cv inst x p param out) cv=dbOpenCellViewByType(%s %s \"schematic\" \"schematic\" \"r\") "
+            "unless(cv error(\"schematic missing\")) out=\"ANALOG_OPT_OK:read\" "
+            "unwindProtect(progn(%s out) when(cv dbClose(cv))))"
         ) % (_quote(library), _quote(cell), " ".join(rows))
         output = self._execute(skill, "ANALOG_OPT_OK:read")
         parsed: Dict[str, Real] = {}
@@ -287,7 +309,7 @@ class VirtuosoApplier:
                         raise ApplyError("read value for %s must be an integer" % name)
                     parsed[name] = int(numeric)
                 elif spec.unit:
-                    parsed[name] = parse_quantity(text, _UNIT_DIMENSIONS[spec.unit])
+                    parsed[name] = _parse_cdf_quantity(text, _UNIT_DIMENSIONS[spec.unit])
                 else:
                     numeric = float(text)
                     if not math.isfinite(numeric):

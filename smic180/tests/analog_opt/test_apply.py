@@ -62,6 +62,8 @@ def test_read_uses_cdf_parameters_and_returns_si_mapping():
     c=RecordingClient([Result("ANALOG_OPT_OK:read\nW\t10um\nM\t4\nR\t2kOhm")]); values=VirtuosoApplier(c).read_cdf("tr","work",[spec("W","M1","w","um"),spec("M","M1","m",dtype="int"),spec("R","R1","r","kOhm")]); s=c.calls[0][0]
     assert values["W"]==pytest.approx(10e-6) and values["M"]==4 and values["R"]==pytest.approx(2000)
     assert "cdfGetInstCDF(inst)~>parameters" in s and 'p~>name=="w"' in s and "param~>value" in s and "getq(inst" not in s and "dbClose(cv)" in s
+    assert 'printf("ANALOG_OPT_OK:read")' not in s
+    assert 'out="ANALOG_OPT_OK:read"' in s and 'strcat(out sprintf(nil' in s
 
 @pytest.mark.parametrize("output,match",[("ANALOG_OPT_OK:read\nW\t10um\nW\t11um","duplicate"),("ANALOG_OPT_OK:read","missing"),("ANALOG_OPT_OK:read\nW\tnan","finite")])
 def test_read_rejects_invalid_machine_output(output,match):
@@ -307,3 +309,21 @@ def test_rollback_view_deletes_are_errset_and_cannot_prevent_restore_attempt():
  assert block.count('errset(')>=2
  assert 'failed schematic cleanup failed' not in block
  assert 'failed symbol cleanup failed' not in block
+
+
+def test_read_decodes_quoted_multiline_bridge_string():
+    output='"ANALOG_OPT_OK:read\\nW\\t10um"'
+    values=VirtuosoApplier(RecordingClient([Result(output)])).read_cdf("tr","work",[spec("W","M1","w","um")])
+    assert values["W"]==pytest.approx(10e-6)
+
+
+def test_read_expands_bare_cdf_engineering_suffix_from_expected_unit():
+    output='"ANALOG_OPT_OK:read\\nW\\t1.000u"'
+    values=VirtuosoApplier(RecordingClient([Result(output)])).read_cdf("tr","work",[spec("W","M1","w","m")])
+    assert values["W"]==pytest.approx(1e-6)
+
+
+def test_read_treats_bare_m_as_milli_prefix_for_length():
+    output='"ANALOG_OPT_OK:read\\nW\\t1m"'
+    values=VirtuosoApplier(RecordingClient([Result(output)])).read_cdf("tr","work",[spec("W","M1","w","m")])
+    assert values["W"]==pytest.approx(1e-3)
