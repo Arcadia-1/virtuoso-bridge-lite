@@ -96,6 +96,34 @@ class VirtuosoApplier:
         destination = _identifier(destination, "destination cell")
         if source == destination:
             raise ApplyError("source and destination cells must be distinct")
+        if not replace:
+            lib, src, dst = map(_quote, (library, source, destination))
+            prefix = "ANALOG_OPT_OK:%s" % operation
+            skill = (
+                f'let((srcCv srcSym dstCv dstSym) '
+                f'when(ddGetObj({lib} {dst}) error("destination cell already exists")) '
+                f'srcCv=dbOpenCellViewByType({lib} {src} "schematic" "schematic" "r") '
+                f'unless(srcCv error("source schematic missing")) '
+                f'srcSym=dbOpenCellViewByType({lib} {src} "symbol" nil "r") '
+                f'unless(srcSym error("source symbol missing")) '
+                f'dstCv=dbCopyCellView(srcCv {lib} {dst} "schematic") '
+                f'unless(dstCv error("schematic copy failed")) '
+                f'unless(dbSave(dstCv) error("schematic save failed")) '
+                f'dstSym=dbCopyCellView(srcSym {lib} {dst} "symbol") '
+                f'unless(dstSym error("symbol copy failed")) '
+                f'unless(dbSave(dstSym) error("symbol save failed")) '
+                f'unless(ddGetObj({lib} {dst} "schematic") error("destination schematic missing")) '
+                f'unless(ddGetObj({lib} {dst} "symbol") error("destination symbol missing")) '
+                f'when(srcCv dbClose(srcCv)) when(srcSym dbClose(srcSym)) '
+                f'when(dstCv dbClose(dstCv)) when(dstSym dbClose(dstSym)) '
+                f'printf("{prefix}:CREATED"))'
+            )
+            output = self._execute(skill, prefix + ":")
+            if any(line.strip() == prefix + ":EXISTS" for line in output.splitlines()):
+                raise ApplyError("destination cell already exists")
+            if not any(line.strip() == prefix + ":CREATED" for line in output.splitlines()):
+                raise ApplyError("bridge did not confirm destination publication")
+            return
         nonce = uuid.uuid4().hex[:12]
         temp = _identifier(destination + "__analog_opt_tmp_" + nonce, "temporary cell")
         backup = _identifier(destination + "__analog_opt_backup_" + nonce, "backup cell")
