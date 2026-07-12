@@ -67,7 +67,8 @@ class NetlistAdapter:
          'when(src dbClose(src)) when(master dbClose(master)) when(dst dbClose(dst))))')%(self.library,self.source_tb,self.library,tb,self.library,self.work_cell)
   result=self.client.execute_skill("progn(\n"+skill+"\n)",timeout=30)
   output=(getattr(result,'output','') or '').strip().strip('"')
-  if getattr(result,'errors',None) or output!='ANALOG_OPT_TB_OK': raise RuntimeError('dedicated work-cell testbench creation failed')
+  errors=getattr(result,'errors',None) or ()
+  if errors or output!='ANALOG_OPT_TB_OK': raise RuntimeError('dedicated work-cell testbench creation failed: errors=%r output=%r'%(errors,getattr(result,'output','') or ''))
   return tb
  def _delete_tb(self,tb):
   skill=('let((ok) ok=dbDeleteCellView("%s" "%s" "schematic") if(ok then "ANALOG_OPT_TB_DELETE_OK" else error("dedicated TB cleanup failed")))')%(self.library,tb)

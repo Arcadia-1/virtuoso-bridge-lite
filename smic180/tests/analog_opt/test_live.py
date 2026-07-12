@@ -13,6 +13,14 @@ class Client:
   return Result('ANALOG_OPT_TB_DELETE_OK' if 'ANALOG_OPT_TB_DELETE_OK' in skill else 'ANALOG_OPT_TB_OK')
 class Site: pass
 
+def test_testbench_creation_reports_bridge_error(tmp_path):
+ class C:
+  def execute_skill(self,skill,timeout=30): return Result("", ("real skill failure",))
+ adapter=NetlistAdapter(C(),Site(),library="tr",source_tb="tb",work_cell="work",exporter=lambda *a:None,base_deck_factory=lambda **k:None)
+ with pytest.raises(RuntimeError,match="real skill failure"):
+  adapter._prepare_tb()
+
+
 def test_testbench_skill_uses_file_channel_and_return_sentinel(tmp_path):
  class C:
   def __init__(self): self.skills=[]
