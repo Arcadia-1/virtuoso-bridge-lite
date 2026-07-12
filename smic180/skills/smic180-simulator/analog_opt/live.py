@@ -39,13 +39,12 @@ def patch_smic180_corner(deck,corner,core_model_include=None):
   section=getattr(model,'section','')
   if not section: continue
   model_identity=str(getattr(model,'path','')).replace('\\','/').lower()
-  if target in ('fnsp','snfp'):
-   explicit_core=core_identity is not None and model_identity==core_identity
-   legacy_core=core_identity is None and re.search(r'core|mos|nch|pch',model_identity+' '+section,re.I)
-   if re.search(r'(^|_)tt($|_)',section,re.I) and (explicit_core or legacy_core): model.section=re.sub(r'(^|_)tt(?=$|_)',lambda m:m.group(1)+target,section,flags=re.I)
-  elif 'tt' in section.lower(): model.section=re.sub('tt',target,section,flags=re.I)
+  explicit_core=core_identity is not None and model_identity==core_identity
+  legacy_core=core_identity is None and re.search(r'core|mos|nch|pch',model_identity+' '+section,re.I)
+  if re.search(r'(^|_)tt($|_)',section,re.I) and (explicit_core or legacy_core):
+   model.section=re.sub(r'(^|_)tt(?=$|_)',lambda m:m.group(1)+target,section,flags=re.I)
  return patched
-
+ return patched
 class NetlistAdapter:
  def __init__(self,client,site,*,library,source_tb,work_cell,dut_instance="DUT",exporter,base_deck_factory,corner_patcher=None): self.client=client; self.site=site; self.library=library; self.source_tb=source_tb; self.work_cell=work_cell; self.dut_instance=dut_instance; self.exporter=exporter; self.base_deck_factory=base_deck_factory; self.corner_patcher=corner_patcher or (lambda d,c:d); self.analyses=[]; self.variables={}; self.biases={}; self.stimuli={}; self.conditions={}
  def configure(self,design_variables,biases,stimuli,conditions): self.variables=dict(design_variables); self.biases=dict(biases); self.stimuli=dict(stimuli); self.conditions=dict(conditions)
@@ -164,28 +163,20 @@ class NetlistAdapter:
    if corner: deck_cfg=self.corner_patcher(deck_cfg,str(corner).lower())
    lines=['','simulator lang=spectre']
    core_path=str(getattr(self.site,'pdk_core_spectre_include','') or '').replace('\\','/').lower()
-   seen_sections=set()
+   seen_includes=set()
+   configured_paths=[]
+   for model in getattr(deck_cfg,'model_includes',[]):
+    path=str(model.path); norm=path.replace('\\','/').lower()
+    if norm not in configured_paths: configured_paths.append(norm)
+   for norm in configured_paths:
+    pattern=r'(?mi)^\s*include\s+["\']%s["\'][^\n]*\n?'%re.escape(norm)
+    text=re.sub(pattern,'',text)
    for model in getattr(deck_cfg,'model_includes',[]):
     path=str(model.path); norm=path.replace('\\','/').lower(); section=str(getattr(model,'section','') or '')
-    is_core=(bool(core_path) and norm==core_path) or ('core' in Path(norm).name or 'mos' in Path(norm).name)
     key=(norm,section.lower())
-    if key in seen_sections: continue
-    seen_sections.add(key)
-    pattern=r'(?mi)^\s*include\s+["\']%s["\'][^\n]*\n?'%re.escape(path)
-    matches=list(re.finditer(pattern,text))
-    existing_section=None
-    for match in matches:
-     existing_section_match=re.search(r'(?i)\bsection\s*=\s*([A-Za-z0-9_]+)',match.group(0))
-     if existing_section_match: existing_section=existing_section_match.group(1).lower()
-    if matches and ((not is_core) or existing_section==section.lower()):
-     continue
-    if matches and is_core and section and existing_section and existing_section.split('_',1)[0] in ('tt','ff','ss','fnsp','snfp'):
-     match=matches[0]
-     replacement=re.sub(r'(?i)\bsection\s*=\s*[A-Za-z0-9_]+','section='+section,match.group(0),count=1)
-     text=text[:match.start()]+replacement+text[match.end():]
-     continue
-    if is_core or not core_path:
-     lines.append('include "%s"%s'%(model.path,' section='+section if section else ''))
+    if key in seen_includes: continue
+    seen_includes.add(key)
+    lines.append('include "%s"%s'%(path,' section='+section if section else ''))
    temp=self.conditions.get('temperature')
    if temp is not None: lines.append('simulatorOptions options temp=%s'%_num(temp))
    if self.variables: lines.append('parameters '+' '.join('%s=%s'%(k,_num(v)) for k,v in sorted(self.variables.items())))
