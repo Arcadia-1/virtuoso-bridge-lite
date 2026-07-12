@@ -71,7 +71,8 @@ class VirtuosoApplier:
         if errors:
             raise ApplyError("bridge rejected SKILL: %s" % (errors,))
         output = getattr(result, "output", "") or ""
-        if not any(line.strip().startswith(sentinel) for line in output.splitlines()):
+        normalized_lines = [line.strip().strip("\"") for line in output.splitlines()]
+        if not any(line.startswith(sentinel) for line in normalized_lines):
             raise ApplyError("bridge response missing sentinel %s" % sentinel)
         return output
 
@@ -116,12 +117,13 @@ class VirtuosoApplier:
                 f'unless(ddGetObj({lib} {dst} "symbol") error("destination symbol missing")) '
                 f'when(srcCv dbClose(srcCv)) when(srcSym dbClose(srcSym)) '
                 f'when(dstCv dbClose(dstCv)) when(dstSym dbClose(dstSym)) '
-                f'printf("{prefix}:CREATED\\n"))'
+                f'"{prefix}:CREATED")'
             )
             output = self._execute(skill, prefix + ":")
-            if any(line.strip() == prefix + ":EXISTS" for line in output.splitlines()):
+            normalized = [line.strip().strip("\"") for line in output.splitlines()]
+            if prefix + ":EXISTS" in normalized:
                 raise ApplyError("destination cell already exists")
-            if not any(line.strip() == prefix + ":CREATED" for line in output.splitlines()):
+            if prefix + ":CREATED" not in normalized:
                 raise ApplyError("bridge did not confirm destination publication")
             return
         nonce = uuid.uuid4().hex[:12]
