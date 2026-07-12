@@ -130,9 +130,10 @@ class VirtuosoApplier:
                 f'unless(dstCv error("schematic copy failed")) createdSchematic=t unless(dbSave(dstCv) error("schematic save failed")) '
                 f'dstSym=dbCopyCellView(srcSym {lib} {dst} "symbol") unless(dstSym error("symbol copy failed")) createdSymbol=t '
                 f'unless(dbSave(dstSym) error("symbol save failed")) unless(ddGetObj({lib} {dst} "schematic") error("destination schematic missing")) '
-                f'unless(ddGetObj({lib} {dst} "symbol") error("destination symbol missing")) "{prefix}:CREATED") '
+                f'unless(ddGetObj({lib} {dst} "symbol") error("destination symbol missing")) completed=t "{prefix}:CREATED") '
                 f'progn(when(dstCv dbClose(dstCv)) when(dstSym dbClose(dstSym)) when(srcCv dbClose(srcCv)) when(srcSym dbClose(srcSym)) '
-                f'when(completed==nil progn(when(createdSymbol unless(dbDeleteCellView({lib} {dst} "symbol") error("fresh publication cleanup failed"))) when(createdSchematic unless(dbDeleteCellView({lib} {dst} "schematic") error("fresh publication cleanup failed")))))'
+                f'when(completed==nil progn(when(createdSymbol unless(dbDeleteCellView({lib} {dst} "symbol") error("fresh publication cleanup failed"))) '
+                f'when(createdSchematic unless(dbDeleteCellView({lib} {dst} "schematic") error("fresh publication cleanup failed"))))))))'
             )
             output = self._execute(skill, prefix + ":")
             normalized = [line.strip().strip("\"") for line in output.splitlines()]

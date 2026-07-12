@@ -336,3 +336,12 @@ def test_apply_formats_meter_unit_as_unambiguous_millimeters():
     c=RecordingClient([Result("t"),Result("ANALOG_OPT_OK:apply")])
     VirtuosoApplier(c).apply_cdf("tr","work",[spec("W","M1","w","m")],{"W":1e-3})
     assert 'list("w" "1mm")' in c.calls[0][0]
+
+
+def test_fresh_copy_skill_is_balanced_and_marks_completion_before_sentinel():
+    c = RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])
+    VirtuosoApplier(c).create_work_cell("tr", "amp", "work", False)
+    skill = c.calls[0][0]
+    assert skill.count("(") == skill.count(")")
+    assert 'completed=t "ANALOG_OPT_OK:create:CREATED"' in skill
+    assert 'when(completed==nil progn(' in skill
