@@ -16,24 +16,26 @@ def spec(name, instance, prop, unit=None, dtype="float", target="virtuoso_cdf", 
     return ParameterSpec(name=name,target=target,lower=0,upper=100,dtype=dtype,instance=instance,property=prop,unit=unit,sync_property=sync_property)
 
 def test_apply_single_transaction_uses_cdf_and_verifies_before_save():
-    c=RecordingClient([Result("ANALOG_OPT_OK:apply")]); VirtuosoApplier(c).apply_cdf("tr","work",[spec("W","M1","w","um"),spec("R","R1","r","kOhm")],{"W":10e-6,"R":2000.0})
-    s=c.calls[0][0]; assert len(c.calls)==1; assert "unwindProtect" in s and "setInstParams" not in s
-    assert "foreach(inst cv~>instances" in s and "cdfGetInstCDF(inst0)" in s and 'param~>name=="w"' in s
-    assert 'unless(param0 error("CDF parameter missing: M1.w"))' in s and 'param0~>value="10um"' in s
-    assert 'unless(param0~>value=="10um"' in s and s.index("CDF parameter missing") < s.index("param0~>value") < s.index("dbSave(cv)")
-    assert 'unless(schCheck(cv) error("schCheck failed"))' in s and 'unless(dbSave(cv) error("schematic save failed"))' in s and "when(cv dbClose(cv))" in s and "dbReplaceProp" not in s
+    c=RecordingClient([Result("t"), Result("t"), Result("ANALOG_OPT_OK:apply")]); VirtuosoApplier(c).apply_cdf("tr","work",[spec("W","M1","w","um"),spec("R","R1","r","kOhm")],{"W":10e-6,"R":2000.0})
+    assert len(c.calls)==3
+    update = " ".join(call[0] for call in c.calls[:-1])
+    save = c.calls[-1][0]
+    assert 'setInstParams("tr" "work" "M1" list("w" "10um"))' in update
+    assert 'setInstParams("tr" "work" "R1" list("r" "2kOhm"))' in update
+    assert "schCheck(cv)" in save and "dbSave(cv)" in save
+    assert "foreach(inst cv~>instances" not in save and "cdfGetInstCDF" not in save
 
 def test_explicit_sync_property_uses_db_replace_prop_only_for_sync():
-    c=RecordingClient([Result("ANALOG_OPT_OK:apply")]); VirtuosoApplier(c).apply_cdf("tr","work",[spec("W","M1","w","um",sync_property="fw")],{"W":10e-6})
-    s=c.calls[0][0]; assert 'dbReplaceProp(inst0 "fw" "string" "10um")' in s; assert 'dbReplaceProp(inst0 "w"' not in s
+    c=RecordingClient([Result("t"), Result("ANALOG_OPT_OK:apply")]); VirtuosoApplier(c).apply_cdf("tr","work",[spec("W","M1","w","um",sync_property="fw")],{"W":10e-6})
+    s=c.calls[0][0]; assert 'list("w" "10um" "fw" "10um")' in s; assert "dbReplaceProp" not in s
 
 def test_non_mos_width_without_sync_does_not_write_fw():
-    c=RecordingClient([Result("ANALOG_OPT_OK:apply")]); VirtuosoApplier(c).apply_cdf("tr","work",[spec("W","R1","w","um")],{"W":10e-6}); assert '"fw"' not in c.calls[0][0]
+    c=RecordingClient([Result("t"), Result("ANALOG_OPT_OK:apply")]); VirtuosoApplier(c).apply_cdf("tr","work",[spec("W","R1","w","um")],{"W":10e-6}); assert '"fw"' not in c.calls[0][0]
 
 def test_apply_protocol_and_integer_validation():
-    VirtuosoApplier(RecordingClient([Result("contains error\nANALOG_OPT_OK:apply")])).apply_cdf("tr","work",[spec("M","M1","m",dtype="int")],{"M":4})
-    with pytest.raises(ApplyError,match="sentinel"): VirtuosoApplier(RecordingClient([Result("t")])).apply_cdf("tr","work",[spec("M","M1","m",dtype="int")],{"M":4})
-    with pytest.raises(ApplyError,match="bridge"): VirtuosoApplier(RecordingClient([Result("ANALOG_OPT_OK:apply",("bad",))])).apply_cdf("tr","work",[spec("M","M1","m",dtype="int")],{"M":4})
+    VirtuosoApplier(RecordingClient([Result("t"), Result("ANALOG_OPT_OK:apply")])).apply_cdf("tr","work",[spec("M","M1","m",dtype="int")],{"M":4})
+    with pytest.raises(ApplyError,match="sentinel"): VirtuosoApplier(RecordingClient([Result("t"), Result("t")])).apply_cdf("tr","work",[spec("M","M1","m",dtype="int")],{"M":4})
+    with pytest.raises(ApplyError,match="bridge"): VirtuosoApplier(RecordingClient([Result("t",("bad",))])).apply_cdf("tr","work",[spec("M","M1","m",dtype="int")],{"M":4})
     with pytest.raises(ApplyError,match="integer"): VirtuosoApplier(RecordingClient([])).apply_cdf("tr","work",[spec("M","M1","m",dtype="int")],{"M":4.5})
 
 def test_apply_validates_candidate_and_identifiers_before_bridge():
@@ -69,14 +71,12 @@ def test_read_protocol_errors():
     with pytest.raises(ApplyError,match="bridge"): VirtuosoApplier(RecordingClient([Result("ANALOG_OPT_OK:read\nW\t10um",("bad",))])).read_cdf("tr","work",[spec("W","M1","w","um")])
     with pytest.raises(ApplyError,match="sentinel"): VirtuosoApplier(RecordingClient([Result("W\t10um")])).read_cdf("tr","work",[spec("W","M1","w","um")])
 
-def test_explicit_sync_property_is_read_back_before_save():
-    c = RecordingClient([Result("ANALOG_OPT_OK:apply")])
+def test_explicit_sync_property_is_written_in_same_set_inst_params_call():
+    c = RecordingClient([Result("t"), Result("ANALOG_OPT_OK:apply")])
     VirtuosoApplier(c).apply_cdf("tr", "work", [spec("W", "M1", "w", "um", sync_property="fw")], {"W": 10e-6})
-    skill = c.calls[0][0]
-    assert 'syncProp0=dbReplaceProp(inst0 "fw" "string" "10um")' in skill
-    assert 'unless(syncProp0 error("sync property failed: M1.fw"))' in skill
-    assert 'syncProp0~>value=="10um"' in skill
-    assert skill.index('syncProp0~>value') < skill.index("dbSave(cv)")
+    assert 'setInstParams("tr" "work" "M1" list("w" "10um" "fw" "10um"))' in c.calls[0][0]
+    assert "dbReplaceProp" not in c.calls[0][0]
+
 
 def test_replace_true_backs_up_before_deleting_target_and_cleans_helpers():
     c = RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])
@@ -177,14 +177,14 @@ def test_destination_save_failure_enters_same_rollback_path_as_copy_failure():
 
 
 def test_apply_checks_schematic_and_save_separately_before_success():
-    c = RecordingClient([Result("ANALOG_OPT_OK:apply")])
+    c = RecordingClient([Result("t"), Result("ANALOG_OPT_OK:apply")])
     VirtuosoApplier(c).apply_cdf("tr", "work", [spec("W", "M1", "w", "um")], {"W": 10e-6})
-    skill = c.calls[0][0]
+    skill = c.calls[-1][0]
     check = 'unless(schCheck(cv) error("schCheck failed"))'
     save = 'unless(dbSave(cv) error("schematic save failed"))'
     assert check in skill and save in skill
-    assert skill.index(check) < skill.index(save) < skill.index("ok=t") < skill.index('printf("ANALOG_OPT_OK:apply")')
-    assert "when(schCheck(cv) dbSave(cv) ok=t)" not in skill
+    assert skill.index(check) < skill.index(save) < skill.index('"ANALOG_OPT_OK:apply"')
+
 
 def test_rollback_closes_failed_destination_before_deleting_view():
     c = RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])

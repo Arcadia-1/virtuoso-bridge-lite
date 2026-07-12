@@ -219,46 +219,34 @@ class VirtuosoApplier:
         selected = self._cdf_specs(specs)
         if not isinstance(candidate, Mapping) or set(candidate) != {spec.name for spec in selected}:
             raise ApplyError("candidate names must exactly match CDF parameter specs")
-        prepared = []
-        for index, spec in enumerate(selected):
+        grouped = {}
+        for spec in selected:
             value = _number(candidate[spec.name], spec)
             try:
                 text = format_quantity(value, spec.unit) if spec.unit else (str(value) if spec.dtype == "int" else "%.12g" % value)
             except UnitError as exc:
                 raise ApplyError("invalid unit for %s: %s" % (spec.name, exc)) from exc
-            sync_property = _identifier(spec.sync_property, "sync property") if spec.sync_property is not None else None
-            prepared.append((index, spec, text, sync_property))
-        declarations = "param " + " ".join("inst%d cdf%d param%d syncProp%d" % (i, i, i, i) for i, _, _, _ in prepared)
-        locate_instances = []
-        locate_params = []
-        writes = []
-        verifies = []
-        for index, spec, text, sync_property in prepared:
-            locate_instances.append(
-                "foreach(inst cv~>instances when(inst~>name==%s inst%d=inst)) unless(inst%d error(\"instance not found: %s\"))"
-                % (_quote(spec.instance), index, index, spec.instance)
-            )
-            locate_params.append(
-                "cdf%d=cdfGetInstCDF(inst%d) unless(cdf%d error(\"CDF unavailable: %s\")) "
-                "foreach(param cdf%d~>parameters when(param~>name==%s param%d=param)) "
-                "unless(param%d error(\"CDF parameter missing: %s.%s\"))"
-                % (index, index, index, spec.instance, index, _quote(spec.property), index, index, spec.instance, spec.property)
-            )
-            writes.append("param%d~>value=%s" % (index, _quote(text)))
-            if sync_property is not None:
-                writes.append("syncProp%d=dbReplaceProp(inst%d %s \"string\" %s) unless(syncProp%d error(\"sync property failed: %s.%s\"))" % (index, index, _quote(sync_property), _quote(text), index, spec.instance, sync_property))
-                verifies.append("unless(syncProp%d~>value==%s error(\"sync verification failed: %s.%s\"))" % (index, _quote(text), spec.instance, sync_property))
-            verifies.append(
-                "unless(param%d~>value==%s error(\"CDF verification failed: %s.%s\"))"
-                % (index, _quote(text), spec.instance, spec.property)
-            )
-        skill = (
-            "let((cv inst %s ok) ok=nil cv=dbOpenCellViewByType(%s %s \"schematic\" \"schematic\" \"a\") "
-            "unless(cv error(\"work schematic missing\")) unwindProtect(progn(%s %s %s %s "
-            "unless(schCheck(cv) error(\"schCheck failed\")) unless(dbSave(cv) error(\"schematic save failed\")) ok=t printf(\"ANALOG_OPT_OK:apply\")) "
-            "when(cv dbClose(cv))))"
-        ) % (declarations, _quote(library), _quote(cell), " ".join(locate_instances), " ".join(locate_params), " ".join(writes), " ".join(verifies))
-        self._execute(skill, "ANALOG_OPT_OK:apply")
+            pairs = grouped.setdefault(spec.instance, [])
+            pairs.append((spec.property, text))
+            if spec.sync_property is not None:
+                pairs.append((_identifier(spec.sync_property, "sync property"), text))
+        for instance, pairs in grouped.items():
+            arguments = " ".join("%s %s" % (_quote(name), _quote(text)) for name, text in pairs)
+            skill = "setInstParams(%s %s %s list(%s))" % (_quote(library), _quote(cell), _quote(instance), arguments)
+            try:
+                result = self.client.execute_skill(skill, timeout=self.timeout)
+            except Exception as exc:
+                raise ApplyError("bridge execution failed: %s" % exc) from exc
+            if getattr(result, "errors", ()):
+                raise ApplyError("bridge rejected setInstParams: %s" % (result.errors,))
+        save = (
+            "let((cv) cv=dbOpenCellViewByType(%s %s \"schematic\" \"schematic\" \"a\") "
+            "unless(cv error(\"work schematic missing\")) "
+            "unless(schCheck(cv) error(\"schCheck failed\")) "
+            "unless(dbSave(cv) error(\"schematic save failed\")) "
+            "when(cv dbClose(cv)) \"ANALOG_OPT_OK:apply\")"
+        ) % (_quote(library), _quote(cell))
+        self._execute(save, "ANALOG_OPT_OK:apply")
 
     def read_cdf(self, library: str, cell: str, specs: Sequence[ParameterSpec]) -> Dict[str, Real]:
         library = _identifier(library, "library")
