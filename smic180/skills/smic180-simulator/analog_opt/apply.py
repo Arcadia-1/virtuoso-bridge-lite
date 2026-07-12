@@ -106,7 +106,7 @@ class VirtuosoApplier:
         recovery = "ANALOG_OPT_RECOVERY_REQUIRED:%s" % backup
         skill = (
             f'let((srcCv tmpCv oldCv backupCv dstCv restoreCv srcSym oldSym backupSym dstSym restoreSym status tempCreated backupSafe cleanupBackup publishOk symbolPublishOk symbolTxn symbolDeleted) '
-            f'status="FAILED" tempCreated=nil backupSafe=nil cleanupBackup=nil publishOk=nil symbolPublishOk=nil symbolDeleted=t '
+            f'progn(status="FAILED" tempCreated=nil backupSafe=nil cleanupBackup=nil publishOk=nil symbolPublishOk=nil symbolDeleted=t '
             f'unwindProtect(progn('
             f'when(ddGetObj({lib} {tmp}) error("temporary cell already exists")) '
             f'when(ddGetObj({lib} {bak}) error("backup cell already exists")) '
@@ -167,7 +167,7 @@ class VirtuosoApplier:
             f'when(srcCv dbClose(srcCv)) when(tmpCv dbClose(tmpCv)) when(oldCv dbClose(oldCv)) when(srcSym dbClose(srcSym)) when(oldSym dbClose(oldSym)) when(dstSym dbClose(dstSym)) '
             f'when(backupCv dbClose(backupCv)) when(backupSym dbClose(backupSym)) when(dstCv dbClose(dstCv)) when(restoreCv dbClose(restoreCv)) when(restoreSym dbClose(restoreSym)) '
             f'when(tempCreated unless(dbDeleteCellView({lib} {tmp} "schematic") error("temporary cleanup failed"))) '
-            f'when(backupSafe&&cleanupBackup progn(unless(dbDeleteCellView({lib} {bak} "schematic") error("backup cleanup failed")) unless(dbDeleteCellView({lib} {bak} "symbol") error("symbol backup cleanup failed"))))))'
+            f'when(backupSafe&&cleanupBackup progn(unless(dbDeleteCellView({lib} {bak} "schematic") error("backup cleanup failed")) unless(dbDeleteCellView({lib} {bak} "symbol") error("symbol backup cleanup failed")))))))'
         )
         output = self._execute(skill, prefix + ":")
         if any(line.strip() == prefix + ":EXISTS" for line in output.splitlines()):
