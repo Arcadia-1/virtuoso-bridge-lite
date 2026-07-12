@@ -244,7 +244,8 @@ class VirtuosoApplier:
         for spec in selected:
             value = _number(candidate[spec.name], spec)
             try:
-                text = format_quantity(value, spec.unit) if spec.unit else (str(value) if spec.dtype == "int" else "%.12g" % value)
+                cdf_unit = "mm" if spec.unit == "m" else spec.unit
+                text = format_quantity(value, cdf_unit) if cdf_unit else (str(value) if spec.dtype == "int" else "%.12g" % value)
             except UnitError as exc:
                 raise ApplyError("invalid unit for %s: %s" % (spec.name, exc)) from exc
             pairs = grouped.setdefault(spec.instance, [])

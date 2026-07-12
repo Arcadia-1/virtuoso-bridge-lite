@@ -327,3 +327,9 @@ def test_read_treats_bare_m_as_milli_prefix_for_length():
     output='"ANALOG_OPT_OK:read\\nW\\t1m"'
     values=VirtuosoApplier(RecordingClient([Result(output)])).read_cdf("tr","work",[spec("W","M1","w","m")])
     assert values["W"]==pytest.approx(1e-3)
+
+
+def test_apply_formats_meter_unit_as_unambiguous_millimeters():
+    c=RecordingClient([Result("t"),Result("ANALOG_OPT_OK:apply")])
+    VirtuosoApplier(c).apply_cdf("tr","work",[spec("W","M1","w","m")],{"W":1e-3})
+    assert 'list("w" "1mm")' in c.calls[0][0]
