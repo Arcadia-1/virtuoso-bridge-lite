@@ -256,6 +256,7 @@ Load on demand — each contains detailed API docs and edge-case guidance:
 - `04_list_library_cells.py` — list libraries and cells
 - `05_multiline_skill.py` — multi-line SKILL with comments, loops, procedures
 - `06_screenshot.py` — capture layout/schematic screenshots
+- `08_library_management.py` — inspect a library, technology binding, categories, and members
 
 ### `examples/01_virtuoso/schematic/`
 - `01a_create_rc_stepwise.py` — create RC schematic via operations
