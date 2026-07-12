@@ -7,7 +7,7 @@ from analog_opt.parameters import ParameterSpec
 class Result:
  def __init__(self,output='OK',errors=()): self.output=output; self.errors=errors
 def tb_result(skill):
- if 'ANALOG_OPT_TB_SNAPSHOT' in skill: return Result('"ANALOG_OPT_TB_SNAPSHOT|((2.5 0.0) \"R0\" 1.0)|nil|nil"')
+ if 'ANALOG_OPT_TB_SNAPSHOT' in skill: return Result(r'"ANALOG_OPT_TB_SNAPSHOT|((2.5 0.0) \"R0\" 1.0)|nil|nil"')
  for marker in ('ANALOG_OPT_TB_COPY_OK','ANALOG_OPT_TB_DELETE_DUT_OK','ANALOG_OPT_TB_CREATE_DUT_OK','ANALOG_OPT_TB_RESTORE_PROPS_OK','ANALOG_OPT_TB_RESTORE_CDF_OK','ANALOG_OPT_TB_DELETE_OK','ANALOG_OPT_TB_OK'):
   if marker in skill: return Result('"'+marker+'"')
  return Result('OK')
@@ -17,6 +17,14 @@ class Client:
   self.skills.append(skill)
   return tb_result(skill)
 class Site: pass
+
+def test_tb_step_decodes_quoted_snapshot_output(tmp_path):
+ class C:
+  def execute_skill(self,skill,timeout=30): return Result(r'"ANALOG_OPT_TB_SNAPSHOT|((2.5 0.0) \"R0\" 1.0)|nil|nil"')
+ adapter=NetlistAdapter(C(),Site(),library='tr',source_tb='tb',work_cell='work',exporter=lambda *a:None,base_deck_factory=lambda **k:None)
+ output=adapter._tb_step('snapshot','ANALOG_OPT_TB_SNAPSHOT|')
+ assert output=='ANALOG_OPT_TB_SNAPSHOT|((2.5 0.0) "R0" 1.0)|nil|nil'
+
 
 def test_testbench_step_failure_cleans_copied_cell(tmp_path):
  class C:

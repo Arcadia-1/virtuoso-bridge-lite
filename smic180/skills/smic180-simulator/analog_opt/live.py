@@ -52,7 +52,9 @@ class NetlistAdapter:
  def _tb_step(self,skill,sentinel):
   result=self.client.execute_skill("progn(\n"+skill+"\n)",timeout=30)
   errors=getattr(result,'errors',None) or ()
-  output=(getattr(result,'output','') or '').strip().strip('"')
+  raw=(getattr(result,'output','') or '').strip()
+  try: output=json.loads(raw) if raw.startswith('\"') and raw.endswith('\"') else raw
+  except json.JSONDecodeError: output=raw.strip('\"')
   if errors or not output.startswith(sentinel): raise RuntimeError('%s failed: errors=%r output=%r'%(sentinel,errors,getattr(result,'output','') or ''))
   return output
  def _tb_literal(self,value,label):
