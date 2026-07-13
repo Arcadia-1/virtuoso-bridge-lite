@@ -1,4 +1,4 @@
-﻿import json
+import json
 from pathlib import Path
 import sys
 
@@ -15,27 +15,35 @@ from test_circuit_ir import valid_ir_data
 
 def evidence():
     return {
-        "input_pair_width": {"instance": "M1", "property": "w", "unit": "um", "linked_instances": ["M1", "M2"]},
+        "input_pair_width": {
+            "instance": "M1",
+            "property": "w",
+            "unit": "um",
+            "linked_instances": ["M2"],
+            "sync_property": "fw",
+            "sync_factor": 1.0,
+            "lower": 2e-6,
+            "upper": 40e-6,
+        },
     }
-
 
 def test_optimizer_adapter_requires_equivalence_and_cdf_evidence(tmp_path):
     ir = circuit_ir_from_data(valid_ir_data())
     with pytest.raises(AdapterError, match="equivalence"):
-        prepare_optimizer_v2_handoff(ir, tmp_path, library="lib", source_cell="source", work_cell="work", result_cell="result", testbench_cell="tb", equivalence_confirmed=False, cdf_evidence=evidence())
+        prepare_optimizer_v2_handoff(ir, tmp_path, library="lib", source_cell="source", work_cell="work", result_cell="result", testbench_cell="tb", equivalence_confirmed=False, cdf_evidence=evidence(), model_includes=(("/pdk/models.scs", "tt"), ("/pdk/models.scs", "mim_tt")))
     with pytest.raises(AdapterError, match="CDF evidence"):
         prepare_optimizer_v2_handoff(ir, tmp_path, library="lib", source_cell="source", work_cell="work", result_cell="result", testbench_cell="tb", equivalence_confirmed=True, cdf_evidence={})
 
 
 def test_optimizer_adapter_requires_distinct_cells(tmp_path):
     with pytest.raises(AdapterError, match="distinct"):
-        prepare_optimizer_v2_handoff(circuit_ir_from_data(valid_ir_data()), tmp_path, library="lib", source_cell="source", work_cell="source", result_cell="result", testbench_cell="tb", equivalence_confirmed=True, cdf_evidence=evidence())
+        prepare_optimizer_v2_handoff(circuit_ir_from_data(valid_ir_data()), tmp_path, library="lib", source_cell="source", work_cell="source", result_cell="result", testbench_cell="tb", equivalence_confirmed=True, cdf_evidence=evidence(), model_includes=(("/pdk/models.scs", "tt"), ("/pdk/models.scs", "mim_tt")))
 
 
 def test_optimizer_adapter_emits_schema_valid_v2_config_and_baseline(tmp_path):
     data = valid_ir_data()
     data["measurements"] = [{"id": "gain", "analysis": "ac", "kind": "hard", "operator": ">=", "target": 60.0, "status": "requested"}]
-    outputs = prepare_optimizer_v2_handoff(circuit_ir_from_data(data), tmp_path, library="lib", source_cell="source", work_cell="work", result_cell="result", testbench_cell="tb", equivalence_confirmed=True, cdf_evidence=evidence())
+    outputs = prepare_optimizer_v2_handoff(circuit_ir_from_data(data), tmp_path, library="lib", source_cell="source", work_cell="work", result_cell="result", testbench_cell="tb", equivalence_confirmed=True, cdf_evidence=evidence(), model_includes=(("/pdk/models.scs", "tt"), ("/pdk/models.scs", "mim_tt")))
     config = load_config(outputs.config)
     assert config.version == 2
     assert config.design.cell == "source"
@@ -43,10 +51,19 @@ def test_optimizer_adapter_emits_schema_valid_v2_config_and_baseline(tmp_path):
     assert config.design.result_cell == "result"
     assert config.parameters[0]["target"] == "virtuoso_cdf"
     assert config.parameters[0]["instance"] == "M1"
+    assert config.parameters[0]["sync_property"] == "fw"
+    assert config.parameters[0]["lower"] == pytest.approx(2e-6)
+    assert config.parameters[0]["linked_instances"] == ["M2"]
     baseline = json.loads(outputs.baseline.read_text(encoding="utf-8"))
     assert baseline["input_pair_width"] == pytest.approx(10e-6)
     raw = json.loads(outputs.config.read_text(encoding="utf-8"))
     assert raw["pvt"]["voltage_stimulus"] == "VDD"
     assert raw["stimuli"]["VDD"]["optimizable"] is False
-    assert raw["specs"]
+    assert raw["specs"][0]["metric"] == "ac.ac_main.gain_dc_db"
+    assert raw["search"] == {"method": "random", "evaluations": 20, "seed": 7}
+    runtime_sim = json.loads((tmp_path / "run" / "sim_config.json").read_text(encoding="utf-8"))
+    assert runtime_sim["model_includes"] == [
+        {"path": "/pdk/models.scs", "section": "tt"},
+        {"path": "/pdk/models.scs", "section": "mim_tt"},
+    ]
 

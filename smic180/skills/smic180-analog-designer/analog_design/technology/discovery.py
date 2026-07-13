@@ -19,6 +19,7 @@ class DiscoveryRequest:
     pdk_roots: tuple[str, ...]
     cds_lib_candidates: tuple[str, ...]
     device_candidates: Mapping[str, tuple[tuple[str, str, str], ...]]
+    model_sections: Mapping[str, tuple[str, ...]]
 
 
 class DiscoveryClient(Protocol):
@@ -26,21 +27,24 @@ class DiscoveryClient(Protocol):
     def probe_device(self, master_ref: str, candidates: tuple[tuple[str, str, str], ...]) -> dict[str, Any] | None: ...
 
 
-_DEVICE_CONTRACTS: dict[str, tuple[str, dict[str, str], dict[str, str]]] = {
+_DEVICE_CONTRACTS: dict[str, tuple[str, dict[str, str], dict[str, str], dict[str, str]]] = {
     "smic180.core_nmos": (
         "mos.nmos",
         {"width": "w", "finger_width": "fw", "length": "l", "fingers": "fingers", "multiplier": "m"},
         {"width": "length", "finger_width": "length", "length": "length", "fingers": "integer", "multiplier": "integer"},
+        {"D": "D", "G": "G", "S": "S", "B": "B"},
     ),
     "smic180.core_pmos": (
         "mos.pmos",
         {"width": "w", "finger_width": "fw", "length": "l", "fingers": "fingers", "multiplier": "m"},
         {"width": "length", "finger_width": "length", "length": "length", "fingers": "integer", "multiplier": "integer"},
+        {"D": "D", "G": "G", "S": "S", "B": "B"},
     ),
     "smic180.miller_capacitor": (
         "passive.capacitor",
         {"width": "w", "length": "l", "multiplier": "m", "capacitance": "c"},
         {"width": "length", "length": "length", "multiplier": "integer", "capacitance": "capacitance"},
+        {"P": "PLUS", "N": "MINUS"},
     ),
 }
 
@@ -145,7 +149,7 @@ class VirtuosoDiscoveryClient:
         if len(matches) != 1:
             return None
         record = matches[0]
-        device_class, parameter_map, parameter_dimensions = contract
+        device_class, parameter_map, parameter_dimensions, terminal_map = contract
         if not set(parameter_map.values()).issubset(record["cdf"]):
             return None
         if roundtrip.get("netlist_model") != record["model"]:
@@ -161,6 +165,7 @@ class VirtuosoDiscoveryClient:
             "terminals": record["terminals"],
             "parameter_map": parameter_map,
             "parameter_dimensions": parameter_dimensions,
+            "terminal_map": terminal_map,
             "evidence": {
                 "master": str(evidence_path),
                 "terminals": str(evidence_path),
@@ -180,6 +185,7 @@ def discover_technology(client: DiscoveryClient, request: DiscoveryRequest, *, p
             "pdk_roots": list(request.pdk_roots),
             "cds_lib_candidates": list(request.cds_lib_candidates),
             "device_candidates": {key: [list(item) for item in value] for key, value in request.device_candidates.items()},
+            "model_sections": {corner: list(sections) for corner, sections in request.model_sections.items()},
         }
     roots = client.existing_paths(request.pdk_roots)
     if not roots:
@@ -210,6 +216,7 @@ def discover_technology(client: DiscoveryClient, request: DiscoveryRequest, *, p
                 parameter_map=dict(probe["parameter_map"]),
                 parameter_dimensions=dict(probe["parameter_dimensions"]),
                 evidence=dict(probe["evidence"]),
+                terminal_map=dict(probe.get("terminal_map", {})),
                 netlist_model=probe.get("netlist_model"),
                 netlist_terminals=tuple(probe.get("netlist_terminals", ())),
                 netlist_parameter_map=dict(probe.get("netlist_parameter_map", {})),
@@ -220,6 +227,12 @@ def discover_technology(client: DiscoveryClient, request: DiscoveryRequest, *, p
             raise DiscoveryError(f"invalid live evidence for {master_ref}: {exc}") from exc
         adapters[master_ref] = adapter
     try:
-        return TechnologyProfile("smic180", "confirmed", adapters, {"pdk_root": roots[0], "cds_lib": matching_libs[0]})
+        return TechnologyProfile(
+            "smic180",
+            "confirmed",
+            adapters,
+            {"pdk_root": roots[0], "cds_lib": matching_libs[0]},
+            request.model_sections,
+        )
     except TechnologyError as exc:
         raise DiscoveryError(str(exc)) from exc

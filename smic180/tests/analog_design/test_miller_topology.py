@@ -1,4 +1,4 @@
-﻿import pytest
+import pytest
 
 from analog_design.topology.base import TopologyError
 from analog_design.topology.registry import default_registry
@@ -50,3 +50,15 @@ def test_every_required_port_is_used_by_the_topology():
     plan = default_registry().create("two_stage_miller", {"input_pair": "nmos"})
     connected = {net for instance in plan.instances if instance.enabled for net in instance.terminals.values()}
     assert set(plan.ports).issubset(connected)
+
+
+def test_second_stage_bias_is_a_real_mos_not_an_ideal_current_source():
+    nmos_plan = default_registry().create("two_stage_miller", {"input_pair": "nmos"})
+    bias = nmos_plan.instance("M_SECOND_BIAS")
+    assert bias.device_class == "mos.nmos"
+    assert bias.terminals == {"D": "VOUT", "G": "IBIAS", "S": "VSS", "B": "VSS"}
+    assert all(item.device_class != "source.current" for item in nmos_plan.instances if item.enabled)
+
+    pmos_plan = default_registry().create("two_stage_miller", {"input_pair": "pmos"})
+    assert pmos_plan.instance("M_SECOND_BIAS").device_class == "mos.pmos"
+    assert pmos_plan.instance("M_SECOND_BIAS").terminals["S"] == "VDD"

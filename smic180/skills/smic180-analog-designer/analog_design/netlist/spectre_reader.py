@@ -1,4 +1,4 @@
-﻿"""Constrained Spectre circuit parser for equivalence checks."""
+"""Constrained Spectre circuit parser for equivalence checks."""
 
 from __future__ import annotations
 
@@ -38,22 +38,63 @@ class ParsedCircuit:
         object.__setattr__(self, "instances", MappingProxyType(dict(self.instances)))
 
 
-def _value(token: str) -> float | str:
-    match = _NUMBER.match(token)
+def _numeric_atom(token: str) -> float | None:
+    candidate = token.strip()
+    while candidate.startswith("(") and candidate.endswith(")"):
+        candidate = candidate[1:-1].strip()
+    match = _NUMBER.match(candidate)
     if not match:
-        return token
+        return None
     magnitude, prefix = match.groups()
     return float(magnitude) * (_PREFIX[prefix] if prefix else 1.0)
 
 
-def parse_spectre_circuit(text: str) -> ParsedCircuit:
-    name = None
-    ports: tuple[str, ...] = ()
-    instances: dict[str, ParsedInstance] = {}
-    inside = False
+def _value(token: str) -> float | str:
+    factors = token.split("*")
+    parsed = [_numeric_atom(factor) for factor in factors]
+    if all(value is not None for value in parsed):
+        result = 1.0
+        for value in parsed:
+            result *= float(value)
+        return result
+    return token
+
+
+def _logical_lines(text: str) -> tuple[str, ...]:
+    lines: list[str] = []
+    pending = ""
     for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("//") or line.startswith("simulator ") or line.startswith("include ") or line.startswith("global "):
+        stripped = raw.strip()
+        if pending:
+            stripped = f"{pending} {stripped}"
+        if stripped.endswith("\\"):
+            pending = stripped[:-1].rstrip()
+            continue
+        if stripped:
+            lines.append(stripped)
+        pending = ""
+    if pending:
+        raise NetlistParseError("unterminated line continuation")
+    return tuple(lines)
+
+
+def parse_spectre_circuit(
+    text: str,
+    *,
+    flat_name: str | None = None,
+    flat_ports: tuple[str, ...] = (),
+) -> ParsedCircuit:
+    logical_lines = _logical_lines(text)
+    has_subcircuit = any(line.startswith("subckt ") for line in logical_lines)
+    if not has_subcircuit and flat_name is None:
+        raise NetlistParseError("netlist contains no supported subcircuit")
+
+    name = flat_name if not has_subcircuit else None
+    ports = tuple(flat_ports) if not has_subcircuit else ()
+    instances: dict[str, ParsedInstance] = {}
+    inside = not has_subcircuit
+    for line in logical_lines:
+        if line.startswith("//") or line.startswith("simulator ") or line.startswith("include ") or line.startswith("global "):
             continue
         if line.startswith("subckt "):
             if inside:

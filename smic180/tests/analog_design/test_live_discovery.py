@@ -31,6 +31,7 @@ def request():
             "smic180.core_nmos": (("smic18", "nmos", "symbol"),),
             "smic180.core_pmos": (("smic18", "pmos", "symbol"),),
         },
+        model_sections={"tt": ("tt", "mim_tt")},
     )
 
 
@@ -73,6 +74,7 @@ def test_discovery_builds_confirmed_profile_from_complete_live_evidence():
     assert profile.state == "confirmed"
     assert profile.evidence["pdk_root"] == request().pdk_roots[0]
     assert profile.resolve("smic180.core_nmos").cdf_parameter("width") == "w"
+    assert profile.model_sections["tt"] == ("tt", "mim_tt")
 
 
 def test_plan_only_returns_queries_without_touching_client():

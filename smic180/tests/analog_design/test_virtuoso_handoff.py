@@ -1,14 +1,17 @@
-﻿import json
+import json
 
 import pytest
 
 from analog_design.technology.base import DeviceAdapter, TechnologyProfile
 from analog_design.technology.smic180 import create_offline_smic180_profile
-from analog_design.virtuoso.materialize import MaterializationError, materialize_schematic
+from analog_design.virtuoso.materialize import MaterializationError, _validate_readback, materialize_schematic
 from analog_design.virtuoso.plan import PlanError, build_schematic_plan
 from test_circuit_ir import valid_ir_data
 from analog_design.ir import circuit_ir_from_data
-
+from analog_design.builder import build_circuit_ir
+from analog_design.sizing.square_law import size_two_stage_miller
+from analog_design.topology.registry import default_registry
+from test_ir_builder import confirmed_profile as golden_confirmed_profile, load_spec
 
 def confirmed_profile():
     adapters = {}
@@ -107,3 +110,38 @@ def test_materialize_rejects_cdf_mismatch_and_failed_schcheck(tmp_path):
         materialize_schematic(FakeVirtuosoClient(readback={}), plan, tmp_path / "cdf")
     with pytest.raises(MaterializationError, match="schCheck"):
         materialize_schematic(FakeVirtuosoClient(schcheck=False), plan, tmp_path / "check")
+
+def test_golden_plan_maps_generic_terminals_and_uses_frozen_cdf_expectations(tmp_path):
+    spec = load_spec(tmp_path)
+    topology = default_registry().create("two_stage_miller", spec.interfaces)
+    profile = golden_confirmed_profile()
+    ir = build_circuit_ir(spec, topology, size_two_stage_miller(spec, topology), profile)
+
+    plan = build_schematic_plan(ir, profile, "analog_design", "golden_target", source_cell="golden_source")
+
+    planned = {item.id: item for item in plan.instances}
+    assert planned["C_MILLER"].terminals == {"PLUS": "VOUT", "MINUS": "N2"}
+    assert planned["C_MILLER"].cdf_values == ir.instance("C_MILLER").cdf_expectations
+    assert planned["M_IN_P"].cdf_values == ir.instance("M_IN_P").cdf_expectations
+    assert set(planned["M_IN_P"].cdf_values) == {"w", "fw", "l", "fingers", "m"}
+    assert planned["M_IN_P"].cdf_dimensions["fw"] == "length"
+    assert plan.ports["VOUT"] == "output"
+    assert set(plan.nets) >= {"VDD", "VSS", "VINP", "VINN", "VOUT", "IBIAS", "N1", "N2", "NTAIL"}
+
+def test_cdf_readback_accepts_only_pdk_display_resolution_normalization():
+    expected = {"M1": {"w": 1.59988514766e-6}}
+    _validate_readback(expected, {"M1": {"w": {"value": 1.6e-6, "raw": "1.6u", "resolution": 1e-7}}})
+    with pytest.raises(MaterializationError, match="CDF readback mismatch"):
+        _validate_readback(expected, {"M1": {"w": {"value": 1.8e-6, "raw": "1.8u", "resolution": 1e-7}}})
+
+def test_failed_materialization_clears_stale_confirmation_markers(tmp_path):
+    plan = build_schematic_plan(circuit_ir_from_data(valid_ir_data()), confirmed_profile(), "design_lib", "target", source_cell="source")
+    materialize_schematic(FakeVirtuosoClient(), plan, tmp_path)
+    assert (tmp_path / "cdf_roundtrip.confirmed.json").is_file()
+    assert (tmp_path / "schematic_checked.confirmed.json").is_file()
+
+    with pytest.raises(MaterializationError, match="CDF readback"):
+        materialize_schematic(FakeVirtuosoClient(readback={}), plan, tmp_path)
+
+    assert not (tmp_path / "cdf_roundtrip.confirmed.json").exists()
+    assert not (tmp_path / "schematic_checked.confirmed.json").exists()

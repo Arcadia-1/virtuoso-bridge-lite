@@ -1,4 +1,4 @@
-﻿"""Build version-1 Circuit IR from specification, topology, and sizing."""
+"""Build version-1 Circuit IR from specification, topology, and sizing."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from .ir import CircuitIr, circuit_ir_from_data
 from .sizing.base import SizingResult
 from .spec import DesignSpec
 from .technology.base import TechnologyProfile
+from .technology.smic180 import physicalize_smic180_instance
 from .topology.base import TopologyPlan
 
 
@@ -46,7 +47,7 @@ def _logical_parameters(role: str, sizing: SizingResult) -> dict[str, Any]:
     if role == "second_stage":
         return {"width": max(input_width * 2.0, 1e-6), "length": length, "fingers": 1, "multiplier": 1}
     if role == "second_stage_bias":
-        return {"dc": sizing.value("second_stage_current")}
+        return {"width": max(input_width, 1e-6), "length": length, "fingers": 1, "multiplier": 1}
     if role == "miller_compensation":
         return {"capacitance": sizing.value("miller_capacitance")}
     if role == "nulling_resistor":
@@ -59,7 +60,12 @@ def build_circuit_ir(spec: DesignSpec, topology: TopologyPlan, sizing: SizingRes
     instances: list[dict[str, Any]] = []
     for item in enabled:
         master_ref = _MASTER_REFS[item.device_class]
-        technology.resolve(master_ref)
+        adapter = technology.resolve(master_ref)
+        logical_parameters = _logical_parameters(item.role, sizing)
+        if technology.state == "confirmed":
+            physical_parameters, cdf_expectations = physicalize_smic180_instance(adapter, logical_parameters)
+        else:
+            physical_parameters, cdf_expectations = {}, {}
         groups = [name for name, members in topology.matching_groups.items() if item.id in members]
         optimization_refs: list[str] = []
         if item.role.startswith("input_pair"):
@@ -70,15 +76,17 @@ def build_circuit_ir(spec: DesignSpec, topology: TopologyPlan, sizing: SizingRes
             optimization_refs = ["tail_device_width", "channel_length", "tail_bias_voltage"]
         elif item.role == "second_stage":
             optimization_refs = ["second_stage_width", "channel_length"]
+        elif item.role == "second_stage_bias":
+            optimization_refs = ["second_stage_bias_width", "channel_length"]
         instances.append({
             "id": item.id,
             "role": item.role,
             "device_class": item.device_class,
             "master_ref": master_ref,
             "terminals": dict(item.terminals),
-            "logical_parameters": _logical_parameters(item.role, sizing),
-            "physical_parameters": {},
-            "cdf_expectations": {},
+            "logical_parameters": logical_parameters,
+            "physical_parameters": physical_parameters,
+            "cdf_expectations": cdf_expectations,
             "optimization_refs": optimization_refs,
             "matching_groups": groups,
             "rationale": [f"role from {topology.id} topology plan"],
@@ -90,7 +98,8 @@ def build_circuit_ir(spec: DesignSpec, topology: TopologyPlan, sizing: SizingRes
         _parameter("active_load_width", "length", width, max(width * 0.25, 1e-7), width * 4.0, ["M_LOAD_DIODE", "M_LOAD_OUT"]),
         _parameter("tail_device_width", "length", max(width * 0.5, 1e-6), 1e-7, max(width * 4.0, 4e-6), ["M_TAIL"]),
         _parameter("second_stage_width", "length", max(width * 2.0, 1e-6), 1e-7, max(width * 8.0, 8e-6), ["M_SECOND"]),
-        _parameter("channel_length", "length", length, max(length * 0.5, 1e-7), length * 4.0, ["M_IN_P", "M_IN_N", "M_LOAD_DIODE", "M_LOAD_OUT", "M_TAIL", "M_SECOND"]),
+        _parameter("second_stage_bias_width", "length", max(width, 1e-6), 1e-7, max(width * 4.0, 4e-6), ["M_SECOND_BIAS"]),
+        _parameter("channel_length", "length", length, max(length * 0.5, 1e-7), length * 4.0, ["M_IN_P", "M_IN_N", "M_LOAD_DIODE", "M_LOAD_OUT", "M_TAIL", "M_SECOND", "M_SECOND_BIAS"]),
         _parameter("tail_bias_voltage", "voltage", min(spec.vdd * 0.3, 0.9), 0.1, max(0.2, spec.vdd * 0.6), ["M_TAIL"], "bias"),
     ]
     port_kind = {"VDD": "power", "VSS": "ground", "VINP": "signal", "VINN": "signal", "VOUT": "signal", "IBIAS": "bias"}
@@ -119,7 +128,7 @@ def build_circuit_ir(spec: DesignSpec, topology: TopologyPlan, sizing: SizingRes
             {"id": metric.id, "analysis": metric.analysis, "kind": metric.kind, "operator": metric.operator, "target": metric.value, "status": metric.status}
             for metric in spec.metrics
         ],
-        "constraints": [],
+        "constraints": [{"id": "output_load", "kind": "capacitance", "net": "VOUT", "value": spec.output_capacitance}],
         "optimization": {"enabled": True, "parameters": [item["id"] for item in parameters]},
         "provenance": {"sizing_status": "estimate", "topology_basis": list(topology.selection_basis), "technology_state": technology.state},
     }

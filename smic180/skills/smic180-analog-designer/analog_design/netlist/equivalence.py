@@ -1,36 +1,58 @@
-﻿"""Semantic circuit and fresh metric equivalence gates."""
+"""Semantic circuit and fresh metric equivalence gates."""
 
 from __future__ import annotations
 
-import json
 import math
 from pathlib import Path
 from typing import Any, Mapping
 
 from ..artifacts import ArtifactStore
-from .spectre_reader import ParsedCircuit, parse_spectre_circuit
+from .spectre_reader import parse_spectre_circuit
 
 
 class EquivalenceError(ValueError):
     """Raised when equivalence evidence is incomplete or invalid."""
 
 
-def _normalized_parameters(model: str, values: Mapping[str, float | str], defaults: Mapping[str, Mapping[str, float]]) -> dict[str, float | str]:
+def _normalized_parameters(
+    model: str,
+    values: Mapping[str, float | str],
+    defaults: Mapping[str, Mapping[str, float]],
+    ignored: Mapping[str, set[str]],
+) -> dict[str, float | str]:
     result = dict(defaults.get(model, {}))
     result.update(values)
+    for name in ignored.get(model, set()):
+        result.pop(name, None)
     return result
 
 
-def _equal_parameter(left: float | str, right: float | str) -> bool:
+def _equal_parameter(left: float | str, right: float | str, limits: Mapping[str, float]) -> bool:
     if isinstance(left, (int, float)) and isinstance(right, (int, float)):
-        return math.isclose(float(left), float(right), rel_tol=1e-9, abs_tol=1e-15)
+        return math.isclose(
+            float(left),
+            float(right),
+            rel_tol=float(limits.get("rel", 1e-9)),
+            abs_tol=float(limits.get("abs", 1e-15)),
+        )
     return left == right
 
 
-def compare_netlists(left_text: str, right_text: str, *, parameter_defaults: Mapping[str, Mapping[str, float]] | None = None) -> dict[str, Any]:
+def compare_netlists(
+    left_text: str,
+    right_text: str,
+    *,
+    parameter_defaults: Mapping[str, Mapping[str, float]] | None = None,
+    ignored_parameters: Mapping[str, set[str]] | None = None,
+    parameter_tolerances: Mapping[str, Mapping[str, float]] | None = None,
+    right_flat_name: str | None = None,
+    right_flat_ports: tuple[str, ...] = (),
+) -> dict[str, Any]:
     defaults = parameter_defaults or {}
+    ignored = ignored_parameters or {}
+    tolerances = parameter_tolerances or {}
     left = parse_spectre_circuit(left_text)
-    right = parse_spectre_circuit(right_text)
+    right = parse_spectre_circuit(right_text, flat_name=right_flat_name, flat_ports=right_flat_ports)
     differences: list[str] = []
     if left.name != right.name:
         differences.append(f"subcircuit name differs: {left.name} != {right.name}")
@@ -45,15 +67,37 @@ def compare_netlists(left_text: str, right_text: str, *, parameter_defaults: Map
             differences.append(f"{name} model differs: {first.model} != {second.model}")
         if first.nodes != second.nodes:
             differences.append(f"{name} nodes differ: {first.nodes} != {second.nodes}")
-        first_params = _normalized_parameters(first.model, first.parameters, defaults)
-        second_params = _normalized_parameters(second.model, second.parameters, defaults)
+        first_params = _normalized_parameters(first.model, first.parameters, defaults, ignored)
+        second_params = _normalized_parameters(second.model, second.parameters, defaults, ignored)
         if set(first_params) != set(second_params):
             differences.append(f"{name} parameter sets differ: {sorted(first_params)} != {sorted(second_params)}")
         for parameter in sorted(set(first_params) & set(second_params)):
-            if not _equal_parameter(first_params[parameter], second_params[parameter]):
+            limits = tolerances.get(f"{name}.{parameter}", tolerances.get(parameter, {}))
+            if not _equal_parameter(first_params[parameter], second_params[parameter], limits):
                 differences.append(f"{name}.{parameter} differs: {first_params[parameter]} != {second_params[parameter]}")
     return {"equivalent": not differences, "differences": differences}
 
+
+def build_virtuoso_replay_deck(direct_deck: str, exported_body: str) -> str:
+    """Replace only the direct DUT body with a fresh flat Virtuoso export."""
+
+    direct_lines = direct_deck.splitlines()
+    start = next((index for index, line in enumerate(direct_lines) if line.strip().startswith("subckt ")), None)
+    if start is None:
+        raise EquivalenceError("direct deck contains no DUT subcircuit")
+    end = next((index for index in range(start + 1, len(direct_lines)) if direct_lines[index].strip().startswith("ends")), None)
+    if end is None:
+        raise EquivalenceError("direct DUT subcircuit is not terminated")
+    exported_lines = exported_body.strip().splitlines()
+    if any(line.strip().startswith(("subckt ", "ends")) for line in exported_lines):
+        raise EquivalenceError("Virtuoso replay requires a flat exported DUT body")
+    replay_lines = [
+        *direct_lines[: start + 1],
+        *exported_lines,
+        direct_lines[end],
+        *direct_lines[end + 1 :],
+    ]
+    return "\n".join(replay_lines) + "\n"
 
 def compare_metrics(left: Mapping[str, object], right: Mapping[str, object], tolerances: Mapping[str, Mapping[str, float]], *, fresh: bool = True) -> dict[str, Any]:
     if not fresh:

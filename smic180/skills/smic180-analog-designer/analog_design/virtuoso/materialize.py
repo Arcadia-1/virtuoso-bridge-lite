@@ -1,4 +1,4 @@
-﻿"""Guarded execution of an already verified schematic plan."""
+"""Guarded execution of an already verified schematic plan."""
 
 from __future__ import annotations
 
@@ -32,14 +32,20 @@ def _plain_plan(plan: SchematicPlan) -> dict[str, Any]:
         "target_cell": plan.target_cell,
         "source_cell": plan.source_cell,
         "view": plan.view,
-        "instances": [{"id": item.id, "library": item.library, "cell": item.cell, "view": item.view, "terminals": dict(item.terminals), "cdf_values": dict(item.cdf_values)} for item in plan.instances],
+        "ports": dict(plan.ports),
+        "nets": list(plan.nets),
+        "instances": [{"id": item.id, "library": item.library, "cell": item.cell, "view": item.view, "terminals": dict(item.terminals), "cdf_values": dict(item.cdf_values), "cdf_dimensions": dict(item.cdf_dimensions)} for item in plan.instances],
         "expected_readback": {key: dict(value) for key, value in plan.expected_readback.items()},
     }
 
 
 def _equal_value(expected: Any, actual: Any) -> bool:
+    resolution = 0.0
+    if isinstance(actual, dict) and {"value", "raw", "resolution"}.issubset(actual):
+        resolution = float(actual["resolution"])
+        actual = actual["value"]
     if isinstance(expected, (int, float)) and not isinstance(expected, bool) and isinstance(actual, (int, float)) and not isinstance(actual, bool):
-        return math.isclose(float(expected), float(actual), rel_tol=1e-9, abs_tol=1e-15)
+        return math.isclose(float(expected), float(actual), rel_tol=1e-9, abs_tol=max(1e-15, resolution * 0.5))
     return expected == actual
 
 
@@ -62,6 +68,14 @@ def materialize_schematic(client: MaterializationClient, plan: SchematicPlan, ev
     if plan_only:
         return {"status": "planned", "plan": plan_data}
     output.mkdir(parents=True, exist_ok=True)
+    for stale_name in (
+        "cdf_readback.json",
+        "schcheck.json",
+        "exported_netlist.scs",
+        "cdf_roundtrip.confirmed.json",
+        "schematic_checked.confirmed.json",
+    ):
+        (output / stale_name).unlink(missing_ok=True)
     plan_path = store.write_json(output / "schematic_plan.json", plan_data)
     exists = client.cell_exists(plan.library, plan.target_cell, plan.view)
     if exists and not replace:

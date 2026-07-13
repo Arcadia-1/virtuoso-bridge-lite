@@ -1,4 +1,4 @@
-﻿"""Deterministic two-stage Miller op-amp topology plan."""
+"""Deterministic two-stage Miller op-amp topology plan."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def build_two_stage_miller(options: Mapping[str, object]) -> TopologyPlan:
         TopologyInstance("M_LOAD_OUT", "mirror_output", load_class, {"D": "N2", "G": "N1", "S": load_source, "B": load_body}),
         TopologyInstance("M_TAIL", "tail_source", input_class, {"D": input_source, "G": "IBIAS", "S": input_body, "B": input_body}),
         TopologyInstance("M_SECOND", "second_stage", second_class, {"D": "VOUT", "G": "N2", "S": load_source, "B": load_body}),
-        TopologyInstance("I_SECOND", "second_stage_bias", "source.current", {"P": "VOUT", "N": input_body}),
+        TopologyInstance("M_SECOND_BIAS", "second_stage_bias", input_class, {"D": "VOUT", "G": "IBIAS", "S": input_body, "B": input_body}),
         TopologyInstance("C_MILLER", "miller_compensation", "passive.capacitor", {"P": "VOUT", "N": "N2"}),
         TopologyInstance("R_NULL", "nulling_resistor", "passive.resistor", {"P": "VOUT", "N": "NCOMP"}, enabled=False),
     )

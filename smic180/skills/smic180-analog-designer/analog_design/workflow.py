@@ -1,4 +1,4 @@
-﻿"""Resumable offline analog design workflow."""
+"""Resumable offline analog design workflow."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from .netlist.spectre_writer import SpectreWriter
 from .sizing.base import SizingResult
 from .sizing.square_law import size_two_stage_miller
 from .spec import DesignSpec, load_design_spec
+from .technology.base import TechnologyProfile, technology_profile_to_dict
 from .technology.smic180 import create_offline_smic180_profile
 from .topology.registry import default_registry
 from .validation import validate_circuit_ir
@@ -182,26 +183,44 @@ class DesignWorkflow:
         sizing = size_two_stage_miller(spec, topology)
         return spec, topology, sizing
 
-    def build_ir(self) -> CircuitIr:
+    def build_ir(self, *, technology: TechnologyProfile | None = None) -> CircuitIr:
         def operation():
             if self.state.current != "initial_sizing_complete":
                 raise WorkflowError("build_ir requires initial_sizing_complete state")
             spec, topology, sizing = self._recompute_design()
-            ir = build_circuit_ir(spec, topology, sizing, create_offline_smic180_profile())
+            profile = technology or create_offline_smic180_profile()
+            ir = build_circuit_ir(spec, topology, sizing, profile)
             validate_circuit_ir(ir)
             path = self.run_dir / "ir" / "circuit_ir.json"
             self.store.write_json(path, dict(ir.source_data))
-            marker = self.store.confirm(self.run_dir / "ir" / "ir_validated.confirmed.json", "ir_validated", [path])
+            dependencies = [path]
+            if profile.state == "confirmed":
+                profile.require_live_ready()
+                profile_path = self.run_dir / "ir" / "technology_profile.json"
+                self.store.write_json(profile_path, technology_profile_to_dict(profile))
+                dependencies.append(profile_path)
+            marker = self.store.confirm(self.run_dir / "ir" / "ir_validated.confirmed.json", "ir_validated", dependencies)
             self.state.advance("ir_validated", {"confirmation": str(marker.relative_to(self.run_dir))})
             return ir
         return self._guard("ir_validated", operation)
 
-    def render_netlist(self, model_includes: tuple[tuple[str, str | None], ...] = ()) -> Path:
+    def render_netlist(
+        self,
+        model_includes: tuple[tuple[str, str | None], ...] = (),
+        *,
+        technology: TechnologyProfile | None = None,
+    ) -> Path:
         if self.state.current != "ir_validated":
             raise WorkflowError("render_netlist requires ir_validated state")
         ir = load_circuit_ir(self.run_dir / "ir" / "circuit_ir.json")
+        if ir.technology.get("profile_state") == "confirmed":
+            if technology is None:
+                raise WorkflowError("confirmed IR netlisting requires its confirmed technology profile")
+            technology.require_live_ready()
+            if technology.name != ir.technology.get("profile"):
+                raise WorkflowError("technology profile does not match the Circuit IR")
         path = self.run_dir / "windows_sim" / "generated" / "design.scs"
-        self.store.write_text(path, SpectreWriter(model_includes).render(ir))
+        self.store.write_text(path, SpectreWriter(model_includes, technology=technology).render(ir))
         self.store.confirm(self.run_dir / "windows_sim" / "generated" / "netlist_generated.confirmed.json", "netlist_generated", [self.run_dir / "ir" / "circuit_ir.json", path])
         return path
 
@@ -214,13 +233,15 @@ class DesignWorkflow:
                 raise WorkflowError("generated Spectre deck is missing")
             result = backend.run(deck, self.run_dir / "windows_sim" / "iterations", iteration)
             measurements_path = self.run_dir / "windows_sim" / "measurements.json"
+            scopes_path = self.run_dir / "windows_sim" / "measurement_scopes.json"
             diagnosis_path = self.run_dir / "windows_sim" / "diagnosis.json"
             self.store.write_json(measurements_path, result.measurements)
+            self.store.write_json(scopes_path, result.measurement_scopes)
             self.store.write_json(diagnosis_path, result.diagnostics)
             marker = self.store.confirm(
                 self.run_dir / "windows_sim" / "windows_nominal_passed.confirmed.json",
                 "windows_nominal_passed",
-                [deck, result.run_dir / "measurements.json", result.run_dir / "operating_points.json", result.run_dir / "diagnosis.json"],
+                [deck, result.run_dir / "measurements.json", result.run_dir / "measurement_scopes.json", result.run_dir / "operating_points.json", result.run_dir / "diagnosis.json"],
             )
             self.state.advance("windows_nominal_passed", {"confirmation": str(marker.relative_to(self.run_dir))})
             return result

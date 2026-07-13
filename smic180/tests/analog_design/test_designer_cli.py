@@ -3,8 +3,8 @@ import sys
 import types
 
 from analog_design.cli import main
-from analog_design.technology.base import load_technology_profile
-from test_ir_builder import load_spec
+from analog_design.technology.base import load_technology_profile, write_technology_profile
+from test_ir_builder import confirmed_profile, load_spec
 
 
 def test_cli_validate_plan_build_render_and_report(tmp_path, capsys):
@@ -23,25 +23,26 @@ def test_cli_validate_plan_build_render_and_report(tmp_path, capsys):
     assert "incomplete" in (run_dir / "reports" / "design_report.md").read_text(encoding="utf-8").lower()
 
 
-def test_cli_discover_technology_plan_only_writes_queries_without_live_connection(tmp_path):
+def test_cli_discover_technology_plan_only_writes_queries_without_live_connection(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIM_CDS_LIB", "/configured/pdk/cds.lib")
+    monkeypatch.setenv("SIM_PDK_CORE_SPECTRE_INCLUDE", "/configured/pdk/models/spectre/models.scs")
     output = tmp_path / "discovery_plan.json"
     assert main(["discover-technology", "--output", str(output), "--plan-only"]) == 0
     plan = json.loads(output.read_text(encoding="utf-8"))
-    assert plan["pdk_roots"] == [
-        "/home/IC/Tech/smic18ee_2",
-        "/home/IC/Tech/smic18ee_2P6M_20100810",
-    ]
+    assert plan["pdk_roots"] == ["/configured/pdk"]
+    assert plan["cds_lib_candidates"] == ["/configured/pdk/cds.lib"]
     assert plan["device_candidates"]["smic180.core_nmos"] == [["smic18ee", "n33e2r", "symbol"]]
     assert plan["device_candidates"]["smic180.miller_capacitor"] == [["smic18ee", "mime2r", "symbol"]]
 
 def test_cli_discover_technology_live_writes_confirmed_profile_from_injected_client(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIM_CDS_LIB", "/configured/pdk/cds.lib")
     output = tmp_path / "technology_profile.json"
     roundtrip_path = tmp_path / "roundtrip.json"
     roundtrip_path.write_text("{}", encoding="utf-8")
 
     class Client:
         def existing_paths(self, paths):
-            return [path for path in paths if "2P6M_20100810" in path]
+            return list(paths)
 
         def probe_device(self, master_ref, candidates):
             cells = {
@@ -78,3 +79,23 @@ def test_cli_discover_technology_live_writes_confirmed_profile_from_injected_cli
     profile = load_technology_profile(output)
     profile.require_live_ready()
     assert profile.resolve("smic180.miller_capacitor").cell == "mime2r"
+
+def test_cli_build_and_render_accept_confirmed_profile_and_shared_site_model(tmp_path, monkeypatch):
+    load_spec(tmp_path)
+    run_dir = tmp_path / "run"
+    profile_path = tmp_path / "technology_profile.json"
+    write_technology_profile(profile_path, confirmed_profile())
+    assert main(["plan", "--spec", str(tmp_path / "spec.json"), "--run-dir", str(run_dir)]) == 0
+    monkeypatch.setenv("AMS_OUTPUT_ROOT", str(tmp_path / "output"))
+    monkeypatch.setenv("SIM_CDS_LIB", "/pdk/cds.lib")
+    monkeypatch.setenv("SIM_IC_ROOT", "/opt/eda/cadence/IC618")
+    monkeypatch.setenv("SIM_MMSIM_ROOT", "/opt/eda/cadence/SPECTRE181")
+    monkeypatch.setenv("SIM_PDK_CORE_SPECTRE_INCLUDE", "/models/e2r018_v1p8_spe.scs")
+
+    assert main(["build-ir", "--run-dir", str(run_dir), "--technology-profile", str(profile_path)]) == 0
+    assert main(["render-netlist", "--run-dir", str(run_dir), "--technology-profile", str(profile_path), "--corner", "tt"]) == 0
+
+    text = (run_dir / "windows_sim" / "generated" / "design.scs").read_text(encoding="utf-8")
+    assert 'include "/models/e2r018_v1p8_spe.scs" section=tt' in text
+    assert 'include "/models/e2r018_v1p8_spe.scs" section=mim_tt' in text
+    assert "mime2r" in text

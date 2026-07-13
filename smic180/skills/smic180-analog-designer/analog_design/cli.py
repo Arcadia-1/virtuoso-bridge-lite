@@ -11,8 +11,9 @@ import sys
 
 from .jsonio import load_strict_json
 from .report import write_report
+from .site import DesignSite
 from .spec import SpecError, load_design_spec
-from .technology.base import write_technology_profile
+from .technology.base import load_technology_profile, write_technology_profile
 from .technology.discovery import discover_technology
 from .technology.smic180 import create_smic180_discovery_request
 from .workflow import DesignWorkflow, WorkflowError
@@ -26,7 +27,14 @@ def _parser() -> argparse.ArgumentParser:
     plan = commands.add_parser("plan")
     plan.add_argument("--spec", type=Path, required=True)
     plan.add_argument("--run-dir", type=Path, required=True)
-    for name in ("build-ir", "render-netlist", "resume", "report"):
+    build_ir = commands.add_parser("build-ir")
+    build_ir.add_argument("--run-dir", type=Path, required=True)
+    build_ir.add_argument("--technology-profile", type=Path)
+    render = commands.add_parser("render-netlist")
+    render.add_argument("--run-dir", type=Path, required=True)
+    render.add_argument("--technology-profile", type=Path)
+    render.add_argument("--corner", default="tt")
+    for name in ("resume", "report"):
         command = commands.add_parser(name)
         command.add_argument("--run-dir", type=Path, required=True)
     simulate = commands.add_parser("simulate")
@@ -76,10 +84,16 @@ def main(argv: list[str] | None = None) -> int:
             print(args.run_dir)
             return 0
         if args.command == "build-ir":
-            DesignWorkflow.resume(args.run_dir).build_ir()
+            technology = load_technology_profile(args.technology_profile) if args.technology_profile else None
+            DesignWorkflow.resume(args.run_dir).build_ir(technology=technology)
             return 0
         if args.command == "render-netlist":
-            DesignWorkflow.resume(args.run_dir).render_netlist()
+            technology = load_technology_profile(args.technology_profile) if args.technology_profile else None
+            model_includes = ()
+            if technology is not None:
+                site = DesignSite.from_environment()
+                model_includes = technology.model_includes(site.model_include, args.corner)
+            DesignWorkflow.resume(args.run_dir).render_netlist(model_includes=model_includes, technology=technology)
             return 0
         if args.command == "simulate":
             module = importlib.import_module(os.getenv("ANALOG_DESIGN_LIVE_MODULE", "analog_design.live"))

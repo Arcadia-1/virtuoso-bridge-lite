@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 import types
 
 from analog_design.cli import main
@@ -32,3 +32,4 @@ def test_cli_simulate_uses_injected_live_backend_and_freezes(tmp_path, monkeypat
     finally:
         sys.modules.pop(module.__name__, None)
     assert DesignWorkflow.resume(run_dir).state.current == "candidate_frozen"
+    assert (run_dir / "windows_sim" / "measurement_scopes.json").is_file()

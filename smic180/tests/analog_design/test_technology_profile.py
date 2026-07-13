@@ -98,6 +98,7 @@ def test_confirmed_profile_roundtrip_preserves_netlist_semantics_and_limits(tmp_
         parameter_map={"width": "w", "finger_width": "fw", "length": "l", "fingers": "fingers", "multiplier": "m"},
         parameter_dimensions={"width": "length", "finger_width": "length", "length": "length", "fingers": "integer", "multiplier": "integer"},
         evidence={"master": "master.json", "terminals": "terminals.json", "cdf": "roundtrip.json"},
+        terminal_map={"D": "D", "G": "G", "S": "S", "B": "B"},
         netlist_model="n33e2r",
         netlist_terminals=("D", "G", "S", "B"),
         netlist_parameter_map={"finger_width": "w", "length": "l", "effective_multiplier": "m"},
@@ -109,13 +110,19 @@ def test_confirmed_profile_roundtrip_preserves_netlist_semantics_and_limits(tmp_
         "confirmed",
         {adapter.master_ref: adapter},
         {"pdk_root": "/home/IC/Tech/smic18ee_2P6M_20100810", "cds_lib": "/home/IC/Tech/smic18ee_2P6M_20100810/cds.lib"},
+        model_sections={"tt": ("tt", "mim_tt")},
     )
     path = tmp_path / "technology_profile.json"
     write_technology_profile(path, profile)
     loaded = load_technology_profile(path)
     resolved = loaded.resolve("smic180.core_nmos")
+    assert resolved.terminal_map == {"D": "D", "G": "G", "S": "S", "B": "B"}
     assert resolved.netlist_model == "n33e2r"
     assert resolved.netlist_terminals == ("D", "G", "S", "B")
     assert resolved.parameter_relations["effective_multiplier"] == "multiplier*fingers"
     assert resolved.limits["minimum_length"] == pytest.approx(600e-9)
+    assert loaded.model_includes("/models/e2r018_v1p8_spe.scs", "tt") == (
+        ("/models/e2r018_v1p8_spe.scs", "tt"),
+        ("/models/e2r018_v1p8_spe.scs", "mim_tt"),
+    )
     loaded.require_live_ready()

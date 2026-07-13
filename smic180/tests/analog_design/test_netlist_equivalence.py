@@ -1,8 +1,8 @@
-﻿import math
+import math
 
 import pytest
 
-from analog_design.netlist.equivalence import EquivalenceError, compare_metrics, compare_netlists, write_equivalence_confirmation
+from analog_design.netlist.equivalence import EquivalenceError, build_virtuoso_replay_deck, compare_metrics, compare_netlists, write_equivalence_confirmation
 from analog_design.netlist.spectre_reader import NetlistParseError, parse_spectre_circuit
 
 
@@ -71,3 +71,45 @@ def test_confirmation_is_written_only_when_both_equivalence_checks_pass(tmp_path
     assert marker.is_file()
     with pytest.raises(EquivalenceError, match="both"):
         write_equivalence_confirmation(tmp_path / "failed", {"equivalent": False}, metrics)
+
+FLAT_EXPORTED = """// Cell name: amp_target
+M1 (N1 VINP NTAIL VSS) nch w=(10u) l=1u as=1p ad=1p \\
+        ps=2u pd=2u m=(1)*(1)
+M2 (VOUT VINN NTAIL VSS) nch l=1u w=(10.04u) m=(1)*(1)
+C1 (VOUT N1) capacitor c=1p
+"""
+
+
+def test_parser_supports_flat_si_output_continuations_and_parenthesized_products():
+    circuit = parse_spectre_circuit(
+        FLAT_EXPORTED,
+        flat_name="amp",
+        flat_ports=("VINP", "VINN", "VOUT", "VDD", "VSS"),
+    )
+    assert circuit.name == "amp"
+    assert circuit.ports == ("VINP", "VINN", "VOUT", "VDD", "VSS")
+    assert circuit.instances["M1"].parameters["w"] == pytest.approx(10e-6)
+    assert circuit.instances["M1"].parameters["m"] == pytest.approx(1.0)
+    assert circuit.instances["M1"].parameters["ps"] == pytest.approx(2e-6)
+
+
+def test_semantic_comparison_supports_flat_si_defaults_ignored_parameters_and_cdf_resolution():
+    result = compare_netlists(
+        DIRECT,
+        FLAT_EXPORTED,
+        right_flat_name="amp",
+        right_flat_ports=("VINP", "VINN", "VOUT", "VDD", "VSS"),
+        parameter_defaults={"nch": {"m": 1.0}},
+        ignored_parameters={"nch": {"as", "ad", "ps", "pd"}},
+        parameter_tolerances={"M2.w": {"abs": 0.1e-6, "rel": 0.0}},
+    )
+    assert result["equivalent"] is True
+
+def test_replay_deck_wraps_exported_body_without_editing_devices_and_reuses_direct_harness():
+    direct_deck = DIRECT + "X_DUT (VINP VINN VOUT VDD VSS) amp\nac ac start=1 stop=1G dec=20\n"
+    replay = build_virtuoso_replay_deck(direct_deck, FLAT_EXPORTED)
+    assert "subckt amp VINP VINN VOUT VDD VSS" in replay
+    assert "M1 (N1 VINP NTAIL VSS) nch w=(10u) l=1u as=1p ad=1p" in replay
+    assert "X_DUT (VINP VINN VOUT VDD VSS) amp" in replay
+    assert "ac ac start=1 stop=1G dec=20" in replay
+    assert replay.count("subckt amp") == 1

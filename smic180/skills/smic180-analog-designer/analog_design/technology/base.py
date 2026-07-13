@@ -32,6 +32,7 @@ class DeviceAdapter:
     parameter_map: Mapping[str, str]
     parameter_dimensions: Mapping[str, str]
     evidence: Mapping[str, str]
+    terminal_map: Mapping[str, str] = field(default_factory=dict)
     netlist_model: str | None = None
     netlist_terminals: tuple[str, ...] = ()
     netlist_parameter_map: Mapping[str, str] = field(default_factory=dict)
@@ -43,6 +44,10 @@ class DeviceAdapter:
         object.__setattr__(self, "parameter_map", MappingProxyType(dict(self.parameter_map)))
         object.__setattr__(self, "parameter_dimensions", MappingProxyType(dict(self.parameter_dimensions)))
         object.__setattr__(self, "evidence", MappingProxyType(dict(self.evidence)))
+        terminal_map = dict(self.terminal_map) or {name: name for name in self.terminals}
+        if set(terminal_map.values()) != set(self.terminals):
+            raise TechnologyError("terminal map must cover every verified master terminal")
+        object.__setattr__(self, "terminal_map", MappingProxyType(terminal_map))
         object.__setattr__(self, "netlist_terminals", tuple(self.netlist_terminals))
         object.__setattr__(self, "netlist_parameter_map", MappingProxyType(dict(self.netlist_parameter_map)))
         object.__setattr__(self, "parameter_relations", MappingProxyType(dict(self.parameter_relations)))
@@ -83,10 +88,15 @@ class TechnologyProfile:
     state: str
     adapters: Mapping[str, DeviceAdapter]
     evidence: Mapping[str, str]
+    model_sections: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "adapters", MappingProxyType(dict(self.adapters)))
         object.__setattr__(self, "evidence", MappingProxyType(dict(self.evidence)))
+        sections = {str(corner): tuple(str(section) for section in values) for corner, values in self.model_sections.items()}
+        if any(not corner or not values or any(not section for section in values) for corner, values in sections.items()):
+            raise TechnologyError("model sections must contain non-empty corner mappings")
+        object.__setattr__(self, "model_sections", MappingProxyType(sections))
         if self.state not in {"unconfirmed", "confirmed"}:
             raise TechnologyError("technology profile state must be unconfirmed or confirmed")
         for key, adapter in self.adapters.items():
@@ -107,6 +117,13 @@ class TechnologyProfile:
         if self.state != "confirmed":
             raise TechnologyError("live operation requires a confirmed technology profile")
 
+    def model_includes(self, model_path: str, corner: str) -> tuple[tuple[str, str], ...]:
+        try:
+            sections = self.model_sections[corner]
+        except KeyError as exc:
+            raise TechnologyError(f"no model sections are registered for corner {corner!r}") from exc
+        return tuple((model_path, section) for section in sections)
+
 
 def technology_profile_to_dict(profile: TechnologyProfile) -> dict[str, Any]:
     return {
@@ -114,6 +131,7 @@ def technology_profile_to_dict(profile: TechnologyProfile) -> dict[str, Any]:
         "name": profile.name,
         "state": profile.state,
         "evidence": dict(profile.evidence),
+        "model_sections": {corner: list(sections) for corner, sections in sorted(profile.model_sections.items())},
         "adapters": {
             master_ref: {
                 "master_ref": adapter.master_ref,
@@ -125,6 +143,7 @@ def technology_profile_to_dict(profile: TechnologyProfile) -> dict[str, Any]:
                 "parameter_map": dict(adapter.parameter_map),
                 "parameter_dimensions": dict(adapter.parameter_dimensions),
                 "evidence": dict(adapter.evidence),
+                "terminal_map": dict(adapter.terminal_map),
                 "netlist_model": adapter.netlist_model,
                 "netlist_terminals": list(adapter.netlist_terminals),
                 "netlist_parameter_map": dict(adapter.netlist_parameter_map),
@@ -157,6 +176,7 @@ def technology_profile_from_dict(data: object) -> TechnologyProfile:
                 parameter_map=dict(raw["parameter_map"]),
                 parameter_dimensions=dict(raw["parameter_dimensions"]),
                 evidence=dict(raw["evidence"]),
+                terminal_map=dict(raw.get("terminal_map", {})),
                 netlist_model=raw.get("netlist_model"),
                 netlist_terminals=tuple(raw.get("netlist_terminals", ())),
                 netlist_parameter_map=dict(raw.get("netlist_parameter_map", {})),
@@ -166,7 +186,8 @@ def technology_profile_from_dict(data: object) -> TechnologyProfile:
             if adapter.master_ref != key:
                 raise TechnologyError("adapter mapping key must equal master_ref")
             adapters[key] = adapter
-        return TechnologyProfile(str(data["name"]), str(data["state"]), adapters, dict(data["evidence"]))
+        model_sections = {str(corner): tuple(sections) for corner, sections in dict(data.get("model_sections", {})).items()}
+        return TechnologyProfile(str(data["name"]), str(data["state"]), adapters, dict(data["evidence"]), model_sections)
     except (KeyError, TypeError, ValueError) as exc:
         if isinstance(exc, TechnologyError):
             raise
