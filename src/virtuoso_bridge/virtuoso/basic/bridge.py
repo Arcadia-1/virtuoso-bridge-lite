@@ -26,6 +26,7 @@ from virtuoso_bridge.virtuoso.ops import (
     save_current_cellview as op_save_current_cellview,
 )
 from virtuoso_bridge.virtuoso.layout import LayoutOps
+from virtuoso_bridge.virtuoso.library import LibraryOps
 from virtuoso_bridge.virtuoso.schematic import SchematicOps
 from virtuoso_bridge.virtuoso.symbol import SymbolOps
 
@@ -88,6 +89,7 @@ class VirtuosoClient(VirtuosoInterface):
         self._tunnel = tunnel  # SSHClient, if provided
         self._log_to_ciw = log_to_ciw
         self.layout = LayoutOps(self)
+        self.library = LibraryOps(self)
         self.schematic = SchematicOps(self)
         self.symbol = SymbolOps(self)
         self._il_upload_cache: dict[str, tuple[str, str]] = {}

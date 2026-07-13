@@ -42,7 +42,7 @@ Always use the highest level that works. Drop to a lower level only when needed.
 
 **Never guess function names.** If the function isn't in the examples below, read the relevant `references/` file before writing the call. Fabricating a wrong name wastes time debugging in CIW.
 
-### Four domains
+### Five domains
 
 | Domain | What it does | Python package | API docs |
 |--------|-------------|----------------|----------|
@@ -50,6 +50,7 @@ Always use the highest level that works. Drop to a lower level only when needed.
 | **Symbol** | Generate, edit, and read symbol views | `client.symbol.*` | `references/symbol-python-api.md` |
 | **Layout** | Create/edit layout, add shapes/vias/instances | `client.layout.*` | `references/layout-python-api.md`, `references/layout-skill-api.md` |
 | **Maestro** | Read/write ADE Assembler config, run simulations | `virtuoso_bridge.virtuoso.maestro` | `references/maestro-python-api.md`, `references/maestro-skill-api.md` |
+| **Library** | Read/create/rename/delete libraries, bind technology | `client.library.*` | `references/library-python-api.md` |
 | **Netlist (si)** | Batch netlist generation without Maestro | `simInitEnvWithArgs` + `si` CLI | See "Batch Netlist (si)" section below |
 | **SKILL Finder** | Search SKILL function names and get detailed docs | `client.find_skill()`, `client.get_skill_more_info()` | `references/skill-finder-python-api.md` |
 | **General** | File transfer, screenshots, raw SKILL, .il loading | `client.*` | See below |
@@ -232,6 +233,7 @@ Load on demand — each contains detailed API docs and edge-case guidance:
 | `references/schematic-python-api.md` | SchematicEditor, SchematicOps, low-level builders |
 | `references/layout-skill-api.md` | Layout SKILL API, read/query, mosaic, layer control |
 | `references/layout-python-api.md` | LayoutEditor, LayoutOps, shape/via/instance creation |
+| `references/library-python-api.md` | Library CRUD, technology binding, return/error contracts |
 | `references/maestro-skill-api.md` | mae* SKILL functions, OCEAN, corners, known blockers |
 | `references/maestro-python-api.md` | snapshot() (raw SKILL sections) + filter_*_xml + writer functions; read_results (per-point × per-output CSV) + export_waveform (OCEAN) |
 | `references/simulation-flow.md` | **Standard simulation flow** — 8-step guide, pitfalls, optimization loops |
@@ -254,6 +256,7 @@ Load on demand — each contains detailed API docs and edge-case guidance:
 - `04_list_library_cells.py` — list libraries and cells
 - `05_multiline_skill.py` — multi-line SKILL with comments, loops, procedures
 - `06_screenshot.py` — capture layout/schematic screenshots
+- `08_library_management.py` — inspect a library, technology binding, categories, and members
 
 ### `examples/01_virtuoso/schematic/`
 - `01a_create_rc_stepwise.py` — create RC schematic via operations
