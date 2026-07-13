@@ -6,7 +6,8 @@ from dataclasses import asdict,is_dataclass
 from pathlib import Path
 import sys
 ROOT=Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path: sys.path.insert(0,str(ROOT))
+while str(ROOT) in sys.path: sys.path.remove(str(ROOT))
+sys.path.insert(0,str(ROOT))
 from analog_opt.schema import ConfigError,load_config
 class CliError(ValueError): pass
 def _strict_json(path,label):
@@ -31,6 +32,13 @@ def _parser():
   if name=='run': cmd.add_argument('--replace-work-cell',action='store_true'); cmd.add_argument('--replace-result-cell',action='store_true')
  for name in ('resume','report'):
   cmd=sub.add_parser(name); cmd.add_argument('--run-dir',type=Path,required=True)
+ verify=sub.add_parser('verify-result'); verify.add_argument('--run-dir',type=Path,required=True); verify.add_argument('--baseline-testbench'); verify.add_argument('--final-testbench')
+ create_maestro=sub.add_parser('create-maestro'); create_maestro.add_argument('--run-dir',type=Path,required=True)
+ verify_maestro=sub.add_parser('verify-maestro'); verify_maestro.add_argument('--run-dir',type=Path,required=True); verify_maestro.add_argument('--timeout',type=int,default=1800)
+ preflight=sub.add_parser('preflight-maestro'); preflight.add_argument('--run-dir',type=Path,required=True)
+ repair_maestro=sub.add_parser('repair-maestro-models'); repair_maestro.add_argument('--run-dir',type=Path,required=True)
+ accept=sub.add_parser('accept-maestro-history'); accept.add_argument('--run-dir',type=Path,required=True); accept.add_argument('--history',required=True)
+
  return parser
 def _output(value):
  if is_dataclass(value): value=asdict(value)
@@ -40,6 +48,24 @@ def main(argv=None):
  args=_parser().parse_args(argv)
  try:
   if args.command=='validate': load_config(args.config); print('Valid analog optimization V2 configuration: %s'%args.config); return 0
+  if args.command=='verify-result':
+   from analog_opt.final_validation_live import verify_result
+   print(verify_result(args.run_dir,baseline_testbench=args.baseline_testbench,final_testbench=args.final_testbench)); return 0
+  if args.command=='create-maestro':
+   from analog_opt.maestro_validation_live import create_maestro
+   print(create_maestro(args.run_dir)); return 0
+  if args.command=='verify-maestro':
+   from analog_opt.maestro_validation_live import verify_maestro
+   print(verify_maestro(args.run_dir,timeout=args.timeout)); return 0
+  if args.command=='preflight-maestro':
+   from analog_opt.maestro_validation_live import preflight_maestro
+   print(preflight_maestro(args.run_dir)); return 0
+  if args.command=='repair-maestro-models':
+   from analog_opt.maestro_validation_live import repair_maestro_models
+   print(repair_maestro_models(args.run_dir)); return 0
+  if args.command=='accept-maestro-history':
+   from analog_opt.maestro_validation_live import accept_maestro_history
+   print(accept_maestro_history(args.run_dir,args.history)); return 0
   if args.command=='report':
    if not args.run_dir.is_dir(): raise CliError('run directory path does not exist: %s'%args.run_dir)
    manifest=_strict_json(args.run_dir/'result_manifest.json','result manifest'); from analog_opt.report import write_report; print(write_report(args.run_dir,manifest)); return 0
