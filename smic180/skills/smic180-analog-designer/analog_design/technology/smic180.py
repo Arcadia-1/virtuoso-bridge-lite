@@ -1,8 +1,9 @@
-﻿"""Offline-only SMIC180 profile used before live PDK discovery."""
+"""Offline-only SMIC180 profile used before live PDK discovery."""
 
 from __future__ import annotations
 
 from .base import DeviceAdapter, TechnologyProfile
+from .discovery import DiscoveryRequest
 
 
 def _adapter(master_ref: str, device_class: str, terminals: tuple[str, ...], parameters: dict[str, str]) -> DeviceAdapter:
@@ -30,3 +31,21 @@ def create_offline_smic180_profile() -> TechnologyProfile:
     ]
     return TechnologyProfile("smic180", "unconfirmed", {item.master_ref: item for item in adapters}, {"purpose": "offline schema and netlist tests only"})
 
+
+
+def create_smic180_discovery_request() -> DiscoveryRequest:
+    """Return evidence queries for the installed SMIC180 e2r profile."""
+
+    roots = (
+        "/home/IC/Tech/smic18ee_2",
+        "/home/IC/Tech/smic18ee_2P6M_20100810",
+    )
+    return DiscoveryRequest(
+        pdk_roots=roots,
+        cds_lib_candidates=tuple(f"{root}/cds.lib" for root in roots),
+        device_candidates={
+            "smic180.core_nmos": (("smic18ee", "n33e2r", "symbol"),),
+            "smic180.core_pmos": (("smic18ee", "p33e2r", "symbol"),),
+            "smic180.miller_capacitor": (("smic18ee", "mime2r", "symbol"),),
+        },
+    )

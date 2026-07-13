@@ -1,6 +1,12 @@
-﻿import pytest
+import pytest
 
-from analog_design.technology.base import DeviceAdapter, TechnologyError, TechnologyProfile
+from analog_design.technology.base import (
+    DeviceAdapter,
+    TechnologyError,
+    TechnologyProfile,
+    load_technology_profile,
+    write_technology_profile,
+)
 from analog_design.technology.smic180 import create_offline_smic180_profile
 
 
@@ -79,3 +85,37 @@ def test_dimensionless_integer_device_parameters_remain_integer():
     assert adapter.normalize("fingers", 4) == 4
     with pytest.raises(TechnologyError, match="integer"):
         adapter.normalize("fingers", 4.5)
+
+
+def test_confirmed_profile_roundtrip_preserves_netlist_semantics_and_limits(tmp_path):
+    adapter = DeviceAdapter(
+        master_ref="smic180.core_nmos",
+        device_class="mos.nmos",
+        library="smic18ee",
+        cell="n33e2r",
+        view="symbol",
+        terminals=("D", "G", "B", "S"),
+        parameter_map={"width": "w", "finger_width": "fw", "length": "l", "fingers": "fingers", "multiplier": "m"},
+        parameter_dimensions={"width": "length", "finger_width": "length", "length": "length", "fingers": "integer", "multiplier": "integer"},
+        evidence={"master": "master.json", "terminals": "terminals.json", "cdf": "roundtrip.json"},
+        netlist_model="n33e2r",
+        netlist_terminals=("D", "G", "S", "B"),
+        netlist_parameter_map={"finger_width": "w", "length": "l", "effective_multiplier": "m"},
+        parameter_relations={"width": "finger_width*fingers", "effective_multiplier": "multiplier*fingers"},
+        limits={"minimum_length": 600e-9, "minimum_finger_width": 600e-9},
+    )
+    profile = TechnologyProfile(
+        "smic180",
+        "confirmed",
+        {adapter.master_ref: adapter},
+        {"pdk_root": "/home/IC/Tech/smic18ee_2P6M_20100810", "cds_lib": "/home/IC/Tech/smic18ee_2P6M_20100810/cds.lib"},
+    )
+    path = tmp_path / "technology_profile.json"
+    write_technology_profile(path, profile)
+    loaded = load_technology_profile(path)
+    resolved = loaded.resolve("smic180.core_nmos")
+    assert resolved.netlist_model == "n33e2r"
+    assert resolved.netlist_terminals == ("D", "G", "S", "B")
+    assert resolved.parameter_relations["effective_multiplier"] == "multiplier*fingers"
+    assert resolved.limits["minimum_length"] == pytest.approx(600e-9)
+    loaded.require_live_ready()

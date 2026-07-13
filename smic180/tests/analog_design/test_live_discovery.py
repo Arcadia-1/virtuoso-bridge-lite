@@ -1,6 +1,11 @@
-﻿import pytest
+import pytest
 
-from analog_design.technology.discovery import DiscoveryError, DiscoveryRequest, discover_technology
+from analog_design.technology.discovery import (
+    DiscoveryError,
+    DiscoveryRequest,
+    VirtuosoDiscoveryClient,
+    discover_technology,
+)
 
 
 class FakeDiscoveryClient:
@@ -76,3 +81,72 @@ def test_plan_only_returns_queries_without_touching_client():
     assert plan["pdk_roots"] == list(request().pdk_roots)
     assert "smic180.core_nmos" in plan["device_candidates"]
     assert client.calls == []
+
+
+class FakeResult:
+    def __init__(self, output, errors=()):
+        self.output = output
+        self.errors = list(errors)
+
+
+class FakeVirtuosoBridge:
+    def __init__(self):
+        self.calls = []
+
+    def execute_skill(self, expression, timeout=30):
+        self.calls.append((expression, timeout))
+        if "n33e2r" in expression:
+            return FakeResult(
+                "MASTER|smic18ee|n33e2r|symbol\n"
+                "TERMINALS|D,G,B,S\n"
+                "SPECTRE_TERMINALS|D,G,S,B\n"
+                "MODEL|n33e2r\n"
+                "CDF|w|600n|smic18mm_mosCB( 'w )\n"
+                "CDF|fw|600n|smic18mm_mosCB( 'fw )\n"
+                "CDF|l|600n|smic18mm_mosCB( 'l )\n"
+                "CDF|fingers|1|smic18mm_mosCB( 'fingers )\n"
+                "CDF|m|1|smic18mm_mosCB( 'm )\n"
+            )
+        return FakeResult("")
+
+
+def test_virtuoso_discovery_client_combines_live_metadata_with_roundtrip_evidence(tmp_path):
+    roundtrip = {
+        "smic180.core_nmos": {
+            "evidence_file": "roundtrip_nmos.json",
+            "cdf_readback": {"w": "2.4u", "fw": "600n", "l": "600n", "fingers": "4", "m": "1"},
+            "netlist_model": "n33e2r",
+            "netlist_terminals": ["D", "G", "S", "B"],
+            "netlist_parameter_map": {"finger_width": "w", "length": "l", "effective_multiplier": "m"},
+            "parameter_relations": {"width": "finger_width*fingers", "effective_multiplier": "multiplier*fingers"},
+            "limits": {"minimum_length": 600e-9, "minimum_finger_width": 600e-9},
+        }
+    }
+    client = VirtuosoDiscoveryClient(FakeVirtuosoBridge(), tmp_path, roundtrip)
+    probe = client.probe_device("smic180.core_nmos", (("smic18ee", "n33e2r", "symbol"),))
+    assert probe["library"] == "smic18ee"
+    assert probe["terminals"] == ["D", "G", "B", "S"]
+    assert probe["parameter_map"]["finger_width"] == "fw"
+    assert probe["netlist_terminals"] == ["D", "G", "S", "B"]
+    assert probe["parameter_relations"]["effective_multiplier"] == "multiplier*fingers"
+    assert probe["limits"]["minimum_length"] == pytest.approx(600e-9)
+    assert (tmp_path / "smic180.core_nmos.master.json").is_file()
+
+
+def test_virtuoso_discovery_client_refuses_device_without_roundtrip_evidence(tmp_path):
+    client = VirtuosoDiscoveryClient(FakeVirtuosoBridge(), tmp_path, {})
+    assert client.probe_device("smic180.core_nmos", (("smic18ee", "n33e2r", "symbol"),)) is None
+
+def test_virtuoso_discovery_uses_getq_for_spectre_property_list(tmp_path):
+    bridge = FakeVirtuosoBridge()
+    client = VirtuosoDiscoveryClient(bridge, tmp_path, {
+        "smic180.core_nmos": {
+            "evidence_file": "roundtrip.json",
+            "netlist_model": "n33e2r",
+            "netlist_terminals": ["D", "G", "S", "B"],
+        }
+    })
+    client.probe_device("smic180.core_nmos", (("smic18ee", "n33e2r", "symbol"),))
+    expression = bridge.calls[0][0]
+    assert "getq(sim termOrder)" in expression
+    assert "sim~>termOrder" not in expression
