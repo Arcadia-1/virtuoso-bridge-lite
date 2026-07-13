@@ -55,7 +55,7 @@ class AnalogSimulationBackend:
    if cdf_specs: self.applier.apply_cdf(self.library,self.work_cell,cdf_specs,cdf)
   except Exception as exc: raise EvaluationFailure('apply',str(exc)) from exc
   try:
-   self.netlist.configure(variables,biases,fixed,conditions or {})
+   self.netlist.configure(variables,biases,self.stimuli,conditions or {})
    deck=self.netlist.export_fresh(self.library,self.work_cell,Path(directory))
   except Exception as exc: raise EvaluationFailure('netlist',str(exc)) from exc
   try: raw=self.runner.run(deck,Path(directory),self.analyses)

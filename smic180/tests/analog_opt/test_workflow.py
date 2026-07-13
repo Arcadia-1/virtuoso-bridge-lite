@@ -37,7 +37,7 @@ def test_backend_uses_real_applier_signature_and_structured_confirmation(tmp_pat
  log=Log(); result=make_backend(tmp_path,log)(CANDIDATE,tmp_path)
  assert result['success'] is True and result['objective']==.25
  assert log.calls[0]==('apply','tr','amp_work',('W',),{'W':10e-6})
- assert log.calls[1][0]=='configure' and log.calls[1][1:]==({'gain':4.},{'VBIAS':1.2},{'VDD':{'value':3.3,'optimizable':False}},{})
+ assert log.calls[1][0]=='configure' and log.calls[1][1:]==({'gain':4.},{'VBIAS':1.2},{'VDD':{'value':3.3,'optimizable':False},'VBIAS':{'value':1.,'optimizable':True}},{})
  assert [c[0] for c in log.calls]==['apply','configure','export','run','metrics','read','confirm']
 
 def test_backend_confirmation_compares_each_finite_physical_value(tmp_path):
@@ -62,6 +62,14 @@ def test_backend_rejects_fixed_stimulus_optimization(tmp_path):
  specs=[ParameterSpec('VDD','bias',2.,4.,stimulus='VDD')]
  with pytest.raises(EvaluationFailure,match='fixed stimulus'):
   AnalogSimulationBackend('tr','w',specs,{'VDD':{'value':3.3,'optimizable':False}},[],[],applier=Applier(Log()),netlist=Netlist(Log()),runner=Runner(Log()),metric_extractor=lambda x:{},spec_evaluator=lambda x:{'objective':0.,'passed':True,'results':{}})({'VDD':3.},tmp_path)
+
+def test_backend_preserves_source_mapping_for_optimizable_bias_stimulus(tmp_path):
+ log=Log(); backend=make_backend(tmp_path,log)
+ backend.stimuli['VBIAS']['source_instance']='SRC_VBIAS'
+ backend(CANDIDATE,tmp_path)
+ configure=next(call for call in log.calls if call[0]=='configure')
+ assert configure[2]=={'VBIAS':1.2}
+ assert configure[3]['VBIAS']['source_instance']=='SRC_VBIAS'
 
 class WorkflowApplier(Applier):
  def __init__(self,log): super().__init__(log); self.published=False
