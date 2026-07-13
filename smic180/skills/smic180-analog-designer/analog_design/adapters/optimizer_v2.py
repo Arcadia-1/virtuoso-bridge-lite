@@ -37,6 +37,7 @@ def prepare_optimizer_v2_handoff(
     equivalence_confirmed: bool,
     cdf_evidence: Mapping[str, Mapping[str, Any]],
     model_includes: tuple[tuple[str, str], ...] = (),
+    bias_mapping: Mapping[str, str] | None = None,
 ) -> OptimizerV2Handoff:
     if not equivalence_confirmed:
         raise AdapterError("Optimizer V2 handoff requires confirmed equivalence")
@@ -48,7 +49,19 @@ def prepare_optimizer_v2_handoff(
     parameters = []
     baseline: dict[str, float | int] = {}
     instance_ids = {item.id for item in ir.instances}
+    biases = dict(bias_mapping or {})
     for parameter in ir.parameters:
+        if parameter.target == "bias":
+            stimulus = biases.get(parameter.id)
+            if stimulus is None:
+                raise AdapterError(f"bias mapping is missing for {parameter.id}")
+            parameters.append({
+                "name": parameter.id, "target": "bias", "stimulus": stimulus,
+                "lower": parameter.minimum, "upper": parameter.maximum,
+                "dtype": "float", "scale": "linear",
+            })
+            baseline[parameter.id] = parameter.value
+            continue
         if parameter.id not in cdf_evidence:
             continue
         proof = cdf_evidence[parameter.id]
@@ -94,6 +107,10 @@ def prepare_optimizer_v2_handoff(
         specs.append({"metric": metric, "op": measurement["operator"], "value": measurement["target"], "hard": True})
     if not specs:
         raise AdapterError("Optimizer V2 handoff requires at least one hard specification")
+    bias_parameter = next((item for item in parameters if item["target"] == "bias" and item["stimulus"] == "IBIAS"), None)
+    ibias_stimulus = {"kind": "voltage", "value": 0.9, "source_instance": "SRC_IBIAS", "optimizable": False}
+    if bias_parameter is not None:
+        ibias_stimulus.update({"optimizable": True, "lower": bias_parameter["lower"], "upper": bias_parameter["upper"]})
     config = {
         "version": 2,
         "design": {"library": library, "cell": source_cell, "work_cell": work_cell, "result_cell": result_cell, "testbench_cell": testbench_cell, "dut_instance": "DUT"},
@@ -101,7 +118,7 @@ def prepare_optimizer_v2_handoff(
             "VDD": {"kind": "voltage", "value": vdd, "source_instance": "SRC_VDD", "optimizable": False},
             "VINP": {"kind": "voltage", "dc": vdd / 2.0, "ac": 1.0, "source_instance": "SRC_VINP", "optimizable": False},
             "VINN": {"kind": "voltage", "dc": vdd / 2.0, "ac": 0.0, "source_instance": "SRC_VINN", "optimizable": False},
-            "IBIAS": {"kind": "voltage", "value": 0.9, "source_instance": "SRC_IBIAS", "optimizable": False},
+            "IBIAS": ibias_stimulus,
             "VSS": {"kind": "voltage", "value": 0.0, "source_instance": "PVSS_VSS", "optimizable": False},
         },
         "parameters": parameters,

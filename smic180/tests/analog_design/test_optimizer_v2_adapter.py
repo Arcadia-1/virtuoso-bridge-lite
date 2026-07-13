@@ -67,3 +67,35 @@ def test_optimizer_adapter_emits_schema_valid_v2_config_and_baseline(tmp_path):
         {"path": "/pdk/models.scs", "section": "mim_tt"},
     ]
 
+
+
+def test_optimizer_adapter_maps_explicit_ir_bias_parameter_to_optimizable_stimulus(tmp_path):
+    data = valid_ir_data()
+    data["parameters"].append({
+        "id": "tail_bias_voltage",
+        "dimension": "voltage",
+        "value": "0.9V",
+        "bounds": {"minimum": "0.7V", "maximum": "1.2V"},
+        "target": "bias",
+        "linked_instances": ["M1"],
+        "quantization": None,
+        "provenance": {"source": "initial_sizing"},
+    })
+    data["measurements"] = [{"id": "gain", "analysis": "ac", "kind": "hard", "operator": ">=", "target": 60.0, "status": "requested"}]
+    outputs = prepare_optimizer_v2_handoff(
+        circuit_ir_from_data(data), tmp_path,
+        library="lib", source_cell="source", work_cell="work", result_cell="result", testbench_cell="tb",
+        equivalence_confirmed=True, cdf_evidence=evidence(),
+        bias_mapping={"tail_bias_voltage": "IBIAS"},
+    )
+    raw = json.loads(outputs.config.read_text(encoding="utf-8"))
+    bias = next(item for item in raw["parameters"] if item["name"] == "tail_bias_voltage")
+    assert bias == {
+        "name": "tail_bias_voltage", "target": "bias", "stimulus": "IBIAS",
+        "lower": 0.7, "upper": 1.2, "dtype": "float", "scale": "linear",
+    }
+    assert raw["stimuli"]["IBIAS"]["optimizable"] is True
+    assert raw["stimuli"]["IBIAS"]["lower"] == pytest.approx(0.7)
+    assert raw["stimuli"]["IBIAS"]["upper"] == pytest.approx(1.2)
+    baseline = json.loads(outputs.baseline.read_text(encoding="utf-8"))
+    assert baseline["tail_bias_voltage"] == pytest.approx(0.9)

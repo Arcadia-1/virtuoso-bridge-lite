@@ -78,6 +78,8 @@ def build_circuit_ir(spec: DesignSpec, topology: TopologyPlan, sizing: SizingRes
             optimization_refs = ["second_stage_width", "channel_length"]
         elif item.role == "second_stage_bias":
             optimization_refs = ["second_stage_bias_width", "channel_length"]
+        elif item.role == "miller_compensation" and "width" in physical_parameters:
+            optimization_refs = ["miller_cap_side"]
         instances.append({
             "id": item.id,
             "role": item.role,
@@ -102,6 +104,12 @@ def build_circuit_ir(spec: DesignSpec, topology: TopologyPlan, sizing: SizingRes
         _parameter("channel_length", "length", length, max(length * 0.5, 1e-7), length * 4.0, ["M_IN_P", "M_IN_N", "M_LOAD_DIODE", "M_LOAD_OUT", "M_TAIL", "M_SECOND", "M_SECOND_BIAS"]),
         _parameter("tail_bias_voltage", "voltage", min(spec.vdd * 0.3, 0.9), 0.1, max(0.2, spec.vdd * 0.6), ["M_TAIL"], "bias"),
     ]
+    cap_instance = next((item for item in instances if item["id"] == "C_MILLER"), None)
+    if cap_instance is not None and "width" in cap_instance["physical_parameters"]:
+        side = float(cap_instance["physical_parameters"]["width"])
+        cap_adapter = technology.resolve("smic180.miller_capacitor")
+        maximum = float(cap_adapter.limits.get("maximum_width", side * 2.0))
+        parameters.append(_parameter("miller_cap_side", "length", side, max(side * 0.25, 1e-7), maximum, ["C_MILLER"]))
     port_kind = {"VDD": "power", "VSS": "ground", "VINP": "signal", "VINN": "signal", "VOUT": "signal", "IBIAS": "bias"}
     direction = {"VOUT": "output"}
     data = {

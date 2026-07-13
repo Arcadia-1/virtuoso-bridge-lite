@@ -107,6 +107,10 @@ def test_confirmed_profile_physicalizes_mos_and_mim_into_ir(tmp_path):
     assert cap.physical_parameters["width"] <= 30e-6
     assert cap.physical_parameters["length"] <= 30e-6
     assert cap.cdf_expectations["m"] == cap.physical_parameters["multiplier"]
+    cap_parameter = next(item for item in ir.parameters if item.id == "miller_cap_side")
+    assert cap_parameter.value == pytest.approx(cap.physical_parameters["width"])
+    assert cap_parameter.linked_instances == ("C_MILLER",)
+    assert "miller_cap_side" in cap.optimization_refs
 
 def test_builder_records_output_load_as_structured_constraint(tmp_path):
     spec = load_spec(tmp_path)
