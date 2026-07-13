@@ -22,11 +22,13 @@ class ParameterSpec:
     scale: str = "linear"
     step: Optional[Number] = None
     instance: Optional[str] = None
+    linked_instances: Sequence[str] = ()
     property: Optional[str] = None
     variable: Optional[str] = None
     stimulus: Optional[str] = None
     unit: Optional[str] = None
     sync_property: Optional[str] = None
+    sync_factor: Optional[Number] = None
 
 
 class ParameterSpace:
@@ -108,9 +110,22 @@ class ParameterSpace:
                 )
                 if step_count < 0.0:
                     raise ValueError("%s finite representable step count is invalid" % spec.name)
+            if isinstance(spec.linked_instances, (str, bytes)) or not isinstance(spec.linked_instances, Sequence):
+                raise ValueError("parameter linked_instances must be a sequence")
+            if len(set(spec.linked_instances)) != len(spec.linked_instances) or spec.instance in spec.linked_instances:
+                raise ValueError("parameter linked_instances must be unique and exclude instance")
+            for linked_instance in spec.linked_instances:
+                if not isinstance(linked_instance, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.$]*", linked_instance):
+                    raise ValueError("parameter linked_instances must contain valid identifiers")
             if spec.sync_property is not None:
                 if not isinstance(spec.sync_property, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.$]*", spec.sync_property):
                     raise ValueError("parameter sync_property must be a valid identifier")
+                if spec.sync_factor is not None:
+                    sync_factor = self._finite_number(spec.sync_factor, "%s sync_factor" % spec.name)
+                    if sync_factor <= 0.0:
+                        raise ValueError("parameter sync_factor must be positive")
+            elif spec.sync_factor is not None:
+                raise ValueError("parameter sync_factor requires sync_property")
             names.append(spec.name)
         if len(names) != len(set(names)):
             raise ValueError("parameter names must be unique")

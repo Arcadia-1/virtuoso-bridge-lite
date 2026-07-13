@@ -158,3 +158,10 @@ def test_parameter_space_rejects_invalid_sync_property():
     item = ParameterSpec(name="W", target="virtuoso_cdf", lower=1e-6, upper=20e-6, instance="M1", property="w", sync_property="bad property")
     with pytest.raises(ValueError, match="sync_property"):
         ParameterSpace([item])
+
+
+@pytest.mark.parametrize("factor", [0, -1, math.nan, math.inf])
+def test_parameter_space_rejects_invalid_sync_factor(factor):
+    item = ParameterSpec(name="W", target="virtuoso_cdf", lower=1e-6, upper=20e-6, instance="M1", property="w", sync_property="fw", sync_factor=factor)
+    with pytest.raises(ValueError, match="sync_factor"):
+        ParameterSpace([item])

@@ -31,6 +31,8 @@ _UNIT_FACTORS = {
     if unit
 }
 
+_UNIT_FACTORS.update({"u": 1e-6, "n": 1e-9})
+
 _QUANTITY_RE = re.compile(
     r"^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*([A-Za-z]*)\s*$"
 )

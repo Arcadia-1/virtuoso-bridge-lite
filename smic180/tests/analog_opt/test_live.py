@@ -138,6 +138,14 @@ def test_metrics_adapter_preserves_curves_and_extracts_task6_metrics():
  assert metrics['curves']['ac_main']['response']==[[10.0,0.0],[1.0,0.0],[0.1,0.0]]
  assert metrics['curves']['line']['x']==data['VDD_SWEEP']
 
+def test_dc_op_metrics_can_export_nodes_and_source_currents():
+ data={"op_VOUT":2.2,"op_IBIAS":2.0,"op_SRC_AVD:p":-126e-6,"op:M1":{"gm":1e-3,"id":1e-4}}
+ result=type("R",(),{"ok":True,"data":data})()
+ metrics=MetricsAdapter([{"name":"op","type":"dc_op","instances":["M1"],"nodes":["VOUT","IBIAS"],"source_currents":{"idd":"SRC_AVD:p"}}])({"op":result})
+ assert metrics["op.node.VOUT"]==2.2
+ assert metrics["op.node.IBIAS"]==2.0
+ assert metrics["op.current.idd"]==-126e-6
+
 def test_publication_confirmation_reads_result_cdf_and_cell_exists(tmp_path):
  class A:
   def cell_exists(self,lib,cell): return True
@@ -330,16 +338,6 @@ def test_mixed_corner_replaces_only_core_tt_sections():
  patched=__import__('analog_opt.live',fromlist=['patch_smic180_corner']).patch_smic180_corner(deck,'FNSP')
  assert [(m.path,m.section) for m in patched.model_includes]==[('core.scs','fnsp_core'),('passive.scs','tt_res')]
 
-def test_same_file_core_and_mim_sections_use_supported_mixed_corner_mapping():
- def deck():
-  models=[type('M',(),{'path':'models.scs','section':'tt'})(),type('M',(),{'path':'models.scs','section':'mim_tt'})()]
-  return type('D',(),{'model_includes':models})()
- patch=__import__('analog_opt.live',fromlist=['patch_smic180_corner']).patch_smic180_corner
- mixed=patch(deck(),'FNSP',core_model_include='models.scs')
- assert [m.section for m in mixed.model_includes]==['fnsp','mim_tt']
- fast=patch(deck(),'FF',core_model_include='models.scs')
- assert [m.section for m in fast.model_includes]==['ff','mim_ff']
-
 
 def test_metrics_adapter_validates_dc_curve_and_writes_svg(tmp_path):
  result=type('R',(),{'ok':True,'data':{'VDD_SWEEP':[2.7,3.0,3.3],'dc:VOUT':[1.0,1.1,1.2]},'metadata':{'run_dir':str(tmp_path)}})()
@@ -454,3 +452,29 @@ def test_confirm_cdf_does_not_map_cdf_total_w_to_deck_finger_w(tmp_path):
  specs=[ParameterSpec('M7_W','virtuoso_cdf',8e-4,12e-4,instance='M7',property='w',unit='m')]
  adapter=NetlistAdapter(Client(),Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=None,base_deck_factory=None)
  assert adapter.confirm_cdf(deck,specs)['M7_W']==pytest.approx(10e-6)
+
+
+def test_confirm_cdf_restores_total_width_when_sync_factor_is_declared(tmp_path):
+ deck=tmp_path/"deck.scs"
+ deck.write_text("subckt amp_work A B\nM11 (A B 0 0) p33e2r w=2u l=1u m=(1)*(4)\nends amp_work\nDUT (A B) amp_work\n")
+ specs=[ParameterSpec("M11_W","virtuoso_cdf",2.4e-6,12e-6,instance="M11",property="w",unit="um",sync_property="fw",sync_factor=0.25)]
+ adapter=NetlistAdapter(Client(),Site(),library="tr",source_tb="amp_tb",work_cell="amp_work",exporter=None,base_deck_factory=None)
+ assert adapter.confirm_cdf(deck,specs)["M11_W"]==pytest.approx(8e-6)
+
+
+def test_confirm_cdf_checks_all_linked_instances_in_netlist(tmp_path):
+ deck=tmp_path/"deck.scs"
+ deck.write_text("subckt amp_work A B\nM0 (A B 0 0) p33e2r w=6u l=800n m=(4)*(4)\nM1 (A B 0 0) p33e2r w=6u l=800n m=(4)*(4)\nends amp_work\nDUT (A B) amp_work\n")
+ specs=[ParameterSpec("PAIR_W","virtuoso_cdf",2.4e-6,24e-6,instance="M0",linked_instances=("M1",),property="w",unit="um",sync_property="fw",sync_factor=0.25)]
+ adapter=NetlistAdapter(Client(),Site(),library="tr",source_tb="amp_tb",work_cell="amp_work",exporter=None,base_deck_factory=None)
+ assert adapter.confirm_cdf(deck,specs)["PAIR_W"]==pytest.approx(24e-6)
+
+def test_same_file_core_and_mim_sections_use_supported_mixed_corner_mapping():
+ def deck():
+  models=[type('M',(),{'path':'models.scs','section':'tt'})(),type('M',(),{'path':'models.scs','section':'mim_tt'})()]
+  return type('D',(),{'model_includes':models})()
+ patch=__import__('analog_opt.live',fromlist=['patch_smic180_corner']).patch_smic180_corner
+ mixed=patch(deck(),'FNSP',core_model_include='models.scs')
+ assert [m.section for m in mixed.model_includes]==['fnsp','mim_tt']
+ fast=patch(deck(),'FF',core_model_include='models.scs')
+ assert [m.section for m in fast.model_includes]==['ff','mim_ff']

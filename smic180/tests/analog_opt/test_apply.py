@@ -12,22 +12,33 @@ class RecordingClient:
     def __init__(self, results): self.results=list(results); self.calls=[]
     def execute_skill(self, skill, timeout=30): self.calls.append((skill,timeout)); return self.results.pop(0)
 
-def spec(name, instance, prop, unit=None, dtype="float", target="virtuoso_cdf", sync_property=None):
-    return ParameterSpec(name=name,target=target,lower=0,upper=100,dtype=dtype,instance=instance,property=prop,unit=unit,sync_property=sync_property)
+def spec(name, instance, prop, unit=None, dtype="float", target="virtuoso_cdf", sync_property=None, sync_factor=None):
+    return ParameterSpec(name=name,target=target,lower=0,upper=100,dtype=dtype,instance=instance,property=prop,unit=unit,sync_property=sync_property,sync_factor=sync_factor)
 
 def test_apply_single_transaction_uses_cdf_and_verifies_before_save():
     c=RecordingClient([Result("t"), Result("t"), Result("ANALOG_OPT_OK:apply")]); VirtuosoApplier(c).apply_cdf("tr","work",[spec("W","M1","w","um"),spec("R","R1","r","kOhm")],{"W":10e-6,"R":2000.0})
     assert len(c.calls)==3
     update = " ".join(call[0] for call in c.calls[:-1])
     save = c.calls[-1][0]
-    assert 'setInstParams("tr" "work" "M1" list("w" "10um"))' in update
+    assert 'setInstParams("tr" "work" "M1" list("w" "10u"))' in update
     assert 'setInstParams("tr" "work" "R1" list("r" "2kOhm"))' in update
     assert "schCheck(cv)" in save and "dbSave(cv)" in save
     assert "foreach(inst cv~>instances" not in save and "cdfGetInstCDF" not in save
 
 def test_explicit_sync_property_uses_db_replace_prop_only_for_sync():
     c=RecordingClient([Result("t"), Result("ANALOG_OPT_OK:apply")]); VirtuosoApplier(c).apply_cdf("tr","work",[spec("W","M1","w","um",sync_property="fw")],{"W":10e-6})
-    s=c.calls[0][0]; assert 'list("w" "10um" "fw" "10um")' in s; assert "dbReplaceProp" not in s
+    s=c.calls[0][0]; assert 'list("w" "10u" "fw" "10u")' in s; assert "dbReplaceProp" not in s
+
+def test_smic180_mos_dimensions_use_cdf_suffixes():
+    c=RecordingClient([Result("t"), Result("ANALOG_OPT_OK:apply")])
+    VirtuosoApplier(c).apply_cdf("tr", "work", [spec("W", "M1", "w", "um"), spec("L", "M1", "l", "nm")], {"W": 1.2e-6, "L": 800e-9})
+    script = c.calls[0][0]
+    assert 'list("w" "1.2u" "l" "800n")' in script
+
+def test_sync_property_can_scale_total_width_to_finger_width():
+    c=RecordingClient([Result("t"), Result("ANALOG_OPT_OK:apply")])
+    VirtuosoApplier(c).apply_cdf("tr", "work", [spec("W", "M11", "w", "um", sync_property="fw", sync_factor=0.25)], {"W": 8e-6})
+    assert 'list("w" "8u" "fw" "2u")' in c.calls[0][0]
 
 def test_non_mos_width_without_sync_does_not_write_fw():
     c=RecordingClient([Result("t"), Result("ANALOG_OPT_OK:apply")]); VirtuosoApplier(c).apply_cdf("tr","work",[spec("W","R1","w","um")],{"W":10e-6}); assert '"fw"' not in c.calls[0][0]
@@ -76,7 +87,7 @@ def test_read_protocol_errors():
 def test_explicit_sync_property_is_written_in_same_set_inst_params_call():
     c = RecordingClient([Result("t"), Result("ANALOG_OPT_OK:apply")])
     VirtuosoApplier(c).apply_cdf("tr", "work", [spec("W", "M1", "w", "um", sync_property="fw")], {"W": 10e-6})
-    assert 'setInstParams("tr" "work" "M1" list("w" "10um" "fw" "10um"))' in c.calls[0][0]
+    assert 'setInstParams("tr" "work" "M1" list("w" "10u" "fw" "10u"))' in c.calls[0][0]
     assert "dbReplaceProp" not in c.calls[0][0]
 
 
@@ -343,3 +354,18 @@ def test_fresh_copy_skill_is_balanced_and_marks_completion_before_sentinel():
     assert skill.count("(") == skill.count(")")
     assert '"ANALOG_OPT_OK:create:CREATED"' in skill
     assert 'unless(txn progn(' in skill
+
+
+def test_linked_instances_receive_same_cdf_update():
+    linked = ParameterSpec(name="PAIR_W", target="virtuoso_cdf", lower=2.4e-6, upper=24e-6, instance="M0", linked_instances=("M1",), property="w", unit="um", sync_property="fw", sync_factor=0.25)
+    c=RecordingClient([Result("t"), Result("t"), Result("ANALOG_OPT_OK:apply")])
+    VirtuosoApplier(c).apply_cdf("tr","work",[linked],{"PAIR_W":8e-6})
+    text=" ".join(call[0] for call in c.calls[:-1])
+    assert 'setInstParams("tr" "work" "M0" list("w" "8u" "fw" "2u"))' in text
+    assert 'setInstParams("tr" "work" "M1" list("w" "8u" "fw" "2u"))' in text
+
+def test_linked_instances_readback_must_match():
+    linked = ParameterSpec(name="PAIR_W", target="virtuoso_cdf", lower=2.4e-6, upper=24e-6, instance="M0", linked_instances=("M1",), property="w", unit="um")
+    c=RecordingClient([Result("ANALOG_OPT_OK:read\nPAIR_W\t8u\nPAIR_W__linked_0\t9u")])
+    with pytest.raises(ApplyError,match="linked instance"):
+        VirtuosoApplier(c).read_cdf("tr","work",[linked])

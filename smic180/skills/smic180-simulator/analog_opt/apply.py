@@ -241,14 +241,21 @@ class VirtuosoApplier:
         for spec in selected:
             value = _number(candidate[spec.name], spec)
             try:
-                cdf_unit = "mm" if spec.unit == "m" else spec.unit
+                cdf_unit = {"m": "mm", "um": "u", "nm": "n"}.get(spec.unit, spec.unit)
                 text = format_quantity(value, cdf_unit) if cdf_unit else (str(value) if spec.dtype == "int" else "%.12g" % value)
             except UnitError as exc:
                 raise ApplyError("invalid unit for %s: %s" % (spec.name, exc)) from exc
-            pairs = grouped.setdefault(spec.instance, [])
-            pairs.append((spec.property, text))
+            instances=(spec.instance,)+tuple(spec.linked_instances)
+            for target_instance in instances:
+                grouped.setdefault(target_instance, []).append((spec.property, text))
             if spec.sync_property is not None:
-                pairs.append((_identifier(spec.sync_property, "sync property"), text))
+                sync_value = value * (float(spec.sync_factor) if spec.sync_factor is not None else 1.0)
+                try:
+                    sync_text = format_quantity(sync_value, cdf_unit) if cdf_unit else (str(sync_value) if spec.dtype == "int" else "%.12g" % sync_value)
+                except UnitError as exc:
+                    raise ApplyError("invalid sync unit for %s: %s" % (spec.name, exc)) from exc
+                for target_instance in instances:
+                    grouped[target_instance].append((_identifier(spec.sync_property, "sync property"), sync_text))
         for instance, pairs in grouped.items():
             arguments = " ".join("%s %s" % (_quote(name), _quote(text)) for name, text in pairs)
             skill = "setInstParams(%s %s %s list(%s))" % (_quote(library), _quote(cell), _quote(instance), arguments)
@@ -272,13 +279,17 @@ class VirtuosoApplier:
         cell = _identifier(cell, "cell")
         selected = self._cdf_specs(specs)
         rows = []
+        read_keys = {}
         for spec in selected:
-            rows.append(
-                "inst=nil param=nil foreach(x cv~>instances when(x~>name==%s inst=x)) unless(inst error(\"instance not found\")) "
-                "foreach(p cdfGetInstCDF(inst)~>parameters when(p~>name==%s param=p)) "
-                "unless(param error(\"CDF parameter missing\")) out=strcat(out sprintf(nil \"\\n%s\\t%%s\" param~>value))"
-                % (_quote(spec.instance), _quote(spec.property), spec.name)
-            )
+            for linked_index, target_instance in enumerate((spec.instance,) + tuple(spec.linked_instances)):
+                key = spec.name if linked_index == 0 else spec.name + "__linked_%d" % (linked_index - 1)
+                read_keys[key] = spec
+                rows.append(
+                    "inst=nil param=nil foreach(x cv~>instances when(x~>name==%s inst=x)) unless(inst error(\"instance not found\")) "
+                    "foreach(p cdfGetInstCDF(inst)~>parameters when(p~>name==%s param=p)) "
+                    "unless(param error(\"CDF parameter missing\")) out=strcat(out sprintf(nil \"\\n%s\t%%s\" param~>value))"
+                    % (_quote(target_instance), _quote(spec.property), key)
+                )
         skill = (
             "let((cv inst x p param out) cv=dbOpenCellViewByType(%s %s \"schematic\" \"schematic\" \"r\") "
             "unless(cv error(\"schematic missing\")) out=\"ANALOG_OPT_OK:read\" "
@@ -286,7 +297,7 @@ class VirtuosoApplier:
         ) % (_quote(library), _quote(cell), " ".join(rows))
         output = self._execute(skill, "ANALOG_OPT_OK:read")
         parsed: Dict[str, Real] = {}
-        expected = {spec.name: spec for spec in selected}
+        expected = read_keys
         for raw_line in output.splitlines():
             line = raw_line.strip()
             if not line or line == "ANALOG_OPT_OK:read":
@@ -318,7 +329,15 @@ class VirtuosoApplier:
         missing = set(expected) - set(parsed)
         if missing:
             raise ApplyError("missing read values: %s" % ", ".join(sorted(missing)))
-        return parsed
+        result = {}
+        for spec in selected:
+            primary = parsed[spec.name]
+            for linked_index in range(len(spec.linked_instances)):
+                linked = parsed[spec.name + "__linked_%d" % linked_index]
+                if not math.isclose(float(primary), float(linked), rel_tol=1e-9, abs_tol=1e-15):
+                    raise ApplyError("linked instance read values differ for %s" % spec.name)
+            result[spec.name] = primary
+        return result
     def publish_result_cell(self, library: str, work_cell: str, result_cell: str, source_cell: str, replace: bool) -> None:
         work_cell = _identifier(work_cell, "work cell")
         result_cell = _identifier(result_cell, "result cell")

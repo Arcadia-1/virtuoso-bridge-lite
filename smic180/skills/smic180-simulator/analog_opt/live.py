@@ -221,11 +221,17 @@ class NetlistAdapter:
   if not block: raise ValueError('complete work-cell subckt unavailable')
   result={}
   for spec in specs:
-   line=re.search(r'(?mi)^\s*%s\b([^\n]*)'%re.escape(spec.instance),block.group(0))
-   if line:
-    deck_property='w' if spec.property=='fw' else spec.property
-    value=re.search(r'\b%s\s*=\s*(\([^\n]*?\)|[^\s]+)'%re.escape(deck_property),line.group(1),re.I)
-    if value: result[spec.name]=_spectre_number(value.group(1),'length' if spec.unit in ('m','mm','um','nm') else 'scalar')
+   observed=[]
+   for target_instance in (spec.instance,)+tuple(spec.linked_instances):
+    line=re.search(r'(?mi)^\s*%s\b([^\n]*)'%re.escape(target_instance),block.group(0))
+    if line:
+     deck_property='w' if spec.property=='fw' else spec.property
+     value=re.search(r'\b%s\s*=\s*(\([^\n]*?\)|[^\s]+)'%re.escape(deck_property),line.group(1),re.I)
+     if value:
+      parsed=_spectre_number(value.group(1),'length' if spec.unit in ('m','mm','um','nm') else 'scalar')
+      if spec.property=='w' and spec.sync_property=='fw' and spec.sync_factor is not None: parsed/=float(spec.sync_factor)
+      observed.append(parsed)
+   if len(observed)==1+len(spec.linked_instances) and all(math.isclose(float(observed[0]),float(item),rel_tol=1e-9,abs_tol=1e-15) for item in observed[1:]): result[spec.name]=observed[0]
   if set(result)!={spec.name for spec in specs}: raise ValueError('complete CDF parameter set unavailable in DUT subckt')
   return result
 
@@ -261,6 +267,18 @@ class MetricsAdapter:
      op=data.get('op:'+inst)
      if not isinstance(op,Mapping): raise AnalysisError('operating-point data unavailable for '+inst)
      maps.append(extract_mos_op_metrics(inst,op))
+    dc_metrics={}
+    for node in analysis.get('nodes',[]):
+     value=data.get(node,data.get('op_'+node))
+     if isinstance(value,(list,tuple)): value=value[-1] if value else None
+     if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(float(value)): raise AnalysisError('DC node data unavailable for '+node)
+     dc_metrics['op.node.'+node]=float(value)
+    for metric,signal in analysis.get('source_currents',{}).items():
+     value=data.get(signal,data.get('op_'+signal))
+     if isinstance(value,(list,tuple)): value=value[-1] if value else None
+     if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(float(value)): raise AnalysisError('DC source current unavailable for '+signal)
+     dc_metrics['op.current.'+metric]=float(value)
+    maps.append(dc_metrics)
    elif kind=='dc_sweep':
     x=data.get(analysis['parameter']); y=data.get('dc:'+signal,data.get(signal))
     if not isinstance(x,(list,tuple)) or not isinstance(y,(list,tuple)) or len(x)<2 or len(x)!=len(y) or len(x)!=analysis.get('points',len(x)) or any(isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(float(v)) for v in list(x)+list(y)): raise AnalysisError('invalid DC sweep curve for '+name)
@@ -300,7 +318,7 @@ class PublicationAdapter:
 def _load_client_class():
  from virtuoso_bridge import VirtuosoClient
  return VirtuosoClient
-def _parameter(r): return ParameterSpec(name=r['name'],target=r['target'],lower=r['lower'],upper=r['upper'],dtype=r.get('dtype','float'),scale=r.get('scale','linear'),step=r.get('step'),instance=r.get('instance'),property=r.get('property'),variable=r.get('variable'),stimulus=r.get('stimulus'),unit=r.get('unit'),sync_property=r.get('sync_property'))
+def _parameter(r): return ParameterSpec(name=r['name'],target=r['target'],lower=r['lower'],upper=r['upper'],dtype=r.get('dtype','float'),scale=r.get('scale','linear'),step=r.get('step'),instance=r.get('instance'),linked_instances=tuple(r.get('linked_instances',())),property=r.get('property'),variable=r.get('variable'),stimulus=r.get('stimulus'),unit=r.get('unit'),sync_property=r.get('sync_property'),sync_factor=r.get('sync_factor'))
 def _spec(r): return Spec(metric=r['metric'],op=r['op'],value=r.get('value'),lower=r.get('lower'),upper=r.get('upper'),weight=r.get('weight',1),hard=r.get('hard',False),tolerance=r.get('tolerance',0))
 def _spec_eval(specs):
  def call(metrics):
