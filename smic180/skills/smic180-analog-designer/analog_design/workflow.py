@@ -317,24 +317,135 @@ class DesignWorkflow:
         self.state.advance("equivalence_passed", {"confirmation": str(marker.relative_to(self.run_dir))})
         return marker
 
-    def record_simulator_handoff(self, pins: str | Path, config: str | Path, review: str | Path) -> Path:
+    @staticmethod
+    def _external_json(path: str | Path, label: str) -> tuple[Path, dict[str, Any]]:
+        source = Path(path)
+        try:
+            value = json.loads(source.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise WorkflowError(f"invalid {label}: {exc}") from exc
+        if not isinstance(value, dict):
+            raise WorkflowError(f"invalid {label}: expected JSON object")
+        return source, value
+
+    @staticmethod
+    def _require_checks(value: dict[str, Any], names: tuple[str, ...], label: str) -> None:
+        checks = value.get("checks")
+        if not isinstance(checks, dict) or any(checks.get(name) is not True for name in names):
+            raise WorkflowError(f"{label} does not prove all required checks")
+
+    def record_simulator_preparation(self, pins: str | Path, config: str | Path, review: str | Path) -> Path:
         if self.state.current != "equivalence_passed":
-            raise WorkflowError("simulator handoff requires equivalence_passed state")
-        marker = self.store.confirm(self.run_dir / "simulator" / "simulator_validated.confirmed.json", "simulator_validated", [pins, config, review])
+            raise WorkflowError("simulator preparation requires equivalence_passed state")
+        return self.store.confirm(
+            self.run_dir / "simulator" / "prepared.confirmed.json",
+            "simulator_prepared",
+            [pins, config, review],
+        )
+
+    def record_simulator_validation(self, external_evidence: str | Path) -> Path:
+        if self.state.current != "equivalence_passed":
+            raise WorkflowError("simulator validation requires equivalence_passed state")
+        source, value = self._external_json(external_evidence, "simulator evidence")
+        if value.get("status") != "passed":
+            raise WorkflowError("simulator evidence status is not passed")
+        self._require_checks(value, ("spectre_passed", "fresh_results", "measurements_readable"), "simulator evidence")
+        marker = self.store.confirm(
+            self.run_dir / "simulator" / "simulator_validated.confirmed.json",
+            "simulator_validated",
+            [source],
+        )
         self.state.advance("simulator_validated", {"confirmation": str(marker.relative_to(self.run_dir))})
         return marker
+
+    def record_simulator_handoff(self, pins: str | Path, config: str | Path, review: str | Path) -> Path:
+        """Compatibility alias that now records preparation without advancing."""
+        return self.record_simulator_preparation(pins, config, review)
 
     def record_optimizer_preparation(self, config: str | Path, baseline: str | Path, evidence: str | Path) -> Path:
         if self.state.current != "simulator_validated":
             raise WorkflowError("optimizer preparation requires simulator_validated state")
         return self.store.confirm(self.run_dir / "optimizer" / "prepared.confirmed.json", "optimizer_prepared", [config, baseline, evidence])
 
-    def record_optimizer_completion(self, external_confirmation: str | Path) -> Path:
+    def record_optimizer_completion(self, workflow_state: str | Path, result_manifest: str | Path) -> Path:
         if self.state.current != "simulator_validated":
             raise WorkflowError("optimizer completion requires simulator_validated state")
-        source = Path(external_confirmation)
-        if not source.is_file() or "confirmed" not in source.name:
-            raise WorkflowError("optimizer completion requires an external confirmed run artifact")
-        marker = self.store.confirm(self.run_dir / "optimizer" / "optimization_complete.confirmed.json", "optimization_complete", [source])
+        state_path, state_value = self._external_json(workflow_state, "optimizer workflow state")
+        result_path, result_value = self._external_json(result_manifest, "optimizer result manifest")
+        candidate_hash = state_value.get("candidate_hash")
+        if state_value.get("state") not in {"pvt_passed", "published"} or not isinstance(candidate_hash, str) or not candidate_hash:
+            raise WorkflowError("optimizer workflow state does not prove fresh replay")
+        best = result_value.get("best")
+        if result_value.get("publishable") is not True or not isinstance(best, dict) or float(best.get("objective", 1.0)) > 0.0:
+            raise WorkflowError("optimizer result manifest does not prove fresh replay")
+        reference = self.store.write_json(self.run_dir / "optimizer" / "run_reference.json", {
+            "candidate_hash": candidate_hash,
+            "workflow_state": str(state_path.resolve()),
+            "result_manifest": str(result_path.resolve()),
+        })
+        marker = self.store.confirm(
+            self.run_dir / "optimizer" / "optimization_complete.confirmed.json",
+            "optimization_complete",
+            [state_path, result_path, reference],
+        )
         self.state.advance("optimization_complete", {"confirmation": str(marker.relative_to(self.run_dir))})
+        return marker
+
+    def _candidate_hash(self) -> str:
+        _, value = self._external_json(self.run_dir / "optimizer" / "run_reference.json", "optimizer run reference")
+        candidate_hash = value.get("candidate_hash")
+        if not isinstance(candidate_hash, str) or not candidate_hash:
+            raise WorkflowError("optimizer run reference has no candidate hash")
+        return candidate_hash
+
+    def record_pvt_completion(self, pvt_results: str | Path, *, expected_points: int) -> Path:
+        if self.state.current != "optimization_complete":
+            raise WorkflowError("PVT completion requires optimization_complete state")
+        source, value = self._external_json(pvt_results, "PVT results")
+        points = value.get("points")
+        failures = value.get("failures")
+        if value.get("overall_passed") is not True or not isinstance(points, list) or len(points) != expected_points or failures != []:
+            raise WorkflowError("PVT results do not prove the expected passing point set")
+        marker = self.store.confirm(self.run_dir / "optimizer" / "pvt_passed.confirmed.json", "pvt_passed", [source])
+        self.state.advance("pvt_passed", {"confirmation": str(marker.relative_to(self.run_dir))})
+        return marker
+
+    def record_publication(self, workflow_state: str | Path, publication_confirmation: str | Path) -> Path:
+        if self.state.current != "pvt_passed":
+            raise WorkflowError("publication requires pvt_passed state")
+        state_path, state_value = self._external_json(workflow_state, "optimizer workflow state")
+        publication_path, publication_value = self._external_json(publication_confirmation, "publication confirmation")
+        candidate_hash = self._candidate_hash()
+        if state_value.get("state") != "published" or state_value.get("candidate_hash") != candidate_hash:
+            raise WorkflowError("optimizer workflow state does not prove publication")
+        if publication_value.get("candidate_hash") != candidate_hash:
+            raise WorkflowError("publication candidate hash does not match optimizer result")
+        marker = self.store.confirm(
+            self.run_dir / "optimizer" / "published.confirmed.json",
+            "published",
+            [state_path, publication_path],
+        )
+        self.state.advance("published", {"confirmation": str(marker.relative_to(self.run_dir))})
+        return marker
+
+    def record_final_validation(self, final_confirmation: str | Path, maestro_confirmation: str | Path, *, expected_points: int) -> Path:
+        if self.state.current != "published":
+            raise WorkflowError("final validation requires published state")
+        final_path, final_value = self._external_json(final_confirmation, "final validation confirmation")
+        maestro_path, maestro_value = self._external_json(maestro_confirmation, "Maestro confirmation")
+        if final_value.get("status") != "passed" or final_value.get("details", {}).get("candidate_hash") != self._candidate_hash():
+            raise WorkflowError("final validation does not match the published candidate")
+        self._require_checks(final_value, ("spectre_passed", "fresh_results", "pvt_passed", "dut_uses_result"), "final validation")
+        if maestro_value.get("status") != "passed":
+            raise WorkflowError("Maestro confirmation status is not passed")
+        self._require_checks(maestro_value, ("maestro_run_completed", "reopen_check_passed"), "Maestro confirmation")
+        checks = maestro_value.get("checks", {})
+        if checks.get("corner_count") != expected_points or checks.get("failed_corner_count") != 0:
+            raise WorkflowError("Maestro confirmation does not prove the expected passing corner set")
+        marker = self.store.confirm(
+            self.run_dir / "optimizer" / "final_validation_passed.confirmed.json",
+            "final_validation_passed",
+            [final_path, maestro_path],
+        )
+        self.state.advance("final_validation_passed", {"confirmation": str(marker.relative_to(self.run_dir))})
         return marker

@@ -44,6 +44,13 @@ def _parser() -> argparse.ArgumentParser:
     freeze.add_argument("--run-dir", type=Path, required=True)
     freeze.add_argument("--allow-near-feasible", action="store_true")
     freeze.add_argument("--reason", default="")
+    simulator_validation = commands.add_parser("validate-simulator")
+    simulator_validation.add_argument("--run-dir", type=Path, required=True)
+    simulator_validation.add_argument("--evidence", type=Path, required=True)
+    optimizer_binding = commands.add_parser("bind-optimizer-run")
+    optimizer_binding.add_argument("--run-dir", type=Path, required=True)
+    optimizer_binding.add_argument("--optimizer-run-dir", type=Path, required=True)
+    optimizer_binding.add_argument("--expected-pvt-points", type=int, default=45)
     discovery = commands.add_parser("discover-technology")
     discovery.add_argument("--output", type=Path, required=True)
     discovery.add_argument("--plan-only", action="store_true")
@@ -102,6 +109,26 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "freeze":
             DesignWorkflow.resume(args.run_dir).freeze(allow_near_feasible=args.allow_near_feasible, reason=args.reason)
+            return 0
+        if args.command == "validate-simulator":
+            DesignWorkflow.resume(args.run_dir).record_simulator_validation(args.evidence)
+            return 0
+        if args.command == "bind-optimizer-run":
+            workflow = DesignWorkflow.resume(args.run_dir)
+            root = args.optimizer_run_dir
+            if workflow.state.current == "simulator_validated":
+                workflow.record_optimizer_completion(root / "workflow_state.json", root / "result_manifest.json")
+            if workflow.state.current == "optimization_complete":
+                workflow.record_pvt_completion(root / "pvt_results.json", expected_points=args.expected_pvt_points)
+            if workflow.state.current == "pvt_passed":
+                workflow.record_publication(root / "workflow_state.json", root / "publication.confirmed.json")
+            if workflow.state.current == "published":
+                workflow.record_final_validation(
+                    root / "final_validation" / "final_validation.confirmed.json",
+                    root / "maestro_validation" / "maestro_validation.confirmed.json",
+                    expected_points=args.expected_pvt_points,
+                )
+            print(workflow.state.current)
             return 0
         if args.command == "resume":
             print(DesignWorkflow.resume(args.run_dir).state.current)
