@@ -12,6 +12,7 @@ from .artifacts import ArtifactError, ArtifactStore, file_sha256
 from .builder import build_circuit_ir
 from .ir import CircuitIr, canonical_ir_digest, load_circuit_ir
 from .netlist.spectre_writer import SpectreWriter
+from .schemas import circuit_ir_schema, design_spec_schema
 from .sizing.base import SizingResult
 from .sizing.square_law import size_two_stage_miller
 from .spec import DesignSpec, load_design_spec
@@ -137,7 +138,8 @@ class DesignWorkflow:
             if self.state.current != "initialized":
                 raise WorkflowError("validate_spec requires initialized state")
             spec = load_design_spec(self.spec_path)
-            marker = self.store.confirm(self.run_dir / "inputs" / "spec_validated.confirmed.json", "spec_validated", [self.spec_path])
+            schema_path = self.store.write_json(self.run_dir / "inputs" / "design_spec.schema.json", design_spec_schema())
+            marker = self.store.confirm(self.run_dir / "inputs" / "spec_validated.confirmed.json", "spec_validated", [self.spec_path, schema_path])
             self.state.advance("spec_validated", {"confirmation": str(marker.relative_to(self.run_dir))})
             return spec
         return self._guard("spec_validated", operation)
@@ -172,7 +174,17 @@ class DesignWorkflow:
                 "records": {name: {"formula_id": item.formula_id, "inputs": dict(item.inputs), "assumptions": list(item.assumptions), "dimension": item.dimension, "value": item.value, "status": item.status, "confidence": item.confidence} for name, item in result.records.items()},
                 "confirmed_values": dict(result.confirmed_values),
             })
-            marker = self.store.confirm(self.run_dir / "sizing" / "initial_sizing_complete.confirmed.json", "initial_sizing_complete", [path])
+            report_lines = ["# Initial Sizing Calculation Report", "", "Theoretical estimates are not declarations of legal PDK CDF values.", ""]
+            for name, item in result.records.items():
+                report_lines.extend([
+                    f"## {name}", "", f"- Formula: `{item.formula_id}`",
+                    f"- Dimension: `{item.dimension}`", f"- Value: `{item.value:.12g}`",
+                    f"- Status: `{item.status}`", f"- Confidence: `{item.confidence}`",
+                    "- Inputs: " + ", ".join(f"`{key}={value:.12g}`" for key, value in item.inputs.items()),
+                    "- Assumptions: " + "; ".join(item.assumptions), "",
+                ])
+            report_path = self.store.write_text(self.run_dir / "sizing" / "calculation_report.md", "\n".join(report_lines))
+            marker = self.store.confirm(self.run_dir / "sizing" / "initial_sizing_complete.confirmed.json", "initial_sizing_complete", [path, report_path])
             self.state.advance("initial_sizing_complete", {"confirmation": str(marker.relative_to(self.run_dir))})
             return result
         return self._guard("initial_sizing_complete", operation)
@@ -193,7 +205,8 @@ class DesignWorkflow:
             validate_circuit_ir(ir)
             path = self.run_dir / "ir" / "circuit_ir.json"
             self.store.write_json(path, dict(ir.source_data))
-            dependencies = [path]
+            schema_path = self.store.write_json(self.run_dir / "ir" / "circuit_ir.schema.json", circuit_ir_schema())
+            dependencies = [path, schema_path]
             if profile.state == "confirmed":
                 profile.require_live_ready()
                 profile_path = self.run_dir / "ir" / "technology_profile.json"

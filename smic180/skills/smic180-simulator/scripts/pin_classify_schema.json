@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pin Classification Output - SMIC180",
+  "description": "Schema for LLM-generated pin classification results with dual-side topology",
+  "type": "object",
+  "required": [
+    "lib",
+    "cell",
+    "vdd_value",
+    "pins"
+  ],
+  "properties": {
+    "lib": {
+      "type": "string",
+      "description": "Virtuoso library name"
+    },
+    "cell": {
+      "type": "string",
+      "description": "Primary cell name"
+    },
+    "vdd_value": {
+      "type": "number",
+      "description": "Core supply voltage in volts (e.g. 0.9)"
+    },
+    "vio_low": {
+      "type": "number",
+      "description": "Low-domain IO voltage in volts (e.g. 0.9)"
+    },
+    "vio_high": {
+      "type": "number",
+      "description": "High-domain IO voltage in volts (e.g. 1.8)"
+    },
+    "llm_model": {
+      "type": "string",
+      "description": "LLM model that generated this classification"
+    },
+    "timestamp": {
+      "type": "string",
+      "description": "ISO 8601 timestamp"
+    },
+    "analog_local_grounds": {
+      "type": "array",
+      "description": "Zone map for analog local grounds",
+      "items": {
+        "type": "object",
+        "required": [
+          "pvss_name",
+          "members"
+        ],
+        "properties": {
+          "pvss_name": {
+            "type": "string"
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "digital_low_gnd": {
+      "type": "string",
+      "description": "Name of the consumer ground pin for digital IO inner references"
+    },
+    "digital_supply_pairs": {
+      "type": "array",
+      "description": "Consumer power/ground pairs for supply current sources",
+      "items": {
+        "type": "object",
+        "required": [
+          "power",
+          "ground",
+          "idc"
+        ],
+        "properties": {
+          "power": {
+            "type": "string"
+          },
+          "ground": {
+            "type": "string"
+          },
+          "idc": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "pins": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "device_class",
+          "domain",
+          "confidence",
+          "reason"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Pin name (must match pin_info.json)"
+          },
+          "device_class": {
+            "type": "string",
+            "enum": [
+              "analog_power",
+              "analog_ground",
+              "dig_consumer_power",
+              "dig_consumer_ground",
+              "dig_provider_power",
+              "dig_provider_ground",
+              "digital_io_input",
+              "digital_io_output"
+            ],
+            "description": "Classified device class for SMIC180 IO cells"
+          },
+          "pin_type": {
+            "type": "string",
+            "description": "Legacy field; set same value as device_class"
+          },
+          "domain": {
+            "type": "string",
+            "enum": [
+              "analog",
+              "digital"
+            ],
+            "description": "Circuit domain"
+          },
+          "local_pvss": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Analog local ground pin name (analog_power only)"
+          },
+          "stimulus": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Outer (left) side stimulus device: vdc, vpulse, idc, or null"
+          },
+          "stimulus_params": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Outer stimulus parameters",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "load": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Outer (left) side load device: cap, or null"
+          },
+          "load_params": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Outer load parameters",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "inner_stimulus": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Inner (right/CORE) side device: idc, vdc, cap, or null"
+          },
+          "inner_params": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Inner device parameters",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "LLM self-assessed confidence"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why this classification was chosen"
+          },
+          "local_dig_gnd": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For dig_provider_power/dig_consumer_power: name of paired digital ground pin"
+          },
+          "inner_load": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Inner (right/CORE) side load device: cap, res, or null"
+          },
+          "inner_load_params": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Inner load parameters",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "shared_output_vpulse": {
+      "type": "object",
+      "description": "Vpulse parameters for the single shared digital-output inner driver",
+      "properties": {
+        "v1": {
+          "type": "string",
+          "description": "Low voltage"
+        },
+        "v2": {
+          "type": "string",
+          "description": "High voltage"
+        },
+        "per": {
+          "type": "string",
+          "description": "Period"
+        },
+        "tr": {
+          "type": "string",
+          "description": "Rise time"
+        },
+        "tf": {
+          "type": "string",
+          "description": "Fall time"
+        },
+        "pw": {
+          "type": "string",
+          "description": "Pulse width"
+        }
+      }
+    }
+  }
+}

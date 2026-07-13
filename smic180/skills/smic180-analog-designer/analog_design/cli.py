@@ -9,7 +9,13 @@ import os
 from pathlib import Path
 import sys
 
+from .adapters.optimizer_v2 import prepare_optimizer_v2_handoff
+from .adapters.simulator import prepare_simulator_handoff
+from .ir import load_circuit_ir
 from .jsonio import load_strict_json
+from .netlist.equivalence import compare_metrics, compare_netlists
+from .virtuoso.materialize import materialize_schematic
+from .virtuoso.plan import build_schematic_plan
 from .report import write_report
 from .site import DesignSite
 from .spec import SpecError, load_design_spec
@@ -51,6 +57,36 @@ def _parser() -> argparse.ArgumentParser:
     optimizer_binding.add_argument("--run-dir", type=Path, required=True)
     optimizer_binding.add_argument("--optimizer-run-dir", type=Path, required=True)
     optimizer_binding.add_argument("--expected-pvt-points", type=int, default=45)
+    materialize = commands.add_parser("materialize")
+    materialize.add_argument("--run-dir", type=Path, required=True)
+    materialize.add_argument("--technology-profile", type=Path, required=True)
+    materialize.add_argument("--library", required=True)
+    materialize.add_argument("--source-cell", required=True)
+    materialize.add_argument("--target-cell", required=True)
+    materialize.add_argument("--plan-only", action="store_true")
+    materialize.add_argument("--replace", action="store_true")
+    equivalence = commands.add_parser("verify-equivalence")
+    equivalence.add_argument("--run-dir", type=Path, required=True)
+    equivalence.add_argument("--direct-metrics", type=Path, required=True)
+    equivalence.add_argument("--exported-metrics", type=Path, required=True)
+    equivalence.add_argument("--tolerances", type=Path, required=True)
+    simulator = commands.add_parser("prepare-simulator")
+    simulator.add_argument("--run-dir", type=Path, required=True)
+    simulator.add_argument("--library", required=True)
+    simulator.add_argument("--cell", required=True)
+    simulator.add_argument("--technology-profile", type=Path)
+    simulator.add_argument("--corner", default="tt")
+    optimizer = commands.add_parser("prepare-optimizer")
+    optimizer.add_argument("--run-dir", type=Path, required=True)
+    optimizer.add_argument("--library", required=True)
+    optimizer.add_argument("--source-cell", required=True)
+    optimizer.add_argument("--work-cell", required=True)
+    optimizer.add_argument("--result-cell", required=True)
+    optimizer.add_argument("--testbench-cell", required=True)
+    optimizer.add_argument("--cdf-evidence", type=Path, required=True)
+    optimizer.add_argument("--bias-mapping", type=Path)
+    optimizer.add_argument("--technology-profile", type=Path)
+    optimizer.add_argument("--corner", default="tt")
     discovery = commands.add_parser("discover-technology")
     discovery.add_argument("--output", type=Path, required=True)
     discovery.add_argument("--plan-only", action="store_true")
@@ -109,6 +145,68 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "freeze":
             DesignWorkflow.resume(args.run_dir).freeze(allow_near_feasible=args.allow_near_feasible, reason=args.reason)
+            return 0
+        if args.command == "materialize":
+            workflow = DesignWorkflow.resume(args.run_dir)
+            technology = load_technology_profile(args.technology_profile)
+            ir = load_circuit_ir(args.run_dir / "frozen" / "circuit_ir.json")
+            plan = build_schematic_plan(ir, technology, args.library, args.target_cell, source_cell=args.source_cell)
+            if args.plan_only:
+                result = materialize_schematic(object(), plan, args.run_dir / "virtuoso", plan_only=True)
+                print(json.dumps(result, indent=2, sort_keys=True))
+                return 0
+            module = importlib.import_module(os.getenv("ANALOG_DESIGN_MATERIALIZATION_MODULE", "analog_design.virtuoso.live_bridge"))
+            result = materialize_schematic(module.create_client(args.run_dir), plan, args.run_dir / "virtuoso", replace=args.replace)
+            workflow.record_materialization(
+                args.run_dir / "virtuoso" / "schematic_plan.json",
+                args.run_dir / "virtuoso" / "cdf_readback.json",
+                args.run_dir / "virtuoso" / "schcheck.json",
+                args.run_dir / "virtuoso" / "exported_netlist.scs",
+            )
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 0
+        if args.command == "verify-equivalence":
+            workflow = DesignWorkflow.resume(args.run_dir)
+            direct = (args.run_dir / "frozen" / "design.scs").read_text(encoding="utf-8")
+            exported = (args.run_dir / "virtuoso" / "exported_netlist.scs").read_text(encoding="utf-8")
+            structural = compare_netlists(direct, exported)
+            left = load_strict_json(args.direct_metrics)
+            right = load_strict_json(args.exported_metrics)
+            tolerances = load_strict_json(args.tolerances)
+            if not all(isinstance(item, dict) for item in (left, right, tolerances)):
+                raise WorkflowError("equivalence metrics and tolerances must be JSON objects")
+            workflow.record_equivalence(structural, compare_metrics(left, right, tolerances, fresh=True))
+            return 0
+        if args.command == "prepare-simulator":
+            workflow = DesignWorkflow.resume(args.run_dir)
+            ir = load_circuit_ir(args.run_dir / "frozen" / "circuit_ir.json")
+            model_includes = ()
+            if args.technology_profile:
+                technology = load_technology_profile(args.technology_profile)
+                model_includes = technology.model_includes(DesignSite.from_environment().model_include, args.corner)
+            outputs = prepare_simulator_handoff(
+                ir, args.run_dir / "simulator", library=args.library, cell=args.cell,
+                equivalence_confirmed=workflow.state.current == "equivalence_passed", model_includes=model_includes,
+            )
+            workflow.record_simulator_preparation(outputs.pin_classifications, outputs.sim_config, outputs.review_required)
+            return 0
+        if args.command == "prepare-optimizer":
+            workflow = DesignWorkflow.resume(args.run_dir)
+            ir = load_circuit_ir(args.run_dir / "frozen" / "circuit_ir.json")
+            cdf = load_strict_json(args.cdf_evidence)
+            biases = load_strict_json(args.bias_mapping) if args.bias_mapping else {}
+            if not isinstance(cdf, dict) or not isinstance(biases, dict):
+                raise WorkflowError("CDF evidence and bias mapping must be JSON objects")
+            model_includes = ()
+            if args.technology_profile:
+                technology = load_technology_profile(args.technology_profile)
+                model_includes = technology.model_includes(DesignSite.from_environment().model_include, args.corner)
+            outputs = prepare_optimizer_v2_handoff(
+                ir, args.run_dir / "optimizer", library=args.library, source_cell=args.source_cell,
+                work_cell=args.work_cell, result_cell=args.result_cell, testbench_cell=args.testbench_cell,
+                equivalence_confirmed=True, cdf_evidence=cdf, model_includes=model_includes, bias_mapping=biases,
+            )
+            workflow.record_optimizer_preparation(outputs.config, outputs.baseline, outputs.evidence)
             return 0
         if args.command == "validate-simulator":
             DesignWorkflow.resume(args.run_dir).record_simulator_validation(args.evidence)

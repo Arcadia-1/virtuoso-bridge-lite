@@ -132,6 +132,21 @@ def _load_primary_psf_data(run_dir: Path, deck_path: Path) -> dict:
             if isinstance(parsed, OperatingPointData):
                 merged.update({f"op:{name}": fields for name, fields in parsed.instances.items()})
 
+        try:
+            from virtuoso_bridge.spectre.parsers import parse_psf_ascii_directory
+            complete = parse_psf_ascii_directory(psf_dir)
+        except Exception:
+            complete = {}
+        grouped_op = {}
+        for key, value in complete.items():
+            match = re.fullmatch(r"op_DUT\.([^:]+):(.+)", key)
+            if match:
+                grouped_op.setdefault(match.group(1), {})[match.group(2)] = value
+            elif key.startswith("op_"):
+                merged[key] = value
+        for instance, fields in grouped_op.items():
+            merged.setdefault("op:" + instance, {}).update(fields)
+
     return merged
 
 
