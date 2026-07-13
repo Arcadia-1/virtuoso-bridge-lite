@@ -7,6 +7,7 @@ import json
 import math
 import os
 from pathlib import Path
+from collections.abc import Mapping
 import tempfile
 from typing import Any
 
@@ -30,7 +31,7 @@ def _strict_value(value: Any) -> None:
         if isinstance(value, float) and not math.isfinite(value):
             raise ArtifactError("JSON values must be finite")
         return
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         for key, item in value.items():
             if not isinstance(key, str):
                 raise ArtifactError("JSON object keys must be strings")
@@ -84,7 +85,13 @@ class ArtifactStore:
 
     def write_json(self, path: str | Path, value: Any) -> Path:
         _strict_value(value)
-        return self.write_text(path, json.dumps(value, allow_nan=False, indent=2, sort_keys=True) + "\n")
+        def plain(item: Any) -> Any:
+            if isinstance(item, Mapping):
+                return {str(key): plain(child) for key, child in item.items()}
+            if isinstance(item, (list, tuple)):
+                return [plain(child) for child in item]
+            return item
+        return self.write_text(path, json.dumps(plain(value), allow_nan=False, indent=2, sort_keys=True) + "\n")
 
     def confirm(self, path: str | Path, gate: str, artifacts: list[str | Path]) -> Path:
         records = []
@@ -106,3 +113,4 @@ class ArtifactStore:
             artifact = Path(record["path"])
             if not artifact.is_file() or file_sha256(artifact) != record.get("sha256"):
                 raise ArtifactError(f"confirmation hash mismatch: {artifact}")
+

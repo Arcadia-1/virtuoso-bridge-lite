@@ -40,3 +40,10 @@ def test_confirmation_records_hashes_and_detects_tampering(tmp_path):
     artifact.write_text(json.dumps({"value": 2}), encoding="utf-8")
     with pytest.raises(ArtifactError, match="hash mismatch"):
         store.verify_confirmation(marker)
+
+
+def test_write_json_accepts_read_only_mapping_values(tmp_path):
+    from types import MappingProxyType
+    store = ArtifactStore(tmp_path)
+    target = store.write_json(tmp_path / "mapping.json", MappingProxyType({"nested": MappingProxyType({"value": 1})}))
+    assert json.loads(target.read_text(encoding="utf-8")) == {"nested": {"value": 1}}

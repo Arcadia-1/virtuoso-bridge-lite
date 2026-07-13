@@ -270,3 +270,28 @@ class DesignWorkflow:
             self.state.advance("candidate_frozen", {"confirmation": str(marker.relative_to(self.run_dir))})
             return manifest
         return self._guard("candidate_frozen", operation)
+
+    def record_materialization(self, plan: str | Path, cdf_readback: str | Path, schcheck: str | Path, exported_netlist: str | Path) -> None:
+        if self.state.current != "candidate_frozen":
+            raise WorkflowError("materialization evidence requires candidate_frozen state")
+        plan_path = Path(plan)
+        cdf_path = Path(cdf_readback)
+        check_path = Path(schcheck)
+        netlist_path = Path(exported_netlist)
+        created = self.store.confirm(self.run_dir / "virtuoso" / "schematic_created.confirmed.json", "schematic_created", [plan_path])
+        self.state.advance("schematic_created", {"confirmation": str(created.relative_to(self.run_dir))})
+        roundtrip = self.store.confirm(self.run_dir / "virtuoso" / "cdf_roundtrip.confirmed.json", "cdf_roundtrip_passed", [plan_path, cdf_path])
+        self.state.advance("cdf_roundtrip_passed", {"confirmation": str(roundtrip.relative_to(self.run_dir))})
+        checked = self.store.confirm(self.run_dir / "virtuoso" / "schematic_checked.confirmed.json", "schematic_checked", [check_path, netlist_path])
+        self.state.advance("schematic_checked", {"confirmation": str(checked.relative_to(self.run_dir))})
+
+    def record_equivalence(self, structural: dict[str, Any], simulation: dict[str, Any]) -> Path:
+        if self.state.current != "schematic_checked":
+            raise WorkflowError("equivalence evidence requires schematic_checked state")
+        from .netlist.equivalence import EquivalenceError, write_equivalence_confirmation
+        try:
+            marker = write_equivalence_confirmation(self.run_dir / "equivalence", structural, simulation)
+        except EquivalenceError as exc:
+            raise WorkflowError(str(exc)) from exc
+        self.state.advance("equivalence_passed", {"confirmation": str(marker.relative_to(self.run_dir))})
+        return marker
