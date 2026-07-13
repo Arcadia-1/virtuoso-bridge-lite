@@ -133,8 +133,16 @@ class CircuitIr:
         raise KeyError(identity)
 
 
+def _json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_json_value(item) for item in value]
+    return value
+
+
 def canonical_ir_digest(data: Mapping[str, Any]) -> str:
-    payload = json.dumps(data, allow_nan=False, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    payload = json.dumps(_json_value(data), allow_nan=False, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 

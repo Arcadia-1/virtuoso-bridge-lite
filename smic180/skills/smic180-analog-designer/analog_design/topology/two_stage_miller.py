@@ -23,7 +23,7 @@ def build_two_stage_miller(options: Mapping[str, object]) -> TopologyPlan:
         TopologyInstance("M_IN_N", "input_pair_negative", input_class, {"D": "N2", "G": "VINN", "S": input_source, "B": input_body}),
         TopologyInstance("M_LOAD_DIODE", "mirror_diode", load_class, {"D": "N1", "G": "N1", "S": load_source, "B": load_body}),
         TopologyInstance("M_LOAD_OUT", "mirror_output", load_class, {"D": "N2", "G": "N1", "S": load_source, "B": load_body}),
-        TopologyInstance("I_TAIL", "tail_source", "source.current", {"P": input_source, "N": input_body}),
+        TopologyInstance("M_TAIL", "tail_source", input_class, {"D": input_source, "G": "IBIAS", "S": input_body, "B": input_body}),
         TopologyInstance("M_SECOND", "second_stage", second_class, {"D": "VOUT", "G": "N2", "S": load_source, "B": load_body}),
         TopologyInstance("I_SECOND", "second_stage_bias", "source.current", {"P": "VOUT", "N": input_body}),
         TopologyInstance("C_MILLER", "miller_compensation", "passive.capacitor", {"P": "VOUT", "N": "N2"}),
@@ -45,3 +45,4 @@ def build_two_stage_miller(options: Mapping[str, object]) -> TopologyPlan:
             "nulling resistor is reserved but disabled in version 1",
         ),
     )
+

@@ -44,3 +44,9 @@ def test_nulling_resistor_slot_is_present_but_disabled():
     slot = plan.instance("R_NULL")
     assert slot.enabled is False
     assert slot.role == "nulling_resistor"
+
+
+def test_every_required_port_is_used_by_the_topology():
+    plan = default_registry().create("two_stage_miller", {"input_pair": "nmos"})
+    connected = {net for instance in plan.instances if instance.enabled for net in instance.terminals.values()}
+    assert set(plan.ports).issubset(connected)
