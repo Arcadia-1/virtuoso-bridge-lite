@@ -1,0 +1,371 @@
+from dataclasses import dataclass
+import pytest
+from analog_opt.apply import ApplyError, VirtuosoApplier
+from analog_opt.parameters import ParameterSpec
+
+@dataclass
+class Result:
+    output: str = ""
+    errors: tuple = ()
+
+class RecordingClient:
+    def __init__(self, results): self.results=list(results); self.calls=[]
+    def execute_skill(self, skill, timeout=30): self.calls.append((skill,timeout)); return self.results.pop(0)
+
+def spec(name, instance, prop, unit=None, dtype="float", target="virtuoso_cdf", sync_property=None, sync_factor=None):
+    return ParameterSpec(name=name,target=target,lower=0,upper=100,dtype=dtype,instance=instance,property=prop,unit=unit,sync_property=sync_property,sync_factor=sync_factor)
+
+def test_apply_single_transaction_uses_cdf_and_verifies_before_save():
+    c=RecordingClient([Result("t"), Result("t"), Result("ANALOG_OPT_OK:apply")]); VirtuosoApplier(c).apply_cdf("tr","work",[spec("W","M1","w","um"),spec("R","R1","r","kOhm")],{"W":10e-6,"R":2000.0})
+    assert len(c.calls)==3
+    update = " ".join(call[0] for call in c.calls[:-1])
+    save = c.calls[-1][0]
+    assert 'setInstParams("tr" "work" "M1" list("w" "10u"))' in update
+    assert 'setInstParams("tr" "work" "R1" list("r" "2kOhm"))' in update
+    assert "schCheck(cv)" in save and "dbSave(cv)" in save
+    assert "foreach(inst cv~>instances" not in save and "cdfGetInstCDF" not in save
+
+def test_explicit_sync_property_uses_db_replace_prop_only_for_sync():
+    c=RecordingClient([Result("t"), Result("ANALOG_OPT_OK:apply")]); VirtuosoApplier(c).apply_cdf("tr","work",[spec("W","M1","w","um",sync_property="fw")],{"W":10e-6})
+    s=c.calls[0][0]; assert 'list("w" "10u" "fw" "10u")' in s; assert "dbReplaceProp" not in s
+
+def test_smic180_mos_dimensions_use_cdf_suffixes():
+    c=RecordingClient([Result("t"), Result("ANALOG_OPT_OK:apply")])
+    VirtuosoApplier(c).apply_cdf("tr", "work", [spec("W", "M1", "w", "um"), spec("L", "M1", "l", "nm")], {"W": 1.2e-6, "L": 800e-9})
+    script = c.calls[0][0]
+    assert 'list("w" "1.2u" "l" "800n")' in script
+
+def test_sync_property_can_scale_total_width_to_finger_width():
+    c=RecordingClient([Result("t"), Result("ANALOG_OPT_OK:apply")])
+    VirtuosoApplier(c).apply_cdf("tr", "work", [spec("W", "M11", "w", "um", sync_property="fw", sync_factor=0.25)], {"W": 8e-6})
+    assert 'list("w" "8u" "fw" "2u")' in c.calls[0][0]
+
+def test_non_mos_width_without_sync_does_not_write_fw():
+    c=RecordingClient([Result("t"), Result("ANALOG_OPT_OK:apply")]); VirtuosoApplier(c).apply_cdf("tr","work",[spec("W","R1","w","um")],{"W":10e-6}); assert '"fw"' not in c.calls[0][0]
+
+def test_apply_protocol_and_integer_validation():
+    VirtuosoApplier(RecordingClient([Result("t"), Result("ANALOG_OPT_OK:apply")])).apply_cdf("tr","work",[spec("M","M1","m",dtype="int")],{"M":4})
+    with pytest.raises(ApplyError,match="sentinel"): VirtuosoApplier(RecordingClient([Result("t"), Result("t")])).apply_cdf("tr","work",[spec("M","M1","m",dtype="int")],{"M":4})
+    with pytest.raises(ApplyError,match="bridge"): VirtuosoApplier(RecordingClient([Result("t",("bad",))])).apply_cdf("tr","work",[spec("M","M1","m",dtype="int")],{"M":4})
+    with pytest.raises(ApplyError,match="integer"): VirtuosoApplier(RecordingClient([])).apply_cdf("tr","work",[spec("M","M1","m",dtype="int")],{"M":4.5})
+
+def test_apply_validates_candidate_and_identifiers_before_bridge():
+    a=VirtuosoApplier(RecordingClient([]))
+    with pytest.raises(ApplyError,match="exactly"): a.apply_cdf("tr","work",[spec("W","M1","w")],{"X":1})
+    with pytest.raises(ApplyError,match="virtuoso_cdf"): a.apply_cdf("tr","work",[spec("W","M1","w",target="bias")],{"W":1})
+    with pytest.raises(ApplyError,match="invalid"): a.apply_cdf("tr","work",[spec("W","M1)","w")],{"W":1})
+
+def test_copy_closes_all_source_and_destination_views_without_deleting():
+    c=RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")]); VirtuosoApplier(c).create_work_cell("tr","amp","work",False); s=c.calls[0][0]
+    assert 'dbOpenCellViewByType("tr" "amp" "schematic" "schematic" "r")' in s and "dbCopyCellView" in s
+    assert all(text in s for text in ("when(srcCv dbClose(srcCv))", "when(srcSym dbClose(srcSym))", "when(dstCv dbClose(dstCv))", "when(dstSym dbClose(dstSym))"))
+    assert "errset(progn(" in s and "createdSchematic" in s and "createdSymbol" in s
+
+def test_create_existing_without_replace_is_rejected():
+    with pytest.raises(ApplyError, match="already exists"):
+        VirtuosoApplier(RecordingClient([Result("ANALOG_OPT_OK:create:EXISTS")])).create_work_cell("tr", "amp", "work", False)
+
+@pytest.mark.parametrize("work,result,source",[("amp","best","amp"),("work","amp","amp"),("work","work","amp")])
+def test_publish_requires_distinct_cells(work,result,source):
+    with pytest.raises(ApplyError,match="distinct"): VirtuosoApplier(RecordingClient([])).publish_result_cell("tr",work,result,source,False)
+
+def test_read_uses_cdf_parameters_and_returns_si_mapping():
+    c=RecordingClient([Result("ANALOG_OPT_OK:read\nW\t10um\nM\t4\nR\t2kOhm")]); values=VirtuosoApplier(c).read_cdf("tr","work",[spec("W","M1","w","um"),spec("M","M1","m",dtype="int"),spec("R","R1","r","kOhm")]); s=c.calls[0][0]
+    assert values["W"]==pytest.approx(10e-6) and values["M"]==4 and values["R"]==pytest.approx(2000)
+    assert "cdfGetInstCDF(inst)~>parameters" in s and 'p~>name=="w"' in s and "param~>value" in s and "getq(inst" not in s and "dbClose(cv)" in s
+    assert 'printf("ANALOG_OPT_OK:read")' not in s
+    assert 'out="ANALOG_OPT_OK:read"' in s and 'strcat(out sprintf(nil' in s
+
+@pytest.mark.parametrize("output,match",[("ANALOG_OPT_OK:read\nW\t10um\nW\t11um","duplicate"),("ANALOG_OPT_OK:read","missing"),("ANALOG_OPT_OK:read\nW\tnan","finite")])
+def test_read_rejects_invalid_machine_output(output,match):
+    with pytest.raises(ApplyError,match=match): VirtuosoApplier(RecordingClient([Result(output)])).read_cdf("tr","work",[spec("W","M1","w","um")])
+
+def test_read_protocol_errors():
+    with pytest.raises(ApplyError,match="bridge"): VirtuosoApplier(RecordingClient([Result("ANALOG_OPT_OK:read\nW\t10um",("bad",))])).read_cdf("tr","work",[spec("W","M1","w","um")])
+    with pytest.raises(ApplyError,match="sentinel"): VirtuosoApplier(RecordingClient([Result("W\t10um")])).read_cdf("tr","work",[spec("W","M1","w","um")])
+
+def test_explicit_sync_property_is_written_in_same_set_inst_params_call():
+    c = RecordingClient([Result("t"), Result("ANALOG_OPT_OK:apply")])
+    VirtuosoApplier(c).apply_cdf("tr", "work", [spec("W", "M1", "w", "um", sync_property="fw")], {"W": 10e-6})
+    assert 'setInstParams("tr" "work" "M1" list("w" "10u" "fw" "10u"))' in c.calls[0][0]
+    assert "dbReplaceProp" not in c.calls[0][0]
+
+
+def test_replace_true_backs_up_before_deleting_target_and_cleans_helpers():
+    c = RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])
+    VirtuosoApplier(c).create_work_cell("tr", "amp", "work", True)
+    skill = c.calls[0][0]
+    assert "work__analog_opt_backup" in skill
+    backup_copy = 'backupCv=dbCopyCellView(oldCv "tr" "work__analog_opt_backup_'
+    delete_target = 'dbDeleteCellView("tr" "work" "schematic")'
+    publish_copy = 'dstCv=dbCopyCellView(tmpCv "tr" "work" "schematic")'
+    assert backup_copy in skill and delete_target in skill and publish_copy in skill
+    assert skill.index(backup_copy) < skill.index(delete_target) < skill.index(publish_copy)
+    assert 'dbDeleteCellView("tr" "work__analog_opt_tmp_' in skill
+    assert 'dbDeleteCellView("tr" "work__analog_opt_backup_' in skill
+    assert 'printf("ANALOG_OPT_OK:create:%s" status)' in skill
+
+
+def test_replace_script_rolls_back_failed_publish_from_backup():
+    c = RecordingClient([Result("ANALOG_OPT_OK:publish:REPLACED")])
+    VirtuosoApplier(c).publish_result_cell("tr", "work", "best", "amp", True)
+    skill = c.calls[0][0]
+    assert 'unless(dstCv' in skill
+    assert 'when(ddGetObj("tr" "best") unless(dbDeleteCellView("tr" "best" "schematic")' in skill
+    assert 'restoreCv=dbCopyCellView(backupCv "tr" "best" "schematic")' in skill
+    assert 'unless(restoreCv progn(printf("ANALOG_OPT_RECOVERY_REQUIRED:' in skill and 'rollback restore failed; backup=' in skill
+    assert "when(oldCv dbClose(oldCv))" in skill
+    assert "when(backupCv dbClose(backupCv))" in skill
+    assert "when(restoreCv dbClose(restoreCv))" in skill
+
+
+def test_replace_uses_unique_backup_and_closes_old_view_before_delete():
+    c1 = RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])
+    c2 = RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])
+    VirtuosoApplier(c1).create_work_cell("tr", "amp", "work", True)
+    VirtuosoApplier(c2).create_work_cell("tr", "amp", "work", True)
+    s1, s2 = c1.calls[0][0], c2.calls[0][0]
+    assert s1 != s2
+    assert "work__analog_opt_backup_" in s1 and "work__analog_opt_backup_" in s2
+    assert s1.index("when(oldCv dbClose(oldCv)) oldCv=nil") < s1.index('dbDeleteCellView("tr" "work" "schematic")')
+
+def test_fresh_copy_is_deterministic_and_has_no_helper_cells():
+    c1 = RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])
+    c2 = RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])
+    VirtuosoApplier(c1).create_work_cell("tr", "amp", "work", False)
+    VirtuosoApplier(c2).create_work_cell("tr", "amp", "work", False)
+    s1, s2 = c1.calls[0][0], c2.calls[0][0]
+    assert s1 == s2 and "__analog_opt_tmp_" not in s1
+    assert "dbDeleteCellView" in s1
+    assert "errset(progn(" in s1
+    assert "createdSchematic" in s1 and "createdSymbol" in s1
+    assert "fresh publication failed; partial destination removed" in s1
+
+
+def test_helper_cleanup_is_gated_by_confirmed_creation_flags():
+    c = RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])
+    VirtuosoApplier(c).create_work_cell("tr", "amp", "work", True)
+    skill = c.calls[0][0]
+    assert "tempCreated=nil" in skill and "backupSafe=nil" in skill and "cleanupBackup=nil" in skill
+    assert "tempCreated=t" in skill and "backupSafe=t" in skill
+    assert "when(tempCreated" in skill
+    assert "when(backupSafe&&cleanupBackup" in skill
+
+
+def test_rollback_failure_preserves_backup_and_reports_its_name():
+    c = RecordingClient([Result("ANALOG_OPT_OK:publish:REPLACED")])
+    VirtuosoApplier(c).publish_result_cell("tr", "work", "best", "amp", True)
+    skill = c.calls[0][0]
+    assert 'unless(restoreCv progn(printf("ANALOG_OPT_RECOVERY_REQUIRED:' in skill
+    assert "backupSafe=t" in skill and "cleanupBackup=nil" in skill
+    assert "when(backupSafe&&cleanupBackup" in skill
+    assert "backup cell" in skill or "RECOVERY_REQUIRED" in skill
+
+
+def test_replace_true_accepts_created_when_target_is_absent():
+    VirtuosoApplier(RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])).create_work_cell("tr", "amp", "work", True)
+
+
+def test_every_critical_save_and_delete_is_checked():
+    c = RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])
+    VirtuosoApplier(c).create_work_cell("tr", "amp", "work", True)
+    skill = c.calls[0][0]
+    for name in ("tmpCv", "backupCv", "dstCv", "restoreCv"):
+        assert 'unless(dbSave(%s)' % name in skill
+    assert 'unless(dbDeleteCellView("tr" "work" "schematic")' in skill
+    assert "temporary cleanup failed" in skill
+    assert "backup cleanup failed" in skill
+
+def test_destination_save_failure_enters_same_rollback_path_as_copy_failure():
+    c = RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])
+    VirtuosoApplier(c).create_work_cell("tr", "amp", "work", True)
+    skill = c.calls[0][0]
+    assert "publishOk=nil" in skill
+    assert "when(dstCv when(dbSave(dstCv) publishOk=t))" in skill
+    rollback = skill.index("unless(publishOk progn(")
+    assert skill.index("dstCv=dbCopyCellView") < rollback
+    assert skill.index("when(dstCv when(dbSave(dstCv) publishOk=t))") < rollback
+    assert 'printf("ANALOG_OPT_RECOVERY_REQUIRED:' in skill[rollback:]
+    assert 'restoreCv=dbCopyCellView(backupCv' in skill[rollback:]
+    replace_branch = skill[:skill.index('status="EXISTS"')]
+    assert 'unless(dbSave(dstCv) error("destination save failed"))' not in replace_branch
+
+
+def test_apply_checks_schematic_and_save_separately_before_success():
+    c = RecordingClient([Result("t"), Result("ANALOG_OPT_OK:apply")])
+    VirtuosoApplier(c).apply_cdf("tr", "work", [spec("W", "M1", "w", "um")], {"W": 10e-6})
+    skill = c.calls[-1][0]
+    check = 'unless(schCheck(cv) error("schCheck failed"))'
+    save = 'unless(dbSave(cv) error("schematic save failed"))'
+    assert check in skill and save in skill
+    assert skill.index(check) < skill.index(save) < skill.index('"ANALOG_OPT_OK:apply"')
+
+
+def test_rollback_closes_failed_destination_before_deleting_view():
+    c = RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])
+    VirtuosoApplier(c).create_work_cell("tr", "amp", "work", True)
+    skill = c.calls[0][0]
+    rollback = skill.index("unless(publishOk progn(")
+    close_dst = skill.index("when(dstCv dbClose(dstCv)) dstCv=nil", rollback)
+    delete_dst = skill.index('dbDeleteCellView("tr" "work" "schematic")', rollback)
+    assert rollback < close_dst < delete_dst
+
+def test_create_work_cell_copies_and_verifies_symbol_view():
+ c=RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])
+ VirtuosoApplier(c).create_work_cell("tr","amp","work",False)
+ skill=c.calls[0][0]
+ assert 'dbOpenCellViewByType("tr" "amp" "symbol"' in skill
+ assert 'dbCopyCellView' in skill and '"symbol"' in skill
+ assert 'ddGetObj("tr" "work" "symbol")' in skill
+ assert 'when(srcSym dbClose(srcSym))' in skill and 'when(dstSym dbClose(dstSym))' in skill
+
+def test_execute_accepts_quoted_file_channel_sentinel():
+    c = RecordingClient([Result('"ANALOG_OPT_OK:create:CREATED"')])
+    VirtuosoApplier(c).create_work_cell("tr", "amp", "work", False)
+
+
+def test_fresh_copy_returns_sentinel_as_final_expression():
+    c = RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])
+    VirtuosoApplier(c).create_work_cell("tr", "amp", "work", False)
+    assert '"ANALOG_OPT_OK:create:CREATED"' in c.calls[0][0] and "partial destination removed" in c.calls[0][0]
+
+
+def test_new_destination_uses_non_destructive_copy_transaction():
+    c = RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])
+    VirtuosoApplier(c).create_work_cell("tr", "amp", "work", False)
+    skill = c.calls[0][0]
+    assert "txn=errset" in skill and "partial destination removed" in skill
+    assert "source schematic missing" in skill
+    assert "destination symbol missing" in skill
+
+
+def test_execute_uses_multiline_skill_file_channel():
+    c = RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])
+    VirtuosoApplier(c).create_work_cell("tr", "amp", "work", False)
+    transmitted = c.calls[0][0]
+    assert transmitted.startswith("progn(\n")
+    assert transmitted.endswith("\n)")
+    assert "\n" in transmitted
+
+
+def test_replace_transaction_uses_bridge_stable_prog_body():
+    c = RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])
+    VirtuosoApplier(c).create_work_cell("tr", "amp", "work", True)
+    skill = c.calls[0][0]
+    assert "\nprog((srcCv tmpCv" in skill
+    assert "status=\"FAILED\" tempCreated=nil" in skill
+
+
+def test_existing_work_cell_without_replace_never_enters_symbol_mutation():
+ c=RecordingClient([Result("ANALOG_OPT_OK:create:EXISTS")])
+ with pytest.raises(ApplyError,match='exists'): VirtuosoApplier(c).create_work_cell('tr','amp','work',False)
+ skill=c.calls[0][0]
+ assert "createdSchematic" in skill and "createdSymbol" in skill
+
+
+def test_replace_backs_up_and_rolls_back_schematic_and_symbol_as_one_transaction():
+ c=RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])
+ VirtuosoApplier(c).create_work_cell("tr","amp","work",True)
+ skill=c.calls[0][0]
+ schematic_backup='backupCv=dbCopyCellView(oldCv "tr" "work__analog_opt_backup_'
+ symbol_backup='backupSym=dbCopyCellView(oldSym "tr" "work__analog_opt_backup_'
+ assert schematic_backup in skill and symbol_backup in skill
+ first_delete=skill.index('dbDeleteCellView("tr" "work" "schematic")')
+ assert skill.index(schematic_backup)<first_delete and skill.index(symbol_backup)<first_delete
+ assert 'restoreCv=dbCopyCellView(backupCv "tr" "work" "schematic")' in skill
+ assert 'restoreSym=dbCopyCellView(backupSym "tr" "work" "symbol")' in skill
+ assert 'when(backupSafe&&cleanupBackup' in skill
+ assert 'dbDeleteCellView("tr" "work__analog_opt_backup_' in skill
+
+def test_symbol_publish_failure_keeps_backup_for_manual_recovery():
+ c=RecordingClient([Result("ANALOG_OPT_OK:create:REPLACED")])
+ VirtuosoApplier(c).create_work_cell("tr","amp","work",True)
+ skill=c.calls[0][0]
+ symbol_publish=skill.index('dstSym=dbCopyCellView(srcSym')
+ recovery=skill.index('restoreSym=dbCopyCellView(backupSym',symbol_publish)
+ assert recovery>symbol_publish
+ assert 'cleanupBackup=nil' in skill[recovery:]
+ assert 'ANALOG_OPT_RECOVERY_REQUIRED' in skill[recovery:]
+
+
+def test_symbol_delete_and_publish_errors_are_caught_before_unified_rollback():
+ c=RecordingClient([Result('ANALOG_OPT_OK:create:REPLACED')])
+ VirtuosoApplier(c).create_work_cell('tr','amp','work',True)
+ skill=c.calls[0][0]
+ assert 'symbolTxn=errset(progn(' in skill
+ assert 'unless(symbolTxn symbolPublishOk=nil)' in skill
+ rollback=skill.index('unless(symbolPublishOk progn(')
+ assert skill.index('target symbol delete failed') < rollback
+ assert 'restoreCv=dbCopyCellView(backupCv' in skill[rollback:]
+ assert 'restoreSym=dbCopyCellView(backupSym' in skill[rollback:]
+
+
+def test_symbol_delete_failure_preserves_old_symbol_and_restores_schematic_only():
+ c=RecordingClient([Result('ANALOG_OPT_OK:create:REPLACED')])
+ VirtuosoApplier(c).create_work_cell('tr','amp','work',True)
+ skill=c.calls[0][0]
+ assert 'symbolDeleted=nil' in skill
+ assert 'symbolDeleted=t' in skill
+ rollback=skill.index('unless(symbolPublishOk progn(')
+ restore=skill.index('restoreCv=dbCopyCellView(backupCv',rollback)
+ rollback_text=skill[rollback:restore]
+ assert 'when(symbolDeleted errset(' in rollback_text
+ assert 'if(symbolDeleted then restoreSym=dbCopyCellView' in skill[restore:]
+ assert '!symbolDeleted||dbSave(restoreSym)' in skill[restore:]
+
+def test_rollback_view_deletes_are_errset_and_cannot_prevent_restore_attempt():
+ c=RecordingClient([Result('ANALOG_OPT_OK:create:REPLACED')])
+ VirtuosoApplier(c).create_work_cell('tr','amp','work',True)
+ skill=c.calls[0][0]; rollback=skill.index('unless(symbolPublishOk progn('); restore=skill.index('restoreCv=dbCopyCellView',rollback)
+ block=skill[rollback:restore]
+ assert block.count('errset(')>=2
+ assert 'failed schematic cleanup failed' not in block
+ assert 'failed symbol cleanup failed' not in block
+
+
+def test_read_decodes_quoted_multiline_bridge_string():
+    output='"ANALOG_OPT_OK:read\\nW\\t10um"'
+    values=VirtuosoApplier(RecordingClient([Result(output)])).read_cdf("tr","work",[spec("W","M1","w","um")])
+    assert values["W"]==pytest.approx(10e-6)
+
+
+def test_read_expands_bare_cdf_engineering_suffix_from_expected_unit():
+    output='"ANALOG_OPT_OK:read\\nW\\t1.000u"'
+    values=VirtuosoApplier(RecordingClient([Result(output)])).read_cdf("tr","work",[spec("W","M1","w","m")])
+    assert values["W"]==pytest.approx(1e-6)
+
+
+def test_read_treats_bare_m_as_milli_prefix_for_length():
+    output='"ANALOG_OPT_OK:read\\nW\\t1m"'
+    values=VirtuosoApplier(RecordingClient([Result(output)])).read_cdf("tr","work",[spec("W","M1","w","m")])
+    assert values["W"]==pytest.approx(1e-3)
+
+
+def test_apply_formats_meter_unit_as_unambiguous_millimeters():
+    c=RecordingClient([Result("t"),Result("ANALOG_OPT_OK:apply")])
+    VirtuosoApplier(c).apply_cdf("tr","work",[spec("W","M1","w","m")],{"W":1e-3})
+    assert 'list("w" "1mm")' in c.calls[0][0]
+
+
+def test_fresh_copy_skill_is_balanced_and_marks_completion_before_sentinel():
+    c = RecordingClient([Result("ANALOG_OPT_OK:create:CREATED")])
+    VirtuosoApplier(c).create_work_cell("tr", "amp", "work", False)
+    skill = c.calls[0][0]
+    assert skill.count("(") == skill.count(")")
+    assert '"ANALOG_OPT_OK:create:CREATED"' in skill
+    assert 'unless(txn progn(' in skill
+
+
+def test_linked_instances_receive_same_cdf_update():
+    linked = ParameterSpec(name="PAIR_W", target="virtuoso_cdf", lower=2.4e-6, upper=24e-6, instance="M0", linked_instances=("M1",), property="w", unit="um", sync_property="fw", sync_factor=0.25)
+    c=RecordingClient([Result("t"), Result("t"), Result("ANALOG_OPT_OK:apply")])
+    VirtuosoApplier(c).apply_cdf("tr","work",[linked],{"PAIR_W":8e-6})
+    text=" ".join(call[0] for call in c.calls[:-1])
+    assert 'setInstParams("tr" "work" "M0" list("w" "8u" "fw" "2u"))' in text
+    assert 'setInstParams("tr" "work" "M1" list("w" "8u" "fw" "2u"))' in text
+
+def test_linked_instances_readback_must_match():
+    linked = ParameterSpec(name="PAIR_W", target="virtuoso_cdf", lower=2.4e-6, upper=24e-6, instance="M0", linked_instances=("M1",), property="w", unit="um")
+    c=RecordingClient([Result("ANALOG_OPT_OK:read\nPAIR_W\t8u\nPAIR_W__linked_0\t9u")])
+    with pytest.raises(ApplyError,match="linked instance"):
+        VirtuosoApplier(c).read_cdf("tr","work",[linked])

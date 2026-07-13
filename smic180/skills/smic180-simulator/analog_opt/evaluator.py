@@ -1,0 +1,211 @@
+"""Physical candidate evaluation boundary and atomic artifact handling."""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+import re
+import tempfile
+from dataclasses import asdict, dataclass, field
+from numbers import Real
+from pathlib import Path
+from typing import Any, Callable, Mapping, Optional, Union
+
+
+_SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_SUCCESS_ARTIFACTS = ("metrics.json", "specs.json", "result.json")
+
+
+class EvaluationFailure(Exception):
+    """A categorized candidate evaluation failure."""
+
+    def __init__(self, category: str, message: str) -> None:
+        super().__init__(message)
+        self.category = str(category)
+        self.message = str(message)
+
+
+@dataclass(frozen=True)
+class EvaluationResult:
+    candidate_id: str
+    objective: float
+    success: bool
+    metrics: Mapping[str, Any]
+    metadata: Mapping[str, Any]
+    failure: Optional[Mapping[str, str]]
+    specs: Mapping[str, Any] = field(default_factory=dict)
+
+
+def atomic_write_json(path: Union[str, Path], value: Any) -> None:
+    """Serialize strict JSON and atomically replace the destination."""
+    destination = Path(path)
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(value, allow_nan=False, indent=2, sort_keys=True) + "\n"
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=destination.name + ".", suffix=".tmp", dir=str(destination.parent)
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        raise OSError("cannot prepare atomic JSON write for %s: %s" % (destination, exc)) from exc
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, destination)
+    except BaseException as exc:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        if isinstance(exc, (OSError, TypeError, ValueError)):
+            raise OSError("atomic JSON write failed for %s: %s" % (destination, exc)) from exc
+        raise
+
+
+def _finite(value: Any, location: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ValueError("%s must be a finite number" % location)
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError("%s must be a finite number" % location)
+    return result
+
+
+def _mapping(value: Any, location: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TypeError("%s must be a mapping" % location)
+    return dict(value)
+
+
+def _failure_fields(value: Any) -> Mapping[str, str]:
+    try:
+        failure = _mapping(value, "failure")
+    except TypeError as exc:
+        raise EvaluationFailure("protocol", str(exc)) from exc
+    category = failure.get("category")
+    message = failure.get("message")
+    if not isinstance(category, str) or not category.strip():
+        raise EvaluationFailure("protocol", "failure.category must be a nonempty string")
+    if not isinstance(message, str) or not message.strip():
+        raise EvaluationFailure("protocol", "failure.message must be a nonempty string")
+    return {"category": category, "message": message}
+
+
+def _validated_result(
+    candidate_id: str,
+    objective: Any,
+    success: Any,
+    metrics: Any,
+    metadata: Any,
+    failure: Any,
+    specs: Any,
+) -> EvaluationResult:
+    if type(success) is not bool:
+        raise EvaluationFailure("protocol", "success must be exactly bool")
+    try:
+        finite_objective = _finite(objective, "objective")
+        metric_values = _mapping(metrics, "metrics")
+        spec_values = _mapping(specs, "specs")
+        metadata_values = _mapping(metadata, "metadata")
+    except (TypeError, ValueError) as exc:
+        raise EvaluationFailure("protocol", str(exc)) from exc
+    if success:
+        if failure is not None:
+            raise EvaluationFailure("protocol", "successful result must not include failure")
+        return EvaluationResult(
+            candidate_id, finite_objective, True, metric_values,
+            metadata_values, None, spec_values
+        )
+    failure_values = _failure_fields(failure)
+    return EvaluationResult(
+        candidate_id, finite_objective, False, metric_values,
+        metadata_values, failure_values, spec_values
+    )
+
+
+def _result_from_backend(candidate_id: str, raw: Any) -> EvaluationResult:
+    if isinstance(raw, EvaluationResult):
+        if raw.candidate_id != candidate_id:
+            raise EvaluationFailure("protocol", "backend result candidate_id does not match")
+        return _validated_result(
+            candidate_id, raw.objective, raw.success, raw.metrics,
+            raw.metadata, raw.failure, raw.specs
+        )
+    if not isinstance(raw, Mapping):
+        raise EvaluationFailure("protocol", "backend must return a mapping or EvaluationResult")
+    return _validated_result(
+        candidate_id=candidate_id,
+        objective=raw.get("objective"),
+        success=raw.get("success", True),
+        metrics=raw.get("metrics", {}),
+        metadata=raw.get("metadata", {}),
+        failure=raw.get("failure"),
+        specs=raw.get("specs", {}),
+    )
+
+
+class CandidateEvaluator:
+    """Evaluate one already-materialized physical candidate."""
+
+    def __init__(self, backend: Callable[[Mapping[str, Any], Path], Any], failure_penalty: float = 1e9) -> None:
+        self.backend = backend
+        self.failure_penalty = _finite(failure_penalty, "failure_penalty")
+        if self.failure_penalty < 0:
+            raise ValueError("failure_penalty must be nonnegative")
+
+    @staticmethod
+    def _candidate_dir(run_dir: Union[str, Path], candidate_id: str) -> Path:
+        if not isinstance(candidate_id, str) or not _SAFE_ID.fullmatch(candidate_id) or candidate_id in (".", ".."):
+            raise ValueError("candidate_id is unsafe")
+        return Path(run_dir) / "candidates" / candidate_id
+
+    @staticmethod
+    def _remove_success_artifacts(candidate_dir: Path) -> None:
+        for name in _SUCCESS_ARTIFACTS:
+            try:
+                (candidate_dir / name).unlink()
+            except FileNotFoundError:
+                pass
+
+    def _failure(self, candidate_dir: Path, candidate_id: str, category: str, message: str) -> EvaluationResult:
+        self._remove_success_artifacts(candidate_dir)
+        failure = {"category": str(category), "message": str(message)}
+        try:
+            atomic_write_json(candidate_dir / "failure.json", failure)
+        except (OSError, TypeError, ValueError) as exc:
+            raise EvaluationFailure(
+                "artifact", "failure artifact could not be written: %s" % exc
+            ) from exc
+        return EvaluationResult(candidate_id, self.failure_penalty, False, {}, {}, failure)
+
+    def evaluate(self, run_dir: Union[str, Path], candidate_id: str, physical_candidate: Mapping[str, Any]) -> EvaluationResult:
+        candidate_dir = self._candidate_dir(run_dir, candidate_id)
+        try:
+            candidate_dir.mkdir(parents=True, exist_ok=False)
+        except FileExistsError as exc:
+            raise EvaluationFailure("candidate", "candidate directory already exists: %s" % candidate_id) from exc
+        except OSError as exc:
+            raise EvaluationFailure("artifact", "candidate directory could not be created: %s" % exc) from exc
+        try:
+            atomic_write_json(candidate_dir / "parameters.json", physical_candidate)
+        except (TypeError, ValueError, OSError) as exc:
+            return self._failure(candidate_dir, candidate_id, "artifact", str(exc))
+        try:
+            result = _result_from_backend(candidate_id, self.backend(physical_candidate, candidate_dir))
+            if not result.success:
+                return self._failure(
+                    candidate_dir, candidate_id,
+                    result.failure["category"], result.failure["message"]
+                )
+            atomic_write_json(candidate_dir / "metrics.json", result.metrics)
+            atomic_write_json(candidate_dir / "specs.json", result.specs)
+            atomic_write_json(candidate_dir / "result.json", asdict(result))
+            return result
+        except EvaluationFailure as exc:
+            return self._failure(candidate_dir, candidate_id, exc.category, exc.message)
+        except (TypeError, ValueError, OSError) as exc:
+            return self._failure(candidate_dir, candidate_id, "artifact", str(exc))
+        except Exception as exc:
+            return self._failure(candidate_dir, candidate_id, "backend", str(exc))
