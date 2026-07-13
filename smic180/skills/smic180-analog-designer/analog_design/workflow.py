@@ -204,3 +204,69 @@ class DesignWorkflow:
         self.store.write_text(path, SpectreWriter(model_includes).render(ir))
         self.store.confirm(self.run_dir / "windows_sim" / "generated" / "netlist_generated.confirmed.json", "netlist_generated", [self.run_dir / "ir" / "circuit_ir.json", path])
         return path
+
+    def simulate(self, backend, *, iteration: int):
+        def operation():
+            if self.state.current != "ir_validated":
+                raise WorkflowError("simulate requires ir_validated state")
+            deck = self.run_dir / "windows_sim" / "generated" / "design.scs"
+            if not deck.is_file():
+                raise WorkflowError("generated Spectre deck is missing")
+            result = backend.run(deck, self.run_dir / "windows_sim" / "iterations", iteration)
+            measurements_path = self.run_dir / "windows_sim" / "measurements.json"
+            diagnosis_path = self.run_dir / "windows_sim" / "diagnosis.json"
+            self.store.write_json(measurements_path, result.measurements)
+            self.store.write_json(diagnosis_path, result.diagnostics)
+            marker = self.store.confirm(
+                self.run_dir / "windows_sim" / "windows_nominal_passed.confirmed.json",
+                "windows_nominal_passed",
+                [deck, result.run_dir / "measurements.json", result.run_dir / "operating_points.json", result.run_dir / "diagnosis.json"],
+            )
+            self.state.advance("windows_nominal_passed", {"confirmation": str(marker.relative_to(self.run_dir))})
+            return result
+        return self._guard("windows_nominal_passed", operation)
+
+    def _hard_spec_results(self) -> dict[str, dict[str, object]]:
+        spec = load_design_spec(self.spec_path)
+        measurements = json.loads((self.run_dir / "windows_sim" / "measurements.json").read_text(encoding="utf-8"))
+        results: dict[str, dict[str, object]] = {}
+        operators = {
+            ">=": lambda actual, target: actual >= target,
+            "<=": lambda actual, target: actual <= target,
+            ">": lambda actual, target: actual > target,
+            "<": lambda actual, target: actual < target,
+            "==": lambda actual, target: actual == target,
+        }
+        for metric in spec.metrics:
+            if metric.kind != "hard":
+                continue
+            actual = measurements.get(metric.id)
+            passed = isinstance(actual, (int, float)) and not isinstance(actual, bool)
+            if passed and metric.operator:
+                passed = operators[metric.operator](float(actual), metric.value)
+            results[metric.id] = {"actual": actual, "target": metric.value, "operator": metric.operator, "passed": bool(passed)}
+        return results
+
+    def freeze(self, *, allow_near_feasible: bool = False, reason: str = "") -> Path:
+        def operation():
+            if self.state.current != "windows_nominal_passed":
+                raise WorkflowError("freeze requires windows_nominal_passed state")
+            hard_results = self._hard_spec_results()
+            failures = [name for name, item in hard_results.items() if not item["passed"]]
+            near = bool(failures)
+            if failures and not allow_near_feasible:
+                raise WorkflowError("hard specification failures block freeze: " + ", ".join(failures))
+            if near and not reason.strip():
+                raise WorkflowError("near-feasible freeze requires a reason")
+            source_ir = self.run_dir / "ir" / "circuit_ir.json"
+            source_deck = self.run_dir / "windows_sim" / "generated" / "design.scs"
+            frozen_ir = self.run_dir / "frozen" / "circuit_ir.json"
+            frozen_deck = self.run_dir / "frozen" / "design.scs"
+            shutil.copyfile(source_ir, frozen_ir)
+            shutil.copyfile(source_deck, frozen_deck)
+            manifest = self.run_dir / "frozen" / "candidate_manifest.json"
+            self.store.write_json(manifest, {"near_feasible": near, "reason": reason, "hard_specs": hard_results, "ir_sha256": file_sha256(frozen_ir), "deck_sha256": file_sha256(frozen_deck)})
+            marker = self.store.confirm(self.run_dir / "frozen" / "candidate_frozen.confirmed.json", "candidate_frozen", [frozen_ir, frozen_deck, manifest])
+            self.state.advance("candidate_frozen", {"confirmation": str(marker.relative_to(self.run_dir))})
+            return manifest
+        return self._guard("candidate_frozen", operation)

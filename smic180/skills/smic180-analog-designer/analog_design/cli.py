@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import importlib
+import os
 from pathlib import Path
 import sys
 
@@ -22,6 +24,13 @@ def _parser() -> argparse.ArgumentParser:
     for name in ("build-ir", "render-netlist", "resume", "report"):
         command = commands.add_parser(name)
         command.add_argument("--run-dir", type=Path, required=True)
+    simulate = commands.add_parser("simulate")
+    simulate.add_argument("--run-dir", type=Path, required=True)
+    simulate.add_argument("--iteration", type=int, required=True)
+    freeze = commands.add_parser("freeze")
+    freeze.add_argument("--run-dir", type=Path, required=True)
+    freeze.add_argument("--allow-near-feasible", action="store_true")
+    freeze.add_argument("--reason", default="")
     return parser
 
 
@@ -45,6 +54,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "render-netlist":
             DesignWorkflow.resume(args.run_dir).render_netlist()
             return 0
+        if args.command == "simulate":
+            module = importlib.import_module(os.getenv("ANALOG_DESIGN_LIVE_MODULE", "analog_design.live"))
+            workflow = DesignWorkflow.resume(args.run_dir)
+            workflow.simulate(module.create_backend(args.run_dir), iteration=args.iteration)
+            return 0
+        if args.command == "freeze":
+            DesignWorkflow.resume(args.run_dir).freeze(allow_near_feasible=args.allow_near_feasible, reason=args.reason)
+            return 0
         if args.command == "resume":
             print(DesignWorkflow.resume(args.run_dir).state.current)
             return 0
@@ -55,3 +72,5 @@ def main(argv: list[str] | None = None) -> int:
     except (SpecError, WorkflowError, OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
+
