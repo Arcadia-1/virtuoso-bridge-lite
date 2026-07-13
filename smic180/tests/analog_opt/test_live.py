@@ -330,6 +330,16 @@ def test_mixed_corner_replaces_only_core_tt_sections():
  patched=__import__('analog_opt.live',fromlist=['patch_smic180_corner']).patch_smic180_corner(deck,'FNSP')
  assert [(m.path,m.section) for m in patched.model_includes]==[('core.scs','fnsp_core'),('passive.scs','tt_res')]
 
+def test_same_file_core_and_mim_sections_use_supported_mixed_corner_mapping():
+ def deck():
+  models=[type('M',(),{'path':'models.scs','section':'tt'})(),type('M',(),{'path':'models.scs','section':'mim_tt'})()]
+  return type('D',(),{'model_includes':models})()
+ patch=__import__('analog_opt.live',fromlist=['patch_smic180_corner']).patch_smic180_corner
+ mixed=patch(deck(),'FNSP',core_model_include='models.scs')
+ assert [m.section for m in mixed.model_includes]==['fnsp','mim_tt']
+ fast=patch(deck(),'FF',core_model_include='models.scs')
+ assert [m.section for m in fast.model_includes]==['ff','mim_ff']
+
 
 def test_metrics_adapter_validates_dc_curve_and_writes_svg(tmp_path):
  result=type('R',(),{'ok':True,'data':{'VDD_SWEEP':[2.7,3.0,3.3],'dc:VOUT':[1.0,1.1,1.2]},'metadata':{'run_dir':str(tmp_path)}})()

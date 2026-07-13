@@ -39,6 +39,9 @@ def patch_smic180_corner(deck,corner,core_model_include=None):
  for model in getattr(patched,'model_includes',[]):
   section=getattr(model,'section','')
   if not section: continue
+  if re.fullmatch(r'mim_(?:tt|ff|ss)',section,re.I):
+   model.section={'ff':'mim_ff','ss':'mim_ss'}.get(target,'mim_tt')
+   continue
   model_identity=str(getattr(model,'path','')).replace('\\','/').lower()
   explicit_core=core_identity is not None and model_identity==core_identity
   legacy_core=core_identity is None and re.search(r'core|mos|nch|pch',model_identity+' '+section,re.I)
