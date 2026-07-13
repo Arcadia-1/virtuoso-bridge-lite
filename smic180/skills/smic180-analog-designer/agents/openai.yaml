@@ -1,0 +1,6 @@
+interface:
+  display_name: "SMIC180 Analog Designer"
+  short_description: "Design and hand off SMIC180 analog circuits"
+  default_prompt: "Use $smic180-analog-designer to create an auditable SMIC180 analog circuit design flow from specification to verified Virtuoso handoff."
+policy:
+  allow_implicit_invocation: true
