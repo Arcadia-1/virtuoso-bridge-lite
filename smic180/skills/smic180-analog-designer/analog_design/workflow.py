@@ -295,3 +295,25 @@ class DesignWorkflow:
             raise WorkflowError(str(exc)) from exc
         self.state.advance("equivalence_passed", {"confirmation": str(marker.relative_to(self.run_dir))})
         return marker
+
+    def record_simulator_handoff(self, pins: str | Path, config: str | Path, review: str | Path) -> Path:
+        if self.state.current != "equivalence_passed":
+            raise WorkflowError("simulator handoff requires equivalence_passed state")
+        marker = self.store.confirm(self.run_dir / "simulator" / "simulator_validated.confirmed.json", "simulator_validated", [pins, config, review])
+        self.state.advance("simulator_validated", {"confirmation": str(marker.relative_to(self.run_dir))})
+        return marker
+
+    def record_optimizer_preparation(self, config: str | Path, baseline: str | Path, evidence: str | Path) -> Path:
+        if self.state.current != "simulator_validated":
+            raise WorkflowError("optimizer preparation requires simulator_validated state")
+        return self.store.confirm(self.run_dir / "optimizer" / "prepared.confirmed.json", "optimizer_prepared", [config, baseline, evidence])
+
+    def record_optimizer_completion(self, external_confirmation: str | Path) -> Path:
+        if self.state.current != "simulator_validated":
+            raise WorkflowError("optimizer completion requires simulator_validated state")
+        source = Path(external_confirmation)
+        if not source.is_file() or "confirmed" not in source.name:
+            raise WorkflowError("optimizer completion requires an external confirmed run artifact")
+        marker = self.store.confirm(self.run_dir / "optimizer" / "optimization_complete.confirmed.json", "optimization_complete", [source])
+        self.state.advance("optimization_complete", {"confirmation": str(marker.relative_to(self.run_dir))})
+        return marker
