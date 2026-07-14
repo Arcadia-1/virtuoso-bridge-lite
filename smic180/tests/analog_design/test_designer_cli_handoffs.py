@@ -106,13 +106,20 @@ def test_cli_prepare_optimizer_records_schema_valid_handoff(tmp_path):
             "linked_instances": parameter["linked_instances"][1:], "lower": 2e-6, "upper": 40e-6,
         }
     })
+    profile_evidence = write_json(tmp_path / "profiles.json", {"profiles": [
+        {"id": "open_loop", "role": "open_loop_small_signal", "testbench_cell": "open_tb", "dut_instance": "DUT", "stimuli": {"VDD": {"kind": "voltage", "value": 3.3, "source_instance": "SRC_VDD"}}, "analyses": [{"name": "ac_main", "type": "ac"}], "metrics": [], "specs": []},
+        {"id": "stability", "role": "unity_gain_stability", "testbench_cell": "stb_tb", "dut_instance": "DUT", "stimuli": {"VDD": {"kind": "voltage", "value": 3.3, "source_instance": "SRC_VDD"}}, "analyses": [{"name": "loop", "type": "stb", "probe": "IPRB"}], "metrics": [], "specs": []},
+        {"id": "closed_loop_slew", "role": "closed_loop_slew", "testbench_cell": "slew_tb", "dut_instance": "DUT", "stimuli": {"VDD": {"kind": "voltage", "value": 3.3, "source_instance": "SRC_VDD"}}, "analyses": [{"name": "step", "type": "tran"}], "metrics": [], "specs": []},
+    ]})
     assert main([
         "prepare-optimizer", "--run-dir", str(workflow.run_dir), "--library", "lib",
         "--source-cell", "source", "--work-cell", "work", "--result-cell", "result",
         "--testbench-cell", "source_tb", "--cdf-evidence", str(evidence),
         "--bias-mapping", str(bias_mapping),
+        "--profile-evidence", str(profile_evidence),
     ]) == 0
     assert workflow.state.current == "simulator_validated"
     raw = json.loads((workflow.run_dir / "optimizer" / "analog_opt_v2.json").read_text(encoding="utf-8"))
     assert raw["version"] == 2
+    assert [profile["id"] for profile in raw["verification_profiles"]] == ["open_loop", "stability", "closed_loop_slew"]
     assert (workflow.run_dir / "optimizer" / "prepared.confirmed.json").is_file()

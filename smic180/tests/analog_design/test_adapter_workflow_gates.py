@@ -101,3 +101,29 @@ def test_pvt_publication_and_final_validation_require_distinct_passing_evidence(
     })
     workflow.record_final_validation(final, maestro, expected_points=45)
     assert workflow.state.current == "final_validation_passed"
+
+def test_profile_final_validation_binds_candidate_and_profile_summary_hashes(tmp_path):
+    workflow = make_state(tmp_path, "equivalence_passed")
+    workflow.state.advance("simulator_validated", {})
+    profile_hash = "p" * 64
+    state = write_json(tmp_path / "workflow.json", {"state": "published", "candidate_hash": "abc", "profile_summary_hash": profile_hash})
+    replay = write_json(tmp_path / "replay.json", {"publishable": True, "best": {"objective": 0.0}})
+    workflow.record_optimizer_completion(state, replay)
+    reference = json.loads((tmp_path / "optimizer" / "run_reference.json").read_text(encoding="utf-8"))
+    assert reference["profile_summary_hash"] == profile_hash
+    workflow.record_pvt_completion(write_json(tmp_path / "pvt.json", {"overall_passed": True, "points": [{}] * 45, "failures": []}), expected_points=45)
+    publication = write_json(tmp_path / "publication.confirmed.json", {"candidate_hash": "abc", "profile_summary_hash": profile_hash})
+    workflow.record_publication(state, publication)
+    required = ["open_loop", "stability", "closed_loop_slew"]
+    final_checks = {profile_id: {name: True for name in ("result_exists", "final_tb_exists", "dut_uses_result", "netlist_uses_result", "spectre_passed", "pvt_passed", "fresh_results")} for profile_id in required}
+    final = write_json(tmp_path / "final.confirmed.json", {"version": 2, "status": "passed", "profiles": final_checks, "details": {"candidate_hash": "abc", "profile_summary_hash": profile_hash, "required_profile_ids": required}})
+    profile_confirmation = lambda name, value=profile_hash: write_json(tmp_path / (name + ".confirmed.json"), {"version": 1, "profile_id": name, "candidate_hash": "abc", "profile_summary_hash": value})
+    stability = profile_confirmation("stability")
+    slew = profile_confirmation("closed_loop_slew", "x" * 64)
+    maestro_profiles = {profile_id: {"test_exists": True, "run_completed": True, "history_exists": True, "reopen_check_passed": True, "metrics_match": True, "corner_count": 45, "failed_corner_count": 0} for profile_id in required}
+    maestro = write_json(tmp_path / "maestro.confirmed.json", {"version": 2, "status": "passed", "profiles": maestro_profiles, "details": {"required_profile_ids": required, "profile_summary_hash": profile_hash}})
+    with pytest.raises(WorkflowError, match="profile summary"):
+        workflow.record_final_validation(final, maestro, expected_points=45, stability_confirmation=stability, slew_confirmation=slew)
+    slew = profile_confirmation("closed_loop_slew")
+    workflow.record_final_validation(final, maestro, expected_points=45, stability_confirmation=stability, slew_confirmation=slew)
+    assert workflow.state.current == "final_validation_passed"

@@ -473,6 +473,9 @@ class DesignWorkflow:
         state_path, state_value = self._external_json(workflow_state, "optimizer workflow state")
         result_path, result_value = self._external_json(result_manifest, "optimizer result manifest")
         candidate_hash = state_value.get("candidate_hash")
+        profile_summary_hash = state_value.get("profile_summary_hash")
+        if profile_summary_hash is not None and (not isinstance(profile_summary_hash, str) or len(profile_summary_hash) != 64):
+            raise WorkflowError("optimizer profile summary hash is invalid")
         if state_value.get("state") not in {"pvt_passed", "published"} or not isinstance(candidate_hash, str) or not candidate_hash:
             raise WorkflowError("optimizer workflow state does not prove fresh replay")
         best = result_value.get("best")
@@ -480,6 +483,7 @@ class DesignWorkflow:
             raise WorkflowError("optimizer result manifest does not prove fresh replay")
         reference = self.store.write_json(self.run_dir / "optimizer" / "run_reference.json", {
             "candidate_hash": candidate_hash,
+            "profile_summary_hash": profile_summary_hash,
             "workflow_state": str(state_path.resolve()),
             "result_manifest": str(result_path.resolve()),
         })
@@ -497,6 +501,13 @@ class DesignWorkflow:
         if not isinstance(candidate_hash, str) or not candidate_hash:
             raise WorkflowError("optimizer run reference has no candidate hash")
         return candidate_hash
+
+    def _profile_summary_hash(self) -> str | None:
+        _, value = self._external_json(self.run_dir / "optimizer" / "run_reference.json", "optimizer run reference")
+        profile_hash = value.get("profile_summary_hash")
+        if profile_hash is not None and (not isinstance(profile_hash, str) or len(profile_hash) != 64):
+            raise WorkflowError("optimizer run reference has an invalid profile summary hash")
+        return profile_hash
 
     def record_pvt_completion(self, pvt_results: str | Path, *, expected_points: int) -> Path:
         if self.state.current != "optimization_complete":
@@ -520,6 +531,9 @@ class DesignWorkflow:
             raise WorkflowError("optimizer workflow state does not prove publication")
         if publication_value.get("candidate_hash") != candidate_hash:
             raise WorkflowError("publication candidate hash does not match optimizer result")
+        profile_hash = self._profile_summary_hash()
+        if profile_hash is not None and (state_value.get("profile_summary_hash") != profile_hash or publication_value.get("profile_summary_hash") != profile_hash):
+            raise WorkflowError("publication profile summary hash does not match optimizer result")
         marker = self.store.confirm(
             self.run_dir / "optimizer" / "published.confirmed.json",
             "published",
@@ -528,24 +542,60 @@ class DesignWorkflow:
         self.state.advance("published", {"confirmation": str(marker.relative_to(self.run_dir))})
         return marker
 
-    def record_final_validation(self, final_confirmation: str | Path, maestro_confirmation: str | Path, *, expected_points: int) -> Path:
+    def record_final_validation(
+        self,
+        final_confirmation: str | Path,
+        maestro_confirmation: str | Path,
+        *,
+        expected_points: int,
+        stability_confirmation: str | Path | None = None,
+        slew_confirmation: str | Path | None = None,
+    ) -> Path:
         if self.state.current != "published":
             raise WorkflowError("final validation requires published state")
         final_path, final_value = self._external_json(final_confirmation, "final validation confirmation")
         maestro_path, maestro_value = self._external_json(maestro_confirmation, "Maestro confirmation")
-        if final_value.get("status") != "passed" or final_value.get("details", {}).get("candidate_hash") != self._candidate_hash():
-            raise WorkflowError("final validation does not match the published candidate")
-        self._require_checks(final_value, ("spectre_passed", "fresh_results", "pvt_passed", "dut_uses_result"), "final validation")
-        if maestro_value.get("status") != "passed":
-            raise WorkflowError("Maestro confirmation status is not passed")
-        self._require_checks(maestro_value, ("maestro_run_completed", "reopen_check_passed"), "Maestro confirmation")
-        checks = maestro_value.get("checks", {})
-        if checks.get("corner_count") != expected_points or checks.get("failed_corner_count") != 0:
-            raise WorkflowError("Maestro confirmation does not prove the expected passing corner set")
+        candidate_hash = self._candidate_hash()
+        profile_hash = self._profile_summary_hash()
+        sources = [final_path, maestro_path]
+        if profile_hash is None:
+            if final_value.get("status") != "passed" or final_value.get("details", {}).get("candidate_hash") != candidate_hash:
+                raise WorkflowError("final validation does not match the published candidate")
+            self._require_checks(final_value, ("spectre_passed", "fresh_results", "pvt_passed", "dut_uses_result"), "final validation")
+            if maestro_value.get("status") != "passed":
+                raise WorkflowError("Maestro confirmation status is not passed")
+            self._require_checks(maestro_value, ("maestro_run_completed", "reopen_check_passed"), "Maestro confirmation")
+            checks = maestro_value.get("checks", {})
+            if checks.get("corner_count") != expected_points or checks.get("failed_corner_count") != 0:
+                raise WorkflowError("Maestro confirmation does not prove the expected passing corner set")
+        else:
+            required = ["open_loop", "stability", "closed_loop_slew"]
+            final_details = final_value.get("details", {})
+            final_profiles = final_value.get("profiles", {})
+            if final_value.get("version") != 2 or final_value.get("status") != "passed" or final_details.get("candidate_hash") != candidate_hash or final_details.get("profile_summary_hash") != profile_hash or final_details.get("required_profile_ids") != required:
+                raise WorkflowError("profile final validation does not match the published candidate and profile summary")
+            final_required = ("result_exists", "final_tb_exists", "dut_uses_result", "netlist_uses_result", "spectre_passed", "pvt_passed", "fresh_results")
+            if not isinstance(final_profiles, dict) or any(not isinstance(final_profiles.get(profile_id), dict) or any(final_profiles[profile_id].get(name) is not True for name in final_required) for profile_id in required):
+                raise WorkflowError("profile final validation checks are incomplete")
+            confirmations = (("stability", stability_confirmation), ("closed_loop_slew", slew_confirmation))
+            for profile_id, source in confirmations:
+                if source is None:
+                    raise WorkflowError(profile_id + " confirmation is required")
+                path, value = self._external_json(source, profile_id + " confirmation")
+                if value.get("profile_id") != profile_id or value.get("candidate_hash") != candidate_hash or value.get("profile_summary_hash") != profile_hash:
+                    raise WorkflowError(profile_id + " confirmation profile summary does not match")
+                sources.append(path)
+            maestro_details = maestro_value.get("details", {})
+            maestro_profiles = maestro_value.get("profiles", {})
+            if maestro_value.get("version") != 2 or maestro_value.get("status") != "passed" or maestro_details.get("profile_summary_hash") != profile_hash or maestro_details.get("required_profile_ids") != required:
+                raise WorkflowError("Maestro profile confirmation does not match the profile summary")
+            maestro_required = ("test_exists", "run_completed", "history_exists", "reopen_check_passed", "metrics_match")
+            if not isinstance(maestro_profiles, dict) or any(not isinstance(maestro_profiles.get(profile_id), dict) or any(maestro_profiles[profile_id].get(name) is not True for name in maestro_required) or maestro_profiles[profile_id].get("corner_count") != expected_points or maestro_profiles[profile_id].get("failed_corner_count") != 0 for profile_id in required):
+                raise WorkflowError("Maestro profile confirmation does not prove the expected passing corner sets")
         marker = self.store.confirm(
             self.run_dir / "optimizer" / "final_validation_passed.confirmed.json",
             "final_validation_passed",
-            [final_path, maestro_path],
+            sources,
         )
         self.state.advance("final_validation_passed", {"confirmation": str(marker.relative_to(self.run_dir))})
         return marker

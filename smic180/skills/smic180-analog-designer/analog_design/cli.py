@@ -86,6 +86,7 @@ def _parser() -> argparse.ArgumentParser:
     optimizer.add_argument("--testbench-cell", required=True)
     optimizer.add_argument("--cdf-evidence", type=Path, required=True)
     optimizer.add_argument("--bias-mapping", type=Path)
+    optimizer.add_argument("--profile-evidence", type=Path)
     optimizer.add_argument("--technology-profile", type=Path)
     optimizer.add_argument("--corner", default="tt")
     discovery = commands.add_parser("discover-technology")
@@ -196,8 +197,9 @@ def main(argv: list[str] | None = None) -> int:
             ir = load_circuit_ir(args.run_dir / "frozen" / "circuit_ir.json")
             cdf = load_strict_json(args.cdf_evidence)
             biases = load_strict_json(args.bias_mapping) if args.bias_mapping else {}
-            if not isinstance(cdf, dict) or not isinstance(biases, dict):
-                raise WorkflowError("CDF evidence and bias mapping must be JSON objects")
+            profiles = load_strict_json(args.profile_evidence) if args.profile_evidence else None
+            if not isinstance(cdf, dict) or not isinstance(biases, dict) or (profiles is not None and not isinstance(profiles, dict)):
+                raise WorkflowError("CDF evidence, bias mapping, and profile evidence must be JSON objects")
             model_includes = ()
             if args.technology_profile:
                 technology = load_technology_profile(args.technology_profile)
@@ -205,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
             outputs = prepare_optimizer_v2_handoff(
                 ir, args.run_dir / "optimizer", library=args.library, source_cell=args.source_cell,
                 work_cell=args.work_cell, result_cell=args.result_cell, testbench_cell=args.testbench_cell,
-                equivalence_confirmed=True, cdf_evidence=cdf, model_includes=model_includes, bias_mapping=biases,
+                equivalence_confirmed=True, cdf_evidence=cdf, model_includes=model_includes, bias_mapping=biases, profile_evidence=profiles,
             )
             workflow.record_optimizer_preparation(outputs.config, outputs.baseline, outputs.evidence)
             return 0
@@ -226,6 +228,8 @@ def main(argv: list[str] | None = None) -> int:
                     root / "final_validation" / "final_validation.confirmed.json",
                     root / "maestro_validation" / "maestro_validation.confirmed.json",
                     expected_points=args.expected_pvt_points,
+                    stability_confirmation=root / "stability.confirmed.json",
+                    slew_confirmation=root / "closed_loop_slew.confirmed.json",
                 )
             print(workflow.state.current)
             return 0

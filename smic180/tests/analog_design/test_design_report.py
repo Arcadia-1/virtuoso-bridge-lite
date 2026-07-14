@@ -77,3 +77,43 @@ def test_complete_report_summarizes_verified_results_and_keeps_unsupported_metri
     assert "PVT Metric Ranges" in markdown
     assert "Phase margin" in markdown
     assert "unverified" in markdown
+
+def test_profile_report_promotes_metrics_only_when_all_hashes_match(tmp_path):
+    state = WorkflowState.create(tmp_path / "workflow_state.json")
+    for target in _STATES[1:]:
+        state.advance(target, {})
+    optimizer = tmp_path / "external"
+    profile_hash = "p" * 64
+    metrics = {
+        "stb.stability.loop.phase_margin_deg": 62.0,
+        "tran.closed_loop_slew.step.VOUT.slew_rise_v_per_s": 6.2e6,
+        "tran.closed_loop_slew.step.VOUT.slew_fall_v_per_s": 5.9e6,
+    }
+    write_json(optimizer / "workflow_state.json", {"state": "published", "candidate_hash": "abc", "profile_summary_hash": profile_hash, "best": {"parameters": {}, "metrics": metrics}})
+    write_json(optimizer / "result_manifest.json", {"failures": [], "publishable": True})
+    write_json(optimizer / "pvt_results.json", {"overall_passed": True, "points": [], "failures": []})
+    required = ["open_loop", "stability", "closed_loop_slew"]
+    final_checks = {profile_id: {name: True for name in ("result_exists", "final_tb_exists", "dut_uses_result", "netlist_uses_result", "spectre_passed", "pvt_passed", "fresh_results")} for profile_id in required}
+    write_json(optimizer / "final_validation" / "final_validation.confirmed.json", {"version": 2, "status": "passed", "profiles": final_checks, "details": {"candidate_hash": "abc", "profile_summary_hash": profile_hash, "required_profile_ids": required}})
+    maestro_profiles = {profile_id: {"test_exists": True, "run_completed": True, "history_exists": True, "reopen_check_passed": True, "metrics_match": True, "corner_count": 45, "failed_corner_count": 0} for profile_id in required}
+    write_json(optimizer / "maestro_validation" / "maestro_validation.confirmed.json", {"version": 2, "status": "passed", "profiles": maestro_profiles, "details": {"history": "Interactive.4", "profile_summary_hash": profile_hash, "required_profile_ids": required}})
+    for profile_id in ("stability", "closed_loop_slew"):
+        write_json(optimizer / (profile_id + ".confirmed.json"), {"version": 1, "profile_id": profile_id, "candidate_hash": "abc", "profile_summary_hash": profile_hash})
+    write_json(tmp_path / "optimizer" / "run_reference.json", {"candidate_hash": "abc", "profile_summary_hash": profile_hash, "workflow_state": str(optimizer / "workflow_state.json"), "result_manifest": str(optimizer / "result_manifest.json")})
+    report_path, _ = write_report(tmp_path, output_dir=tmp_path / "reports-valid")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["verification_scope"]["phase_margin"] == {"status": "verified", "value_deg": 62.0}
+    assert report["verification_scope"]["closed_loop_slew_rate"] == {"status": "verified", "rise_v_per_s": 6.2e6, "fall_v_per_s": 5.9e6}
+    write_json(optimizer / "closed_loop_slew.confirmed.json", {"version": 1, "profile_id": "closed_loop_slew", "candidate_hash": "abc", "profile_summary_hash": "x" * 64})
+    report_path, _ = write_report(tmp_path, output_dir=tmp_path / "reports-stale")
+    stale = json.loads(report_path.read_text(encoding="utf-8"))
+    assert stale["verification_scope"]["phase_margin"]["status"] == "unverified"
+    assert stale["verification_scope"]["closed_loop_slew_rate"]["status"] == "unverified"
+    write_json(optimizer / "closed_loop_slew.confirmed.json", {"version": 1, "profile_id": "closed_loop_slew", "candidate_hash": "abc", "profile_summary_hash": profile_hash})
+    workflow_value = json.loads((optimizer / "workflow_state.json").read_text(encoding="utf-8"))
+    workflow_value["profile_summary_hash"] = "y" * 64
+    write_json(optimizer / "workflow_state.json", workflow_value)
+    report_path, _ = write_report(tmp_path, output_dir=tmp_path / "reports-workflow-stale")
+    stale = json.loads(report_path.read_text(encoding="utf-8"))
+    assert stale["verification_scope"]["phase_margin"]["status"] == "unverified"
+    assert stale["verification_scope"]["closed_loop_slew_rate"]["status"] == "unverified"

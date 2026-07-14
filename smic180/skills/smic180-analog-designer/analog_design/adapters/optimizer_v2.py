@@ -25,6 +25,30 @@ def _safe_identifier(value: str, label: str) -> str:
     return value
 
 
+def _verification_profiles(evidence: Mapping[str, Any] | None, reserved_cells: set[str]) -> list[dict[str, Any]] | None:
+    if evidence is None:
+        return None
+    raw_profiles = evidence.get("profiles") if isinstance(evidence, Mapping) else None
+    if not isinstance(raw_profiles, (list, tuple)):
+        raise AdapterError("profile evidence must contain a profiles list")
+    expected = ["open_loop", "stability", "closed_loop_slew"]
+    identifiers = [item.get("id") for item in raw_profiles if isinstance(item, Mapping)]
+    if identifiers != expected:
+        raise AdapterError("profile evidence must define open_loop, stability, and closed_loop_slew in order")
+    required = {"id", "role", "testbench_cell", "dut_instance", "stimuli", "analyses", "metrics", "specs"}
+    profiles = []
+    cells = set(reserved_cells)
+    for raw in raw_profiles:
+        if not isinstance(raw, Mapping) or not required.issubset(raw):
+            raise AdapterError("profile evidence is incomplete")
+        cell = _safe_identifier(str(raw["testbench_cell"]), "profile testbench cell")
+        if cell in cells:
+            raise AdapterError("profile testbench cells must be isolated")
+        cells.add(cell)
+        profiles.append(dict(raw))
+    return profiles
+
+
 def prepare_optimizer_v2_handoff(
     ir: CircuitIr,
     output_dir: str | Path,
@@ -38,6 +62,7 @@ def prepare_optimizer_v2_handoff(
     cdf_evidence: Mapping[str, Mapping[str, Any]],
     model_includes: tuple[tuple[str, str], ...] = (),
     bias_mapping: Mapping[str, str] | None = None,
+    profile_evidence: Mapping[str, Any] | None = None,
 ) -> OptimizerV2Handoff:
     if not equivalence_confirmed:
         raise AdapterError("Optimizer V2 handoff requires confirmed equivalence")
@@ -46,6 +71,7 @@ def prepare_optimizer_v2_handoff(
         raise AdapterError("source, work, and result cells must be distinct")
     _safe_identifier(library, "library")
     _safe_identifier(testbench_cell, "testbench cell")
+    verification_profiles = _verification_profiles(profile_evidence, set(cells) | {testbench_cell})
     parameters = []
     baseline: dict[str, float | int] = {}
     instance_ids = {item.id for item in ir.instances}
@@ -132,6 +158,8 @@ def prepare_optimizer_v2_handoff(
         "pvt": {"corners": ["TT"], "voltages": [vdd], "temperatures_c": [27.0], "voltage_stimulus": "VDD"},
         "outputs": {"run_dir": str(Path(output_dir).resolve() / "run")},
     }
+    if verification_profiles is not None:
+        config["verification_profiles"] = verification_profiles
     output = Path(output_dir)
     store = ArtifactStore(output)
     config_path = store.write_json(output / "analog_opt_v2.json", config)

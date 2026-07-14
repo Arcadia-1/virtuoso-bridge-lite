@@ -99,3 +99,30 @@ def test_optimizer_adapter_maps_explicit_ir_bias_parameter_to_optimizable_stimul
     assert raw["stimuli"]["IBIAS"]["upper"] == pytest.approx(1.2)
     baseline = json.loads(outputs.baseline.read_text(encoding="utf-8"))
     assert baseline["tail_bias_voltage"] == pytest.approx(0.9)
+
+def test_optimizer_adapter_emits_three_evidence_backed_profiles(tmp_path):
+    data = valid_ir_data()
+    data["measurements"] = [{"id": "gain", "analysis": "ac", "kind": "hard", "operator": ">=", "target": 60.0, "status": "requested"}]
+    supply = {"VDD": {"kind": "voltage", "value": 3.3, "source_instance": "SRC_VDD"}}
+    profiles = [
+        {
+            "id": "open_loop", "role": "open_loop_small_signal", "testbench_cell": "amp_open_loop_tb", "dut_instance": "DUT",
+            "stimuli": supply, "analyses": [{"name": "ac_main", "type": "ac", "start": 1.0, "stop": 1e9, "points_per_decade": 20}],
+            "metrics": [{"name": "gain", "analysis": "ac_main", "maestro_expression": "value(gain 1)"}], "specs": [{"metric": "gain", "op": ">=", "value": 60.0, "hard": True}], "pvt_policy": "full", "timeout_s": 1800,
+        },
+        {
+            "id": "stability", "role": "unity_gain_stability", "testbench_cell": "amp_stability_tb", "dut_instance": "DUT",
+            "stimuli": supply, "analyses": [{"name": "loop", "type": "stb", "probe": "IPRB", "start": 1.0, "stop": 1e9, "points_per_decade": 50, "maestro_options": "((\"probe\" \"IPRB\"))"}],
+            "metrics": [{"name": "phase_margin_deg", "analysis": "loop", "maestro_expression": "phaseMargin(loopGain)"}], "specs": [{"metric": "phase_margin_deg", "op": ">=", "value": 60.0, "hard": True}], "pvt_policy": "full", "timeout_s": 1800,
+        },
+        {
+            "id": "closed_loop_slew", "role": "closed_loop_slew", "testbench_cell": "amp_slew_tb", "dut_instance": "DUT",
+            "stimuli": supply, "analyses": [{"name": "step", "type": "tran", "stop": 20e-6, "metric_mode": "closed_loop_slew", "signal": "VOUT", "low": 0.7, "high": 1.1}],
+            "metrics": [{"name": "slew_rise_v_per_s", "analysis": "step", "maestro_expression": "1e6"}, {"name": "slew_fall_v_per_s", "analysis": "step", "maestro_expression": "1e6"}],
+            "specs": [{"metric": "slew_rise_v_per_s", "op": ">=", "value": 5e6, "hard": True}, {"metric": "slew_fall_v_per_s", "op": ">=", "value": 5e6, "hard": True}], "pvt_policy": "full", "timeout_s": 1800,
+        },
+    ]
+    outputs = prepare_optimizer_v2_handoff(circuit_ir_from_data(data), tmp_path, library="lib", source_cell="source", work_cell="work", result_cell="result", testbench_cell="tb", equivalence_confirmed=True, cdf_evidence=evidence(), profile_evidence={"profiles": profiles})
+    raw = json.loads(outputs.config.read_text(encoding="utf-8"))
+    assert [profile["id"] for profile in raw["verification_profiles"]] == ["open_loop", "stability", "closed_loop_slew"]
+    assert [profile.id for profile in load_config(outputs.config).verification_profiles] == ["open_loop", "stability", "closed_loop_slew"]

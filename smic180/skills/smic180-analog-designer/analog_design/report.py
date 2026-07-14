@@ -45,16 +45,25 @@ def _optimizer_context(root: Path) -> tuple[dict[str, Any], Path | None]:
         raw_metrics = {}
     metrics = {
         name: value for name, value in raw_metrics.items()
-        if _is_number(value) and (name.startswith("ac.") or "power" in name or "supply_current" in name)
+        if _is_number(value) and (name.startswith(("ac.", "stb.", "tran.closed_loop_slew.")) or "power" in name or "supply_current" in name)
     }
     devices = _operating_point_devices(raw_metrics)
     saturation = {
         name: values["saturation_margin"] for name, values in devices.items()
         if _is_number(values.get("saturation_margin"))
     }
+    candidate_hash = reference.get("candidate_hash")
+    if candidate_hash != workflow.get("candidate_hash"):
+        candidate_hash = None
+    profile_summary_hash = (
+        reference.get("profile_summary_hash")
+        if reference.get("profile_summary_hash") == workflow.get("profile_summary_hash")
+        else None
+    )
     return {
-        "candidate_hash": reference.get("candidate_hash"),
+        "candidate_hash": candidate_hash,
         "state": workflow.get("state"),
+        "profile_summary_hash": profile_summary_hash,
         "parameters": workflow.get("best", {}).get("parameters", {}),
         "metrics": metrics,
         "operating_point": {
@@ -112,12 +121,90 @@ def _pvt_metric_ranges(pvt_raw: Any) -> dict[str, dict[str, Any]]:
     return ranges
 
 
+
+
+def _profile_verification_scope(
+    optimizer_root: Path | None,
+    optimizer: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    unverified = {
+        "phase_margin": {
+            "status": "unverified",
+            "reason": "a matching STB profile confirmation chain is unavailable",
+        },
+        "closed_loop_slew_rate": {
+            "status": "unverified",
+            "reason": "a matching closed-loop slew profile confirmation chain is unavailable",
+        },
+    }
+    risks = [
+        "Phase margin remains unverified until the STB profile confirmation chain matches.",
+        "Standard closed-loop slew rate remains unverified until the dedicated profile confirmation chain matches.",
+    ]
+    if optimizer_root is None:
+        return unverified, risks
+    candidate_hash = optimizer.get("candidate_hash")
+    profile_hash = optimizer.get("profile_summary_hash")
+    if (
+        not isinstance(candidate_hash, str)
+        or not candidate_hash
+        or not isinstance(profile_hash, str)
+        or len(profile_hash) != 64
+    ):
+        return unverified, risks
+    required = ["open_loop", "stability", "closed_loop_slew"]
+    final_value = _read_json(
+        optimizer_root / "final_validation" / "final_validation.confirmed.json", {}
+    )
+    maestro_value = _read_json(
+        optimizer_root / "maestro_validation" / "maestro_validation.confirmed.json", {}
+    )
+    stability = _read_json(optimizer_root / "stability.confirmed.json", {})
+    slew = _read_json(optimizer_root / "closed_loop_slew.confirmed.json", {})
+    final_details = final_value.get("details", {}) if isinstance(final_value, dict) else {}
+    maestro_details = maestro_value.get("details", {}) if isinstance(maestro_value, dict) else {}
+    confirmations = (("stability", stability), ("closed_loop_slew", slew))
+    chain_matches = (
+        final_value.get("version") == 2
+        and final_value.get("status") == "passed"
+        and final_details.get("candidate_hash") == candidate_hash
+        and final_details.get("profile_summary_hash") == profile_hash
+        and final_details.get("required_profile_ids") == required
+        and maestro_value.get("version") == 2
+        and maestro_value.get("status") == "passed"
+        and maestro_details.get("profile_summary_hash") == profile_hash
+        and maestro_details.get("required_profile_ids") == required
+        and all(
+            value.get("profile_id") == profile_id
+            and value.get("candidate_hash") == candidate_hash
+            and value.get("profile_summary_hash") == profile_hash
+            for profile_id, value in confirmations
+        )
+    )
+    if not chain_matches:
+        return unverified, risks
+    metrics = optimizer.get("metrics", {})
+    phase = metrics.get("stb.stability.loop.phase_margin_deg") if isinstance(metrics, dict) else None
+    rise = metrics.get("tran.closed_loop_slew.step.VOUT.slew_rise_v_per_s") if isinstance(metrics, dict) else None
+    fall = metrics.get("tran.closed_loop_slew.step.VOUT.slew_fall_v_per_s") if isinstance(metrics, dict) else None
+    if not all(_is_number(value) for value in (phase, rise, fall)):
+        return unverified, risks
+    return {
+        "phase_margin": {"status": "verified", "value_deg": float(phase)},
+        "closed_loop_slew_rate": {
+            "status": "verified",
+            "rise_v_per_s": float(rise),
+            "fall_v_per_s": float(fall),
+        },
+    }, []
+
 def write_report(run_dir: str | Path, *, output_dir: str | Path | None = None) -> tuple[Path, Path]:
     root = Path(run_dir)
     state = WorkflowState.load(root / "workflow_state.json")
     current_index = _STATES.index(state.current)
     stages = {name: ("confirmed" if index <= current_index else "unverified") for index, name in enumerate(_STATES)}
     optimizer, optimizer_root = _optimizer_context(root)
+    verification_scope, residual_risks = _profile_verification_scope(optimizer_root, optimizer)
     pvt_raw = _read_json(optimizer_root / "pvt_results.json", {}) if optimizer_root else {}
     final_raw = _read_json(optimizer_root / "final_validation" / "final_validation.confirmed.json", {}) if optimizer_root else {}
     maestro_raw = _read_json(optimizer_root / "maestro_validation" / "maestro_validation.confirmed.json", {}) if optimizer_root else {}
@@ -162,14 +249,8 @@ def write_report(run_dir: str | Path, *, output_dir: str | Path | None = None) -
             "corner_count": maestro_checks.get("corner_count"),
             "failed_corner_count": maestro_checks.get("failed_corner_count"),
         },
-        "verification_scope": {
-            "phase_margin": {"status": "unverified", "reason": "ordinary AC analysis is not an STB loop-stability measurement"},
-            "closed_loop_slew_rate": {"status": "unverified", "reason": "open-loop transient slope is not the standard closed-loop slew-rate test"},
-        },
-        "residual_risks": [
-            "Phase margin remains unverified until a dedicated STB loop testbench passes.",
-            "Standard closed-loop slew rate remains unverified until a dedicated large-signal follower testbench passes.",
-        ],
+        "verification_scope": verification_scope,
+        "residual_risks": residual_risks,
     }
     destination = Path(output_dir) if output_dir is not None else root / "reports"
     store = ArtifactStore(destination)
@@ -205,7 +286,18 @@ def write_report(run_dir: str | Path, *, output_dir: str | Path | None = None) -
             lines.append(f"- `{name}`: min={item['minimum']} at `{item['minimum_point']}`, max={item['maximum']} at `{item['maximum_point']}`")
     else:
         lines.append("- No numeric PVT metric ranges were available.")
-    lines.extend(["", "## Verification Scope", "", "- Phase margin: unverified; ordinary AC is not STB.", "- Closed-loop slew rate: unverified; the existing open-loop transient slope is not a standard slew test.", "", "## Stage Status", ""])
+    lines.extend(["", "## Verification Scope", ""])
+    phase_scope = report["verification_scope"]["phase_margin"]
+    slew_scope = report["verification_scope"]["closed_loop_slew_rate"]
+    if phase_scope["status"] == "verified":
+        lines.append(f"- Phase margin: verified by STB, {phase_scope['value_deg']} deg.")
+    else:
+        lines.append(f"- Phase margin: unverified; {phase_scope['reason']}.")
+    if slew_scope["status"] == "verified":
+        lines.append(f"- Closed-loop slew rate: verified, rise={slew_scope['rise_v_per_s']} V/s, fall={slew_scope['fall_v_per_s']} V/s.")
+    else:
+        lines.append(f"- Closed-loop slew rate: unverified; {slew_scope['reason']}.")
+    lines.extend(["", "## Stage Status", ""])
     lines.extend(f"- `{name}`: {status}" for name, status in stages.items())
     lines.extend(["", "Unverified items are not claims of success.", ""])
     markdown_path = store.write_text(destination / "design_report.md", "\n".join(lines))
