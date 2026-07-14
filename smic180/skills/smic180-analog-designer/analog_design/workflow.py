@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import shutil
@@ -25,6 +26,26 @@ from .validation import validate_circuit_ir
 class WorkflowError(ValueError):
     """Raised when a workflow gate or resume invariant fails."""
 
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _artifact_summary(path: Path, root: Path) -> dict[str, Any]:
+    resolved = path.resolve()
+    try:
+        display = str(resolved.relative_to(root.resolve()))
+    except ValueError:
+        display = str(resolved)
+    return {"path": display, "sha256": file_sha256(resolved), "size": resolved.stat().st_size}
+
+
+def _confirmation_outputs(marker: Path, root: Path) -> list[dict[str, Any]]:
+    try:
+        data = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise WorkflowError(f"invalid confirmation marker {marker}: {exc}") from exc
+    return [_artifact_summary(Path(record["path"]), root) for record in data.get("artifacts", [])]
 
 _STATES = (
     "initialized", "spec_validated", "topology_selected",
@@ -69,9 +90,44 @@ class WorkflowState:
         expected = _STATES[expected_index] if expected_index < len(_STATES) else None
         if target != expected:
             raise WorkflowError(f"expected {expected}, cannot advance to {target}")
-        self.transitions.append({"from": self.current, "to": target, "evidence": dict(evidence)})
+        root = self.path.parent
+        timestamp = _utc_now()
+        inputs: list[dict[str, Any]] = []
+        if self.transitions:
+            previous_manifest = self.transitions[-1].get("manifest")
+            if isinstance(previous_manifest, str):
+                try:
+                    inputs = list(json.loads((root / previous_manifest).read_text(encoding="utf-8")).get("outputs", []))
+                except (OSError, json.JSONDecodeError):
+                    inputs = []
+        else:
+            initialized = root / "manifests" / "000-initialized.json"
+            if initialized.is_file():
+                inputs = list(json.loads(initialized.read_text(encoding="utf-8")).get("outputs", []))
+        confirmation = evidence.get("confirmation")
+        outputs = _confirmation_outputs(root / confirmation, root) if isinstance(confirmation, str) else []
+        manifest_path = root / "manifests" / f"{expected_index:03d}-{target}.json"
+        self.store.write_json(manifest_path, {
+            "stage": target, "status": "confirmed", "timestamp": timestamp,
+            "inputs": inputs, "outputs": outputs, "evidence": dict(evidence),
+        })
+        self.transitions.append({
+            "from": self.current, "to": target, "status": "confirmed", "timestamp": timestamp,
+            "manifest": str(manifest_path.relative_to(root)), "evidence": dict(evidence),
+        })
         self.current = target
         self._save()
+        run_manifest = root / "manifest.json"
+        if run_manifest.is_file():
+            try:
+                summary = json.loads(run_manifest.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                summary = {"version": 1}
+            summary.update({
+                "status": "confirmed", "current_stage": target, "updated_at": timestamp,
+                "output_summary": outputs, "stage_manifest": str(manifest_path.relative_to(root)),
+            })
+            self.store.write_json(run_manifest, summary)
 
 
 class DesignWorkflow:
@@ -89,10 +145,26 @@ class DesignWorkflow:
         target.mkdir(parents=True)
         for relative in ArtifactStore.LAYOUT:
             (target / relative).mkdir(parents=True, exist_ok=True)
+        if target.parent.name == "analog_design":
+            ArtifactStore(target.parent).write_text(target.parent / ".latest_run", str(target.resolve()) + "\n")
         shutil.copyfile(source, target / "inputs" / "design_spec.json")
         state = WorkflowState.create(target / "workflow_state.json")
         workflow = cls(target, state)
-        workflow.store.write_json(target / "manifest.json", {"version": 1, "spec": "inputs/design_spec.json"})
+        timestamp = _utc_now()
+        spec_summary = _artifact_summary(target / "inputs" / "design_spec.json", target)
+        initialized_manifest = target / "manifests" / "000-initialized.json"
+        workflow.store.write_json(initialized_manifest, {
+            "stage": "initialized", "status": "confirmed", "timestamp": timestamp,
+            "inputs": [{"path": str(source.resolve()), "sha256": file_sha256(source), "size": source.stat().st_size}],
+            "outputs": [spec_summary], "evidence": {},
+        })
+        workflow.store.write_json(target / "manifest.json", {
+            "version": 1, "status": "initialized", "created_at": timestamp,
+            "spec": "inputs/design_spec.json",
+            "input_summary": [{"path": str(source.resolve()), "sha256": file_sha256(source), "size": source.stat().st_size}],
+            "output_summary": [spec_summary],
+            "stage_manifest": str(initialized_manifest.relative_to(target)),
+        })
         return workflow
 
     @classmethod
@@ -117,8 +189,23 @@ class DesignWorkflow:
                 failures = []
         else:
             failures = []
-        failures.append({"stage": stage, "error": str(exc), "type": type(exc).__name__})
+        timestamp = _utc_now()
+        record = {"stage": stage, "status": "failed", "timestamp": timestamp, "error": str(exc), "type": type(exc).__name__, "current_state": self.state.current}
+        failures.append(record)
         self.store.write_json(path, failures)
+        failure_manifest = self.run_dir / "manifests" / f"failed-{len(failures):03d}-{stage}.json"
+        self.store.write_json(failure_manifest, {**record, "inputs": [], "outputs": []})
+        run_manifest = self.run_dir / "manifest.json"
+        if run_manifest.is_file():
+            try:
+                summary = json.loads(run_manifest.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                summary = {"version": 1}
+            summary.update({
+                "status": "failed", "current_stage": self.state.current, "updated_at": timestamp,
+                "last_failure": record, "stage_manifest": str(failure_manifest.relative_to(self.run_dir)),
+            })
+            self.store.write_json(run_manifest, summary)
 
     def _guard(self, stage: str, operation):
         try:

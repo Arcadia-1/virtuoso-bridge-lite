@@ -34,3 +34,21 @@ after handoff.
 
 Read the matching reference before executing a live PDK or topology-specific
 stage. Runtime artifacts belong under `${AMS_OUTPUT_ROOT}/analog_design/`.
+## Audit and resume
+
+Every new confirmed stage writes `manifests/<index>-<stage>.json` with a UTC
+timestamp, status, input artifact summaries, output artifact summaries, and the
+confirmation reference. Standard `${AMS_OUTPUT_ROOT}/analog_design/<run>`
+initialization updates `.latest_run` atomically.
+
+For a historical signed run, use the additive audit command instead of editing
+old artifacts:
+
+```powershell
+python scripts/analog_design.py audit-run --run-dir <run_dir>
+```
+
+It verifies the existing confirmation chain, refuses to overwrite an existing
+addendum, and writes `audit/addendum-v1/` with current schemas, a calculation
+report, an expanded design report, and before/after hashes of signed control
+artifacts.

@@ -11,6 +11,7 @@ import sys
 
 from .adapters.optimizer_v2 import prepare_optimizer_v2_handoff
 from .adapters.simulator import prepare_simulator_handoff
+from .audit import write_audit_addendum
 from .ir import load_circuit_ir
 from .jsonio import load_strict_json
 from .netlist.equivalence import compare_metrics, compare_netlists
@@ -40,7 +41,7 @@ def _parser() -> argparse.ArgumentParser:
     render.add_argument("--run-dir", type=Path, required=True)
     render.add_argument("--technology-profile", type=Path)
     render.add_argument("--corner", default="tt")
-    for name in ("resume", "report"):
+    for name in ("resume", "report", "audit-run"):
         command = commands.add_parser(name)
         command.add_argument("--run-dir", type=Path, required=True)
     simulate = commands.add_parser("simulate")
@@ -233,6 +234,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "report":
             write_report(args.run_dir)
+            return 0
+        if args.command == "audit-run":
+            print(write_audit_addendum(args.run_dir))
             return 0
         return 2
     except (SpecError, WorkflowError, OSError, ValueError) as exc:

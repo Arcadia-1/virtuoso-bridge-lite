@@ -23,6 +23,14 @@ def test_cli_validate_plan_build_render_and_report(tmp_path, capsys):
     assert "incomplete" in (run_dir / "reports" / "design_report.md").read_text(encoding="utf-8").lower()
 
 
+def test_cli_audit_run_writes_additive_snapshot(tmp_path):
+    load_spec(tmp_path)
+    run_dir = tmp_path / "run"
+    assert main(["plan", "--spec", str(tmp_path / "spec.json"), "--run-dir", str(run_dir)]) == 0
+    assert main(["build-ir", "--run-dir", str(run_dir)]) == 0
+    assert main(["audit-run", "--run-dir", str(run_dir)]) == 0
+    assert (run_dir / "audit" / "addendum-v1" / "migration_manifest.json").is_file()
+
 def test_cli_discover_technology_plan_only_writes_queries_without_live_connection(tmp_path, monkeypatch):
     monkeypatch.setenv("SIM_CDS_LIB", "/configured/pdk/cds.lib")
     monkeypatch.setenv("SIM_PDK_CORE_SPECTRE_INCLUDE", "/configured/pdk/models/spectre/models.scs")

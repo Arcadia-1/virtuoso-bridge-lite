@@ -1,4 +1,4 @@
-﻿"""Atomic artifact and confirmation management."""
+"""Atomic artifact and confirmation management."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ class ArtifactStore:
     LAYOUT = (
         "inputs", "topology", "sizing", "ir", "windows_sim/generated",
         "windows_sim/iterations", "frozen", "virtuoso", "equivalence",
-        "simulator", "optimizer", "reports",
+        "simulator", "optimizer", "reports", "manifests", "audit",
     )
 
     def __init__(self, output_root: str | Path) -> None:

@@ -31,3 +31,16 @@
 - Do not overwrite `main` working-tree changes.
 - Do not commit `_local/site.yaml`, licenses, local paths, or simulation raw output.
 - Ordinary AC does not prove phase margin; open-loop transient does not prove standard closed-loop slew rate.
+## Completion audit update
+
+- Fresh baseline before the audit: 721 passed, 1 skipped.
+- Added per-stage manifests, timestamps, input/output summaries, failure manifests,
+  root-manifest status updates, and standard-layout `.latest_run` updates.
+- Added `audit-run`, which created `audit/addendum-v1/` for the formal live run
+  without changing historical signed control hashes.
+- Expanded the report with final parameters, per-device operating-point data,
+  optimization history, and numeric PVT ranges.
+- Fixed isolated Designer regression setup so `smic180/tests/analog_design` can
+  run without depending on Optimizer test collection order.
+- Completion matrix: `../specs/2026-07-14-analog-design-completion-audit.md`.
+- Final combined regression passed: 727 passed, 1 existing skip. CLI smoke, compilation, `git diff --check`, and change-scope hygiene checks passed.
