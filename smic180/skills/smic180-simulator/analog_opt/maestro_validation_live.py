@@ -2,10 +2,16 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 from analog_opt.live import _load_client_class
-from analog_opt.maestro_validation import (MaestroValidationError, build_corner_status, load_maestro_context, verify_maestro_netlist, write_maestro_confirmation)
+from analog_opt.final_validation_live import _final_tb_uses_result
+from analog_opt.maestro_validation import (MaestroValidationError, build_corner_status, compare_profile_metrics, load_maestro_context, verify_maestro_netlist, write_maestro_confirmation, write_maestro_profile_confirmation)
+
+def _write_json(path: Path, payload) -> None:
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
 
 
 def _skill(client, expression: str, sentinel: str, timeout: int = 60) -> str:
@@ -102,6 +108,25 @@ def _maestro_stimulus_plan(config, parameters, voltage_variable: str) -> list[li
     return plan
 
 
+def _maestro_profile_stimulus_plan(profile, voltage_variable: str) -> list[list[str]]:
+    stimuli = profile.stimuli
+    if not isinstance(stimuli, dict) or voltage_variable not in stimuli:
+        raise MaestroValidationError(
+            f"profile supply stimulus is missing: {voltage_variable}"
+        )
+    supply = stimuli[voltage_variable]
+    if not isinstance(supply, dict) or supply.get("kind") != "voltage":
+        raise MaestroValidationError(
+            f"profile supply stimulus must be voltage: {voltage_variable}"
+        )
+    instance = supply.get("source_instance")
+    if not isinstance(instance, str) or not instance:
+        raise MaestroValidationError(
+            f"profile supply source instance is missing: {voltage_variable}"
+        )
+    return [[instance, "vdc", voltage_variable], [instance, "srcType", "dc"]]
+
+
 def _copy_action(destination_exists: bool, recovery_verified: bool) -> str:
     if not destination_exists:
         return "copy"
@@ -173,27 +198,34 @@ def _configure_corner_models(client, context, session: str) -> None:
             120,
         )
 
-def _copy_maestro_testbench(client, context) -> None:
+def _copy_maestro_testbench(client, context, profile=None) -> None:
     library = context.published.library
-    destination_exists = _cell_exists(client, library, context.maestro_testbench)
+    final_testbench = profile.final_testbench if profile is not None else context.final_testbench
+    maestro_testbench = profile.maestro_testbench if profile is not None else context.maestro_testbench
+    destination_exists = _cell_exists(client, library, maestro_testbench)
     recovery_verified = False
     if destination_exists:
         recovery_verified = (
-            _schematic_signature(client, library, context.final_testbench)
-            == _schematic_signature(client, library, context.maestro_testbench)
+            _schematic_signature(client, library, final_testbench)
+            == _schematic_signature(client, library, maestro_testbench)
         )
     action = _copy_action(destination_exists, recovery_verified)
-    plan = _maestro_stimulus_plan(
-        context.published.config, context.published.parameters, context.voltage_variable
-    )
+    if profile is None:
+        plan = _maestro_stimulus_plan(
+            context.published.config,
+            context.published.parameters,
+            context.voltage_variable,
+        )
+    else:
+        plan = _maestro_profile_stimulus_plan(profile, context.voltage_variable)
     open_destination = (
-        f'dst=dbOpenCellViewByType("{library}" "{context.maestro_testbench}" "schematic" "schematic" "a")'
+        f'dst=dbOpenCellViewByType("{library}" "{maestro_testbench}" "schematic" "schematic" "a")'
         if action == "resume"
-        else f'dst=dbCopyCellView(src "{library}" "{context.maestro_testbench}" "schematic")'
+        else f'dst=dbCopyCellView(src "{library}" "{maestro_testbench}" "schematic")'
     )
     expression = f'''
 let((src dst target parameter)
- src=dbOpenCellViewByType("{library}" "{context.final_testbench}" "schematic" "schematic" "r")
+ src=dbOpenCellViewByType("{library}" "{final_testbench}" "schematic" "schematic" "r")
  unless(src error("final testbench missing"))
  {open_destination}
  unless(dst error("Maestro testbench open/copy failed"))
@@ -218,6 +250,71 @@ def _bootstrap_maestro_view(client, library: str, maestro_cell: str) -> str:
     return session
 
 
+def _profile_analysis_plan(analyses) -> list[dict]:
+    plan = []
+    for analysis in analyses:
+        if not isinstance(analysis, dict) or not isinstance(analysis.get("type"), str):
+            raise MaestroValidationError("invalid Maestro profile analysis")
+        analysis_type = analysis["type"]
+        if analysis_type == "dc_op":
+            plan.append({"type": "dc", "options": None})
+        elif analysis_type == "ac":
+            options = analysis.get("maestro_options")
+            if options is None:
+                options = '(("start" "%s") ("stop" "%s") ("incrType" "Logarithmic") ("stepTypeLog" "Points Per Decade") ("dec" "%s"))' % (_number(analysis["start"]), _number(analysis["stop"]), int(analysis["points_per_decade"]))
+            plan.append({"type": "ac", "options": options})
+        elif analysis_type == "tran":
+            options = analysis.get("maestro_options")
+            if options is None:
+                options = '(("stop" "%s"))' % _number(analysis["stop"])
+            plan.append({"type": "tran", "options": options})
+        elif analysis_type == "stb":
+            options = analysis.get("maestro_options")
+            if not isinstance(options, str) or not options.strip():
+                raise MaestroValidationError("STB Maestro analysis requires explicit maestro_options from a verified live setup")
+            plan.append({"type": "stb", "options": options})
+        else:
+            raise MaestroValidationError("unsupported Maestro profile analysis type: " + analysis_type)
+    if not plan:
+        raise MaestroValidationError("Maestro profile must contain an analysis")
+    return plan
+
+
+def _configure_profile_analyses(set_analysis, client, profile, session) -> None:
+    for analysis_type in ("tran", "dc", "ac", "stb"):
+        set_analysis(client, profile.test_name, analysis_type, enable=False, session=session)
+    for item in _profile_analysis_plan(profile.analyses):
+        kwargs = {"enable": True, "session": session}
+        if item["options"] is not None: kwargs["options"] = item["options"]
+        set_analysis(client, profile.test_name, item["type"], **kwargs)
+
+
+def _profile_metric_plan(profile) -> list[dict]:
+    import re
+    hard_metrics = {item.get("metric") for item in profile.specs if isinstance(item, dict) and item.get("hard") is True}
+    plan = []
+    by_metric = {}
+    for item in profile.metrics:
+        if not isinstance(item, dict):
+            raise MaestroValidationError("invalid Maestro metric declaration: " + profile.profile_id)
+        metric = item.get("metric", item.get("name"))
+        expression = item.get("maestro_expression")
+        if not isinstance(metric, str) or not metric:
+            raise MaestroValidationError("Maestro metric identifier is missing: " + profile.profile_id)
+        if expression is None:
+            by_metric[metric] = None
+            continue
+        if not isinstance(expression, str) or not expression:
+            raise MaestroValidationError("invalid maestro_expression: " + metric)
+        output = re.sub(r"[^A-Za-z0-9_]", "_", profile.profile_id + "__" + metric)
+        record = {"metric": metric, "output": output, "expression": expression}
+        plan.append(record); by_metric[metric] = record
+    missing = sorted(metric for metric in hard_metrics if by_metric.get(metric) is None)
+    if missing:
+        raise MaestroValidationError("hard-spec Maestro metrics require maestro_expression: " + ", ".join(missing))
+    return plan
+
+
 def create_maestro(run_dir):
     from virtuoso_bridge.virtuoso.maestro import (
         add_output, close_session, create_test, save_setup, set_analysis, set_current_run_mode,
@@ -229,6 +326,51 @@ def create_maestro(run_dir):
     library = context.published.library
     _ensure_absent(client, library, context.maestro_cell)
     _prepare_create_root(root)
+    profile_mode = not (len(context.profiles) == 1 and context.profiles[0].role == "legacy")
+    if profile_mode:
+        for profile in context.profiles:
+            _copy_maestro_testbench(client, context, profile)
+        session = _bootstrap_maestro_view(client, library, context.maestro_cell)
+        try:
+            set_var(client, context.voltage_variable, "3.3", session=session)
+            model_options = _nominal_model_options(context.model_file)
+            profile_metric_plans = {}
+            for profile in context.profiles:
+                create_test(client, profile.test_name, lib=library, cell=profile.maestro_testbench,
+                            view="schematic", simulator="spectre", session=session)
+                _configure_profile_analyses(set_analysis, client, profile, session)
+                set_env_option(client, profile.test_name, model_options, session=session)
+                set_sim_option(client, profile.test_name,
+                               '(("temp" "27") ("reltol" "0.0001") ("vabstol" "1e-6") ("iabstol" "1e-12") ("gmin" "1e-12") ("format" "psfascii"))',
+                               session=session)
+                metric_plan = _profile_metric_plan(profile); profile_metric_plans[profile.profile_id] = metric_plan
+                for metric in metric_plan:
+                    add_output(client, metric["output"], profile.test_name, output_type="point", expr=metric["expression"], session=session)
+            for corner in context.corners:
+                setup_corner(client, corner.name, variables={context.voltage_variable: str(corner.voltage),
+                             "temperature": str(corner.temperature)}, session=session)
+            _configure_corner_models(client, context, session)
+            capability = client.execute_skill("getd('maeSetCurrentRunMode)")
+            if (capability.output or "").strip() not in ("", "nil"):
+                set_current_run_mode(client, "Single Run, Sweeps and Corners", session=session)
+            else:
+                fallback = client.execute_skill(f'axlSetCurrentRunMode(axlGetMainSetupDB("{session}") "Single Run, Sweeps and Corners")')
+                if fallback.errors or (fallback.output or "").strip() in ("", "nil"):
+                    raise MaestroValidationError("cannot select Maestro corners run mode")
+            save_setup(client, library, context.maestro_cell, session=session)
+        finally:
+            close_session(client, session)
+        manifest = {"version": 2, "library": library, "result_cell": context.published.result_cell,
+                    "maestro_cell": context.maestro_cell, "model_file": context.model_file,
+                    "corner_count": len(context.corners), "corners": [corner.__dict__ for corner in context.corners],
+                    "profiles": [{"profile_id": profile.profile_id, "role": profile.role,
+                                  "final_testbench": profile.final_testbench, "maestro_testbench": profile.maestro_testbench,
+                                  "test_name": profile.test_name, "analysis_types": list(profile.analysis_types),
+                                  "expected_corner_count": profile.expected_corner_count,
+                                  "metrics": profile_metric_plans[profile.profile_id]} for profile in context.profiles]}
+        target = root / "maestro_manifest.json"
+        _write_json(target, manifest)
+        return target
     _copy_maestro_testbench(client, context)
     session = _bootstrap_maestro_view(client, library, context.maestro_cell)
     try:
@@ -313,6 +455,36 @@ def _remove_redundant_core_models(xml_text: str, basename: str, expected_corners
     if missing:
         raise MaestroValidationError("Maestro XML corners are missing: " + ", ".join(sorted(missing)))
     return ET.tostring(root, encoding="unicode", xml_declaration=True)
+
+
+def _verify_model_matrix_xml(xml_text: str, expected_sections) -> bool:
+    import xml.etree.ElementTree as ET
+    try: root = ET.fromstring(xml_text)
+    except ET.ParseError as exc: raise MaestroValidationError("invalid maestro.sdb XML") from exc
+    seen = set()
+    for corner in root.findall("./active/corners/corner"):
+        name = (corner.text or "").strip()
+        if name not in expected_sections: continue
+        models = corner.find("models")
+        sections = [] if models is None else [(model.findtext("modelsection") or "").strip().lower() for model in models.findall("model")]
+        core, mim = (str(value).lower() for value in expected_sections[name])
+        if core not in sections or mim not in sections:
+            raise MaestroValidationError("Maestro model sections do not match corner: " + name)
+        seen.add(name)
+    missing = set(expected_sections) - seen
+    if missing: raise MaestroValidationError("Maestro model matrix is missing corners: " + ", ".join(sorted(missing)))
+    return True
+
+
+def _verify_saved_model_matrix(client, context, root) -> bool:
+    result = client.execute_skill(f'ddGetObj("{context.published.library}" "{context.maestro_cell}" "maestro")~>readPath')
+    remote_view = (result.output or "").strip().strip(chr(34))
+    if result.errors or not remote_view: raise MaestroValidationError("cannot resolve saved Maestro cellview path")
+    local_path = root / "maestro.sdb.verified.xml"
+    transfer = client.download_file(remote_view + "/maestro.sdb", str(local_path), timeout=120)
+    if transfer.errors or not local_path.is_file(): raise MaestroValidationError("cannot download saved maestro.sdb")
+    expected = {corner.name: _corner_model_sections(corner.process) for corner in context.corners}
+    return _verify_model_matrix_xml(local_path.read_text(encoding="utf-8"), expected)
 
 def repair_maestro_models(run_dir):
     import hashlib
@@ -436,6 +608,8 @@ def _read_remote_history_log(client, context, history: str) -> str:
 def accept_maestro_history(run_dir, history: str):
     from virtuoso_bridge.virtuoso.maestro import close_gui_session, open_gui_session, purge_maestro_cellviews
     context = load_maestro_context(run_dir)
+    if not (len(context.profiles) == 1 and context.profiles[0].role == "legacy"):
+        raise MaestroValidationError("multi-profile Maestro validation requires verify-maestro Detail-table validation")
     root = context.run_dir / "maestro_validation"
     client = _load_client_class().from_env()
     parsed = parse_history_log(_read_remote_history_log(client, context, history),
@@ -470,6 +644,120 @@ def accept_maestro_history(run_dir, history: str):
                "history": history, "result_source": "IC618 Maestro history log"}
     return write_maestro_confirmation(context.run_dir, checks, details)
 
+
+def _numeric_metric(metrics, metric):
+    found = []
+    def visit(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key == metric and isinstance(item, (int, float)) and not isinstance(item, bool):
+                    found.append(float(item))
+                visit(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value: visit(item)
+    visit(metrics)
+    if len(found) != 1:
+        raise MaestroValidationError("direct Spectre metric is missing or ambiguous: " + metric)
+    return found[0]
+
+
+def _profile_comparison_inputs(context, manifest, results):
+    by_id = {item.get("profile_id"): item for item in manifest.get("profiles", ()) if isinstance(item, dict)}
+    if set(by_id) != {profile.profile_id for profile in context.profiles}:
+        raise MaestroValidationError("Maestro manifest profile set does not match context")
+    points = results.get("points", ()) if isinstance(results, dict) else ()
+    if len(points) != len(context.corners):
+        raise MaestroValidationError("Maestro result point count does not match configured corners")
+    direct = {}; observed = {}; checks = {}; expected_counts = {}
+    for profile in context.profiles:
+        metric_plan = by_id[profile.profile_id].get("metrics", ())
+        direct_path = context.run_dir / "final_validation" / "profiles" / profile.profile_id / "pvt_results.json"
+        try: direct_payload = json.loads(direct_path.read_text(encoding="utf-8"))
+        except Exception as exc: raise MaestroValidationError("direct Spectre profile PVT results are missing: " + profile.profile_id) from exc
+        direct_points = direct_payload.get("points") if isinstance(direct_payload, dict) else None
+        if not isinstance(direct_points, list) or len(direct_points) != profile.expected_corner_count or profile.expected_corner_count != len(context.corners):
+            raise MaestroValidationError("direct and Maestro profile corner counts do not match: " + profile.profile_id)
+        output_names = {item.get("output") for item in metric_plan if isinstance(item, dict)}
+        failed = 0
+        for corner, direct_point, maestro_point in zip(context.corners, direct_points, points):
+            if str(direct_point.get("corner", "")).upper() != corner.process or float(direct_point.get("voltage")) != corner.voltage or float(direct_point.get("temperature")) != corner.temperature:
+                raise MaestroValidationError("direct Spectre PVT ordering does not match Maestro corners")
+            outputs = maestro_point.get("outputs", {}) if isinstance(maestro_point, dict) else {}
+            filtered = {name: outputs[name] for name in output_names if name in outputs}
+            if build_corner_status({"corner": corner.name, "outputs": filtered}, spectre_completed=True, spectre_errors=0)["passed"] is not True: failed += 1
+            if metric_plan:
+                key = profile.profile_id + "@" + corner.name; direct[key] = {}; observed[key] = {}
+                for item in metric_plan:
+                    metric = item["metric"]; output = item["output"]
+                    if output not in outputs or not isinstance(outputs[output], dict): raise MaestroValidationError("Maestro profile output is missing: " + output)
+                    try: value = float(outputs[output].get("value"))
+                    except (TypeError, ValueError) as exc: raise MaestroValidationError("Maestro profile output is not numeric: " + output) from exc
+                    direct[key][metric] = _numeric_metric(direct_point.get("metrics", {}), metric); observed[key][metric] = value
+        expected_counts[profile.profile_id] = profile.expected_corner_count
+        checks[profile.profile_id] = {"test_exists": True, "run_completed": True, "history_exists": True,
+            "reopen_check_passed": False, "metrics_match": not metric_plan, "corner_count": len(direct_points), "failed_corner_count": failed}
+    return direct, observed, checks, expected_counts
+
+
+def _run_profile_history(context, root, client, timeout, api):
+    open_gui_session, close_gui_session, purge_maestro_cellviews, read_results, run_and_wait, save_setup = api
+    purge_maestro_cellviews(client)
+    session = open_gui_session(client, context.published.library, context.maestro_cell, timeout=180)
+    history = ""
+    try:
+        save_setup(client, context.published.library, context.maestro_cell, session=session)
+        history_raw, status = run_and_wait(client, session=session, timeout=timeout)
+        history = history_raw.strip().strip(chr(34))
+        if status != "done" or not history:
+            raise MaestroValidationError("Maestro profile run did not complete")
+        results = read_results(client, session, lib=context.published.library, cell=context.maestro_cell, history=history, include_raw=True)
+        _write_json(root / "maestro_results.json", results)
+    finally:
+        close_gui_session(client, session, save=True, timeout=120)
+    return history, results
+
+
+def _reopen_profile_setup(context, client, open_gui_session, close_gui_session, purge_maestro_cellviews):
+    purge_maestro_cellviews(client)
+    session = open_gui_session(client, context.published.library, context.maestro_cell, timeout=180)
+    try:
+        expression = 'let((sdb tests corners) sdb=axlGetMainSetupDB("%s") tests=cadr(axlGetTests(sdb)) corners=cadr(axlGetCorners(sdb)) sprintf(nil "MAESTRO_REOPEN|%%L|%%L" tests corners))' % session
+        result = client.execute_skill(expression)
+        output = result.output or ""
+        return all(profile.test_name in output for profile in context.profiles) and all(corner.name in output for corner in context.corners)
+    finally:
+        close_gui_session(client, session, save=True, timeout=120)
+
+
+def _verify_profile_maestro(context, root, client, timeout, api):
+    open_gui_session, close_gui_session, purge_maestro_cellviews, _, _, _ = api
+    try: manifest = json.loads((root / "maestro_manifest.json").read_text(encoding="utf-8"))
+    except Exception as exc: raise MaestroValidationError("multi-profile Maestro manifest is invalid") from exc
+    if manifest.get("version") != 2:
+        raise MaestroValidationError("multi-profile Maestro manifest is invalid")
+    history, results = _run_profile_history(context, root, client, timeout, api)
+    if set(results.get("tests", ())) != {profile.test_name for profile in context.profiles}:
+        raise MaestroValidationError("Maestro result history does not contain every profile test")
+    direct, observed, checks, expected_counts = _profile_comparison_inputs(context, manifest, results)
+    comparison = compare_profile_metrics(direct, observed, relative=1e-3, absolute=1e-9) if direct else {"passed": True, "profiles": {}}
+    for profile in context.profiles:
+        relevant = [value for key, value in comparison.get("profiles", {}).items() if key.startswith(profile.profile_id + "@")]
+        if relevant: checks[profile.profile_id]["metrics_match"] = all(item.get("passed") is True for item in relevant)
+    comparison_path = root / "maestro_metric_comparison.json"
+    _write_json(comparison_path, comparison)
+    reopen_ok = _reopen_profile_setup(context, client, open_gui_session, close_gui_session, purge_maestro_cellviews)
+    for item in checks.values(): item["reopen_check_passed"] = reopen_ok
+    global_checks = {"maestro_cell_exists": _cell_exists(client, context.published.library, context.maestro_cell),
+        "maestro_testbenches_exist": all(_cell_exists(client, context.published.library, profile.maestro_testbench) for profile in context.profiles),
+        "dut_uses_result_cell": all(_final_tb_uses_result(client, context.published, profile.maestro_testbench, profile.dut_instance) for profile in context.profiles),
+        "model_sections_verified": _verify_saved_model_matrix(client, context, root),
+        "profile_summary_hash_match": isinstance(context.published.profile_summary_hash, str) and len(context.published.profile_summary_hash) == 64}
+    details = {"library": context.published.library, "maestro_cell": context.maestro_cell, "history": history,
+        "required_profile_ids": [profile.profile_id for profile in context.profiles], "expected_corner_counts": expected_counts,
+        "profile_summary_hash": context.published.profile_summary_hash,
+        "metric_comparison_hash": hashlib.sha256(comparison_path.read_bytes()).hexdigest(), "global_checks": global_checks}
+    return write_maestro_profile_confirmation(context.run_dir, checks, details)
+
 def verify_maestro(run_dir, timeout: int = 1800):
     from virtuoso_bridge.virtuoso.maestro import (
         close_gui_session, open_gui_session, purge_maestro_cellviews, read_results,
@@ -481,6 +769,9 @@ def verify_maestro(run_dir, timeout: int = 1800):
     if not manifest_path.exists():
         raise MaestroValidationError("create-maestro must complete before verify-maestro")
     client = _load_client_class().from_env()
+    if not (len(context.profiles) == 1 and context.profiles[0].role == "legacy"):
+        api = (open_gui_session, close_gui_session, purge_maestro_cellviews, read_results, run_and_wait, save_setup)
+        return _verify_profile_maestro(context, root, client, timeout, api)
     purge_maestro_cellviews(client)
     session = open_gui_session(client, context.published.library, context.maestro_cell, timeout=180)
     history = ""
@@ -537,6 +828,8 @@ def preflight_maestro(run_dir):
     Spectre history must still be accepted separately before confirmation.
     """
     context = load_maestro_context(run_dir)
+    if not (len(context.profiles) == 1 and context.profiles[0].role == "legacy"):
+        raise MaestroValidationError("multi-profile Maestro preflight requires verify-maestro Detail-table validation")
     root = context.run_dir / "maestro_validation"
     root.mkdir(parents=True, exist_ok=True)
     client = _load_client_class().from_env()

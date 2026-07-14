@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
@@ -23,6 +24,22 @@ class MaestroCorner:
 
 
 @dataclass(frozen=True)
+class MaestroProfileContext:
+    profile_id: str
+    role: str
+    final_testbench: str
+    maestro_testbench: str
+    test_name: str
+    dut_instance: str
+    analysis_types: tuple[str, ...]
+    stimuli: Mapping[str, Mapping[str, Any]]
+    analyses: tuple[Mapping[str, Any], ...]
+    metrics: tuple[Mapping[str, Any], ...]
+    specs: tuple[Mapping[str, Any], ...]
+    expected_corner_count: int
+
+
+@dataclass(frozen=True)
 class MaestroContext:
     published: PublishedContext
     final_testbench: str
@@ -32,6 +49,7 @@ class MaestroContext:
     corners: tuple[MaestroCorner, ...]
     model_file: str
     voltage_variable: str
+    profiles: tuple[MaestroProfileContext, ...] = ()
 
     @property
     def run_dir(self) -> Path:
@@ -83,14 +101,52 @@ def load_maestro_context(run_dir: str | Path) -> MaestroContext:
     if len(names) != len(set(names)):
         raise MaestroValidationError("Maestro corner names are not unique")
     result = published.result_cell
-    final_tb = result + "_tb"
-    maestro_tb = result + "_maestro_tb"
     maestro_cell = result + "_maestro"
-    identifiers = {published.source_cell, published.work_cell, result, final_tb, maestro_tb, maestro_cell}
-    if len(identifiers) != 6:
+    raw_profiles = published.config.get("verification_profiles")
+    profiles = []
+    if isinstance(raw_profiles, (list, tuple)) and raw_profiles and not (len(raw_profiles) == 1 and isinstance(raw_profiles[0], Mapping) and raw_profiles[0].get("id") == "default" and raw_profiles[0].get("role") == "legacy"):
+        if not isinstance(published.profile_summary_hash, str) or len(published.profile_summary_hash) != 64:
+            raise MaestroValidationError("multi-profile Maestro validation requires publication profile summary hash")
+        details = confirmation.get("details")
+        profile_details = details.get("profiles") if isinstance(details, Mapping) else None
+        required_ids = details.get("required_profile_ids") if isinstance(details, Mapping) else None
+        configured_ids = [item.get("id") for item in raw_profiles if isinstance(item, Mapping)]
+        if required_ids != configured_ids or not isinstance(profile_details, Mapping):
+            raise MaestroValidationError("batch Spectre profile confirmation does not match configuration")
+        if published.profile_summary_hash is not None and details.get("profile_summary_hash") != published.profile_summary_hash:
+            raise MaestroValidationError("batch Spectre profile summary hash does not match publication")
+        for raw in raw_profiles:
+            profile_id = raw.get("id") if isinstance(raw, Mapping) else None
+            role = raw.get("role") if isinstance(raw, Mapping) else None
+            dut_instance = raw.get("dut_instance") if isinstance(raw, Mapping) else None
+            info = profile_details.get(profile_id) if isinstance(profile_id, str) else None
+            final_testbench = info.get("final_testbench") if isinstance(info, Mapping) else None
+            expected_corner_count = info.get("pvt_point_count") if isinstance(info, Mapping) else None
+            analyses = raw.get("analyses") if isinstance(raw, Mapping) else None
+            stimuli = raw.get("stimuli") if isinstance(raw, Mapping) else None
+            metrics = raw.get("metrics", ()) if isinstance(raw, Mapping) else None
+            specs = raw.get("specs", ()) if isinstance(raw, Mapping) else None
+            if not isinstance(profile_id, str) or not profile_id or not isinstance(role, str) or not role or not isinstance(dut_instance, str) or not dut_instance or not isinstance(final_testbench, str) or not final_testbench or not isinstance(expected_corner_count, int) or expected_corner_count < 0 or not isinstance(stimuli, Mapping) or not isinstance(analyses, (list, tuple)) or not analyses or not isinstance(metrics, (list, tuple)) or not isinstance(specs, (list, tuple)):
+                raise MaestroValidationError("Maestro profile context is incomplete")
+            analysis_types = tuple(str(item.get("type")) for item in analyses if isinstance(item, Mapping))
+            if len(analysis_types) != len(analyses):
+                raise MaestroValidationError("Maestro profile analyses are invalid")
+            maestro_testbench = result + "_" + profile_id + "_maestro_tb"
+            profiles.append(MaestroProfileContext(profile_id, role, final_testbench, maestro_testbench, profile_id, dut_instance,
+                                                   analysis_types, dict(stimuli), tuple(dict(item) for item in analyses), tuple(dict(item) for item in metrics), tuple(dict(item) for item in specs), expected_corner_count))
+    else:
+        final_testbench = result + "_tb"
+        maestro_testbench = result + "_maestro_tb"
+        profiles.append(MaestroProfileContext("default", "legacy", final_testbench, maestro_testbench, "amp_op_ac", published.dut_instance,
+                                               ("ac",), dict(published.config.get("stimuli", {})), tuple(published.config.get("analyses", ())), tuple(published.config.get("metrics", ())), tuple(published.config.get("specs", ())), len(corners)))
+    identifiers = {published.source_cell, published.work_cell, result, maestro_cell}
+    identifiers.update(profile.final_testbench for profile in profiles)
+    identifiers.update(profile.maestro_testbench for profile in profiles)
+    if len(identifiers) != 4 + 2 * len(profiles):
         raise MaestroValidationError("Maestro delivery identifiers are not isolated")
-    return MaestroContext(published, final_tb, maestro_tb, maestro_cell, "amp_op_ac", corners,
-                          _model_file(published.config), str(pvt.get("voltage_stimulus", "VDD")))
+    primary = profiles[0]
+    return MaestroContext(published, primary.final_testbench, primary.maestro_testbench, maestro_cell, primary.test_name, corners,
+                          _model_file(published.config), str(pvt.get("voltage_stimulus", "VDD")), tuple(profiles))
 
 
 def write_maestro_confirmation(run_dir: str | Path, checks: Mapping[str, Any], details: Mapping[str, Any]) -> Path:
@@ -104,6 +160,61 @@ def write_maestro_confirmation(run_dir: str | Path, checks: Mapping[str, Any], d
     target = Path(run_dir) / "maestro_validation" / "maestro_validation.confirmed.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = {"version": 1, "status": "passed", "checks": dict(checks), "details": dict(details)}
+    target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return target
+
+
+def compare_profile_metrics(direct: Mapping[str, Any], maestro: Mapping[str, Any], *, relative: float, absolute: float) -> dict[str, Any]:
+    if not isinstance(direct, Mapping) or not isinstance(maestro, Mapping) or set(direct) != set(maestro) or not direct:
+        raise MaestroValidationError("direct and Maestro profile metric sets must match")
+    if isinstance(relative, bool) or isinstance(absolute, bool) or not all(isinstance(value, (int, float)) and math.isfinite(float(value)) and float(value) >= 0 for value in (relative, absolute)):
+        raise MaestroValidationError("metric comparison tolerances must be finite and nonnegative")
+    profiles = {}; overall = True
+    for profile_id, direct_metrics in direct.items():
+        maestro_metrics = maestro.get(profile_id)
+        if not isinstance(direct_metrics, Mapping) or not isinstance(maestro_metrics, Mapping) or set(direct_metrics) != set(maestro_metrics) or not direct_metrics:
+            raise MaestroValidationError("profile metric sets must match: " + str(profile_id))
+        compared = {}; profile_passed = True
+        for metric, expected in direct_metrics.items():
+            actual = maestro_metrics[metric]
+            if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)) for value in (expected, actual)):
+                raise MaestroValidationError("profile metrics must be finite numbers")
+            delta = abs(float(actual) - float(expected))
+            limit = max(float(absolute), float(relative) * abs(float(expected)))
+            passed = delta <= limit
+            compared[str(metric)] = {"direct": float(expected), "maestro": float(actual), "delta": delta, "limit": limit, "passed": passed}
+            profile_passed = profile_passed and passed
+        profiles[str(profile_id)] = {"passed": profile_passed, "metrics": compared}
+        overall = overall and profile_passed
+    return {"passed": overall, "relative_tolerance": float(relative), "absolute_tolerance": float(absolute), "profiles": profiles}
+
+
+def write_maestro_profile_confirmation(run_dir: str | Path, checks: Mapping[str, Any], details: Mapping[str, Any]) -> Path:
+    required_profiles = details.get("required_profile_ids") if isinstance(details, Mapping) else None
+    if not isinstance(required_profiles, (list, tuple)) or not required_profiles or len(set(required_profiles)) != len(required_profiles):
+        raise MaestroValidationError("required Maestro profiles are invalid")
+    expected_counts = details.get("expected_corner_counts", {})
+    if not isinstance(expected_counts, Mapping):
+        raise MaestroValidationError("expected Maestro corner counts must be a mapping")
+    global_checks = details.get("global_checks")
+    required_global = ("maestro_cell_exists", "maestro_testbenches_exist", "dut_uses_result_cell", "model_sections_verified", "profile_summary_hash_match")
+    if not isinstance(global_checks, Mapping) or any(global_checks.get(name) is not True for name in required_global):
+        raise MaestroValidationError("Maestro global structural checks are incomplete")
+    required_true = ("test_exists", "run_completed", "history_exists", "reopen_check_passed", "metrics_match")
+    normalized = {}
+    for profile_id in required_profiles:
+        profile_checks = checks.get(profile_id) if isinstance(checks, Mapping) else None
+        if not isinstance(profile_checks, Mapping):
+            raise MaestroValidationError("Maestro profile is missing: " + str(profile_id))
+        if any(profile_checks.get(name) is not True for name in required_true):
+            raise MaestroValidationError("Maestro profile checks are incomplete: " + str(profile_id))
+        expected = expected_counts.get(profile_id, 45)
+        if profile_checks.get("corner_count") != expected or profile_checks.get("failed_corner_count") != 0:
+            raise MaestroValidationError("Maestro profile corner validation failed: " + str(profile_id))
+        normalized[str(profile_id)] = dict(profile_checks)
+    target = Path(run_dir) / "maestro_validation" / "maestro_validation.confirmed.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"version": 2, "status": "passed", "profiles": normalized, "details": dict(details)}
     target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return target
 
