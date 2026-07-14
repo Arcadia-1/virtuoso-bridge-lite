@@ -8,6 +8,7 @@ from analog_opt.apply import VirtuosoApplier
 from analog_opt.evaluator import CandidateEvaluator,EvaluationResult,atomic_write_json
 from analog_opt.metrics import extract_ac_metrics,extract_mos_op_metrics,extract_noise_metrics,extract_tran_metrics,merge_metrics
 from analog_opt.parameters import ParameterSpace,ParameterSpec
+from analog_opt.profile_testbenches import confirm_profile_netlist
 from analog_opt.profiles import MultiProfileBackend,ProfileRuntime
 from analog_opt.pvt import PvtConfig
 from analog_opt.search import SearchConfig,run_search
@@ -54,6 +55,10 @@ def patch_smic180_corner(deck,corner,core_model_include=None):
 class NetlistAdapter:
  def __init__(self,client,site,*,library,source_tb,work_cell,dut_instance="DUT",exporter,base_deck_factory,corner_patcher=None): self.client=client; self.site=site; self.library=library; self.source_tb=source_tb; self.work_cell=work_cell; self.dut_instance=dut_instance; self.exporter=exporter; self.base_deck_factory=base_deck_factory; self.corner_patcher=corner_patcher or (lambda d,c:d); self.analyses=[]; self.variables={}; self.biases={}; self.stimuli={}; self.conditions={}
  def configure(self,design_variables,biases,stimuli,conditions): self.variables=dict(design_variables); self.biases=dict(biases); self.stimuli=dict(stimuli); self.conditions=dict(conditions)
+ def confirm_profile(self,profile,deck,expectation):
+  path=Path(deck)
+  if not path.is_file(): raise RuntimeError('profile netlist is missing: '+str(path))
+  return confirm_profile_netlist(profile,path.read_text(encoding='utf-8'),expectation)
  def _tb_step(self,skill,sentinel):
   result=self.client.execute_skill("progn(\n"+skill+"\n)",timeout=30)
   errors=getattr(result,'errors',None) or ()

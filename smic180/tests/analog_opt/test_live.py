@@ -128,6 +128,17 @@ def test_netlist_confirm_extracts_cdf_values_from_work_subckt(tmp_path):
  adapter=NetlistAdapter(Client(),Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=None,base_deck_factory=None)
  assert adapter.confirm_cdf(deck,specs)=={'W':1e-5}
 
+def test_netlist_adapter_delegates_profile_structural_confirmation(tmp_path):
+ from test_profile_testbenches import STB_EXPECTATION,STB_NETLIST,profile
+ deck=tmp_path/'stb.scs'; deck.write_text(STB_NETLIST,encoding='utf-8')
+ adapter=NetlistAdapter(Client(),Site(),library='tr',source_tb='stb_tb',work_cell='amp_work',exporter=None,base_deck_factory=None)
+ confirmation=adapter.confirm_profile(
+  profile('stability','unity_gain_stability',{'name':'loop','type':'stb'}),
+  deck,STB_EXPECTATION,
+ )
+ assert confirmation.probe['instance']=='IPRB'
+ assert confirmation.netlist_sha256
+
 def test_metrics_adapter_preserves_curves_and_extracts_task6_metrics():
  data={'freq':[1.,10.,100.],'ac:VOUT':[10+0j,1+0j,.1+0j],'noise:VOUT':[1e-9,2e-9,3e-9],'time':[0.,1e-6,2e-6],'VOUT':[0.,1.1,1.0],'op:M1':{'gm':1e-3,'id':1e-4,'gds':1e-5,'vds':1.2,'vdsat':.2},'VDD_SWEEP':[2.7,3.0,3.3],'dc:VOUT':[1.0,1.1,1.2]}
  result=type('R',(),{'ok':True,'data':data})()
