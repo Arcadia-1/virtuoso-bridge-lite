@@ -176,6 +176,27 @@ def test_metrics_adapter_extracts_stability_only_for_explicit_metric_mode():
  assert metrics['stb.stability.loop.phase_margin_deg']==pytest.approx(60.)
  assert metrics['stb.stability.loop.gain_margin_db']==pytest.approx(15.)
 
+def test_metrics_adapter_uses_closed_loop_slew_only_for_explicit_mode():
+ times=[index*.25e-6 for index in range(41)]; values=[]
+ for time in times:
+  if time<1e-6: value=.7
+  elif time<3e-6: value=.7+(time-1e-6)*2e5
+  elif time<6e-6: value=1.1
+  elif time<8e-6: value=1.1-(time-6e-6)*2e5
+  else: value=.7
+  values.append(value)
+ analysis={
+  'name':'step','type':'tran','metric_mode':'closed_loop_slew',
+  'profile_id':'closed_loop_slew','signal':'VOUT','low':.7,'high':1.1,
+  'rise_reference_time':1e-6,'fall_reference_time':6e-6,
+ }
+ result=type('R',(),{'ok':True,'data':{'time':times,'VOUT':values},'metadata':{}})()
+ metrics=MetricsAdapter([analysis])({'step':result})
+ prefix='tran.closed_loop_slew.step.VOUT.'
+ assert metrics[prefix+'slew_rise_v_per_s']==pytest.approx(2e5)
+ assert metrics[prefix+'slew_fall_v_per_s']==pytest.approx(2e5)
+ assert metrics['curves']['step']['slew_evidence']['method']=='least_squares_20_80'
+
 @pytest.mark.parametrize('data,mtimes,match',[
  ({'stb_freq':[1.,10.]},{'stb_freq':101.},'unavailable'),
  ({'stb_freq':[1.,10.],'a':[2+0j,1+0j],'b':[2+0j,1+0j]},

@@ -10,6 +10,7 @@ from analog_opt.metrics import extract_ac_metrics,extract_mos_op_metrics,extract
 from analog_opt.parameters import ParameterSpace,ParameterSpec
 from analog_opt.pvt import PvtConfig
 from analog_opt.search import SearchConfig,run_search
+from analog_opt.slew import extract_closed_loop_slew
 from analog_opt.specs import Spec,evaluate_specs
 from analog_opt.stability import extract_stability_metrics
 from analog_opt.schema import canonical_resolved_payload
@@ -294,7 +295,21 @@ class MetricsAdapter:
    elif kind=='noise':
     density=data.get('noise:'+signal); freq=data.get('noise_freq',data.get('freq')); maps.append(extract_noise_metrics(name,freq,density)); curves[name]={'frequency':freq,'density':density}
    elif kind=='tran':
-    values=data.get(signal); times=data.get('time'); maps.append(extract_tran_metrics(name,signal,times,values,target=analysis['target'],settling_tolerance=analysis.get('settling_tolerance',.02))); curves[name]={'time':times,'values':values}
+    values=data.get(signal); times=data.get('time')
+    if analysis.get('metric_mode')=='closed_loop_slew':
+     measurement=extract_closed_loop_slew(
+      analysis.get('profile_id','default'),name,signal,times,values,
+      low=analysis['low'],high=analysis['high'],
+      fractions=tuple(analysis.get('fractions',(.2,.8))),
+      settling_tolerance=analysis.get('settling_tolerance',.02),
+      max_nonmonotonic_fraction=analysis.get('max_nonmonotonic_fraction',.1),
+      min_fit_samples=analysis.get('min_fit_samples',3),
+      rise_reference_time=analysis.get('rise_reference_time'),
+      fall_reference_time=analysis.get('fall_reference_time'),
+     )
+     maps.append(measurement.metrics); curves[name]={'time':times,'values':values,'slew_evidence':measurement.evidence}
+    else:
+     maps.append(extract_tran_metrics(name,signal,times,values,target=analysis['target'],settling_tolerance=analysis.get('settling_tolerance',.02))); curves[name]={'time':times,'values':values}
    elif kind=='dc_op':
     for inst in analysis.get('instances',[]):
      op=data.get('op:'+inst)
