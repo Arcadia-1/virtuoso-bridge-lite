@@ -8,8 +8,9 @@ import re
 from numbers import Real
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Union
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
+from analog_opt.profiles import VerificationProfileConfig
 from analog_opt.units import UnitError, parse_quantity
 
 
@@ -48,6 +49,7 @@ class AnalogOptConfig:
     analyses: List[Dict[str, Any]]
     metrics: List[Dict[str, Any]]
     specs: List[Dict[str, Any]]
+    verification_profiles: Tuple[VerificationProfileConfig, ...]
     search: Dict[str, Any]
     pvt: Dict[str, Any]
     outputs: Dict[str, Any]
@@ -69,6 +71,9 @@ _REQUIRED_DESIGN = ("library", "cell", "work_cell", "result_cell", "testbench_ce
 _PARAMETER_TARGETS = {"virtuoso_cdf", "bias", "spectre_variable"}
 _ANALYSIS_TYPES = {"dc_op", "dc_sweep", "ac", "noise", "tran"}
 _STIMULUS_DIMENSIONS = {"voltage": "voltage", "current": "current"}
+
+
+_PROFILE_PVT_POLICIES = {'nominal_only', 'selected', 'full'}
 
 
 def _mapping(value: Any, location: str) -> Mapping[str, Any]:
@@ -209,7 +214,7 @@ def _validate_named_items(
     allowed: Any,
 ) -> None:
     names = set()
-    singular = {"parameters": "parameter", "analyses": "analysis"}[location]
+    singular = {'target': 'parameter', 'type': 'analysis'}[discriminator]
     for index, item in enumerate(items):
         _require_keys(item, ("name", discriminator), f"{location}[{index}].")
         name = _nonempty_string(item["name"], f"{singular} name")
@@ -223,6 +228,96 @@ def _validate_named_items(
             raise ConfigError(
                 f"unsupported {singular} {discriminator}: {discriminator_value}"
             )
+
+
+def _stimuli_payload(stimuli: Mapping[str, StimulusConfig]) -> Dict[str, Dict[str, Any]]:
+    return {
+        name: {
+            key: item
+            for key, item in asdict(stimulus).items()
+            if item is not None
+        }
+        for name, stimulus in stimuli.items()
+    }
+
+
+def _profile_metric_references(
+    analyses: List[Dict[str, Any]], metrics: List[Dict[str, Any]]
+) -> Tuple[set, Tuple[str, ...]]:
+    exact = set()
+    for metric in metrics:
+        name = metric.get('name', metric.get('metric'))
+        if isinstance(name, str) and name:
+            if name in exact:
+                raise ConfigError('verification profile metric name must be unique')
+            exact.add(name)
+    prefixes = tuple(
+        '%s.%s.' % (analysis['type'], analysis['name'])
+        for analysis in analyses
+    )
+    return exact, prefixes
+
+
+def _parse_verification_profiles(
+    value: Any,
+    design: DesignConfig,
+    stimuli: Mapping[str, StimulusConfig],
+    analyses: List[Dict[str, Any]],
+    metrics: List[Dict[str, Any]],
+    specs: List[Dict[str, Any]],
+) -> Tuple[VerificationProfileConfig, ...]:
+    if value is None:
+        return (VerificationProfileConfig(
+            id='default', role='legacy', testbench_cell=design.testbench_cell,
+            dut_instance=design.dut_instance, stimuli=_stimuli_payload(stimuli),
+            analyses=tuple(dict(item) for item in analyses),
+            metrics=tuple(dict(item) for item in metrics),
+            specs=tuple(dict(item) for item in specs),
+        ),)
+    raw_profiles = _list_of_mappings(value, 'verification_profiles')
+    if not raw_profiles:
+        raise ConfigError('verification_profiles must be a nonempty list')
+    parsed = []
+    profile_ids = set()
+    testbench_cells = set()
+    for index, raw in enumerate(raw_profiles):
+        location = 'verification_profiles[%d]' % index
+        _require_keys(raw, ('id', 'role', 'testbench_cell', 'dut_instance',
+                            'stimuli', 'analyses', 'metrics', 'specs'), location + '.')
+        profile_id = _nonempty_string(raw['id'], location + '.id')
+        if profile_id in profile_ids:
+            raise ConfigError('verification profile id must be unique')
+        profile_ids.add(profile_id)
+        testbench_cell = _nonempty_string(raw['testbench_cell'], location + '.testbench_cell')
+        if testbench_cell in testbench_cells:
+            raise ConfigError('verification profile testbench cell must be unique')
+        testbench_cells.add(testbench_cell)
+        parsed_stimuli = _parse_stimuli(raw['stimuli'])
+        parsed_analyses = _list_of_mappings(raw['analyses'], location + '.analyses')
+        _validate_named_items(parsed_analyses, location + '.analyses', 'type', _ANALYSIS_TYPES)
+        parsed_metrics = _list_of_mappings(raw['metrics'], location + '.metrics')
+        parsed_specs = _list_of_mappings(raw['specs'], location + '.specs')
+        exact_metrics, metric_prefixes = _profile_metric_references(parsed_analyses, parsed_metrics)
+        for spec in parsed_specs:
+            metric = _nonempty_string(spec.get('metric'), location + '.specs.metric')
+            if metric not in exact_metrics and not metric.startswith(metric_prefixes):
+                raise ConfigError('verification profile spec metric must exist')
+        policy = raw.get('pvt_policy', 'full')
+        if policy not in _PROFILE_PVT_POLICIES:
+            raise ConfigError(location + '.pvt_policy is invalid')
+        timeout = raw.get('timeout_s', 1800)
+        if type(timeout) is not int or timeout <= 0:
+            raise ConfigError(location + '.timeout_s must be a positive integer')
+        parsed.append(VerificationProfileConfig(
+            id=profile_id,
+            role=_nonempty_string(raw['role'], location + '.role'),
+            testbench_cell=testbench_cell,
+            dut_instance=_nonempty_string(raw['dut_instance'], location + '.dut_instance'),
+            stimuli=_stimuli_payload(parsed_stimuli),
+            analyses=tuple(parsed_analyses), metrics=tuple(parsed_metrics),
+            specs=tuple(parsed_specs), pvt_policy=policy, timeout_s=timeout,
+        ))
+    return tuple(parsed)
 
 
 def _parse_pvt(value: Any, stimuli: Mapping[str, StimulusConfig]) -> Dict[str, Any]:
@@ -313,15 +408,23 @@ def load_config(path: Union[str, Path]) -> AnalogOptConfig:
                 raise ConfigError(f"parameters[{index}] bias stimulus must exist")
             if parsed_stimuli[stimulus_name].optimizable is not True:
                 raise ConfigError(f"parameters[{index}] bias stimulus must be optimizable")
-    pvt = _parse_pvt(data["pvt"], parsed_stimuli)
+    design = _parse_design(data['design'])
+    metrics = _list_of_mappings(data['metrics'], 'metrics')
+    specs = _list_of_mappings(data['specs'], 'specs')
+    verification_profiles = _parse_verification_profiles(
+        data.get('verification_profiles'), design, parsed_stimuli,
+        analyses, metrics, specs,
+    )
+    pvt = _parse_pvt(data['pvt'], parsed_stimuli)
     return AnalogOptConfig(
         version=2,
-        design=_parse_design(data["design"]),
+        design=design,
         stimuli=parsed_stimuli,
         parameters=parameters,
         analyses=analyses,
-        metrics=_list_of_mappings(data["metrics"], "metrics"),
-        specs=_list_of_mappings(data["specs"], "specs"),
+        metrics=metrics,
+        specs=specs,
+        verification_profiles=verification_profiles,
         search=dict(_mapping(data["search"], "search")),
         pvt=pvt,
         outputs=dict(_mapping(data["outputs"], "outputs")),
