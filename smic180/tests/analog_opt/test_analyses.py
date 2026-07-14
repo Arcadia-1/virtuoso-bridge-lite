@@ -51,6 +51,25 @@ def test_dc_op_is_not_curve_but_real_sweeps_are():
     assert is_curve_analysis({"type": "tran"})
 
 
+def test_stb_analysis_renders_probe_and_frequency_sweep():
+    analysis = {
+        'name': 'loop', 'type': 'stb', 'probe': 'IPRB',
+        'start': 1.0, 'stop': 1e9, 'points_per_decade': 50,
+    }
+    assert build_analysis_lines([analysis]) == [
+        'loop stb probe=IPRB start=1 stop=1000000000 dec=50'
+    ]
+    assert is_curve_analysis(analysis)
+
+
+def test_stb_analysis_requires_probe():
+    with pytest.raises(AnalysisError, match='probe'):
+        build_analysis_lines([{
+            'name': 'loop', 'type': 'stb', 'start': 1,
+            'stop': 1e9, 'points_per_decade': 50,
+        }])
+
+
 def test_required_source_parameters_returns_mapping():
     analyses = [
         {"name": "vdd", "type": "dc_sweep", "source": "VDD", "parameter": "VDD_SWEEP", "start": 0, "stop": 1, "points": 2},

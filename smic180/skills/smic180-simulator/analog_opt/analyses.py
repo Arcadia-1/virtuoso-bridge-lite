@@ -15,7 +15,7 @@ class AnalysisError(ValueError):
 
 
 _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_ANALYSIS_TYPES = {"dc_op", "dc_sweep", "ac", "noise", "tran"}
+_ANALYSIS_TYPES = {'dc_op', 'dc_sweep', 'ac', 'noise', 'tran', 'stb'}
 _ERRPRESETS = {"liberal", "moderate", "conservative"}
 
 
@@ -126,6 +126,13 @@ def build_analysis_lines(analyses: Iterable[Mapping[str, Any]]) -> List[str]:
             lines.append(
                 f"{name} ac start={_format(start)} stop={_format(stop)} dec={points}"
             )
+        elif analysis_type == 'stb':
+            probe = _required_name(analysis, 'probe')
+            start, stop, points = _frequency_sweep(analysis)
+            lines.append(
+                f'{name} stb probe={probe} start={_format(start)} '
+                f'stop={_format(stop)} dec={points}'
+            )
         elif analysis_type == "noise":
             input_source = _required_name(analysis, "input_source")
             output = _required_name(analysis, "output")
@@ -185,4 +192,5 @@ def is_curve_analysis(analysis: Mapping[str, Any]) -> bool:
         "ac",
         "noise",
         "tran",
+        'stb',
     }

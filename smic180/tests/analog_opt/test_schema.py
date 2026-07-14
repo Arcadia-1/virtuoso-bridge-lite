@@ -273,6 +273,15 @@ def test_rejects_unsupported_analysis_type(tmp_path):
         load_config(write_config(tmp_path, data))
 
 
+def test_accepts_stb_analysis_type(tmp_path):
+    data = minimal_config()
+    data['analyses'] = [{
+        'name': 'loop', 'type': 'stb', 'probe': 'IPRB',
+        'start': 1.0, 'stop': 1e9, 'points_per_decade': 50,
+    }]
+    assert load_config(write_config(tmp_path, data)).analyses[0]['type'] == 'stb'
+
+
 def test_schema_module_uses_python_39_compatible_annotations():
     schema_path = Path(__file__).resolve().parents[2] / "skills" / "smic180-simulator" / "analog_opt" / "schema.py"
     module = ast.parse(schema_path.read_text(encoding="utf-8-sig"))

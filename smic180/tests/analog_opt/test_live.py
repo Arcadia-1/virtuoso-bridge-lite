@@ -138,6 +138,43 @@ def test_metrics_adapter_preserves_curves_and_extracts_task6_metrics():
  assert metrics['curves']['ac_main']['response']==[[10.0,0.0],[1.0,0.0],[0.1,0.0]]
  assert metrics['curves']['line']['x']==data['VDD_SWEEP']
 
+def test_stb_complex_trace_selection_is_explicit_and_fresh():
+ analysis={'name':'loop','type':'stb','result_candidates':['stb:loop_gain'],'frequency_candidates':['stb_freq']}
+ result=type('R',(),{
+  'data':{'stb_freq':[1.,10.,100.],'stb:loop_gain':[10+0j,1-1j,.1-.2j]},
+  'metadata':{'analysis_started_at':100.,'result_mtimes':{'stb_freq':101.,'stb:loop_gain':101.}},
+ })()
+ freq,response,key=MetricsAdapter([analysis]).load_complex_analysis(result,analysis)
+ assert freq==[1.,10.,100.]
+ assert response[1]==1-1j
+ assert key=='stb:loop_gain'
+
+def test_metrics_adapter_preserves_validated_stb_curve_without_ac_metrics():
+ analysis={'name':'loop','type':'stb','result_candidates':['stb:loop_gain'],'frequency_candidates':['stb_freq']}
+ result=type('R',(),{
+  'ok':True,
+  'data':{'stb_freq':[1.,10.],'stb:loop_gain':[10+0j,1-1j]},
+  'metadata':{'analysis_started_at':100.,'result_mtimes':{'stb_freq':101.,'stb:loop_gain':101.}},
+ })()
+ metrics=MetricsAdapter([analysis])({'loop':result})
+ assert metrics['curves']['loop']['response']==[[10.0,0.0],[1.0,-1.0]]
+ assert not any(name.startswith('ac.') for name in metrics)
+
+@pytest.mark.parametrize('data,mtimes,match',[
+ ({'stb_freq':[1.,10.]},{'stb_freq':101.},'unavailable'),
+ ({'stb_freq':[1.,10.],'a':[2+0j,1+0j],'b':[2+0j,1+0j]},
+  {'stb_freq':101.,'a':101.,'b':101.},'exactly one'),
+ ({'stb_freq':[1.,10.],'a':[2+0j,1+0j]},
+  {'stb_freq':101.,'a':99.},'stale'),
+ ({'stb_freq':[1.,10.],'a':[2.,1.]},
+  {'stb_freq':101.,'a':101.},'complex'),
+])
+def test_stb_complex_trace_rejects_ambiguous_stale_or_real_data(data,mtimes,match):
+ analysis={'name':'loop','type':'stb','result_candidates':['a','b'],'frequency_candidates':['stb_freq']}
+ result=type('R',(),{'data':data,'metadata':{'analysis_started_at':100.,'result_mtimes':mtimes}})()
+ with pytest.raises(RuntimeError,match=match):
+  MetricsAdapter([analysis]).load_complex_analysis(result,analysis)
+
 def test_dc_op_metrics_can_export_nodes_and_source_currents():
  data={"op_VOUT":2.2,"op_IBIAS":2.0,"op_SRC_AVD:p":-126e-6,"op:M1":{"gm":1e-3,"id":1e-4}}
  result=type("R",(),{"ok":True,"data":data})()

@@ -69,7 +69,7 @@ _REQUIRED_TOP_LEVEL = (
 )
 _REQUIRED_DESIGN = ("library", "cell", "work_cell", "result_cell", "testbench_cell")
 _PARAMETER_TARGETS = {"virtuoso_cdf", "bias", "spectre_variable"}
-_ANALYSIS_TYPES = {"dc_op", "dc_sweep", "ac", "noise", "tran"}
+_ANALYSIS_TYPES = {'dc_op', 'dc_sweep', 'ac', 'noise', 'tran', 'stb'}
 _STIMULUS_DIMENSIONS = {"voltage": "voltage", "current": "current"}
 
 

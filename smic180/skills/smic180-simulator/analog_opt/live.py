@@ -249,6 +249,29 @@ class AnalysisRunner:
 
 class MetricsAdapter:
  def __init__(self,analyses): self.analyses=tuple(analyses)
+ def load_complex_analysis(self,result,analysis):
+  data=getattr(result,'data',None); metadata=getattr(result,'metadata',None)
+  if not isinstance(data,Mapping) or not isinstance(metadata,Mapping): raise RuntimeError('STB result unavailable')
+  result_candidates=analysis.get('result_candidates'); frequency_candidates=analysis.get('frequency_candidates')
+  if not isinstance(result_candidates,(list,tuple)) or not result_candidates or not all(isinstance(x,str) and x for x in result_candidates): raise RuntimeError('STB result candidates unavailable')
+  if not isinstance(frequency_candidates,(list,tuple)) or not frequency_candidates or not all(isinstance(x,str) and x for x in frequency_candidates): raise RuntimeError('STB frequency candidates unavailable')
+  result_keys=[key for key in result_candidates if key in data]
+  if not result_keys: raise RuntimeError('STB complex result unavailable')
+  if len(result_keys)!=1: raise RuntimeError('STB requires exactly one complex result')
+  frequency_keys=[key for key in frequency_candidates if key in data]
+  if not frequency_keys: raise RuntimeError('STB frequency result unavailable')
+  if len(frequency_keys)!=1: raise RuntimeError('STB requires exactly one frequency result')
+  result_key=result_keys[0]; frequency_key=frequency_keys[0]
+  started=metadata.get('analysis_started_at'); mtimes=metadata.get('result_mtimes')
+  if isinstance(started,bool) or not isinstance(started,(int,float)) or not math.isfinite(float(started)) or not isinstance(mtimes,Mapping): raise RuntimeError('STB freshness metadata unavailable')
+  for key in (frequency_key,result_key):
+   mtime=mtimes.get(key)
+   if isinstance(mtime,bool) or not isinstance(mtime,(int,float)) or not math.isfinite(float(mtime)) or float(mtime)<float(started): raise RuntimeError('STB result is stale: '+key)
+  frequencies=data[frequency_key]; response=data[result_key]
+  if not isinstance(frequencies,(list,tuple)) or not isinstance(response,(list,tuple)) or len(frequencies)<2 or len(frequencies)!=len(response): raise RuntimeError('STB complex curve is invalid')
+  if any(isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(float(value)) for value in frequencies): raise RuntimeError('STB frequency curve is invalid')
+  if any(not isinstance(value,complex) or not math.isfinite(value.real) or not math.isfinite(value.imag) for value in response): raise RuntimeError('STB response must be finite complex data')
+  return list(frequencies),list(response),result_key
  def __call__(self,results):
   if not isinstance(results,Mapping): raise RuntimeError('analysis results must be a mapping')
   maps=[]; curves={}
@@ -256,7 +279,10 @@ class MetricsAdapter:
    name=analysis['name']; result=results.get(name)
    if result is None or not getattr(result,'ok',False) or not isinstance(getattr(result,'data',None),Mapping): raise RuntimeError('Spectre result unavailable for '+name)
    data=result.data; kind=analysis['type']; signal=analysis.get('signal',analysis.get('output','VOUT'))
-   if kind=='ac':
+   if kind=='stb':
+    freq,response,result_key=self.load_complex_analysis(result,analysis)
+    curves[name]={'frequency':freq,'response':[[float(value.real),float(value.imag)] for value in response],'result_key':result_key}
+   elif kind=='ac':
     response=data.get('ac:'+signal); freq=data.get('freq'); maps.append(extract_ac_metrics(name,freq,response)); curves[name]={'frequency':freq,'response':[[float(v.real),float(v.imag)] if isinstance(v,complex) else float(v) for v in response] if response is not None else None}
    elif kind=='noise':
     density=data.get('noise:'+signal); freq=data.get('noise_freq',data.get('freq')); maps.append(extract_noise_metrics(name,freq,density)); curves[name]={'frequency':freq,'density':density}
