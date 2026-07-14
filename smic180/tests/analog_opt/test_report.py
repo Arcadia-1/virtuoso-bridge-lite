@@ -95,3 +95,17 @@ def test_missing_blocking_defaults_to_true_and_blocks_publish(tmp_path):
     parsed = json.loads(write_result_manifest(tmp_path, data).read_text(encoding="utf-8"))
     assert parsed["publishable"] is False
     assert parsed["failures"][0]["blocking"] is True
+
+
+@pytest.mark.parametrize("missing", ["best", "pvt"])
+def test_multi_profile_manifest_requires_complete_profile_hash_chain(tmp_path, missing):
+    data = sample_data()
+    data["profile_evidence_required"] = True
+    data["best"]["profile_summary_hash"] = "a" * 64
+    data["pvt"]["points"] = [{"metadata": {"profile_summary_hash": "b" * 64}}]
+    if missing == "best":
+        data["best"].pop("profile_summary_hash")
+    else:
+        data["pvt"]["points"][0]["metadata"].pop("profile_summary_hash")
+    parsed = json.loads(write_result_manifest(tmp_path, data).read_text(encoding="utf-8"))
+    assert parsed["publishable"] is False

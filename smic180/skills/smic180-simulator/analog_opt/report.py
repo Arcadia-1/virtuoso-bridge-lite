@@ -102,6 +102,11 @@ def _normalize_result_data(data: Mapping[str, Any]) -> Mapping[str, Any]:
 def _publishable(data: Mapping[str, Any]) -> bool:
     best = data.get("best"); pvt = data.get("pvt")
     if not isinstance(best, Mapping) or not isinstance(pvt, Mapping) or pvt.get("overall_passed") is not True: return False
+    if data.get("profile_evidence_required") is True:
+        profile_hash = best.get("profile_summary_hash")
+        points = pvt.get("points")
+        if not isinstance(profile_hash, str) or len(profile_hash) != 64 or not isinstance(points, (list, tuple)) or not points: return False
+        if any(not isinstance(point, Mapping) or not isinstance(point.get("metadata"), Mapping) or not isinstance(point["metadata"].get("profile_summary_hash"), str) or len(point["metadata"]["profile_summary_hash"]) != 64 for point in points): return False
     specs = best.get("specs")
     if not isinstance(specs, Mapping) or not specs: return False
     if not all(isinstance(item, Mapping) and item.get("passed") is True for item in specs.values()): return False

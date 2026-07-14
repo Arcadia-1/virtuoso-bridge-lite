@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from analog_opt.profiles import MultiProfileBackend, ProfileRuntime, VerificationProfileConfig
+from analog_opt.profiles import MultiProfileBackend, ProfileRuntime, VerificationProfileConfig, profile_summary_hash
 from analog_opt.schema import ConfigError, canonical_resolved_payload, load_config
 from test_schema import minimal_config, write_config
 
@@ -88,6 +88,17 @@ def test_profile_spec_must_reference_declared_metric(tmp_path):
         load_config(write_config(tmp_path, data))
 
 
+def test_nonfull_pvt_policy_is_limited_to_report_only_profile(tmp_path):
+    data = minimal_config()
+    selected = explicit_profile()
+    selected['pvt_policy'] = 'nominal_only'
+    data['verification_profiles'] = [selected]
+    with pytest.raises(ConfigError, match='report-only'):
+        load_config(write_config(tmp_path, data))
+    selected['specs'] = []
+    assert load_config(write_config(tmp_path, data)).verification_profiles[0].pvt_policy == 'nominal_only'
+
+
 def test_multi_profile_backend_applies_candidate_once_and_aggregates(tmp_path):
     applied = []
     calls = []
@@ -118,6 +129,11 @@ def test_multi_profile_backend_applies_candidate_once_and_aggregates(tmp_path):
     assert set(result['metrics']) == {'ac.gain', 'stb.pm', 'tran.slew'}
     assert list(result['metadata']['profiles']) == ['open_loop', 'stability', 'closed_loop_slew']
     assert all('/profiles/' in '/' + item[1] + '/' for item in calls)
+    summary_path = tmp_path / 'profile_summary.json'
+    summary = json.loads(summary_path.read_text(encoding='utf-8'))
+    assert result['metadata']['profile_summary'] == str(summary_path)
+    assert result['metadata']['profile_summary_hash'] == profile_summary_hash(summary)
+    assert summary['profiles']['stability']['metrics'] == {'stb.pm': 2.0}
 
 
 def test_required_profile_failure_returns_finite_penalty(tmp_path):
@@ -171,3 +187,20 @@ def test_multi_profile_backend_resumes_after_interruption(tmp_path):
     assert len(first_calls) == 1
     assert len(second_calls) == 1
     assert result['metadata']['resumed_profiles'] == ['first']
+
+
+def test_multi_profile_backend_can_select_profiles_for_pvt(tmp_path):
+    calls = []
+    def runtime(profile_id):
+        def call(candidate, directory, conditions):
+            calls.append((profile_id, dict(conditions)))
+            return {'objective': 0.0, 'success': True, 'metrics': {}, 'specs': {}, 'metadata': {}}
+        return call
+    backend = MultiProfileBackend(
+        lambda candidate: None,
+        [ProfileRuntime('full', runtime('full')), ProfileRuntime('report', runtime('report'))],
+    )
+    result = backend({'W': 10e-6}, tmp_path, {'corner': 'TT', '_profile_ids': ['full']})
+    assert calls == [('full', {'corner': 'TT'})]
+    assert result['metadata']['selected_profiles'] == ['full']
+    assert result['metadata']['skipped_profiles'] == ['report']

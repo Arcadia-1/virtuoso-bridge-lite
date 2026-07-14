@@ -63,6 +63,16 @@ def _candidate_hash(candidate: Mapping[str, float]) -> str:
     return hashlib.sha256(payload.encode('utf-8')).hexdigest()
 
 
+def profile_summary_hash(summary: Mapping[str, Any]) -> str:
+    if not isinstance(summary, Mapping):
+        raise MultiProfileError('profile summary must be a mapping')
+    try:
+        payload = json.dumps(summary, sort_keys=True, separators=(',', ':'), allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise MultiProfileError('profile summary must be strict JSON: %s' % exc) from exc
+    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
+
+
 def _profile_result(value: Any, profile_id: str) -> dict:
     if not isinstance(value, Mapping):
         raise MultiProfileError('profile backend must return a mapping')
@@ -140,7 +150,19 @@ class MultiProfileBackend:
         root.mkdir(parents=True, exist_ok=True)
         state_path = root / 'profile_state.json'
         candidate_hash = _candidate_hash(physical)
-        runtime_ids = [runtime.id for runtime in self.runtimes]
+        conditions = dict(conditions or {})
+        requested_ids = conditions.pop('_profile_ids', None)
+        all_runtime_ids = [runtime.id for runtime in self.runtimes]
+        if requested_ids is None:
+            runtime_ids = list(all_runtime_ids)
+        else:
+            if not isinstance(requested_ids, (list, tuple)) or not requested_ids or len(set(requested_ids)) != len(requested_ids):
+                raise MultiProfileError('_profile_ids must be a non-empty unique list')
+            if any(profile_id not in all_runtime_ids for profile_id in requested_ids):
+                raise MultiProfileError('_profile_ids references an unknown profile')
+            runtime_ids = list(requested_ids)
+        selected_runtimes = tuple(runtime for runtime in self.runtimes if runtime.id in runtime_ids)
+        skipped_ids = [profile_id for profile_id in all_runtime_ids if profile_id not in runtime_ids]
         completed = {}
         resumed = []
         if state_path.exists():
@@ -170,8 +192,7 @@ class MultiProfileBackend:
             state['status'] = 'failed'; state['failure'] = {'stage': 'apply', 'message': str(exc)}
             atomic_write_json(state_path, state)
             return self._failure(physical, completed, 'candidate', 'apply', str(exc))
-        conditions = dict(conditions or {})
-        for runtime in self.runtimes:
+        for runtime in selected_runtimes:
             if runtime.id in completed:
                 continue
             profile_dir = root / 'profiles' / runtime.id
@@ -200,7 +221,7 @@ class MultiProfileBackend:
         specs = {}
         objective = 0.0
         profile_metadata = {}
-        for runtime in self.runtimes:
+        for runtime in selected_runtimes:
             result = completed[runtime.id]
             for name, value in result['metrics'].items():
                 if name in metrics:
@@ -212,7 +233,19 @@ class MultiProfileBackend:
                 specs[name] = value
             if result['success']:
                 objective += result['objective']
-            profile_metadata[runtime.id] = result['metadata']
+            profile_metadata[runtime.id] = {
+                'objective': result['objective'], 'success': result['success'],
+                'metrics': result['metrics'], 'specs': result['specs'],
+                'metadata': result['metadata'], 'failure': result['failure'],
+            }
+        summary = {
+            'version': 1, 'candidate_hash': candidate_hash,
+            'selected_profiles': runtime_ids, 'skipped_profiles': skipped_ids,
+            'profiles': profile_metadata,
+        }
+        summary_path = root / 'profile_summary.json'
+        atomic_write_json(summary_path, summary)
+        summary_hash = profile_summary_hash(summary)
         state['status'] = 'complete'
         state['completed'] = completed
         atomic_write_json(state_path, state)
@@ -222,5 +255,8 @@ class MultiProfileBackend:
             'metadata': {
                 'physical_candidate': physical, 'profiles': profile_metadata,
                 'resumed_profiles': resumed, 'profile_state': str(state_path),
+                'selected_profiles': runtime_ids, 'skipped_profiles': skipped_ids,
+                'profile_summary': str(summary_path),
+                'profile_summary_hash': summary_hash,
             },
         }

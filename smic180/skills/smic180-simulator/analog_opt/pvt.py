@@ -4,6 +4,8 @@ import math
 import struct
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
+from analog_opt.profiles import VerificationProfileConfig
+
 _CORNERS = {"tt", "ff", "ss", "fnsp", "snfp"}
 
 
@@ -50,6 +52,12 @@ class PvtPoint:
 
 
 @dataclass(frozen=True)
+class ProfilePvtJob:
+    profile_id: str
+    point: PvtPoint
+
+
+@dataclass(frozen=True)
 class PvtWorst:
     point_id: str
     objective: float
@@ -71,6 +79,48 @@ def build_pvt_points(config: PvtConfig) -> Tuple[PvtPoint, ...]:
                    for c in config.corners for v in config.voltages for t in config.temperatures)
     _unique(tuple(point.point_id for point in points), "PVT point IDs")
     return points
+
+
+def build_profile_pvt_jobs(
+    profiles: Sequence[VerificationProfileConfig],
+    points: Sequence[PvtPoint],
+    selections: Optional[Mapping[str, Sequence[str]]] = None,
+) -> Tuple[ProfilePvtJob, ...]:
+    if not profiles or not points:
+        raise ValueError('profiles and PVT points must be non-empty')
+    if any(not isinstance(profile, VerificationProfileConfig) for profile in profiles):
+        raise ValueError('profiles must contain VerificationProfileConfig values')
+    profile_ids = tuple(profile.id for profile in profiles)
+    _unique(profile_ids, 'profile IDs')
+    point_by_id = {point.point_id: point for point in points}
+    if len(point_by_id) != len(points):
+        raise ValueError('PVT point IDs must be unique')
+    if selections is None:
+        selections = {}
+    if not isinstance(selections, Mapping):
+        raise ValueError('profile PVT selections must be a mapping')
+    unknown_profiles = set(selections) - set(profile_ids)
+    if unknown_profiles:
+        raise ValueError('profile PVT selection references unknown profile')
+    jobs = []
+    for profile in profiles:
+        if profile.pvt_policy == 'nominal_only':
+            continue
+        if profile.pvt_policy == 'full':
+            selected_ids = tuple(point.point_id for point in points)
+        elif profile.pvt_policy == 'selected':
+            raw_selection = selections.get(profile.id)
+            if not isinstance(raw_selection, (list, tuple)) or not raw_selection:
+                raise ValueError('selected profile requires a non-empty PVT selection')
+            selected_ids = tuple(raw_selection)
+            _unique(selected_ids, 'profile PVT selection')
+        else:
+            raise ValueError('unsupported profile PVT policy')
+        for point_id in selected_ids:
+            if point_id not in point_by_id:
+                raise ValueError('profile selection references unknown PVT point: ' + str(point_id))
+            jobs.append(ProfilePvtJob(profile.id, point_by_id[point_id]))
+    return tuple(jobs)
 
 
 def pvt_result_from_evaluation(point: PvtPoint, result: Any, parameters: Optional[Mapping[str, Any]] = None) -> Mapping[str, Any]:
@@ -98,6 +148,7 @@ def pvt_result_from_evaluation(point: PvtPoint, result: Any, parameters: Optiona
     return {"point_id": point.point_id, "corner": point.corner, "voltage": point.voltage,
             "temperature": point.temperature, "parameters": dict(parameters), "metrics": dict(result.metrics),
             "success": result.success, "objective": objective, "specs": dict(result.specs),
+            "metadata": dict(result.metadata),
             "failure": None if failure is None else dict(failure)}
 
 
@@ -129,8 +180,8 @@ def summarize_pvt(points: Sequence[PvtPoint], results: Sequence[Mapping[str, Any
         if raw.get("corner") != point.corner or _finite(raw.get("voltage"), "voltage") != point.voltage or _finite(raw.get("temperature"), "temperature") != point.temperature:
             raise ValueError("PVT result condition does not match point")
         if type(raw.get("success")) is not bool: raise ValueError("success must be bool")
-        if not isinstance(raw.get("parameters"), Mapping) or not isinstance(raw.get("metrics"), Mapping):
-            raise ValueError("parameters and metrics must be mappings")
+        if not isinstance(raw.get("parameters"), Mapping) or not isinstance(raw.get("metrics"), Mapping) or not isinstance(raw.get("metadata", {}), Mapping):
+            raise ValueError("parameters, metrics, and metadata must be mappings")
         objective = _finite(raw.get("objective"), "objective")
         specs = raw.get("specs")
         if not isinstance(specs, Mapping) or set(specs) != set(spec_ids): raise ValueError("each PVT point must contain the complete specification set")
@@ -149,7 +200,8 @@ def summarize_pvt(points: Sequence[PvtPoint], results: Sequence[Mapping[str, Any
         by_id[pid] = {"point_id": pid, "corner": point.corner, "voltage": point.voltage,
                       "temperature": point.temperature, "parameters": dict(raw["parameters"]),
                       "metrics": dict(raw["metrics"]), "success": raw["success"], "objective": objective,
-                      "specs": normalized_specs, "failure": None if failure is None else dict(failure)}
+                      "specs": normalized_specs, "metadata": dict(raw.get("metadata", {})),
+                      "failure": None if failure is None else dict(failure)}
     ordered = tuple(by_id[p.point_id] for p in points)
     def severity(item): return max([item["objective"]] + [v["violation"] for v in item["specs"].values()])
     worst_raw = max(ordered, key=lambda item: (not item["success"], severity(item)))

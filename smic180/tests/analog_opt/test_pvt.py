@@ -3,7 +3,8 @@ import math
 import pytest
 
 from analog_opt.evaluator import EvaluationResult
-from analog_opt.pvt import PvtConfig, build_pvt_points, pvt_result_from_evaluation, summarize_pvt
+from analog_opt.pvt import PvtConfig, build_profile_pvt_jobs, build_pvt_points, pvt_result_from_evaluation, summarize_pvt
+from analog_opt.profiles import VerificationProfileConfig
 
 
 def result(point, success=True, objective=1.0, violation=0.0, failure=None):
@@ -104,3 +105,55 @@ def test_evaluation_adapter_rejects_nonmapping_parameters():
                                   {"gain": {"passed": True, "violation": 0.0}})
     with pytest.raises(ValueError):
         pvt_result_from_evaluation(point, evaluation, [])
+
+
+def test_pvt_result_preserves_profile_summary_evidence():
+    point = build_pvt_points(PvtConfig(("tt",), (1.8,), (25.0,)))[0]
+    evaluation = EvaluationResult(
+        point.point_id, 0.0, True, {"gain": 60.0},
+        {
+            "physical_candidate": {"w": 1e-6},
+            "profile_summary": "profile_summary.json",
+            "profile_summary_hash": "a" * 64,
+        },
+        None, {"gain": {"passed": True, "violation": 0.0}},
+    )
+    adapted = pvt_result_from_evaluation(point, evaluation, {"w": 1e-6})
+    assert adapted["metadata"]["profile_summary"] == "profile_summary.json"
+    assert adapted["metadata"]["profile_summary_hash"] == "a" * 64
+    summary = summarize_pvt((point,), (adapted,), expected_spec_ids=("gain",))
+    assert summary.points[0]["metadata"]["profile_summary_hash"] == "a" * 64
+
+
+def verification_profile(profile_id, policy):
+    return VerificationProfileConfig(
+        id=profile_id, role='report', testbench_cell=profile_id+'_tb',
+        dut_instance='DUT', stimuli={}, analyses=(), metrics=(), specs=(),
+        pvt_policy=policy,
+    )
+
+
+def test_profile_pvt_jobs_honor_full_nominal_and_selected_policies():
+    points = build_pvt_points(PvtConfig(('tt',), (1.8,), (25.0, 125.0)))
+    profiles = (
+        verification_profile('full', 'full'),
+        verification_profile('nominal', 'nominal_only'),
+        verification_profile('selected', 'selected'),
+    )
+    jobs = build_profile_pvt_jobs(
+        profiles, points, selections={'selected': [points[1].point_id]}
+    )
+    assert [(job.profile_id, job.point.point_id) for job in jobs] == [
+        ('full', points[0].point_id),
+        ('full', points[1].point_id),
+        ('selected', points[1].point_id),
+    ]
+
+
+def test_selected_profile_requires_complete_valid_selection():
+    points = build_pvt_points(PvtConfig(('tt',), (1.8,), (25.0,)))
+    selected = verification_profile('selected', 'selected')
+    with pytest.raises(ValueError, match='selection'):
+        build_profile_pvt_jobs((selected,), points)
+    with pytest.raises(ValueError, match='unknown PVT point'):
+        build_profile_pvt_jobs((selected,), points, selections={'selected': ['missing']})

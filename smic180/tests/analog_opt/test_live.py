@@ -1,3 +1,4 @@
+import json
 import math
 from pathlib import Path
 import pytest
@@ -230,6 +231,18 @@ def test_create_workflow_builds_one_runtime_per_explicit_profile(tmp_path,monkey
  assert calls==['open_loop','stability']
  assert isinstance(workflow.evaluator.backend,MultiProfileBackend)
 
+def test_pvt_profile_selection_excludes_nominal_only_report_profile(tmp_path):
+ from analog_opt.live import _profile_ids_by_pvt_point,_pvt_settings
+ from analog_opt.schema import load_config
+ from test_profiles import explicit_profile
+ from test_schema import minimal_config,write_config
+ data=minimal_config(); report=explicit_profile('report','report_tb')
+ report['pvt_policy']='nominal_only'; report['specs']=[]
+ data['verification_profiles']=[explicit_profile('full','full_tb'),report]
+ config=load_config(write_config(tmp_path,data)); pvt,_,_=_pvt_settings(config)
+ selection=_profile_ids_by_pvt_point(config,pvt)
+ assert list(selection.values())==[['full']]
+
 @pytest.mark.parametrize('data,mtimes,match',[
  ({'stb_freq':[1.,10.]},{'stb_freq':101.},'unavailable'),
  ({'stb_freq':[1.,10.],'a':[2+0j,1+0j],'b':[2+0j,1+0j]},
@@ -386,6 +399,22 @@ def test_publication_write_creates_hash_marker_for_noncdf(tmp_path):
  (tmp_path/'publication.json').write_text('{"candidate_hash":"abc","parameters":{"GAIN":4.0}}')
  adapter=PublicationAdapter(A(),tmp_path,[],lambda:{'GAIN':4.0}); adapter.publish_result_cell('tr','w','r','s',False)
  assert __import__('json').loads((tmp_path/'publication.confirmed.json').read_text())['candidate_hash']=='abc'
+
+
+def test_publication_marker_and_confirmation_bind_profile_summary_hash(tmp_path):
+ class A:
+  def publish_result_cell(self,*args): pass
+  def cell_exists(self,lib,cell): return True
+ candidate={"GAIN":4.0}
+ (tmp_path/"publication.json").write_text(json.dumps({"candidate_hash":"abc","profile_summary_hash":"def","parameters":candidate}))
+ adapter=PublicationAdapter(A(),tmp_path,[],lambda:candidate)
+ adapter.publish_result_cell("tr","w","r","s",False)
+ marker=json.loads((tmp_path/"publication.confirmed.json").read_text())
+ assert marker=={"candidate_hash":"abc","profile_summary_hash":"def"}
+ assert adapter.confirm_result_cell("tr","r","abc","def") is True
+ marker["profile_summary_hash"]="changed"
+ (tmp_path/"publication.confirmed.json").write_text(json.dumps(marker))
+ assert adapter.confirm_result_cell("tr","r","abc","def") is False
 
 def test_dedicated_tb_name_is_unique_and_skill_closes_all_views(tmp_path):
  client=Client(); adapter=NetlistAdapter(client,Site(),library='tr',source_tb='amp_tb',work_cell='amp_work',exporter=lambda *a,**k:None,base_deck_factory=lambda **k:None)

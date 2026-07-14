@@ -1,8 +1,10 @@
+import hashlib
 import json
 from pathlib import Path
 import pytest
 from analog_opt.evaluator import CandidateEvaluator, EvaluationFailure, EvaluationResult
 from analog_opt.parameters import ParameterSpec
+from analog_opt.profiles import profile_summary_hash
 from analog_opt.pvt import PvtConfig
 from analog_opt.search import SearchConfig, SearchResult
 from analog_opt.workflow import AnalogSimulationBackend, OptimizationWorkflow
@@ -21,7 +23,8 @@ class Applier:
 class Netlist:
  def __init__(self,log,confirm=None): self.log=log; self.confirmed=confirm or {'gain':4.,'VBIAS':1.2,'VDD':3.3}
  def configure(self,design_variables,biases,stimuli,conditions): self.log.add('configure',dict(design_variables),dict(biases),dict(stimuli),dict(conditions))
- def export_fresh(self,library,work_cell,directory): self.log.add('export',library,work_cell,directory.name); return {'op':directory/'fresh.scs'}
+ def export_fresh(self,library,work_cell,directory):
+  self.log.add('export',library,work_cell,directory.name); directory.mkdir(parents=True,exist_ok=True); path=directory/'fresh.scs'; path.write_text('simulator lang=spectre\n',encoding='utf-8'); return {'op':path}
  def confirm(self,path,expected_by_analysis): self.log.add('confirm',tuple(expected_by_analysis)); return {'op':dict(self.confirmed, dut_cell='amp_work')}
  def confirm_cdf(self,path,specs): return {'W':10e-6}
 class Runner:
@@ -36,6 +39,7 @@ def make_backend(tmp_path,log,confirm=None,spec_summary=None,runner=None):
 def test_backend_uses_real_applier_signature_and_structured_confirmation(tmp_path):
  log=Log(); result=make_backend(tmp_path,log)(CANDIDATE,tmp_path)
  assert result['success'] is True and result['objective']==.25
+ assert all(len(result['metadata'][name])==64 for name in ('testbench_signature','netlist_hash','measurement_hash'))
  assert log.calls[0]==('apply','tr','amp_work',('W',),{'W':10e-6})
  assert log.calls[1][0]=='configure' and log.calls[1][1:]==({'gain':4.},{'VBIAS':1.2},{'VDD':{'value':3.3,'optimizable':False},'VBIAS':{'value':1.,'optimizable':True}},{})
  assert [c[0] for c in log.calls]==['apply','configure','export','run','metrics','read','confirm']
@@ -74,10 +78,19 @@ def test_backend_preserves_source_mapping_for_optimizable_bias_stimulus(tmp_path
 class WorkflowApplier(Applier):
  def __init__(self,log): super().__init__(log); self.published=False
  def publish_result_cell(self,lib,work,result,source,replace): super().publish_result_cell(lib,work,result,source,replace); self.published=True
- def confirm_result_cell(self,lib,result,source_hash): self.log.add('confirm_result',lib,result,source_hash); return self.published
+ def confirm_result_cell(self,lib,result,source_hash,profile_summary_hash=None): self.log.add('confirm_result',lib,result,source_hash,profile_summary_hash); return self.published
 
 def eval_result(cid='best-replay',passed=True,params=CANDIDATE):
  return EvaluationResult(cid,.1,True,{'measured':{'gain':8.},'derived':{},'unavailable':{}},{'physical_candidate':dict(params)},None,{'gain':{'passed':passed,'violation':0. if passed else .2}})
+
+
+def profile_eval_result(directory,cid='best-replay',params=CANDIDATE,profile_ids=('stability',)):
+ candidate_hash=hashlib.sha256(json.dumps(params,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
+ evidence={"testbench_signature":"c"*64,"netlist_hash":"d"*64,"measurement_hash":"e"*64}
+ summary={"version":1,"candidate_hash":candidate_hash,"selected_profiles":list(profile_ids),"skipped_profiles":[],"profiles":{name:{"success":True,"metadata":dict(evidence)} for name in profile_ids}}
+ path=Path(directory)/"profile_summary.json"; path.parent.mkdir(parents=True,exist_ok=True); path.write_text(json.dumps(summary),encoding="utf-8")
+ metadata={"physical_candidate":dict(params),"profile_summary":str(path),"profile_summary_hash":profile_summary_hash(summary)}
+ return EvaluationResult(cid,.1,True,{"measured":{"gain":8.}},metadata,None,{"gain":{"passed":True,"violation":0.}})
 
 def workflow(tmp_path,log,search_result=None,pvt_pass=True,applier=None):
  best=eval_result('candidate-000000')
@@ -105,6 +118,75 @@ def test_fresh_best_must_pass_specs_and_match_parameters(tmp_path):
  log=Log(); w=workflow(tmp_path,log); w.replay=lambda c,d,conditions=None: eval_result(passed=False,params=c)
  with pytest.raises(EvaluationFailure) as err: w.run()
  assert err.value.category=='best_replay' and not any(c[0]=='publish' for c in log.calls)
+
+
+def test_explicit_profiles_require_hash_bound_fresh_replay_summary(tmp_path):
+ log=Log(); w=workflow(tmp_path,log)
+ w.config_payload["verification_profiles"]=[{
+  "id":"stability","role":"unity_gain_stability","testbench_cell":"amp_stb_tb",
+  "dut_instance":"DUT","stimuli":{},"analyses":[],"metrics":[],"specs":[],
+  "pvt_policy":"full","timeout_s":1800,
+ }]
+ with pytest.raises(EvaluationFailure,match="profile summary") as err:
+  w.run()
+ assert err.value.category=="best_replay"
+ assert not any(call[0]=="publish" for call in log.calls)
+
+
+def test_profile_summary_candidate_hash_accepts_float_normalized_integer_values(tmp_path):
+ w=workflow(tmp_path,Log()); w.config_payload["verification_profiles"]=[{"id":"stability","role":"unity_gain_stability"}]
+ parameters=dict(CANDIDATE,GAIN=4)
+ result=profile_eval_result(tmp_path,params={name:float(value) for name,value in parameters.items()})
+ evidence=w._validate_replay(result,parameters,tmp_path)
+ assert evidence["profile_summary_hash"]==result.metadata["profile_summary_hash"]
+
+
+def test_publication_intent_binds_fresh_replay_profile_summary_hash(tmp_path):
+ log=Log(); w=workflow(tmp_path,log)
+ w.config_payload["verification_profiles"]=[{"id":"stability","role":"unity_gain_stability"}]
+ w.replay=lambda candidate,directory,conditions=None: profile_eval_result(directory,params=candidate)
+ w.pvt_evaluator=lambda point,candidate,directory: profile_eval_result(directory,point.point_id,candidate)
+ state=w.run()
+ intent=json.loads((tmp_path/"publication.json").read_text(encoding="utf-8"))
+ assert intent["profile_summary_hash"]==state["profile_summary_hash"]==state["best"]["profile_summary_hash"]
+ manifest=json.loads((tmp_path/"result_manifest.json").read_text(encoding="utf-8"))
+ assert manifest["profile_evidence_required"] is True
+ assert manifest["publishable"] is True
+
+
+def test_profile_publication_confirmation_receives_candidate_and_profile_hashes(tmp_path):
+ log=Log()
+ class HashApplier(WorkflowApplier):
+  def confirm_result_cell(self,*args):
+   self.log.add("confirm_result",*args)
+   return self.published
+ applier=HashApplier(log); w=workflow(tmp_path,log,applier=applier)
+ w.config_payload["verification_profiles"]=[{"id":"stability","role":"unity_gain_stability"}]
+ w.replay=lambda candidate,directory,conditions=None: profile_eval_result(directory,params=candidate)
+ w.pvt_evaluator=lambda point,candidate,directory: profile_eval_result(directory,point.point_id,candidate)
+ state=w.run()
+ confirmations=[call for call in log.calls if call[0]=="confirm_result"]
+ assert all(call[-1]==state["profile_summary_hash"] for call in confirmations)
+
+
+def test_profile_confirmations_are_written_only_after_replay_and_full_pvt(tmp_path):
+ log=Log(); w=workflow(tmp_path,log)
+ profile_ids=("stability","closed_loop_slew")
+ w.config_payload["verification_profiles"]=[
+  {"id":name,"role":name,"pvt_policy":"full"} for name in profile_ids
+ ]
+ w.replay=lambda candidate,directory,conditions=None: profile_eval_result(directory,params=candidate,profile_ids=profile_ids)
+ w.pvt_evaluator=lambda point,candidate,directory: profile_eval_result(directory,point.point_id,candidate,profile_ids)
+ state=w.run()
+ for profile_id in profile_ids:
+  confirmation=json.loads((tmp_path/(profile_id+".confirmed.json")).read_text(encoding="utf-8"))
+  assert confirmation["candidate_hash"]==state["candidate_hash"]
+  assert confirmation["profile_summary_hash"]==state["profile_summary_hash"]
+  assert all(len(confirmation[name])==64 for name in ("testbench_signature","netlist_hash","measurement_hash"))
+  assert len(confirmation["pvt_profile_summary_hashes"])==1
+ manifest=json.loads((tmp_path/"result_manifest.json").read_text(encoding="utf-8"))
+ assert manifest["artifacts"]["stability_confirmation"]=="stability.confirmed.json"
+ assert manifest["artifacts"]["closed_loop_slew_confirmation"]=="closed_loop_slew.confirmed.json"
 
 def test_pvt_failure_reports_without_publish(tmp_path):
  log=Log(); w=workflow(tmp_path,log,pvt_pass=False); state=w.run()
@@ -144,7 +226,10 @@ def test_backend_confirms_every_analysis_deck_and_dc_parameter_token(tmp_path):
  log=Log(); backend=make_backend(tmp_path,log)
  backend.analyses=({'name':'line','type':'dc_sweep','source':'VDD','parameter':'VDD_SWEEP','start':2.7,'stop':3.6,'points':3},{'name':'ac_main','type':'ac','start':1.,'stop':1e6,'points_per_decade':10})
  class MultiNet(Netlist):
-  def export_fresh(self,library,cell,directory): return {'line':directory/'line.scs','ac_main':directory/'ac.scs'}
+  def export_fresh(self,library,cell,directory):
+   directory.mkdir(parents=True,exist_ok=True); decks={'line':directory/'line.scs','ac_main':directory/'ac.scs'}
+   for name,path in decks.items(): path.write_text('// '+name+'\n',encoding='utf-8')
+   return decks
   def confirm_cdf(self,decks,specs): return {'W':10e-6}
   def confirm(self,decks,expected):
    self.log.add('confirm_multi',decks,expected)

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any,Callable,Mapping,Sequence
 from analog_opt.evaluator import CandidateEvaluator,EvaluationFailure,EvaluationResult,atomic_write_json
 from analog_opt.parameters import ParameterSpec
+from analog_opt.profiles import profile_summary_hash
 from analog_opt.pvt import build_pvt_points,pvt_result_from_evaluation,summarize_pvt
 from analog_opt.report import write_pvt_results,write_report,write_result_manifest,write_run_manifest
 
@@ -18,6 +19,15 @@ def _stimulus(value):
  if isinstance(value,Mapping): return value.get('value',value.get('dc')),value.get('optimizable',False)
  raw=getattr(value,'value',None); return raw if raw is not None else getattr(value,'dc',None),getattr(value,'optimizable',False)
 def _hash(candidate): return hashlib.sha256(json.dumps(candidate,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
+def _profile_candidate_hash(candidate): return _hash({str(name):float(value) for name,value in candidate.items()})
+def _deck_hash(deck):
+ items=deck.items() if isinstance(deck,Mapping) else (("default",deck),)
+ hashes={}
+ for name,value in items:
+  path=Path(value)
+  if not path.is_file(): raise ValueError('fresh netlist is missing: '+str(path))
+  hashes[str(name)]=hashlib.sha256(path.read_bytes()).hexdigest()
+ return _hash(hashes)
 def _spec_protocol(summary):
  if is_dataclass(summary): summary=asdict(summary)
  if not isinstance(summary,Mapping): raise ValueError('spec evaluator must return mapping')
@@ -97,7 +107,7 @@ class AnalogSimulationBackend:
       if not matches: raise ValueError('analysis %s physical value mismatch for %s'%(analysis_name,name))
      elif isinstance(got,bool) or not isinstance(got,(int,float)) or not math.isfinite(float(got)) or not math.isclose(float(got),float(want),rel_tol=self.rtol,abs_tol=self.atol): raise ValueError('analysis %s physical value mismatch for %s'%(analysis_name,name))
   except Exception as exc: raise EvaluationFailure('confirmation',str(exc)) from exc
-  return {'objective':objective,'success':True,'metrics':metrics,'specs':spec_results,'metadata':{'physical_candidate':dict(candidate),'specs_passed':passed,'netlist':str(deck),'artifacts':dict(metrics.get('artifacts',{})) if isinstance(metrics,Mapping) else {}}}
+  return {'objective':objective,'success':True,'metrics':metrics,'specs':spec_results,'metadata':{'physical_candidate':dict(candidate),'specs_passed':passed,'netlist':str(deck),'testbench_signature':_hash(net_values),'netlist_hash':_deck_hash(deck),'measurement_hash':_hash(metrics),'artifacts':dict(metrics.get('artifacts',{})) if isinstance(metrics,Mapping) else {}}}
 
 class OptimizationWorkflow:
  def __init__(self,run_dir:Any,*,config_payload:Mapping[str,Any]=None,library:str,source_cell:str,work_cell:str,result_cell:str,parameter_specs:Sequence[ParameterSpec],applier:Any,evaluator:Any,search_config:Any,search_runner:Callable,replay:Callable,pvt_config:Any,pvt_evaluator:Callable):
@@ -123,12 +133,16 @@ class OptimizationWorkflow:
    try: intent=json.loads((self.run_dir/'publication.json').read_text(encoding='utf-8'))
    except Exception as exc: raise EvaluationFailure('state','publication intent is missing') from exc
    if intent.get('candidate_hash')!=data['candidate_hash'] or intent.get('parameters')!=data['parameters']: raise EvaluationFailure('state','publication intent does not match state')
+   if self._requires_profile_evidence() and (intent.get('profile_summary_hash')!=data.get('profile_summary_hash') or data.get('profile_summary_hash')!=data['best'].get('profile_summary_hash')): raise EvaluationFailure('state','publication profile summary hash does not match state')
   return dict(data)
  def _candidate(self,candidate):
   if not isinstance(candidate,Mapping) or set(candidate)!=set(self.names) or not candidate: raise EvaluationFailure('candidate','best parameters must be nonempty and exactly match configuration')
   for name,value in candidate.items():
    if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(float(value)): raise EvaluationFailure('candidate','parameter %s must be finite'%name)
   return dict(candidate)
+ def _requires_profile_evidence(self):
+  profiles=self.config_payload.get('verification_profiles')
+  return isinstance(profiles,(list,tuple)) and any(isinstance(item,Mapping) and (item.get('id')!='default' or item.get('role')!='legacy') for item in profiles)
  def _write_bootstrap(self,state):
   if not self.config_payload: raise EvaluationFailure('configuration','resolved configuration payload is required')
   atomic_write_json(self.run_dir/'analog_opt_config.resolved.json',self.config_payload)
@@ -159,8 +173,9 @@ class OptimizationWorkflow:
   if state in ('work_cell_created','searching'):
    if state=='searching' and self.search_config.method!='random': raise EvaluationFailure('search','non-random search cannot resume without a complete best candidate')
    self._save('searching'); write_run_manifest(self.run_dir,{'config':'analog_opt_config.resolved.json','state':'searching','artifacts':{}}); search=self.search_runner(state=='searching'); parameters=self._search_best_parameters(search)
-   replay=self.replay(parameters,self.run_dir/'best_replay',None); self._validate_replay(replay,parameters)
+   replay_dir=self.run_dir/'best_replay'; replay=self.replay(parameters,replay_dir,None); profile_evidence=self._validate_replay(replay,parameters,replay_dir)
    best={'objective':float(replay.objective),'metrics':dict(replay.metrics),'specs':dict(replay.specs),'parameters':parameters}
+   if profile_evidence is not None: best.update(profile_evidence)
    self._save('best_replayed',parameters=parameters,best=best); data=self._load(); state='best_replayed'
   parameters=data.get('parameters'); best=data.get('best')
   if state=='best_replayed':
@@ -168,28 +183,89 @@ class OptimizationWorkflow:
    for point in points:
     directory=self.run_dir/'pvt'/point.point_id
     result=self.pvt_evaluator(point,parameters,directory)
-    results.append(pvt_result_from_evaluation(point,result,parameters))
+    profile_evidence=self._validate_profile_evidence(result,parameters,directory,'pvt') if self._requires_profile_evidence() else None
+    row=dict(pvt_result_from_evaluation(point,result,parameters))
+    if profile_evidence is not None: row['metadata'].update(profile_evidence)
+    results.append(row)
    summary=summarize_pvt(points,results,expected_spec_ids=tuple(best['specs']))
+   if self._requires_profile_evidence():
+    full_ids={item.get('id') for item in self.config_payload.get('verification_profiles',()) if isinstance(item,Mapping) and item.get('pvt_policy','full')=='full'}
+    for row in summary.points:
+     selected=set(row.get('metadata',{}).get('selected_profiles',()))
+     if not full_ids.issubset(selected): raise EvaluationFailure('pvt','full verification profiles are missing from a PVT point')
+    if summary.overall_passed is True: self._write_profile_confirmations(best,summary,parameters)
    write_pvt_results(self.run_dir,summary); pvt=_plain(summary); self._save('pvt_validated',parameters=parameters,best=best,pvt=pvt); data=self._load(); state='pvt_validated'
   pvt=data.get('pvt')
   if state=='pvt_validated':
    payload=self._report_payload(best,pvt); write_run_manifest(self.run_dir,{'config':'analog_opt_config.resolved.json','state':'reported','artifacts':payload['artifacts']}); write_result_manifest(self.run_dir,payload); write_report(self.run_dir,payload); self._save('reported',parameters=parameters,best=best,pvt=pvt); state='reported'
   if state=='reported' and pvt.get('overall_passed') is True:
-   candidate_hash=_hash(parameters); atomic_write_json(self.run_dir/'publication.json',{'candidate_hash':candidate_hash,'parameters':parameters}); self._save('publishing',parameters=parameters,best=best,pvt=pvt,candidate_hash=candidate_hash); state='publishing'
+   candidate_hash=_hash(parameters); profile_hash=best.get('profile_summary_hash') if self._requires_profile_evidence() else None; intent={'candidate_hash':candidate_hash,'parameters':parameters}
+   if profile_hash is not None: intent['profile_summary_hash']=profile_hash
+   atomic_write_json(self.run_dir/'publication.json',intent); state_data={'parameters':parameters,'best':best,'pvt':pvt,'candidate_hash':candidate_hash}
+   if profile_hash is not None: state_data['profile_summary_hash']=profile_hash
+   self._save('publishing',**state_data); state='publishing'
   if state=='publishing':
    data=self._load(); candidate_hash=data['candidate_hash']
-   if not self.applier.confirm_result_cell(self.library,self.result_cell,candidate_hash): self.applier.publish_result_cell(self.library,self.work_cell,self.result_cell,self.source_cell,replace_result)
-   if self.applier.confirm_result_cell(self.library,self.result_cell,candidate_hash) is not True: raise EvaluationFailure('publication','result cell publication could not be confirmed')
-   self._save('published',parameters=parameters,best=best,pvt=pvt,candidate_hash=candidate_hash)
+   confirmation=(self.library,self.result_cell,candidate_hash)
+   if data.get('profile_summary_hash') is not None: confirmation=confirmation+(data['profile_summary_hash'],)
+   if not self.applier.confirm_result_cell(*confirmation): self.applier.publish_result_cell(self.library,self.work_cell,self.result_cell,self.source_cell,replace_result)
+   if self.applier.confirm_result_cell(*confirmation) is not True: raise EvaluationFailure('publication','result cell publication could not be confirmed')
+   published={'parameters':parameters,'best':best,'pvt':pvt,'candidate_hash':candidate_hash}
+   if data.get('profile_summary_hash') is not None: published['profile_summary_hash']=data['profile_summary_hash']
+   self._save('published',**published)
   return self._load()
- def _validate_replay(self,result,parameters):
+ def _validate_replay(self,result,parameters,directory=None):
   if not isinstance(result,EvaluationResult) or result.success is not True or not math.isfinite(float(result.objective)): raise EvaluationFailure('best_replay','fresh best replay failed')
   actual=result.metadata.get('physical_candidate') if isinstance(result.metadata,Mapping) else None
   if actual!=parameters or not result.specs or not all(isinstance(v,Mapping) and v.get('passed') is True for v in result.specs.values()): raise EvaluationFailure('best_replay','fresh best replay did not confirm passing specifications and parameters')
+  if not self._requires_profile_evidence(): return None
+  evidence=self._validate_profile_evidence(result,parameters,directory or self.run_dir/'best_replay','best_replay')
+  evidence['profile_summary']='best_replay/'+evidence['profile_summary']
+  return evidence
+ def _validate_profile_evidence(self,result,parameters,directory,category):
+  metadata=result.metadata
+  summary_hash=metadata.get('profile_summary_hash'); summary_value=metadata.get('profile_summary')
+  if not isinstance(summary_hash,str) or len(summary_hash)!=64 or not isinstance(summary_value,str): raise EvaluationFailure(category,'profile summary evidence is missing')
+  root=Path(directory).resolve(strict=False); summary_path=Path(summary_value)
+  if not summary_path.is_absolute(): summary_path=root/summary_path
+  summary_path=summary_path.resolve(strict=False)
+  try: summary_path.relative_to(root)
+  except ValueError as exc: raise EvaluationFailure(category,'profile summary path escapes evaluation directory') from exc
+  try: summary=json.loads(summary_path.read_text(encoding='utf-8'),parse_constant=lambda x:(_ for _ in ()).throw(ValueError(x)))
+  except Exception as exc: raise EvaluationFailure(category,'profile summary is unreadable') from exc
+  selected=summary.get('selected_profiles') if isinstance(summary,Mapping) else None; profiles=summary.get('profiles') if isinstance(summary,Mapping) else None
+  try: computed_summary_hash=profile_summary_hash(summary)
+  except Exception as exc: raise EvaluationFailure(category,'profile summary is not strict hashable JSON') from exc
+  if computed_summary_hash!=summary_hash or summary.get('candidate_hash')!=_profile_candidate_hash(parameters): raise EvaluationFailure(category,'profile summary hash or candidate does not match')
+  if not isinstance(selected,list) or not selected or not isinstance(profiles,Mapping) or any(not isinstance(profiles.get(name),Mapping) or profiles[name].get('success') is not True for name in selected): raise EvaluationFailure(category,'profile summary does not confirm every selected profile')
+  relative=summary_path.relative_to(root).as_posix()
+  return {'profile_summary':relative,'profile_summary_hash':summary_hash,'selected_profiles':list(selected)}
+ def _write_profile_confirmations(self,best,summary,parameters):
+  targets={item.get('id') for item in self.config_payload.get('verification_profiles',()) if isinstance(item,Mapping) and item.get('id') in ('stability','closed_loop_slew')}
+  if not targets: return
+  try: replay_summary=json.loads((self.run_dir/best['profile_summary']).read_text(encoding='utf-8'))
+  except Exception as exc: raise EvaluationFailure('pvt','fresh replay profile summary is unavailable for confirmation') from exc
+  pending={}
+  for profile_id in targets:
+   profile=replay_summary.get('profiles',{}).get(profile_id); metadata=profile.get('metadata') if isinstance(profile,Mapping) else None
+   required=('testbench_signature','netlist_hash','measurement_hash')
+   if not isinstance(metadata,Mapping) or any(not isinstance(metadata.get(name),str) or len(metadata[name])!=64 for name in required): raise EvaluationFailure('pvt',profile_id+' confirmation evidence is incomplete')
+   pvt_hashes={}
+   for row in summary.points:
+    point_metadata=row.get('metadata',{})
+    if profile_id not in point_metadata.get('selected_profiles',()): raise EvaluationFailure('pvt',profile_id+' is missing from a required PVT point')
+    value=point_metadata.get('profile_summary_hash')
+    if not isinstance(value,str) or len(value)!=64: raise EvaluationFailure('pvt',profile_id+' PVT profile summary hash is missing')
+    pvt_hashes[row['point_id']]=value
+   pending[profile_id]={'version':1,'profile_id':profile_id,'candidate_hash':_hash(parameters),'configuration_hash':_hash(self.config_payload),'profile_summary_hash':best['profile_summary_hash'],'testbench_signature':metadata['testbench_signature'],'netlist_hash':metadata['netlist_hash'],'measurement_hash':metadata['measurement_hash'],'pvt_profile_summary_hashes':pvt_hashes}
+  for profile_id,payload in pending.items(): atomic_write_json(self.run_dir/(profile_id+'.confirmed.json'),payload)
  def _report_payload(self,best,pvt):
   artifacts={'best_replay':'best_replay','pvt_results':'pvt_results.json','report':'optimization_report.md'}
+  for profile_id in ('stability','closed_loop_slew'):
+   name=profile_id+'.confirmed.json'
+   if (self.run_dir/name).is_file(): artifacts[profile_id+'_confirmation']=name
   metric_artifacts=best.get('metrics',{}).get('artifacts',{}) if isinstance(best.get('metrics'),Mapping) else {}
   for analysis,items in metric_artifacts.items():
    if isinstance(items,Mapping):
     for kind,value in items.items(): artifacts['dc.%s.%s'%(analysis,kind)]='best_replay/'+str(value).replace('\\','/')
-  return {'best':best,'pvt':pvt,'failures':[],'artifacts':artifacts}
+  return {'best':best,'pvt':pvt,'profile_evidence_required':self._requires_profile_evidence(),'failures':[],'artifacts':artifacts}

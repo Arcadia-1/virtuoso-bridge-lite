@@ -355,3 +355,17 @@ def test_pvt_boundary_strictly_validates_values(tmp_path,change,match):
 def test_pvt_quantity_strings_are_normalized_to_si(tmp_path):
  config=load_config(write_config(tmp_path,minimal_config()))
  assert config.pvt=={'corners':['TT'],'voltages':[3.3],'temperatures_c':[27.0],'voltage_stimulus':'VDD'}
+
+
+def test_pvt_profile_point_selections_are_preserved_and_profile_bound(tmp_path):
+ data=minimal_config()
+ data['verification_profiles']=[{
+  'id':'report','role':'report','testbench_cell':'report_tb','dut_instance':'DUT',
+  'stimuli':{},'analyses':[],'metrics':[],'specs':[],'pvt_policy':'selected',
+ }]
+ data['pvt']['profile_points']={'report':['tt-v1-t1']}
+ config=load_config(write_config(tmp_path,data))
+ assert config.pvt['profile_points']=={'report':['tt-v1-t1']}
+ data['pvt']['profile_points']={'missing':['tt-v1-t1']}
+ with pytest.raises(ConfigError,match='profile_points'):
+  load_config(write_config(tmp_path,data))

@@ -10,7 +10,7 @@ from analog_opt.metrics import extract_ac_metrics,extract_mos_op_metrics,extract
 from analog_opt.parameters import ParameterSpace,ParameterSpec
 from analog_opt.profile_testbenches import confirm_profile_netlist
 from analog_opt.profiles import MultiProfileBackend,ProfileRuntime
-from analog_opt.pvt import PvtConfig
+from analog_opt.pvt import PvtConfig,build_profile_pvt_jobs,build_pvt_points
 from analog_opt.search import SearchConfig,run_search
 from analog_opt.slew import extract_closed_loop_slew
 from analog_opt.specs import Spec,evaluate_specs
@@ -351,8 +351,10 @@ class PublicationAdapter:
  def __getattr__(self,name): return getattr(self._applier,name)
  def publish_result_cell(self,*args):
   self._applier.publish_result_cell(*args)
-  intent=json.loads((self.run_dir/'publication.json').read_text(encoding='utf-8')); atomic_write_json(self.run_dir/'publication.confirmed.json',{'candidate_hash':intent['candidate_hash']})
- def confirm_result_cell(self,library,result_cell,candidate_hash):
+  intent=json.loads((self.run_dir/'publication.json').read_text(encoding='utf-8')); marker={'candidate_hash':intent['candidate_hash']}
+  if intent.get('profile_summary_hash') is not None: marker['profile_summary_hash']=intent['profile_summary_hash']
+  atomic_write_json(self.run_dir/'publication.confirmed.json',marker)
+ def confirm_result_cell(self,library,result_cell,candidate_hash,profile_summary_hash=None):
   try:
    if hasattr(self._applier,'client'):
     bridge=self._applier.client.execute_skill('let((schematic symbol) schematic=dbOpenCellViewByType(\"%s\" \"%s\" \"schematic\" \"schematic\" \"r\") symbol=dbOpenCellViewByType(\"%s\" \"%s\" \"symbol\" nil \"r\") prog1(if(schematic&&symbol t nil) progn(when(schematic dbClose(schematic)) when(symbol dbClose(symbol)))))'%(library,result_cell,library,result_cell),timeout=30)
@@ -362,9 +364,12 @@ class PublicationAdapter:
    else: exists=False
    if exists is not True: return False
    candidate=self.candidate_provider()
-   if not self.specs:
+   if profile_summary_hash is not None or not self.specs:
     intent=json.loads((self.run_dir/'publication.json').read_text(encoding='utf-8')); marker=json.loads((self.run_dir/'publication.confirmed.json').read_text(encoding='utf-8'))
-    return intent.get('candidate_hash')==candidate_hash and marker.get('candidate_hash')==candidate_hash and intent.get('parameters')==candidate
+    hashes_match=intent.get('candidate_hash')==candidate_hash and marker.get('candidate_hash')==candidate_hash and intent.get('parameters')==candidate
+    if profile_summary_hash is not None: hashes_match=hashes_match and intent.get('profile_summary_hash')==profile_summary_hash and marker.get('profile_summary_hash')==profile_summary_hash
+    if hashes_match is not True: return False
+    if not self.specs: return True
    actual=self._applier.read_cdf(library,result_cell,self.specs); expected={k:v for k,v in candidate.items() if k in {s.name for s in self.specs}}
    return set(actual)==set(expected) and all(math.isfinite(float(actual[k])) and math.isclose(float(actual[k]),float(v),rel_tol=1e-9,abs_tol=1e-15) for k,v in expected.items())
   except Exception: return False
@@ -406,6 +411,13 @@ def _pvt_settings(config):
   voltages=(nominal if nominal is not None else 1.0,)
  return PvtConfig(tuple(raw.get('corners',('TT',))),voltages,tuple(raw.get('temperatures',raw.get('temperatures_c',(25.,))))),voltage_stimulus,explicit
 
+def _profile_ids_by_pvt_point(config,pvt_config):
+ points=build_pvt_points(pvt_config)
+ jobs=build_profile_pvt_jobs(config.verification_profiles,points,selections=config.pvt.get('profile_points',{}))
+ selected={point.point_id:[] for point in points}
+ for job in jobs: selected[job.point.point_id].append(job.profile_id)
+ return selected
+
 class _ReadbackOnlyApplier:
  def __init__(self,applier): self.applier=applier
  def apply_cdf(self,*args,**kwargs): return None
@@ -441,12 +453,13 @@ def create_workflow(config,run_dir):
     return profile_backend(candidate,directory,conditions)
    runtimes.append(ProfileRuntime(profile.id,call,required=True))
   backend=MultiProfileBackend(apply_candidate,runtimes)
- evaluator=CandidateEvaluator(backend); space=ParameterSpace(specs); search=SearchConfig(config.search.get('method','random'),config.search.get('evaluations',20),config.search.get('seed',0)); pvt,voltage_stimulus,pvt_voltage_override=_pvt_settings(config)
+ evaluator=CandidateEvaluator(backend); space=ParameterSpace(specs); search=SearchConfig(config.search.get('method','random'),config.search.get('evaluations',20),config.search.get('seed',0)); pvt,voltage_stimulus,pvt_voltage_override=_pvt_settings(config); pvt_profile_ids=None if legacy else _profile_ids_by_pvt_point(config,pvt)
  def evaluate(candidate,directory,conditions=None):
   holder['candidate']=dict(candidate); directory.mkdir(parents=True,exist_ok=True); raw_result=backend(candidate,directory,conditions or {})
   return EvaluationResult(directory.name,raw_result['objective'],raw_result.get('success',True),raw_result.get('metrics',{}),raw_result.get('metadata',{}),raw_result.get('failure'),raw_result.get('specs',{}))
  def pvt_eval(point,candidate,directory):
   conditions={'corner':point.corner,'temperature':point.temperature}
   if pvt_voltage_override: conditions.update(voltage=point.voltage,voltage_stimulus=voltage_stimulus)
+  if pvt_profile_ids is not None: conditions['_profile_ids']=pvt_profile_ids[point.point_id]
   return evaluate(candidate,directory,conditions)
  return OptimizationWorkflow(root,config_payload=canonical_resolved_payload(config),library=config.design.library,source_cell=config.design.cell,work_cell=config.design.work_cell,result_cell=config.design.result_cell,parameter_specs=specs,applier=applier,evaluator=evaluator,search_config=search,search_runner=lambda resume:run_search(root,space,evaluator,search,resume=resume),replay=evaluate,pvt_config=pvt,pvt_evaluator=pvt_eval)

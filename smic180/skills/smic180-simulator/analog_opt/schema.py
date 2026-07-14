@@ -305,6 +305,8 @@ def _parse_verification_profiles(
         policy = raw.get('pvt_policy', 'full')
         if policy not in _PROFILE_PVT_POLICIES:
             raise ConfigError(location + '.pvt_policy is invalid')
+        if policy != 'full' and parsed_specs:
+            raise ConfigError(location + ' non-full PVT policy requires a report-only profile')
         timeout = raw.get('timeout_s', 1800)
         if type(timeout) is not int or timeout <= 0:
             raise ConfigError(location + '.timeout_s must be a positive integer')
@@ -361,9 +363,21 @@ def _parse_pvt(value: Any, stimuli: Mapping[str, StimulusConfig]) -> Dict[str, A
         raise ConfigError("pvt.voltage_stimulus is required when voltages are configured")
     if voltage_stimulus is not None and (voltage_stimulus not in stimuli or stimuli[voltage_stimulus].kind != "voltage"):
         raise ConfigError("pvt.voltage_stimulus must reference a voltage stimulus")
-    result = {"corners": corners, "voltages": voltages, "temperatures_c": temperatures}
+    profile_points_raw = raw.get('profile_points', {})
+    if not isinstance(profile_points_raw, Mapping):
+        raise ConfigError('pvt.profile_points must be a mapping')
+    profile_points = {}
+    for profile_id, point_ids in profile_points_raw.items():
+        if not isinstance(profile_id, str) or not profile_id or not isinstance(point_ids, list) or not point_ids:
+            raise ConfigError('pvt.profile_points entries must be non-empty lists')
+        if any(not isinstance(point_id, str) or not point_id for point_id in point_ids) or len(set(point_ids)) != len(point_ids):
+            raise ConfigError('pvt.profile_points point IDs must be unique non-empty strings')
+        profile_points[profile_id] = list(point_ids)
+    result = {'corners': corners, 'voltages': voltages, 'temperatures_c': temperatures}
     if voltage_stimulus is not None:
         result["voltage_stimulus"] = voltage_stimulus
+    if profile_points:
+        result['profile_points'] = profile_points
     return result
 
 
@@ -416,6 +430,15 @@ def load_config(path: Union[str, Path]) -> AnalogOptConfig:
         analyses, metrics, specs,
     )
     pvt = _parse_pvt(data['pvt'], parsed_stimuli)
+    profile_points = pvt.get('profile_points', {})
+    profiles_by_id = {profile.id: profile for profile in verification_profiles}
+    if set(profile_points) - set(profiles_by_id):
+        raise ConfigError('pvt.profile_points references an unknown verification profile')
+    for profile in verification_profiles:
+        if profile.pvt_policy == 'selected' and profile.id not in profile_points:
+            raise ConfigError('pvt.profile_points is required for selected verification profile '+profile.id)
+        if profile.id in profile_points and profile.pvt_policy != 'selected':
+            raise ConfigError('pvt.profile_points is only valid for selected verification profiles')
     return AnalogOptConfig(
         version=2,
         design=design,
