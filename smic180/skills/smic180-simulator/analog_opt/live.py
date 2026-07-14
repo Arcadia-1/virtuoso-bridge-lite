@@ -8,6 +8,7 @@ from analog_opt.apply import VirtuosoApplier
 from analog_opt.evaluator import CandidateEvaluator,EvaluationResult,atomic_write_json
 from analog_opt.metrics import extract_ac_metrics,extract_mos_op_metrics,extract_noise_metrics,extract_tran_metrics,merge_metrics
 from analog_opt.parameters import ParameterSpace,ParameterSpec
+from analog_opt.profiles import MultiProfileBackend,ProfileRuntime
 from analog_opt.pvt import PvtConfig
 from analog_opt.search import SearchConfig,run_search
 from analog_opt.slew import extract_closed_loop_slew
@@ -373,13 +374,17 @@ def _spec_eval(specs):
   summary=evaluate_specs(metrics,specs); return {'objective':summary.total,'passed':summary.passed,'results':{x.spec.metric:{'passed':x.passed,'violation':x.violation} for x in summary.results}}
  return call
 
-def _build_runtime_adapters(client,config,specs,run_dir):
+def _build_runtime_adapters(client,config,specs,run_dir,profile=None):
  from sim_io.site_config import SiteConfig
  from sim_io.sim.run import export_netlist,run_spectre
  from sim_io.sim.config import resolve_sim_config
- site=SiteConfig.from_env(); netlist=NetlistAdapter(client,site,library=config.design.library,source_tb=config.design.testbench_cell,work_cell=config.design.work_cell,dut_instance=config.design.dut_instance,exporter=export_netlist,base_deck_factory=lambda **k:resolve_sim_config(run_dir=run_dir,lib=k['library'],cell=k['cell']),corner_patcher=lambda deck,corner:patch_smic180_corner(deck,corner,core_model_include=site.pdk_core_spectre_include)); netlist.analyses=config.analyses
+ site=SiteConfig.from_env()
+ source_tb=profile.testbench_cell if profile is not None else config.design.testbench_cell
+ dut_instance=profile.dut_instance if profile is not None else config.design.dut_instance
+ analyses=[dict(item,profile_id=profile.id) for item in profile.analyses] if profile is not None else config.analyses
+ netlist=NetlistAdapter(client,site,library=config.design.library,source_tb=source_tb,work_cell=config.design.work_cell,dut_instance=dut_instance,exporter=export_netlist,base_deck_factory=lambda **k:resolve_sim_config(run_dir=run_dir,lib=k['library'],cell=k['cell']),corner_patcher=lambda deck,corner:patch_smic180_corner(deck,corner,core_model_include=site.pdk_core_spectre_include)); netlist.analyses=analyses
  runner=AnalysisRunner(lambda path,directory:run_spectre(path,directory,site=site,client=client))
- return VirtuosoApplier(client),netlist,runner,MetricsAdapter(config.analyses)
+ return VirtuosoApplier(client),netlist,runner,MetricsAdapter(analyses)
 
 def _pvt_settings(config):
  raw=dict(config.pvt); explicit=bool(raw.get('voltages'))
@@ -396,10 +401,45 @@ def _pvt_settings(config):
   voltages=(nominal if nominal is not None else 1.0,)
  return PvtConfig(tuple(raw.get('corners',('TT',))),voltages,tuple(raw.get('temperatures',raw.get('temperatures_c',(25.,))))),voltage_stimulus,explicit
 
+class _ReadbackOnlyApplier:
+ def __init__(self,applier): self.applier=applier
+ def apply_cdf(self,*args,**kwargs): return None
+ def __getattr__(self,name): return getattr(self.applier,name)
+
 def create_workflow(config,run_dir):
- client=_load_client_class().from_env(); specs=tuple(_parameter(x) for x in config.parameters); declarations=tuple(_spec(x) for x in config.specs); raw,netlist,runner,metrics=_build_runtime_adapters(client,config,specs,run_dir); holder={}
- applier=PublicationAdapter(raw,run_dir,specs,lambda:holder.get('candidate',{})); backend=AnalogSimulationBackend(config.design.library,config.design.work_cell,specs,config.stimuli,config.analyses,declarations,applier=applier,netlist=netlist,runner=runner,metric_extractor=metrics,spec_evaluator=_spec_eval(declarations)); evaluator=CandidateEvaluator(backend); space=ParameterSpace(specs); search=SearchConfig(config.search.get('method','random'),config.search.get('evaluations',20),config.search.get('seed',0)); pvt,voltage_stimulus,pvt_voltage_override=_pvt_settings(config); root=Path(run_dir)
- def evaluate(candidate,directory,conditions=None): holder['candidate']=dict(candidate); directory.mkdir(parents=True,exist_ok=True); raw_result=backend(candidate,directory,conditions or {}); return EvaluationResult(directory.name,raw_result['objective'],True,raw_result['metrics'],raw_result['metadata'],None,raw_result['specs'])
+ client=_load_client_class().from_env(); specs=tuple(_parameter(x) for x in config.parameters); holder={}; root=Path(run_dir)
+ profiles=tuple(config.verification_profiles)
+ legacy=len(profiles)==1 and profiles[0].id=='default' and profiles[0].role=='legacy'
+ if legacy:
+  declarations=tuple(_spec(x) for x in config.specs)
+  raw,netlist,runner,metrics=_build_runtime_adapters(client,config,specs,run_dir)
+  applier=PublicationAdapter(raw,run_dir,specs,lambda:holder.get('candidate',{}))
+  backend=AnalogSimulationBackend(config.design.library,config.design.work_cell,specs,config.stimuli,config.analyses,declarations,applier=applier,netlist=netlist,runner=runner,metric_extractor=metrics,spec_evaluator=_spec_eval(declarations))
+ else:
+  built=[]
+  for profile in profiles:
+   raw,netlist,runner,metrics=_build_runtime_adapters(client,config,specs,run_dir,profile=profile)
+   declarations=tuple(_spec(x) for x in profile.specs)
+   profile_analyses=tuple(dict(item,profile_id=profile.id) for item in profile.analyses)
+   profile_backend=AnalogSimulationBackend(config.design.library,config.design.work_cell,specs,profile.stimuli,profile_analyses,declarations,applier=_ReadbackOnlyApplier(raw),netlist=netlist,runner=runner,metric_extractor=metrics,spec_evaluator=_spec_eval(declarations))
+   built.append((profile,raw,profile_backend))
+  applier=PublicationAdapter(built[0][1],run_dir,specs,lambda:holder.get('candidate',{}))
+  cdf_specs=tuple(spec for spec in specs if spec.target=='virtuoso_cdf')
+  expected={spec.name for spec in specs}
+  def apply_candidate(candidate):
+   if set(candidate)!=expected: raise ValueError('candidate parameters must exactly match configuration')
+   holder['candidate']=dict(candidate)
+   if cdf_specs: applier.apply_cdf(config.design.library,config.design.work_cell,cdf_specs,{spec.name:candidate[spec.name] for spec in cdf_specs})
+  runtimes=[]
+  for profile,raw,profile_backend in built:
+   def call(candidate,directory,conditions,profile_backend=profile_backend):
+    return profile_backend(candidate,directory,conditions)
+   runtimes.append(ProfileRuntime(profile.id,call,required=True))
+  backend=MultiProfileBackend(apply_candidate,runtimes)
+ evaluator=CandidateEvaluator(backend); space=ParameterSpace(specs); search=SearchConfig(config.search.get('method','random'),config.search.get('evaluations',20),config.search.get('seed',0)); pvt,voltage_stimulus,pvt_voltage_override=_pvt_settings(config)
+ def evaluate(candidate,directory,conditions=None):
+  holder['candidate']=dict(candidate); directory.mkdir(parents=True,exist_ok=True); raw_result=backend(candidate,directory,conditions or {})
+  return EvaluationResult(directory.name,raw_result['objective'],raw_result.get('success',True),raw_result.get('metrics',{}),raw_result.get('metadata',{}),raw_result.get('failure'),raw_result.get('specs',{}))
  def pvt_eval(point,candidate,directory):
   conditions={'corner':point.corner,'temperature':point.temperature}
   if pvt_voltage_override: conditions.update(voltage=point.voltage,voltage_stimulus=voltage_stimulus)

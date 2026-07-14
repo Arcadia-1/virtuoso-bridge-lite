@@ -197,6 +197,28 @@ def test_metrics_adapter_uses_closed_loop_slew_only_for_explicit_mode():
  assert metrics[prefix+'slew_fall_v_per_s']==pytest.approx(2e5)
  assert metrics['curves']['step']['slew_evidence']['method']=='least_squares_20_80'
 
+def test_create_workflow_builds_one_runtime_per_explicit_profile(tmp_path,monkeypatch):
+ from analog_opt.live import create_workflow
+ from analog_opt.profiles import MultiProfileBackend
+ from analog_opt.schema import load_config
+ from test_profiles import explicit_profile
+ from test_schema import minimal_config,write_config
+ data=minimal_config(); second=explicit_profile('stability','amp_stability_tb')
+ data['verification_profiles']=[explicit_profile(),second]
+ config=load_config(write_config(tmp_path,data)); calls=[]
+ class ClientClass:
+  @classmethod
+  def from_env(cls): return object()
+ class Raw: pass
+ monkeypatch.setattr('analog_opt.live._load_client_class',lambda:ClientClass)
+ def build(client,config,specs,run_dir,profile=None):
+  calls.append(profile.id if profile else 'legacy')
+  return Raw(),object(),object(),lambda results:{}
+ monkeypatch.setattr('analog_opt.live._build_runtime_adapters',build)
+ workflow=create_workflow(config,tmp_path/'run')
+ assert calls==['open_loop','stability']
+ assert isinstance(workflow.evaluator.backend,MultiProfileBackend)
+
 @pytest.mark.parametrize('data,mtimes,match',[
  ({'stb_freq':[1.,10.]},{'stb_freq':101.},'unavailable'),
  ({'stb_freq':[1.,10.],'a':[2+0j,1+0j],'b':[2+0j,1+0j]},

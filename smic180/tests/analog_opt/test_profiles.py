@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from analog_opt.profiles import VerificationProfileConfig
+from analog_opt.profiles import MultiProfileBackend, ProfileRuntime, VerificationProfileConfig
 from analog_opt.schema import ConfigError, canonical_resolved_payload, load_config
 from test_schema import minimal_config, write_config
 
@@ -86,3 +86,88 @@ def test_profile_spec_must_reference_declared_metric(tmp_path):
     data['verification_profiles'] = [profile]
     with pytest.raises(ConfigError, match='profile spec metric must exist'):
         load_config(write_config(tmp_path, data))
+
+
+def test_multi_profile_backend_applies_candidate_once_and_aggregates(tmp_path):
+    applied = []
+    calls = []
+
+    def evaluate(profile_id, metric, objective):
+        def call(candidate, directory, conditions):
+            calls.append((profile_id, directory.relative_to(tmp_path).as_posix(), dict(conditions)))
+            return {
+                'objective': objective, 'success': True,
+                'metrics': {metric: objective},
+                'specs': {metric: {'passed': True, 'violation': 0.0}},
+                'metadata': {'profile_id': profile_id},
+            }
+        return call
+
+    backend = MultiProfileBackend(
+        lambda candidate: applied.append(dict(candidate)),
+        [
+            ProfileRuntime('open_loop', evaluate('open_loop', 'ac.gain', 1.0)),
+            ProfileRuntime('stability', evaluate('stability', 'stb.pm', 2.0)),
+            ProfileRuntime('closed_loop_slew', evaluate('closed_loop_slew', 'tran.slew', 3.0)),
+        ],
+    )
+    result = backend({'W': 10e-6}, tmp_path, {'corner': 'TT'})
+    assert applied == [{'W': 10e-6}]
+    assert [item[0] for item in calls] == ['open_loop', 'stability', 'closed_loop_slew']
+    assert result['objective'] == pytest.approx(6.0)
+    assert set(result['metrics']) == {'ac.gain', 'stb.pm', 'tran.slew'}
+    assert list(result['metadata']['profiles']) == ['open_loop', 'stability', 'closed_loop_slew']
+    assert all('/profiles/' in '/' + item[1] + '/' for item in calls)
+
+
+def test_required_profile_failure_returns_finite_penalty(tmp_path):
+    def fail(candidate, directory, conditions):
+        raise RuntimeError('missing loop-gain trace')
+
+    backend = MultiProfileBackend(
+        lambda candidate: None,
+        [ProfileRuntime('stability', fail)],
+        failure_penalty=1e12,
+    )
+    result = backend({'W': 10e-6}, tmp_path)
+    assert result['success'] is False
+    assert result['objective'] == pytest.approx(1e12)
+    assert result['failure']['category'] == 'profile'
+    assert result['metadata']['failure_detail']['profile_id'] == 'stability'
+    assert result['metadata']['failure_detail']['stage'] == 'evaluation'
+
+
+def test_multi_profile_backend_resumes_after_interruption(tmp_path):
+    first_calls = []
+    second_calls = []
+
+    def first(candidate, directory, conditions):
+        first_calls.append(directory)
+        return {'objective': 1.0, 'success': True, 'metrics': {'a': 1.0}, 'specs': {}, 'metadata': {}}
+
+    def interrupt(candidate, directory, conditions):
+        raise KeyboardInterrupt()
+
+    interrupted = MultiProfileBackend(
+        lambda candidate: None,
+        [ProfileRuntime('first', first), ProfileRuntime('second', interrupt)],
+    )
+    with pytest.raises(KeyboardInterrupt):
+        interrupted({'W': 10e-6}, tmp_path)
+
+    def second(candidate, directory, conditions):
+        second_calls.append(directory)
+        return {'objective': 2.0, 'success': True, 'metrics': {'b': 2.0}, 'specs': {}, 'metadata': {}}
+
+    resumed = MultiProfileBackend(
+        lambda candidate: None,
+        [
+            ProfileRuntime('first', lambda *args: pytest.fail('completed profile reran')),
+            ProfileRuntime('second', second),
+        ],
+    )
+    result = resumed({'W': 10e-6}, tmp_path)
+    assert result['success'] is True
+    assert len(first_calls) == 1
+    assert len(second_calls) == 1
+    assert result['metadata']['resumed_profiles'] == ['first']
