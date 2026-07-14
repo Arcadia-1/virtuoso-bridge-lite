@@ -11,6 +11,7 @@ from analog_opt.parameters import ParameterSpace,ParameterSpec
 from analog_opt.pvt import PvtConfig
 from analog_opt.search import SearchConfig,run_search
 from analog_opt.specs import Spec,evaluate_specs
+from analog_opt.stability import extract_stability_metrics
 from analog_opt.schema import canonical_resolved_payload
 from analog_opt.workflow import AnalogSimulationBackend,OptimizationWorkflow
 from analog_opt.units import parse_quantity
@@ -282,6 +283,12 @@ class MetricsAdapter:
    if kind=='stb':
     freq,response,result_key=self.load_complex_analysis(result,analysis)
     curves[name]={'frequency':freq,'response':[[float(value.real),float(value.imag)] for value in response],'result_key':result_key}
+    if analysis.get('metric_mode')=='stability':
+     maps.append(extract_stability_metrics(
+      analysis.get('profile_id','default'),name,freq,response,
+      crossing_policy=analysis.get('crossing_policy','single'),
+      require_gain_margin=analysis.get('require_gain_margin',True),
+     ))
    elif kind=='ac':
     response=data.get('ac:'+signal); freq=data.get('freq'); maps.append(extract_ac_metrics(name,freq,response)); curves[name]={'frequency':freq,'response':[[float(v.real),float(v.imag)] if isinstance(v,complex) else float(v) for v in response] if response is not None else None}
    elif kind=='noise':

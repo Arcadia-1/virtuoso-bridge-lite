@@ -160,6 +160,22 @@ def test_metrics_adapter_preserves_validated_stb_curve_without_ac_metrics():
  assert metrics['curves']['loop']['response']==[[10.0,0.0],[1.0,-1.0]]
  assert not any(name.startswith('ac.') for name in metrics)
 
+def test_metrics_adapter_extracts_stability_only_for_explicit_metric_mode():
+ import cmath
+ analysis={
+  'name':'loop','type':'stb','metric_mode':'stability','profile_id':'stability',
+  'result_candidates':['stb:loop_gain'],'frequency_candidates':['stb_freq'],
+ }
+ magnitudes=[40.,20.,0.,-20.]; phases=[-90.,-110.,-120.,-200.]
+ response=[10**(magnitude/20.)*cmath.exp(1j*math.radians(phase)) for magnitude,phase in zip(magnitudes,phases)]
+ result=type('R',(),{
+  'ok':True,'data':{'stb_freq':[1e3,1e4,1e5,1e6],'stb:loop_gain':response},
+  'metadata':{'analysis_started_at':100.,'result_mtimes':{'stb_freq':101.,'stb:loop_gain':101.}},
+ })()
+ metrics=MetricsAdapter([analysis])({'loop':result})
+ assert metrics['stb.stability.loop.phase_margin_deg']==pytest.approx(60.)
+ assert metrics['stb.stability.loop.gain_margin_db']==pytest.approx(15.)
+
 @pytest.mark.parametrize('data,mtimes,match',[
  ({'stb_freq':[1.,10.]},{'stb_freq':101.},'unavailable'),
  ({'stb_freq':[1.,10.],'a':[2+0j,1+0j],'b':[2+0j,1+0j]},
