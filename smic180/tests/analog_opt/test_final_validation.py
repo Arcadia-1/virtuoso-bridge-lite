@@ -24,6 +24,18 @@ def published_run(tmp_path):
     (tmp_path / "workflow_state.json").write_text(json.dumps({"state": "published"}))
 
 
+def published_profile_run(tmp_path):
+    published_run(tmp_path)
+    config = json.loads((tmp_path / "analog_opt_config.resolved.json").read_text())
+    config["verification_profiles"] = [
+        {"id": "stability", "role": "unity_gain_stability", "testbench_cell": "amp_stability_tb", "dut_instance": "DUT"},
+        {"id": "closed_loop_slew", "role": "closed_loop_slew", "testbench_cell": "amp_slew_tb", "dut_instance": "DUT"},
+    ]
+    (tmp_path / "analog_opt_config.resolved.json").write_text(json.dumps(config))
+    (tmp_path / "publication.json").write_text(json.dumps({"candidate_hash": "abc123", "profile_summary_hash": "p" * 64, "parameters": {}}))
+    (tmp_path / "publication.confirmed.json").write_text(json.dumps({"candidate_hash": "abc123", "profile_summary_hash": "p" * 64}))
+
+
 def test_final_validation_module_is_isolated_to_optimizer_v2():
     result = run_code("import analog_opt.final_validation as m; print(m.__file__)")
     assert result.returncode == 0, result.stderr
@@ -43,6 +55,42 @@ def test_final_validation_derives_isolated_final_tb(tmp_path):
     result = run_code(code, tmp_path)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "tr amp_result amp_baseline_tb amp_result_tb"
+
+
+def test_final_profiles_are_persistent_and_isolated(tmp_path):
+    published_profile_run(tmp_path)
+    code = "from analog_opt.final_validation import load_published_context,build_final_profile_plan; c=load_published_context(__import__('sys').argv[1]); p=build_final_profile_plan(c); print([(x.profile_id,x.baseline_testbench,x.final_testbench) for x in p])"
+    result = run_code(code, tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "[('stability', 'amp_stability_tb', 'amp_result_stability_tb'), ('closed_loop_slew', 'amp_slew_tb', 'amp_result_closed_loop_slew_tb')]"
+
+
+def test_final_profile_plan_rejects_collision_with_another_baseline(tmp_path):
+    published_profile_run(tmp_path)
+    config_path = tmp_path / "analog_opt_config.resolved.json"
+    config = json.loads(config_path.read_text())
+    config["verification_profiles"][1]["testbench_cell"] = "amp_result_stability_tb"
+    config_path.write_text(json.dumps(config))
+    code = "from analog_opt.final_validation import load_published_context,build_final_profile_plan; build_final_profile_plan(load_published_context(__import__('sys').argv[1]))"
+    result = run_code(code, tmp_path)
+    assert result.returncode != 0 and "isolated" in result.stderr
+
+
+def test_profile_confirmation_requires_every_profile(tmp_path):
+    code = "from analog_opt.final_validation import write_profile_confirmation as f; checks={'stability':{k:True for k in ('result_exists','final_tb_exists','dut_uses_result','netlist_uses_result','spectre_passed','pvt_passed','fresh_results')}}; f(__import__('sys').argv[1],checks,{'required_profile_ids':['stability','closed_loop_slew']})"
+    result = run_code(code, tmp_path)
+    assert result.returncode != 0 and "closed_loop_slew" in result.stderr
+
+
+def test_published_profile_context_requires_matching_profile_summary_hash(tmp_path):
+    published_profile_run(tmp_path)
+    code = "from analog_opt.final_validation import load_published_context as f; print(f(__import__('sys').argv[1]).profile_summary_hash)"
+    result = run_code(code, tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "p" * 64
+    (tmp_path / "publication.confirmed.json").write_text(json.dumps({"candidate_hash": "abc123", "profile_summary_hash": "wrong"}))
+    result = run_code(code, tmp_path)
+    assert result.returncode != 0 and "profile summary" in result.stderr
 
 
 def test_final_netlist_must_reference_result_and_reject_work_cell():
@@ -83,6 +131,13 @@ def test_final_pvt_uses_evaluation_result_contract():
     result = run_code(code)
     assert result.returncode == 0, result.stderr
 
+
+def test_report_only_profile_pvt_summary_accepts_empty_spec_set():
+    code = "from analog_opt.final_validation_live import _profile_pvt_payload as f; from analog_opt.pvt import PvtConfig,build_pvt_points; p=build_pvt_points(PvtConfig(('tt',),(1.8,),(25.0,)))[0]; r={'point_id':p.point_id,'corner':p.corner,'voltage':p.voltage,'temperature':p.temperature,'parameters':{},'metrics':{'noise':1.0},'metadata':{},'success':True,'objective':0.0,'specs':{},'failure':None}; print(f((p,),(r,),()))"
+    result = run_code(code)
+    assert result.returncode == 0, result.stderr
+    assert "'overall_passed': True" in result.stdout
+
 def test_cli_exposes_verify_result_without_removing_existing_commands():
     script = ROOT / "scripts" / "analog_optimize.py"
     result = subprocess.run([sys.executable, str(script), "--help"], text=True, capture_output=True)
@@ -116,6 +171,12 @@ def test_published_context_preserves_publication_parameters(tmp_path):
 
 def test_final_validation_live_has_guarded_resume_path():
     code = "import inspect,analog_opt.final_validation_live as m; s=inspect.getsource(m.verify_result); assert 'final_validation.confirmed.json' in s and '_final_tb_uses_result' in s and 'reuse_existing_final' in s"
+    result = run_code(code)
+    assert result.returncode == 0, result.stderr
+
+
+def test_profile_final_confirmation_binds_replay_artifact_hashes():
+    code = "import inspect,analog_opt.final_validation_live as m; s=inspect.getsource(m._verify_profile_results); assert all(name in s for name in ('final_netlist_hash','nominal_result_hash','pvt_results_hash','upstream_confirmation_hash'))"
     result = run_code(code)
     assert result.returncode == 0, result.stderr
 
