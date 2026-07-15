@@ -591,7 +591,7 @@ class SSHClient:
             try:
                 os.kill(pid, 0)
                 return True
-            except (OSError, PermissionError):
+            except (OSError, PermissionError, SystemError):
                 pass
         return False
 

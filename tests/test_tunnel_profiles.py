@@ -219,3 +219,22 @@ def test_status_allows_cross_user_with_explicit_override(monkeypatch, capsys) ->
     out = capsys.readouterr().out
     assert rc == 0
     assert "[daemon identity] FAILED" not in out
+
+
+def test_is_running_treats_windows_stale_pid_systemerror_as_stopped(monkeypatch) -> None:
+    monkeypatch.setattr(
+        SSHClient,
+        "read_state",
+        staticmethod(lambda profile=None: {"mode": "remote", "port": 65471, "tunnel_pid": 19684}),
+    )
+
+    def refused(*args, **kwargs):
+        raise OSError("port closed")
+
+    def invalid_pid(*args, **kwargs):
+        raise SystemError("os.kill failed")
+
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.socket.create_connection", refused)
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.os.kill", invalid_pid)
+
+    assert SSHClient.is_running() is False
