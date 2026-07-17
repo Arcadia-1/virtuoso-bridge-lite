@@ -300,8 +300,64 @@ def cli_stop() -> int:
 
 # -- restart ----------------------------------------------------------------
 
+def _restart_daemon_one(profile: str | None) -> None:
+    """Ask the CIW-side RAMIC loader to restart the daemon for this profile."""
+    from virtuoso_bridge.daemon_guard import check_daemon_user
+    from virtuoso_bridge.models import ExecutionStatus
+    from virtuoso_bridge.transport.tunnel import SSHClient
+    from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
+    from virtuoso_bridge.virtuoso.ops import escape_skill_string
+
+    state = SSHClient.read_state(profile)
+    if not state or not state.get("port"):
+        return
+
+    label = f" [{profile}]" if profile else ""
+    setup_path = str(state.get("setup_path") or "")
+    if setup_path:
+        skill = f'RBStop()\nload("{escape_skill_string(setup_path)}")'
+    else:
+        skill = "RBStop()\nRBStart()"
+
+    print(f"Restarting daemon{label}...")
+    client = VirtuosoClient(
+        host="127.0.0.1",
+        port=int(state["port"]),
+        timeout=5,
+        log_to_ciw=False,
+    )
+    try:
+        user_check = check_daemon_user(client, profile=profile, timeout=5)
+    except Exception as exc:
+        print(f"[warning] Could not check daemon before restart{label}: {exc}")
+        return
+    if not user_check.ok:
+        print(f"[warning] Refusing to restart daemon{label}: {user_check.error}")
+        return
+
+    result = client.execute_skill(skill, timeout=5)
+    if result.status == ExecutionStatus.SUCCESS:
+        print(f"Daemon restart requested{label}.")
+        return
+
+    details = "; ".join(result.errors) or result.output or "unknown error"
+    expected_disconnect = (
+        "Empty response from daemon",
+        "Connection reset",
+        "Broken pipe",
+    )
+    if any(fragment in details for fragment in expected_disconnect):
+        print(
+            f"Daemon restart requested{label} "
+            "(old daemon closed the connection while restarting)."
+        )
+        return
+
+    print(f"[warning] Could not restart daemon{label}: {details}")
+
+
 def _restart_one() -> int:
-    """Restart tunnel for the current profile."""
+    """Restart tunnel and request daemon restart for the current profile."""
     profile = _get_cli_profile()
     from virtuoso_bridge.transport.tunnel import SSHClient
 
@@ -312,7 +368,10 @@ def _restart_one() -> int:
         ssh.stop()
         time.sleep(0.5)
 
-    return _start_one()
+    rc = _start_one()
+    if rc == 0:
+        _restart_daemon_one(profile)
+    return rc
 
 
 def cli_restart() -> int:
@@ -1378,7 +1437,7 @@ def build_parser() -> argparse.ArgumentParser:
     for name, hlp in [
         ("start", "Start SSH tunnel + deploy daemon"),
         ("stop", "Stop the SSH tunnel"),
-        ("restart", "Restart the SSH tunnel"),
+        ("restart", "Restart SSH tunnel + daemon"),
         ("status", "Check tunnel + daemon status"),
         ("license", "Check Spectre license availability"),
     ]:
