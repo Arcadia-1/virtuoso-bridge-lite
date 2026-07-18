@@ -478,6 +478,12 @@ def _parse_psf_non_swept_data(
     """Parse non-swept PSF ASCII data (e.g. operating-point info files)."""
     data: dict[str, Any] = {}
 
+    struct_fields = _parse_psf_struct_types(
+        lines,
+        sections.get("TYPE", 0) + 1,
+        sections.get("VALUE", n),
+    )
+
     value_start = sections["VALUE"] + 1
     value_end = sections.get("END", n)
 
@@ -485,6 +491,23 @@ def _parse_psf_non_swept_data(
         stripped = lines[i].strip()
         if not stripped or stripped == "END":
             break
+
+        # Per-instance operating-point values use a type-defined STRUCT:
+        #   "M0" "mos" ( <gm> <vth> ... ) PROP(...)
+        # Keep the public result flat so callers can use ``M0:gm`` directly.
+        m_struct = re.match(r'^"([^"]+)"\s+"([^"]+)"\s+\($', stripped)
+        if m_struct and m_struct.group(2) in struct_fields:
+            instance, type_name = m_struct.groups()
+            values: list[Any] = []
+            for j in range(i + 1, value_end):
+                value_line = lines[j].strip()
+                if value_line == ")" or value_line.startswith(") PROP("):
+                    break
+                if value_line:
+                    values.append(_parse_psf_scalar(value_line))
+            for field, value in zip(struct_fields[type_name], values):
+                data[f"{instance}:{field}"] = value
+            continue
 
         # DC OP lines: "M0:gm" "S" 1.906e-04 PROP( ... )
         m_typed = re.match(
@@ -518,3 +541,43 @@ def _parse_psf_non_swept_data(
                 data[name] = raw_value.strip('"')
 
     return data
+
+
+def _parse_psf_struct_types(lines: list[str], start: int, end: int) -> dict[str, list[str]]:
+    """Return ordered member names for each STRUCT declared in a TYPE section."""
+    structs: dict[str, list[str]] = {}
+    current_type: str | None = None
+    depth = 0
+
+    for line in lines[start:end]:
+        stripped = line.strip()
+        if current_type is None:
+            match = re.match(r'^"([^"]+)"\s+STRUCT\($', stripped)
+            if match:
+                current_type = match.group(1)
+                structs[current_type] = []
+                depth = 1
+            continue
+
+        # Members appear one level inside STRUCT; PROP metadata is deeper.
+        member = re.match(r'^"([^"]+)"\s+[A-Z]+(?:\s+[A-Z]+)?(?:\s+PROP\()?$', stripped)
+        if depth == 1 and member:
+            structs[current_type].append(member.group(1))
+
+        depth += stripped.count("(") - stripped.count(")")
+        if depth <= 0:
+            current_type = None
+            depth = 0
+
+    return structs
+
+
+def _parse_psf_scalar(raw_value: str) -> Any:
+    """Parse one scalar from a STRUCT value while preserving non-numeric fields."""
+    value = raw_value.strip()
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        return value[1:-1]
+    try:
+        return float(value)
+    except ValueError:
+        return value

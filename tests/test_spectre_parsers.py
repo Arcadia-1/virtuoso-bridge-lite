@@ -24,6 +24,7 @@ import pytest
 
 from virtuoso_bridge.spectre.parsers import (
     _parse_psf_swept_data,
+    parse_spectre_psf_ascii,
     parse_sweep_psf_directory,
 )
 from virtuoso_bridge.spectre.runner import _build_simulation_result
@@ -200,6 +201,48 @@ def test_sweep_dir_no_layout_returns_empty(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# parse_spectre_psf_ascii — STRUCT operating-point values
+# ---------------------------------------------------------------------------
+
+def test_non_swept_struct_values_are_flattened_by_instance_and_member(tmp_path):
+    """Operating-point info stores device scalars as ordered STRUCT members."""
+    psf_file = tmp_path / "finalTimeOP.info"
+    psf_file.write_text("""\
+HEADER
+"analysis type" "info"
+TYPE
+"nmos" STRUCT(
+"gm" FLOAT DOUBLE PROP(
+"units" "S"
+)
+"vth" FLOAT DOUBLE PROP(
+"units" "V"
+)
+"region" STRING PROP(
+)
+) PROP(
+"key" "inst"
+)
+VALUE
+"M0" "nmos" (
+1.906e-04
+4.500e-01
+"saturation"
+) PROP(
+"model" "nmos"
+)
+END
+""", encoding="utf-8")
+
+    result = parse_spectre_psf_ascii(psf_file)
+
+    assert result.ok
+    assert result.data["M0:gm"] == pytest.approx(1.906e-04)
+    assert result.data["M0:vth"] == pytest.approx(0.45)
+    assert result.data["M0:region"] == "saturation"
+
+
+# ---------------------------------------------------------------------------
 # _build_simulation_result — runner.py wiring
 # ---------------------------------------------------------------------------
 
@@ -254,3 +297,40 @@ def test_build_result_actual_readin_error_still_flagged(tmp_path):
     )
     err_text = " ".join(result.errors).lower()
     assert "netlist read error" in err_text
+
+
+def test_build_result_ignores_successful_convergence_chatter(tmp_path):
+    run = _fake_run_result(
+        tmp_path,
+        stdout="No convergence difficulties encountered.\nsimulation completed.\n",
+    )
+
+    result = _build_simulation_result(run, output_format="psfascii")
+
+    assert result.ok
+    assert "convergence failure" not in result.errors
+
+
+def test_build_result_marks_fatal_output_as_failure_even_with_zero_exit(tmp_path):
+    run = _fake_run_result(
+        tmp_path,
+        stdout="ERROR (SFE-23): instance M0 is invalid\n",
+    )
+
+    result = _build_simulation_result(run, output_format="psfascii")
+
+    assert not result.ok
+    assert result.status.value == "failure"
+    assert result.errors
+
+
+def test_build_result_marks_pss_convergence_failure_with_zero_exit(tmp_path):
+    run = _fake_run_result(
+        tmp_path,
+        stdout="SPCRTRF-15044: PSS analysis failed to converge\n",
+    )
+
+    result = _build_simulation_result(run, output_format="psfascii")
+
+    assert not result.ok
+    assert "convergence failure" in result.errors

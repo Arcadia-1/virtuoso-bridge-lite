@@ -55,6 +55,19 @@ Virtuoso SKILL execution and Spectre simulation are independent. You can run
 Spectre without the SKILL bridge, and you can use the SKILL bridge without
 Spectre.
 
+### Python environment selection
+
+Python entry points discover the nearest parent `.env` containing
+`VB_REMOTE_HOST` or `VB_LOCAL_PORT`, then load it with `override=True`; this can
+change a long-lived process from local to remote mode. Pin the intended file
+before constructing a client when embedding the bridge:
+
+```python
+from virtuoso_bridge.env import set_runtime_env_file
+
+set_runtime_env_file("/path/to/virtuoso-bridge.env")
+```
+
 ## Quick Start
 
 ```bash
