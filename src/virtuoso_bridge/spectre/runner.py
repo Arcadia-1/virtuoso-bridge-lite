@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.resources
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -122,31 +123,43 @@ def _build_spectre_argv(
 def _run_spectre_local(
     *,
     netlist: Path,
+    params: dict | None = None,
     spectre_cmd: str = "spectre",
     spectre_args: list[str] | tuple[str, ...] | None = None,
     timeout: int = 600,
     work_dir: Path | None = None,
     output_format: str | None = "psfascii",
+    cadence_cshrc: str | None = None,
 ) -> _SpectreRunResult:
     """Run Spectre as a local subprocess."""
+    params = params or {}
     cwd = Path(work_dir) if work_dir is not None else artifact_dir("spectre", netlist.stem)
     cwd.mkdir(parents=True, exist_ok=True)
+    for include_file in params.get("include_files", []):
+        include_path = Path(include_file).resolve()
+        if include_path.exists():
+            destination = cwd / include_path.name
+            if include_path != destination.resolve():
+                shutil.copy2(include_path, destination)
     raw_dir = str((Path(cwd) / f"{netlist.stem}.raw").resolve())
     log_file = str((Path(cwd) / f"{netlist.stem}.log").resolve())
     cmd = _build_spectre_argv(
         spectre_cmd=spectre_cmd,
-        spectre_args=spectre_args,
+        spectre_args=list(spectre_args or []) + list(params.get("spectre_args", [])),
         output_format=output_format,
         netlist_path=str(netlist),
         raw_dir=raw_dir,
         log_file=log_file,
     )
     spectre_command = " ".join(shlex.quote(part) for part in cmd)
+    command = cmd
+    if cadence_cshrc:
+        command = ["csh", "-fc", f"source {shlex.quote(cadence_cshrc)}; exec {spectre_command}"]
     logger.debug("Running Spectre locally: %s (cwd=%s)", spectre_command, cwd)
 
     try:
         proc = subprocess.run(
-            cmd,
+            command,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -379,7 +392,7 @@ def _build_simulation_result(
         errors.append("netlist read error (missing include or syntax)")
     elif "license" in combined_lower and ("error" in combined_lower or "denied" in combined_lower):
         errors.append("license error")
-    elif "convergence" in combined_lower:
+    elif _has_convergence_failure(combined):
         errors.append("convergence failure")
     elif "no such file" in combined_lower or "cannot open" in combined_lower:
         errors.append("file not found")
@@ -409,10 +422,19 @@ def _build_simulation_result(
         else []
     )
 
-    if run_result.returncode != 0:
+    has_execution_failure = (
+        has_readin_error
+        or _has_convergence_failure(combined)
+        or _has_fatal_spectre_error(combined)
+    )
+    if run_result.returncode != 0 or has_execution_failure:
         status = ExecutionStatus.PARTIAL if output_files else ExecutionStatus.FAILURE
         if not errors:
-            errors.append(f"exit code {run_result.returncode}")
+            errors.append(
+                f"exit code {run_result.returncode}"
+                if run_result.returncode != 0
+                else "Spectre reported a fatal error"
+            )
     else:
         status = ExecutionStatus.SUCCESS
 
@@ -442,6 +464,27 @@ def _build_simulation_result(
         errors=errors,
         warnings=warnings,
         metadata=metadata,
+    )
+
+
+def _has_convergence_failure(output: str) -> bool:
+    """Match explicit convergence failures, not normal convergence chatter."""
+    lower = output.lower()
+    return (
+        "spcrtrf-15044" in lower
+        or "failed to converge" in lower
+        or "convergence failed" in lower
+        or "convergence failure" in lower
+    )
+
+
+def _has_fatal_spectre_error(output: str) -> bool:
+    """Identify fatal Spectre output even when a wrapper returns zero."""
+    lower = output.lower()
+    return (
+        "spectre terminated prematurely due to fatal error" in lower
+        or "fatal error" in lower
+        or bool(re.search(r"(?m)^\s*error\s*\(", output, re.IGNORECASE))
     )
 
 # ---------------------------------------------------------------------------
@@ -589,9 +632,10 @@ class SpectreSimulator:
 
     # -- public API ---------------------------------------------------------
 
-    def run_simulation(self, netlist: Path, params: dict) -> SimulationResult:
+    def run_simulation(self, netlist: Path, params: dict | None = None) -> SimulationResult:
         """Run a Spectre simulation on *netlist* synchronously."""
         netlist = Path(netlist).resolve()
+        params = params or {}
         if not netlist.exists():
             return SimulationResult(
                 status=ExecutionStatus.ERROR,
@@ -599,7 +643,7 @@ class SpectreSimulator:
             )
         if self._remote_host:
             return self._run_remote(netlist, params)
-        return self._run_local(netlist)
+        return self._run_local(netlist, params)
 
     # -- parallel simulation API ---------------------------------------------
 
@@ -803,14 +847,21 @@ class SpectreSimulator:
 
     # -- private helpers ----------------------------------------------------
 
-    def _run_local(self, netlist: Path) -> SimulationResult:
+    def _run_local(self, netlist: Path, params: dict) -> SimulationResult:
+        suffix = f"_{self._profile}" if self._profile else ""
+        cadence_cshrc = (
+            os.environ.get(f"VB_CADENCE_CSHRC{suffix}", "").strip()
+            or os.environ.get("VB_CADENCE_CSHRC", "").strip()
+        )
         run_result = _run_spectre_local(
             netlist=netlist,
+            params=params,
             spectre_cmd=self._spectre_cmd,
             spectre_args=self._spectre_args,
             timeout=self._timeout,
             work_dir=self._work_dir,
             output_format=self._output_format,
+            cadence_cshrc=cadence_cshrc or None,
         )
         if not run_result.success:
             return SimulationResult(
