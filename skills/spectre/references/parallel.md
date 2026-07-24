@@ -55,7 +55,11 @@ sim.set_max_workers(4)  # default is 8, adjust for license/CPU limits
 sim.shutdown()           # tear down pool, new one created on next submit
 ```
 
-Each simulation gets its own remote directory (uuid-based) — no file conflicts.
+Each task gets a unique `<netlist-stem>__<run-id>/` directory below the
+configured local `work_dir`, as well as its own remote directory when
+applicable. This isolates PSF data, logs, initial-condition files, and other
+auxiliary files even when the same deck is submitted more than once. The
+synchronous `run_simulation()` path continues to use `work_dir` directly.
 SSH ControlMaster is shared automatically across threads.
 
 ## Multi-server simulation

@@ -90,7 +90,11 @@ These are silent or near-silent foot-guns from real lab runs:
 
 ## Parallel simulation
 
-Submit simulations that run concurrently — each gets its own remote directory, no conflicts. For full API and multi-server setup, read `references/parallel.md`.
+Submit simulations that run concurrently. Each task gets a unique
+`<netlist-stem>__<run-id>/` directory below `work_dir`, plus its own remote
+directory when applicable, so even repeated submissions of the same deck do
+not overwrite PSF data or auxiliary files. For full API and multi-server
+setup, read `references/parallel.md`.
 
 ```python
 t1 = sim.submit(Path("tb_comp.scs"))    # returns Future immediately
