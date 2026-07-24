@@ -548,10 +548,15 @@ procedure(_vb_sim_done_{nonce}(session runID)
 # ---------------------------------------------------------------------------
 
 def create_netlist_for_corner(client: VirtuosoClient, test: str,
-                              corner: str, output_dir: str) -> str:
-    """maeCreateNetlistForCorner — export standalone netlist for a corner."""
+                              corner: str, output_dir: str, *,
+                              session: str = "") -> str:
+    """maeCreateNetlistForCorner — export standalone netlist for a corner.
+
+    If *session* is omitted, Cadence uses the current Maestro session.
+    """
+    s = f' ?session "{session}"' if session else ""
     return _q(client,
-        f'maeCreateNetlistForCorner("{test}" "{corner}" "{output_dir}")')
+        f'maeCreateNetlistForCorner("{test}" "{corner}" "{output_dir}"{s})')
 
 
 def export_output_view(client: VirtuosoClient, filepath: str, *,
