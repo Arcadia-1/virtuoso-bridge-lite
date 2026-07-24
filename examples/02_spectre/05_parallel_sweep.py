@@ -160,11 +160,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[Parallel] {len(tasks)} simulations, {max_workers} workers, mode '{mode}'")
 
     # --- Run all sweep points in parallel via SpectreSimulator's pool ----
-    # One SpectreSimulator instance manages the worker pool; each task gets
-    # its own remote uuid-based directory automatically, and locally each
-    # task writes ``<netlist.stem>.raw`` next to its netlist, so the
-    # distinct sweep filenames (inv_cload_5.0f.scs / inv_cload_10.0f.scs /
-    # ...) keep results from colliding without per-task work_dir setup.
+    # One SpectreSimulator instance manages the worker pool. Each task gets
+    # its own ``<netlist.stem>__<run-id>`` local work directory and a remote
+    # uuid-based directory automatically, so PSF and auxiliary files cannot
+    # collide even when the same netlist is submitted more than once.
     sim = SpectreSimulator.from_env(
         spectre_cmd=os.getenv("SPECTRE_CMD", "spectre"),
         spectre_args=spectre_mode_args(mode),
