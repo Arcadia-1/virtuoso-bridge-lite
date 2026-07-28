@@ -350,12 +350,17 @@ history, status = client.maestro.run_and_wait(session=session, timeout=600)
 
 | Python | SKILL | Description |
 |--------|-------|-------------|
-| `client.maestro.create_netlist_for_corner(test, corner, output_dir)` | `maeCreateNetlistForCorner` | Export netlist for one corner |
+| `client.maestro.create_netlist_for_corner(test, corner, output_dir, *, session="")` | `maeCreateNetlistForCorner` | Export netlist for one corner, optionally from an explicit session |
 | `client.maestro.export_output_view(filepath, *, view="Detail")` | `maeExportOutputView` | Export results to CSV |
 | `client.maestro.write_script(filepath)` | `maeWriteScript` | Export setup as SKILL script |
 
 ```python
-client.maestro.create_netlist_for_corner("TRAN2", "myCorner_2", "./myNetlistDir")
+client.maestro.create_netlist_for_corner(
+    "TRAN2",
+    "myCorner_2",
+    "./myNetlistDir",
+    session=session,
+)
 client.maestro.export_output_view("./results.csv")
 client.maestro.write_script("mySetupScript.il")
 ```
