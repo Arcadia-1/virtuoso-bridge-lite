@@ -308,10 +308,10 @@ If you use virtuoso-bridge in academic work, please cite:
 
 ## Star History
 
-<a href="https://star-history.com/#Arcadia-1/virtuoso-bridge-lite&Date">
+<a href="https://www.star-history.com/?repos=virtuoso-bridge-lite%2Fvirtuoso-bridge-lite&type=date&legend=top-left">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Arcadia-1/virtuoso-bridge-lite&type=Date&theme=dark"/>
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Arcadia-1/virtuoso-bridge-lite&type=Date"/>
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Arcadia-1/virtuoso-bridge-lite&type=Date"/>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=virtuoso-bridge-lite/virtuoso-bridge-lite&type=date&theme=dark&legend=top-left&sealed_token=gTUWqxfJ6GHXd-Tmjn_ePjI463M2HVPc63S9_Dpi5EgBODIdUyqKCiWBuisUPmCq8vRojRUu6_b7OQz0ZgUnvrknXFs1yKawr1JysqVVQkt-2GhJaGnYYJS5emkRSf57hDLG8u2p7sgH31KLfNuyjkuIQAqEht2svFXIYFeBlvlFT8NDbzNk8Vfko0iR" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=virtuoso-bridge-lite/virtuoso-bridge-lite&type=date&legend=top-left&sealed_token=gTUWqxfJ6GHXd-Tmjn_ePjI463M2HVPc63S9_Dpi5EgBODIdUyqKCiWBuisUPmCq8vRojRUu6_b7OQz0ZgUnvrknXFs1yKawr1JysqVVQkt-2GhJaGnYYJS5emkRSf57hDLG8u2p7sgH31KLfNuyjkuIQAqEht2svFXIYFeBlvlFT8NDbzNk8Vfko0iR" />
+    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=virtuoso-bridge-lite/virtuoso-bridge-lite&type=date&legend=top-left&sealed_token=gTUWqxfJ6GHXd-Tmjn_ePjI463M2HVPc63S9_Dpi5EgBODIdUyqKCiWBuisUPmCq8vRojRUu6_b7OQz0ZgUnvrknXFs1yKawr1JysqVVQkt-2GhJaGnYYJS5emkRSf57hDLG8u2p7sgH31KLfNuyjkuIQAqEht2svFXIYFeBlvlFT8NDbzNk8Vfko0iR" />
   </picture>
 </a>
