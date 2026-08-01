@@ -1368,41 +1368,43 @@ def emit(out, record):
     out.write((json.dumps(record, ensure_ascii=True) + "\n").encode("ascii"))
 
 
+def iter_document_paths():
+    for dirpath, dirnames, filenames in os.walk(ROOT):
+        dirnames.sort()
+        for filename in sorted(filenames):
+            if os.path.splitext(filename)[1].lower() in CONTENT_SUFFIXES:
+                yield os.path.join(dirpath, filename)
+
+
 fd, out_path = tempfile.mkstemp(prefix="vb_doc_index_", suffix=".jsonl.gz")
 os.close(fd)
 documents = 0
 topics = 0
 
 with gzip.open(out_path, "wb") as out:
-    for dirpath, _dirnames, filenames in os.walk(ROOT):
-        for filename in filenames:
-            path = os.path.join(dirpath, filename)
-            suffix = os.path.splitext(filename)[1].lower()
-            if suffix not in SEARCH_SUFFIXES:
-                continue
-            relative = relpath(path)
-            if suffix == ".tgf":
-                if relative == CANONICAL_TGF:
-                    for record in iter_tgf_records(path):
-                        emit(out, record)
-                        topics += 1
-                continue
-            if suffix not in CONTENT_SUFFIXES:
-                continue
-            try:
-                raw = read_preview(path)
-                title, text = extract_text(path, raw)
-            except Exception:
-                continue
-            emit(out, {
-                "kind": "document",
-                "path": path,
-                "relative_path": relative,
-                "suffix": suffix,
-                "title": title or os.path.splitext(filename)[0],
-                "text": text,
-            })
-            documents += 1
+    for path in iter_document_paths():
+        filename = os.path.basename(path)
+        suffix = os.path.splitext(filename)[1].lower()
+        try:
+            raw = read_preview(path)
+            title, text = extract_text(path, raw)
+        except Exception:
+            continue
+        emit(out, {
+            "kind": "document",
+            "path": path,
+            "relative_path": relpath(path),
+            "suffix": suffix,
+            "title": title or os.path.splitext(filename)[0],
+            "text": text,
+        })
+        documents += 1
+
+    canonical_tgf_path = os.path.join(ROOT, CANONICAL_TGF)
+    if os.path.isfile(canonical_tgf_path):
+        for record in iter_tgf_records(canonical_tgf_path):
+            emit(out, record)
+            topics += 1
 
 print(json.dumps({"path": out_path, "documents": documents, "topics": topics}))
 '''

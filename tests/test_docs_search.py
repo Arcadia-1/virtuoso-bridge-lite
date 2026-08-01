@@ -508,6 +508,50 @@ def test_remote_doc_index_command_extracts_records(tmp_path: Path) -> None:
     assert records[0]["relative_path"] == "skdfref/dbOpenCellViewByType.html"
 
 
+def test_remote_doc_index_command_orders_records_deterministically(tmp_path: Path) -> None:
+    doc_root = tmp_path / "doc"
+    for relative_path, title in (
+        ("zref/zeta.html", "Zeta"),
+        ("aref/alpha.html", "Alpha"),
+    ):
+        html_path = doc_root / relative_path
+        html_path.parent.mkdir(parents=True)
+        html_path.write_text(
+            f"<html><title>{title}</title><body>{title} docs.</body></html>",
+            encoding="utf-8",
+        )
+
+    tgf_path = doc_root / "api_more_info" / "api_more_info.tgf"
+    tgf_path.parent.mkdir()
+    tgf_path.write_text(
+        "alpha $aref/alpha.html NULL HTML\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", "-lc", _remote_doc_index_command(str(doc_root))],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(result.stdout.strip().splitlines()[-1])
+    records_path = Path(summary["path"])
+    try:
+        with gzip.open(records_path, "rt", encoding="utf-8") as fh:
+            records = [json.loads(line) for line in fh if line.strip()]
+    finally:
+        records_path.unlink(missing_ok=True)
+
+    assert [record["relative_path"] for record in records] == [
+        "aref/alpha.html",
+        "zref/zeta.html",
+        "api_more_info/api_more_info.tgf",
+    ]
+
+
 def test_remote_doc_index_command_skips_broken_cadence_python(tmp_path: Path) -> None:
     install_root = tmp_path / "IC618"
     doc_root = install_root / "doc"
