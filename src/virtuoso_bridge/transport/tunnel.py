@@ -27,7 +27,11 @@ from virtuoso_bridge.transport.remote_paths import (
     resolve_client_id,
     resolve_remote_username,
 )
-from virtuoso_bridge.transport.ssh import SSHRunner, CommandResult
+from virtuoso_bridge.transport.ssh import (
+    SSHRunner,
+    CommandResult,
+    ssh_backend_env_from_os,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +158,8 @@ class SSHClient:
         timeout: int = 30,
         keep_remote_files: bool = False,
         profile: str | None = None,
+        ssh_backend: str | None = None,
+        ssh_max_sessions: int | None = None,
     ) -> None:
         self._remote_host = remote_host
         self._remote_user = remote_user
@@ -174,6 +180,8 @@ class SSHClient:
                 jump_host=jump_host,
                 jump_user=jump_user,
                 persistent_shell=True,
+                backend=ssh_backend,
+                max_sessions=ssh_max_sessions,
                 verbose=True,
             )
 
@@ -204,6 +212,7 @@ class SSHClient:
         remote_user = os.getenv(f"VB_REMOTE_USER{suffix}", "").strip() or None
         jump_host = os.getenv(f"VB_JUMP_HOST{suffix}", "").strip() or None
         jump_user = os.getenv(f"VB_JUMP_USER{suffix}", "").strip() or None
+        backend_env = ssh_backend_env_from_os(profile)
 
         # Port
         from virtuoso_bridge.virtuoso.basic.bridge import _default_remote_port
@@ -230,6 +239,8 @@ class SSHClient:
             jump_user=jump_user,
             keep_remote_files=keep_remote_files,
             profile=profile,
+            ssh_backend=backend_env.backend,
+            ssh_max_sessions=backend_env.max_sessions,
         )
 
     # -- properties ---------------------------------------------------------

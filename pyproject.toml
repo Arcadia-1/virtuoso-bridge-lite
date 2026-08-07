@@ -19,6 +19,9 @@ dependencies = [
 # Microsoft Visio via COM, Windows-only.  The pure model layer in
 # `virtuoso/visio.py` has no extra deps and stays importable everywhere.
 visio = ["pywin32; sys_platform == 'win32'"]
+# Persistent SSH transport with real multi-session multiplexing. This avoids
+# Windows OpenSSH ControlMaster limitations while keeping local mode lightweight.
+ssh = ["paramiko>=3.5"]
 # Test runner.  Install with `pip install -e .[dev]` then `pytest`.
 dev = ["pytest>=7.0"]
 

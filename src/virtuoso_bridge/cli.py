@@ -13,7 +13,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from virtuoso_bridge.env import default_user_env_path, load_vb_env, set_runtime_env_file
-from virtuoso_bridge.transport.ssh import SSHRunner, remote_ssh_env_from_os
+from virtuoso_bridge.transport.ssh import (
+    SSHRunner,
+    remote_ssh_env_from_os,
+    ssh_backend_env_from_os,
+)
 
 
 def _env_template_path() -> Path:
@@ -423,6 +427,16 @@ def _print_status() -> int:
     configured_host = os.getenv(f"VB_REMOTE_HOST{suffix}", "").strip()
     configured_user = os.getenv(f"VB_REMOTE_USER{suffix}", "").strip()
     jump_host = os.getenv(f"VB_JUMP_HOST{suffix}", "").strip()
+    ssh_backend = (
+        os.getenv(f"VB_SSH_BACKEND{suffix}", "").strip()
+        or os.getenv("VB_SSH_BACKEND", "").strip()
+        or "openssh"
+    )
+    ssh_max_sessions = (
+        os.getenv(f"VB_SSH_MAX_SESSIONS{suffix}", "").strip()
+        or os.getenv("VB_SSH_MAX_SESSIONS", "").strip()
+        or "10"
+    )
 
     is_local = _is_localhost(configured_host) if configured_host else False
 
@@ -461,6 +475,10 @@ def _print_status() -> int:
         print(f"  remote user : {configured_user or '(not set)'}")
         if jump_host:
             print(f"  jump host   : {jump_host}")
+        if ssh_backend.lower() == "paramiko":
+            print(f"  command SSH : paramiko ({ssh_max_sessions} max sessions)")
+        else:
+            print("  command SSH : openssh")
         if state:
             print(f"  local port  : {state.get('port')}")
             setup_path = state.get("setup_path")
@@ -809,8 +827,15 @@ def _make_ssh_runner() -> tuple["SSHRunner | None", str]:
         raise SystemExit("Error: VB_REMOTE_HOST not set")
     if _is_localhost(remote_host):
         return None, remote_user
-    return SSHRunner(host=remote_host, user=remote_user,
-                     jump_host=jump_host, jump_user=jump_user), remote_user
+    backend_env = ssh_backend_env_from_os(profile)
+    return SSHRunner(
+        host=remote_host,
+        user=remote_user,
+        jump_host=jump_host,
+        jump_user=jump_user,
+        backend=backend_env.backend,
+        max_sessions=backend_env.max_sessions,
+    ), remote_user
 
 
 def cli_load(*, file: str, timeout: int = 60, quiet: bool = False) -> int:

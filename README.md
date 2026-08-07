@@ -96,6 +96,34 @@ virtuoso-bridge status         # tunnel + Virtuoso daemon + Spectre availability
 On Windows PowerShell, replace the activation line with
 `.\.venv\Scripts\Activate.ps1`.
 
+### Single-connection SSH concurrency
+
+OpenSSH `ControlMaster` is not usable with every Windows SSH build. For real
+multi-session multiplexing inside one bridge process, install the Paramiko
+backend and select it explicitly:
+
+```bash
+uv pip install -e '.[ssh]'
+```
+
+```dotenv
+VB_SSH_BACKEND=paramiko
+VB_SSH_MAX_SESSIONS=10
+```
+
+Commands and SFTP transfers then share one authenticated target SSH Transport;
+each operation opens a channel on that Transport. `VB_SSH_MAX_SESSIONS` is a
+client-side gate and must be no greater than the target sshd `MaxSessions`.
+Waiting work queues at the gate instead of opening another command connection.
+There is no automatic fallback to independent SSH connections.
+
+`MaxStartups` governs unauthenticated TCP handshakes, while `MaxSessions`
+governs channels on one authenticated connection. The Paramiko backend avoids
+one handshake per parallel job, but it cannot override the server's
+`MaxSessions`. The long-lived Virtuoso TCP port-forward created by
+`virtuoso-bridge start` remains a separate OpenSSH connection because it must
+survive after the starting CLI process exits.
+
 ```python
 from virtuoso_bridge import VirtuosoClient
 client = VirtuosoClient.from_env()
@@ -226,7 +254,7 @@ same pattern — point their skills path at `skills/` in this repo.
 
 - **VirtuosoClient** — pure TCP SKILL client. Sends SKILL as JSON, gets results. No SSH awareness.
 - **SpectreSimulator** — runs standalone Spectre simulations locally or through SSH, then parses PSF ASCII results into Python data.
-- **SSHClient** — maintains a persistent ControlMaster connection for TCP port-forwarding, remote shell commands, and file transfer. Optional — bypassed in local mode.
+- **SSHClient** — maintains the TCP port-forward and provides either OpenSSH or a process-local Paramiko Transport for remote commands and file transfer. The Paramiko backend multiplexes bounded concurrent channels on one authenticated connection. Optional — bypassed in local mode.
 
 Fully decoupled: VirtuosoClient works with any TCP endpoint — SSH tunnel, VPN, direct LAN, or local. Multiple connection profiles are supported, each managing an independent tunnel to a separate design server.
 

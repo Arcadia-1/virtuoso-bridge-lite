@@ -523,6 +523,10 @@ def _configure_deadline_runner(monkeypatch, clock: _DeadlineClock) -> SSHRunner:
     monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
     monkeypatch.setattr("virtuoso_bridge.transport.ssh._setup_command_log", lambda: None)
     monkeypatch.setattr("virtuoso_bridge.transport.ssh.time.monotonic", clock)
+    monkeypatch.delenv("VB_DISABLE_CONTROL_MASTER", raising=False)
+    monkeypatch.delenv("VB_FORCE_CONTROL_MASTER", raising=False)
+    monkeypatch.delenv("VB_SSH_BACKEND", raising=False)
+    monkeypatch.delenv("VB_SSH_MAX_SESSIONS", raising=False)
     return SSHRunner(host="eda-host", user="designer", ssh_cmd="ssh")
 
 

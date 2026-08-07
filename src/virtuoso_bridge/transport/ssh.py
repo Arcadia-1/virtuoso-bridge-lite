@@ -87,6 +87,40 @@ class RemoteSshEnv(NamedTuple):
     jump_host: str | None
     jump_user: str | None
 
+
+class SshBackendEnv(NamedTuple):
+    """Profile-aware SSH command backend settings."""
+
+    backend: str | None
+    max_sessions: int | None
+
+
+def ssh_backend_env_from_os(profile: str | None = None) -> SshBackendEnv:
+    """Read profile-specific SSH backend settings with global fallback."""
+    profile = resolve_profile(profile)
+    load_vb_env()
+    suffix = f"_{profile}" if profile else ""
+
+    def _profile_or_global(name: str) -> str:
+        if suffix:
+            profiled = os.environ.get(f"{name}{suffix}", "").strip()
+            if profiled:
+                return profiled
+        return os.environ.get(name, "").strip()
+
+    backend = _profile_or_global("VB_SSH_BACKEND") or None
+    raw_max_sessions = _profile_or_global("VB_SSH_MAX_SESSIONS")
+    max_sessions: int | None = None
+    if raw_max_sessions:
+        try:
+            max_sessions = int(raw_max_sessions)
+        except ValueError as exc:
+            raise ValueError("VB_SSH_MAX_SESSIONS must be a positive integer") from exc
+        if max_sessions < 1:
+            raise ValueError("VB_SSH_MAX_SESSIONS must be a positive integer")
+    return SshBackendEnv(backend=backend, max_sessions=max_sessions)
+
+
 def remote_ssh_env_from_os(profile: str | None = None) -> RemoteSshEnv:
     """Read remote SSH target from environment variables.
 
@@ -190,7 +224,7 @@ def _short_control_path(host: str, user: str | None, jump_host: str | None) -> s
 
 
 class SSHRunner:
-    """Generic SSH/rsync/tar runner using OpenSSH CLI tools."""
+    """Remote command and file runner backed by OpenSSH or Paramiko."""
 
     def __init__(
         self,
@@ -204,6 +238,8 @@ class SSHRunner:
         timeout: int = 600,
         connect_timeout: int = 30,
         persistent_shell: bool = False,
+        backend: str | None = None,
+        max_sessions: int | None = None,
         verbose: bool = False,
     ) -> None:
         load_vb_env()
@@ -222,6 +258,22 @@ class SSHRunner:
         self._connect_timeout = connect_timeout
         self._verbose = verbose
 
+        selected_backend = (backend or os.environ.get("VB_SSH_BACKEND", "openssh")).strip().lower()
+        if selected_backend not in ("openssh", "paramiko"):
+            raise ValueError(
+                f"Unsupported SSH backend {selected_backend!r}; expected 'openssh' or 'paramiko'."
+            )
+        self._backend = selected_backend
+        if max_sessions is None:
+            raw_max_sessions = os.environ.get("VB_SSH_MAX_SESSIONS", "10").strip()
+            try:
+                max_sessions = int(raw_max_sessions)
+            except ValueError as exc:
+                raise ValueError("VB_SSH_MAX_SESSIONS must be a positive integer") from exc
+        if max_sessions < 1:
+            raise ValueError("VB_SSH_MAX_SESSIONS must be a positive integer")
+        self._max_sessions = max_sessions
+
         env_ssh_cmd = _tool_override_from_env("VB_SSH_CMD")
         env_scp_cmd = _tool_override_from_env("VB_SCP_CMD")
         env_tar_cmd = _tool_override_from_env("VB_TAR_CMD")
@@ -236,7 +288,10 @@ class SSHRunner:
         # to opt out if a specific platform trips mux errors.
         _disable_cm = os.environ.get("VB_DISABLE_CONTROL_MASTER", "").strip().lower() in ("1", "true", "yes")
         _force_cm = os.environ.get("VB_FORCE_CONTROL_MASTER", "").strip().lower() in ("1", "true", "yes")
-        self._use_control_master = _force_cm or (not _disable_cm)
+        self._use_control_master = (
+            self._backend == "openssh"
+            and (_force_cm or (not _disable_cm))
+        )
 
         self._control_path = _short_control_path(host, user, jump_host)
 
@@ -250,7 +305,9 @@ class SSHRunner:
         # connection with mux off.  Users who need both features can still
         # set VB_DISABLE_CONTROL_MASTER=1 to trade mux for persistent-shell
         # on Windows.
-        if os.name == "nt":
+        if self._backend == "paramiko":
+            self._persistent_shell_enabled = False
+        elif os.name == "nt":
             self._persistent_shell_enabled = (
                 persistent_shell
                 and not self._use_control_master
@@ -277,6 +334,21 @@ class SSHRunner:
         self._tunnel_pid: int | None = None
         self._tunnel_using_external = False
 
+        self._paramiko_backend: Any | None = None
+        if self._backend == "paramiko":
+            from virtuoso_bridge.transport.paramiko_backend import ParamikoSessionBackend
+
+            self._paramiko_backend = ParamikoSessionBackend(
+                host=host,
+                user=user,
+                jump_host=jump_host,
+                jump_user=self._jump_user,
+                ssh_key_path=ssh_key_path,
+                ssh_config_path=self._ssh_config_path,
+                connect_timeout=connect_timeout,
+                max_sessions=max_sessions,
+            )
+
     @property
     def host(self) -> str:
         """Target hostname."""
@@ -286,6 +358,16 @@ class SSHRunner:
     def user(self) -> str | None:
         """SSH user name."""
         return self._user
+
+    @property
+    def backend(self) -> str:
+        """Selected command/file-transfer SSH backend."""
+        return self._backend
+
+    @property
+    def max_sessions(self) -> int:
+        """Maximum concurrent sessions on a multiplexed Paramiko transport."""
+        return self._max_sessions
 
     @property
     def persistent_shell_enabled(self) -> bool:
@@ -506,6 +588,10 @@ class SSHRunner:
 
     def test_connection(self, timeout: float | None = None) -> bool:
         """Test SSH connectivity to the remote host."""
+        if self._paramiko_backend is not None:
+            return self._paramiko_backend.test_connection(
+                self._connect_timeout if timeout is None else timeout
+            )
         budget = _TimeoutBudget.start(timeout, self._connect_timeout)
         cmd = self._build_ssh_base() + ["-T", "exit", "0"]
         logger.debug("Testing SSH connection: %s", cmd)
@@ -546,6 +632,13 @@ class SSHRunner:
     def run_command(self, command: str, timeout: float | None = None) -> CommandResult:
         """Execute a command on the remote host via SSH."""
         budget = _TimeoutBudget.start(timeout, self._timeout)
+        if self._paramiko_backend is not None:
+            logger.info("[server] %s", command)
+            rc, stdout, stderr = self._paramiko_backend.run_command(
+                command,
+                timeout=budget.remaining(command),
+            )
+            return CommandResult(returncode=rc, stdout=stdout, stderr=stderr)
         if self._persistent_shell_enabled:
             try:
                 return self._run_via_persistent_shell_with_retry(
@@ -759,6 +852,14 @@ class SSHRunner:
         if not local_path.exists():
             raise FileNotFoundError(f"Local path not found: {local_path}")
 
+        if self._paramiko_backend is not None:
+            rc, stdout, stderr = self._paramiko_backend.upload(
+                local_path,
+                remote_path,
+                timeout=budget.remaining(remote_path),
+            )
+            return CommandResult(returncode=rc, stdout=stdout, stderr=stderr)
+
         result = self._upload_via_tar(
             local_path,
             remote_path,
@@ -780,6 +881,13 @@ class SSHRunner:
             return CommandResult(returncode=0, stdout="", stderr="")
 
         budget = _TimeoutBudget.start(timeout, self._timeout)
+
+        if self._paramiko_backend is not None:
+            rc, stdout, stderr = self._paramiko_backend.upload_batch(
+                files,
+                timeout=budget.remaining("upload_batch"),
+            )
+            return CommandResult(returncode=rc, stdout=stdout, stderr=stderr)
 
         # Group by remote directory (usually all the same)
         by_remote_dir: dict[str, list[tuple[Path, str]]] = {}
@@ -876,6 +984,13 @@ class SSHRunner:
     def upload_text(self, text: str, remote_path: str, timeout: float | None = None) -> CommandResult:
         """Upload a UTF-8 text string as a file to the remote host via SSH."""
         budget = _TimeoutBudget.start(timeout, self._timeout)
+        if self._paramiko_backend is not None:
+            rc, stdout, stderr = self._paramiko_backend.upload_text(
+                text,
+                remote_path,
+                timeout=budget.remaining(remote_path),
+            )
+            return CommandResult(returncode=rc, stdout=stdout, stderr=stderr)
         if self._persistent_shell_enabled:
             if not text.endswith("\n"):
                 text = text + "\n"
@@ -948,6 +1063,15 @@ class SSHRunner:
     ) -> CommandResult:
         """Download a file or directory from the remote host via tar pipe or scp."""
         budget = _TimeoutBudget.start(timeout, self._timeout)
+
+        if self._paramiko_backend is not None:
+            rc, stdout, stderr = self._paramiko_backend.download(
+                remote_path,
+                local_path,
+                recursive=recursive,
+                timeout=budget.remaining(remote_path),
+            )
+            return CommandResult(returncode=rc, stdout=stdout, stderr=stderr)
 
         if recursive:
             return self._download_via_tar(
@@ -1244,6 +1368,8 @@ class SSHRunner:
 
     def close(self) -> None:
         """Release any persistent SSH resources held by this runner."""
+        if self._paramiko_backend is not None:
+            self._paramiko_backend.close()
         with self._shell_lock:
             self._close_persistent_shell_locked()
 
