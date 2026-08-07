@@ -22,8 +22,9 @@ visio = ["pywin32; sys_platform == 'win32'"]
 # Persistent SSH transport with real multi-session multiplexing. This avoids
 # Windows OpenSSH ControlMaster limitations while keeping local mode lightweight.
 ssh = ["paramiko>=3.5"]
-# Test runner.  Install with `pip install -e .[dev]` then `pytest`.
-dev = ["pytest>=7.0"]
+# Complete test environment, including the optional SSH backend exercised by
+# the transport suite.
+dev = ["pytest>=7.0", "paramiko>=3.5"]
 
 [project.scripts]
 virtuoso-bridge = "virtuoso_bridge.cli:main"
