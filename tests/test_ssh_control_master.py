@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import threading
 from pathlib import Path
 from typing import Callable
 
@@ -20,9 +21,15 @@ class _Pipe:
 class _Stderr:
     def __init__(self, data: bytes = b"") -> None:
         self.data = data
+        self.closed = False
 
-    def read(self) -> bytes:
-        return self.data
+    def read(self, _size: int = -1) -> bytes:
+        data = self.data
+        self.data = b""
+        return data
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def _tar_extract_root(cmd: list[str], cwd: Path | None) -> Path:
@@ -300,14 +307,6 @@ def test_recursive_download_quotes_remote_path_components(monkeypatch, tmp_path)
     commands: list[list[str]] = []
     process_cwds: list[Path | None] = []
 
-    class _Pipe:
-        def close(self) -> None:
-            pass
-
-    class _Stderr:
-        def read(self) -> bytes:
-            return b""
-
     class _FakeProcess:
         def __init__(self, cmd, **kwargs):
             commands.append(cmd)
@@ -347,7 +346,7 @@ def test_recursive_download_quotes_remote_path_components(monkeypatch, tmp_path)
     assert 'd=$(dirname "$p")' in inner_cmd
     assert 'b=$(basename "$p")' in inner_cmd
     assert 'cd "$d"' in inner_cmd
-    assert 'tar czf - "$b"' in inner_cmd
+    assert 'tar czf - -- "$b"' in inner_cmd
     assert commands[1] == [runner._tar_cmd, "xzf", "-"]
     extract_dir = Path(process_cwds[1])
     assert extract_dir.parent == tmp_path
@@ -360,14 +359,6 @@ def test_recursive_download_extracts_into_requested_directory(monkeypatch, tmp_p
 
     commands: list[list[str]] = []
     process_cwds: list[Path | None] = []
-
-    class _Pipe:
-        def close(self) -> None:
-            pass
-
-    class _Stderr:
-        def read(self) -> bytes:
-            return b""
 
     class _FakeProcess:
         def __init__(self, cmd, **kwargs):
@@ -407,7 +398,7 @@ def test_recursive_download_extracts_into_requested_directory(monkeypatch, tmp_p
     remote_cmd = commands[0][-1]
     inner_cmd = shlex.split(remote_cmd)[2]
     assert 'cd "$d"' in inner_cmd
-    assert 'tar czf - "$b"' in inner_cmd
+    assert 'tar czf - -- "$b"' in inner_cmd
     assert commands[1] == [runner._tar_cmd, "xzf", "-"]
     extract_dir = Path(process_cwds[1])
     assert extract_dir.parent == tmp_path
@@ -419,19 +410,11 @@ def test_recursive_download_preserves_existing_target_when_tar_fails(monkeypatch
     monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
     monkeypatch.setattr("virtuoso_bridge.transport.ssh._setup_command_log", lambda: None)
 
-    class _Pipe:
-        def close(self) -> None:
-            pass
-
-    class _Stderr:
-        def read(self) -> bytes:
-            return b"remote ok"
-
     class _FakeProcess:
         def __init__(self, cmd, **kwargs):
             self.cmd = cmd
             self.stdout = _Pipe()
-            self.stderr = _Stderr()
+            self.stderr = _Stderr(b"remote ok")
             self.returncode = 0 if "ssh" in cmd[0] else 2
 
         def communicate(self, timeout=None):
@@ -462,14 +445,6 @@ def test_recursive_download_restores_existing_target_when_install_rename_fails(
 ) -> None:
     monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
     monkeypatch.setattr("virtuoso_bridge.transport.ssh._setup_command_log", lambda: None)
-
-    class _Pipe:
-        def close(self) -> None:
-            pass
-
-    class _Stderr:
-        def read(self) -> bytes:
-            return b""
 
     class _FakeProcess:
         def __init__(self, cmd, **kwargs):
@@ -638,6 +613,7 @@ def test_tar_upload_retries_share_one_timeout_budget(
     clock = _DeadlineClock()
     runner = _configure_deadline_runner(monkeypatch, clock)
     communicate_timeouts: list[float] = []
+    processes: list[object] = []
 
     class _UploadProcess:
         def __init__(self, command: list[str], **_kwargs) -> None:
@@ -646,17 +622,23 @@ def test_tar_upload_retries_share_one_timeout_budget(
             self.returncode = 0 if self.is_tar else 255
             self.stdout = _Pipe()
             self.stderr = _Stderr(b"Connection reset by peer")
+            self.killed = False
+            self.wait_called = False
+            processes.append(self)
 
         def communicate(self, timeout=None):
             assert timeout is not None
             communicate_timeouts.append(timeout)
             clock.consume(0.04, timeout, self.command)
+            self.wait_called = True
             return b"", b"Connection reset by peer"
 
         def wait(self, timeout=None):
+            self.wait_called = True
             return self.returncode
 
         def kill(self) -> None:
+            self.killed = True
             self.returncode = -9
 
     monkeypatch.setattr(
@@ -671,6 +653,108 @@ def test_tar_upload_retries_share_one_timeout_budget(
 
     assert communicate_timeouts == pytest.approx([0.05, 0.01])
     assert clock.now == pytest.approx(0.05)
+    assert len(processes) == 4
+    assert all(process.wait_called for process in processes)
+    assert all(process.killed for process in processes[-2:])
+
+
+def test_tar_upload_drains_local_stderr_while_ssh_is_running(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runner = _configure_deadline_runner(monkeypatch, _DeadlineClock())
+    stderr_started = threading.Event()
+    stderr_payload = b"tar warning\n" * 10000
+
+    class _SignalingStderr(_Stderr):
+        def read(self, size: int = -1) -> bytes:
+            stderr_started.set()
+            return super().read(size)
+
+    class _PipelineProcess:
+        def __init__(self, command: list[str], **_kwargs) -> None:
+            self.command = command
+            self.is_tar = Path(command[0]).stem.lower() == "tar"
+            self.returncode = 2 if self.is_tar else 0
+            self.stdout = _Pipe()
+            self.stderr = (
+                _SignalingStderr(stderr_payload) if self.is_tar else _Stderr()
+            )
+
+        def communicate(self, timeout=None):
+            assert not self.is_tar
+            assert stderr_started.wait(timeout=1)
+            return b"", b""
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.ssh.subprocess.Popen",
+        _PipelineProcess,
+    )
+    local_path = tmp_path / "input.scs"
+    local_path.write_text("payload", encoding="utf-8")
+
+    result = runner.upload(local_path, "/remote/input.scs", timeout=5)
+
+    assert result.returncode == 2
+    assert result.stderr.encode("utf-8") == stderr_payload
+
+
+def test_tar_download_drains_ssh_stderr_while_tar_is_running(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runner = _configure_deadline_runner(monkeypatch, _DeadlineClock())
+    stderr_started = threading.Event()
+    stderr_payload = b"remote warning\n" * 10000
+
+    class _SignalingStderr(_Stderr):
+        def read(self, size: int = -1) -> bytes:
+            stderr_started.set()
+            return super().read(size)
+
+    class _PipelineProcess:
+        def __init__(self, command: list[str], **kwargs) -> None:
+            self.command = command
+            self.cwd = kwargs.get("cwd")
+            self.is_tar = Path(command[0]).stem.lower() == "tar"
+            self.returncode = 0 if self.is_tar else 1
+            self.stdout = _Pipe()
+            self.stderr = (
+                _Stderr() if self.is_tar else _SignalingStderr(stderr_payload)
+            )
+
+        def communicate(self, timeout=None):
+            assert self.is_tar
+            assert stderr_started.wait(timeout=1)
+            (Path(self.cwd) / "netlist").mkdir()
+            return b"", b""
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.ssh.subprocess.Popen",
+        _PipelineProcess,
+    )
+
+    result = runner.download(
+        "/remote/netlist",
+        tmp_path / "netlist",
+        recursive=True,
+        timeout=5,
+    )
+
+    assert result.returncode == 1
+    assert stderr_payload.decode("utf-8").strip() in result.stderr
 
 
 def test_batch_upload_groups_share_one_timeout_budget(
@@ -752,6 +836,8 @@ def test_recursive_download_pipeline_shares_one_timeout_budget(
             return b"", b""
 
         def wait(self, timeout=None):
+            if self.returncode == -9:
+                return self.returncode
             assert not self.is_tar
             assert timeout is not None
             ssh_timeouts.append(timeout)

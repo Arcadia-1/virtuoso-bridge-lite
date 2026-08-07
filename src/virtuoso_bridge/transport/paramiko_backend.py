@@ -7,25 +7,24 @@ import getpass
 import hashlib
 import logging
 import os
-import posixpath
 import queue
 import re
 import shlex
 import socket
-import stat
 import subprocess
 import threading
 import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import unquote, urlsplit
 
 from virtuoso_bridge.transport.transfer import (
     TarDownloadPlan,
     TarUploadPlan,
+    TextUploadPlan,
     discard_stage,
     install_staged_item,
     install_staged_path,
@@ -813,6 +812,8 @@ class ParamikoSessionBackend:
                     channel.close()
         except subprocess.TimeoutExpired:
             raise
+        except socket.timeout as exc:
+            raise subprocess.TimeoutExpired(command, deadline.timeout) from exc
         except Exception as exc:  # noqa: BLE001
             self._invalidate_if_transport_failed(exc)
             return 255, "", str(exc)
@@ -977,6 +978,11 @@ class ParamikoSessionBackend:
             )
         except subprocess.TimeoutExpired:
             raise
+        except socket.timeout as exc:
+            raise subprocess.TimeoutExpired(
+                plan.remote_command,
+                deadline.timeout,
+            ) from exc
         except Exception as exc:  # noqa: BLE001
             self._invalidate_if_transport_failed(exc)
             return 255, "", str(exc)
@@ -1084,39 +1090,16 @@ class ParamikoSessionBackend:
         except subprocess.TimeoutExpired:
             discard_stage(plan.stage_path)
             raise
+        except socket.timeout as exc:
+            discard_stage(plan.stage_path)
+            raise subprocess.TimeoutExpired(
+                plan.remote_command,
+                deadline.timeout,
+            ) from exc
         except Exception as exc:  # noqa: BLE001
             discard_stage(plan.stage_path)
             self._invalidate_if_transport_failed(exc)
             return 255, "", str(exc)
-
-    @staticmethod
-    def _mkdir_p(
-        sftp: Any,
-        remote_dir: str,
-        deadline: _Deadline,
-    ) -> None:
-        if remote_dir in ("", ".", "/"):
-            return
-        current = "/" if remote_dir.startswith("/") else ""
-        for part in PurePosixPath(remote_dir).parts:
-            if part in ("", "/", "."):
-                continue
-            current = posixpath.join(current, part) if current else part
-            deadline.remaining(current)
-            try:
-                sftp.stat(current)
-            except OSError as exc:
-                if getattr(exc, "errno", None) not in (None, errno.ENOENT):
-                    raise
-                try:
-                    sftp.mkdir(current)
-                except OSError as mkdir_exc:
-                    try:
-                        attrs = sftp.stat(current)
-                    except OSError:
-                        raise mkdir_exc
-                    if not stat.S_ISDIR(attrs.st_mode):
-                        raise mkdir_exc
 
     @staticmethod
     def _error_result(exc: Exception) -> tuple[int, str, str]:
@@ -1141,21 +1124,36 @@ class ParamikoSessionBackend:
 
     def upload_text(
         self,
+        plan: TextUploadPlan,
         text: str,
-        remote_path: str,
         *,
         timeout: float,
     ) -> tuple[int, str, str]:
         deadline = _Deadline.start(timeout)
         try:
-            with self._sftp(deadline, remote_path) as sftp:
-                self._mkdir_p(sftp, posixpath.dirname(remote_path), deadline)
-                with sftp.file(remote_path, "wb") as remote_file:
-                    remote_file.settimeout(deadline.remaining(remote_path))
-                    remote_file.write(text.encode("utf-8"))
-            return 0, "", ""
+            with self._session_lease(deadline, plan.remote_command) as transport:
+                channel = transport.open_session(
+                    timeout=deadline.remaining(plan.remote_command)
+                )
+                try:
+                    channel.settimeout(deadline.remaining(plan.remote_command))
+                    channel.exec_command(plan.remote_command)
+                    channel.sendall(text.encode("utf-8"))
+                    channel.shutdown_write()
+                    return self._collect_channel(
+                        channel,
+                        deadline,
+                        plan.remote_command,
+                    )
+                finally:
+                    channel.close()
         except subprocess.TimeoutExpired:
             raise
+        except socket.timeout as exc:
+            raise subprocess.TimeoutExpired(
+                plan.remote_command,
+                deadline.timeout,
+            ) from exc
         except Exception as exc:  # noqa: BLE001
             self._invalidate_if_transport_failed(exc)
             return self._error_result(exc)
@@ -1184,6 +1182,12 @@ class ParamikoSessionBackend:
         except subprocess.TimeoutExpired:
             discard_stage(stage_path)
             raise
+        except socket.timeout as exc:
+            discard_stage(stage_path)
+            raise subprocess.TimeoutExpired(
+                remote_path,
+                deadline.timeout,
+            ) from exc
         except Exception as exc:  # noqa: BLE001
             discard_stage(stage_path)
             self._invalidate_if_transport_failed(exc)

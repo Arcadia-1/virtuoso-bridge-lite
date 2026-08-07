@@ -30,6 +30,7 @@ from virtuoso_bridge.transport.transfer import (
     TarUploadPlan,
     build_tar_download_plan,
     build_tar_upload_plans,
+    build_text_upload_plan,
     discard_stage,
     install_staged_path,
 )
@@ -203,6 +204,45 @@ def _as_text(value: bytes | str | None) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return value
+
+
+def _drain_binary_stream(
+    stream: Any,
+    chunks: list[bytes],
+    failures: "queue.Queue[BaseException]",
+) -> None:
+    try:
+        while True:
+            chunk = stream.read(65536)
+            if not chunk:
+                return
+            chunks.append(chunk)
+    except BaseException as exc:  # noqa: BLE001
+        failures.put(exc)
+
+
+def _stop_pipeline(
+    processes: list[subprocess.Popen[Any]],
+    streams: list[Any],
+    workers: list[threading.Thread],
+) -> None:
+    for process in processes:
+        try:
+            process.kill()
+        except OSError:
+            pass
+    for process in processes:
+        try:
+            process.wait(timeout=1)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    for stream in streams:
+        try:
+            stream.close()
+        except OSError:
+            pass
+    for worker in workers:
+        worker.join(timeout=1)
 
 def _derive_tool(base_cmd: str, old_name: str, new_name: str) -> str:
     """Derive a sibling tool path from a known tool (e.g. ssh -> scp).
@@ -887,29 +927,18 @@ class SSHRunner:
     def upload_text(self, text: str, remote_path: str, timeout: float | None = None) -> CommandResult:
         """Upload a UTF-8 text string as a file to the remote host via SSH."""
         budget = _TimeoutBudget.start(timeout, self._timeout)
+        plan = build_text_upload_plan(remote_path)
         if self._paramiko_backend is not None:
             rc, stdout, stderr = self._paramiko_backend.upload_text(
+                plan,
                 text,
-                remote_path,
                 timeout=budget.remaining(remote_path),
             )
             return CommandResult(returncode=rc, stdout=stdout, stderr=stderr)
         if self._persistent_shell_enabled:
-            if not text.endswith("\n"):
-                text = text + "\n"
-            remote_dir = str(Path(remote_path).parent).replace("\\", "/")
-            quoted_dir = shlex.quote(remote_dir)
-            quoted_path = shlex.quote(remote_path.replace("\\", "/"))
-            payload_token = f"__vb_PAYLOAD_{uuid.uuid4().hex}__"
-            command = (
-                f"mkdir -p {quoted_dir} && chmod 755 {quoted_dir}\n"
-                f"cat > {quoted_path} <<'{payload_token}'\n"
-                f"{text}"
-                f"{payload_token}\n"
-            )
             try:
                 return self._run_via_persistent_shell_with_retry(
-                    command,
+                    plan.persistent_command(text),
                     _budget=budget,
                 )
             except subprocess.TimeoutExpired:
@@ -917,22 +946,13 @@ class SSHRunner:
             except Exception as exc:  # noqa: BLE001
                 self._log_persistent_shell_fallback("Persistent SSH text upload failed", exc)
 
-        remote_dir = str(Path(remote_path).parent).replace("\\", "/")
-        quoted_dir = shlex.quote(remote_dir)
-        quoted_path = shlex.quote(remote_path.replace("\\", "/"))
-        remote_cmd = (
-            "sh -lc "
-            + shlex.quote(
-                f"mkdir -p {quoted_dir} && chmod 755 {quoted_dir} && cat > {quoted_path}"
-            )
-        )
         logger.debug("Uploading text payload (%d chars) -> %s:%s", len(text), self._host, remote_path)
         text_bytes = text.encode("utf-8")
 
         def _attempt() -> tuple[int, bytes, bytes]:
             # Rebuild ssh command per attempt so a CM-disable mid-loop
             # picks up the no-mux config on the next try.
-            cmd = self._build_ssh_base() + [remote_cmd]
+            cmd = self._build_ssh_base() + [plan.remote_command]
             if self._verbose:
                 print(f"[cmd] {' '.join(cmd)}  # upload -> {remote_path}", flush=True)
             r = subprocess.run(
@@ -948,7 +968,7 @@ class SSHRunner:
         rc, out, err = self._attempt_with_cm_fallback(
             _attempt,
             budget=budget,
-            command=remote_cmd,
+            command=plan.remote_command,
         )
         if rc != 0:
             err_text = _as_text(err).strip()
@@ -1066,14 +1086,31 @@ class SSHRunner:
                     f"[cmd] {' '.join(local_command)} | {' '.join(ssh_command)}",
                     flush=True,
                 )
-            budget.remaining(local_command)
-            tar_process = subprocess.Popen(
-                local_command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                **_windows_no_window_kwargs(),
-            )
+            tar_process: subprocess.Popen[Any] | None = None
+            ssh_process: subprocess.Popen[Any] | None = None
+            streams: list[Any] = []
+            workers: list[threading.Thread] = []
+            failures: "queue.Queue[BaseException]" = queue.Queue()
+            tar_stderr_chunks: list[bytes] = []
             try:
+                budget.remaining(local_command)
+                tar_process = subprocess.Popen(
+                    local_command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    **_windows_no_window_kwargs(),
+                )
+                if tar_process.stdout is None or tar_process.stderr is None:
+                    raise OSError("Failed to allocate local tar pipes")
+                streams.extend([tar_process.stdout, tar_process.stderr])
+                stderr_worker = threading.Thread(
+                    target=_drain_binary_stream,
+                    args=(tar_process.stderr, tar_stderr_chunks, failures),
+                    daemon=True,
+                )
+                workers.append(stderr_worker)
+                stderr_worker.start()
+
                 budget.remaining(ssh_command)
                 ssh_process = subprocess.Popen(
                     ssh_command,
@@ -1082,22 +1119,37 @@ class SSHRunner:
                     stderr=subprocess.PIPE,
                     **_windows_no_window_kwargs(),
                 )
-            except Exception:
-                tar_process.kill()
-                raise
-            if tar_process.stdout:
+                if ssh_process.stdout is not None:
+                    streams.append(ssh_process.stdout)
+                if ssh_process.stderr is not None:
+                    streams.append(ssh_process.stderr)
                 tar_process.stdout.close()
-            try:
                 ssh_stdout, ssh_stderr = ssh_process.communicate(
                     timeout=budget.remaining(ssh_command)
                 )
                 tar_process.wait(timeout=budget.remaining(local_command))
-            except subprocess.TimeoutExpired:
-                ssh_process.kill()
-                tar_process.kill()
+                stderr_worker.join(timeout=budget.remaining(local_command))
+                if stderr_worker.is_alive():
+                    raise subprocess.TimeoutExpired(
+                        local_command,
+                        budget.timeout,
+                    )
+                if not failures.empty():
+                    raise failures.get()
+            except Exception:
+                _stop_pipeline(
+                    [process for process in (ssh_process, tar_process) if process],
+                    streams,
+                    workers,
+                )
                 raise
+            for stream in streams:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
             if tar_process.returncode != 0 and ssh_process.returncode == 0:
-                tar_stderr = tar_process.stderr.read() if tar_process.stderr else b""
+                tar_stderr = b"".join(tar_stderr_chunks)
                 return tar_process.returncode, ssh_stdout or b"", tar_stderr
             return ssh_process.returncode, ssh_stdout or b"", ssh_stderr or b""
 
@@ -1137,6 +1189,21 @@ class SSHRunner:
             stderr=subprocess.PIPE,
             **_windows_no_window_kwargs(),
         )
+        streams: list[Any] = []
+        workers: list[threading.Thread] = []
+        failures: "queue.Queue[BaseException]" = queue.Queue()
+        ssh_stderr_chunks: list[bytes] = []
+        if ssh_process.stdout is not None:
+            streams.append(ssh_process.stdout)
+        if ssh_process.stderr is not None:
+            streams.append(ssh_process.stderr)
+            stderr_worker = threading.Thread(
+                target=_drain_binary_stream,
+                args=(ssh_process.stderr, ssh_stderr_chunks, failures),
+                daemon=True,
+            )
+            workers.append(stderr_worker)
+            stderr_worker.start()
         try:
             budget.remaining(local_command)
             tar_process = subprocess.Popen(
@@ -1148,9 +1215,13 @@ class SSHRunner:
                 **_windows_no_window_kwargs(),
             )
         except Exception:
-            ssh_process.kill()
+            _stop_pipeline([ssh_process], streams, workers)
             discard_stage(plan.stage_path)
             raise
+        if tar_process.stdout is not None:
+            streams.append(tar_process.stdout)
+        if tar_process.stderr is not None:
+            streams.append(tar_process.stderr)
         if ssh_process.stdout:
             ssh_process.stdout.close()
 
@@ -1159,15 +1230,33 @@ class SSHRunner:
                 timeout=budget.remaining(local_command)
             )
             ssh_process.wait(timeout=budget.remaining(ssh_command))
-        except subprocess.TimeoutExpired:
-            ssh_process.kill()
-            tar_process.kill()
+            for worker in workers:
+                worker.join(timeout=budget.remaining(ssh_command))
+                if worker.is_alive():
+                    raise subprocess.TimeoutExpired(
+                        ssh_command,
+                        budget.timeout,
+                    )
+            if not failures.empty():
+                raise failures.get()
+        except Exception:
+            _stop_pipeline(
+                [ssh_process, tar_process],
+                streams,
+                workers,
+            )
             discard_stage(plan.stage_path)
             raise
 
+        for stream in streams:
+            try:
+                stream.close()
+            except OSError:
+                pass
+
         if ssh_process.returncode != 0 or tar_process.returncode != 0:
             discard_stage(plan.stage_path)
-            ssh_stderr = _as_text(ssh_process.stderr.read()) if ssh_process.stderr else ""
+            ssh_stderr = _as_text(b"".join(ssh_stderr_chunks))
             combined = (
                 f"SSH error: {ssh_stderr.strip()} | "
                 f"Tar error: {_as_text(tar_stderr).strip()}"

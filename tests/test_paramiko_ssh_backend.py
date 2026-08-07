@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import io
-import stat
+import socket
 import subprocess
 import tarfile
 import threading
@@ -24,8 +24,10 @@ from virtuoso_bridge.transport.ssh import SSHRunner
 from virtuoso_bridge.transport.transfer import (
     TarDownloadPlan,
     TarUploadPlan,
+    TextUploadPlan,
     build_tar_download_plan,
     build_tar_upload_plans,
+    build_text_upload_plan,
 )
 from virtuoso_bridge.transport.tunnel import SSHClient
 
@@ -50,8 +52,8 @@ class _DispatchBackend:
         self.calls.append(("upload_tar", plan, timeout))
         return 0, "", ""
 
-    def upload_text(self, contents, remote_path, *, timeout):
-        self.calls.append(("upload_text", contents, remote_path, timeout))
+    def upload_text(self, plan, contents, *, timeout):
+        self.calls.append(("upload_text", plan, contents, timeout))
         return 0, "", ""
 
     def download_tar(self, plan, *, timeout):
@@ -122,6 +124,7 @@ def test_ssh_runner_dispatches_to_explicit_paramiko_backend(
     ]
     assert isinstance(backend.calls[2][1], TarUploadPlan)
     assert isinstance(backend.calls[3][1], TarUploadPlan)
+    assert isinstance(backend.calls[4][1], TextUploadPlan)
     assert isinstance(backend.calls[5][1], TarDownloadPlan)
 
 
@@ -668,6 +671,62 @@ def test_channel_rejection_does_not_close_shared_transport() -> None:
     assert not client.closed
 
 
+@pytest.mark.parametrize(
+    "operation",
+    ["run_command", "upload_tar", "download_tar", "upload_text", "download_file"],
+)
+def test_paramiko_socket_timeout_uses_subprocess_timeout_contract(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    tracker = _SessionTracker()
+
+    class _TimeoutTransport(_FakeTransport):
+        def open_session(self, timeout):
+            raise socket.timeout("channel timed out")
+
+    backend = ParamikoSessionBackend.__new__(ParamikoSessionBackend)
+    backend._paramiko = SimpleNamespace(SSHException=_FakeSSHException)
+    backend._session_gate = threading.BoundedSemaphore(1)
+    backend._connect_lock = threading.RLock()
+    backend._target_client = _FakeClient(_TimeoutTransport(tracker))
+    backend._jump_client = None
+    backend._jump_channel = None
+    backend.ensure_connected = lambda timeout=None: None
+
+    local_file = tmp_path / "input.scs"
+    local_file.write_text("payload", encoding="utf-8")
+    upload_plan = build_tar_upload_plans(
+        "tar",
+        [(local_file, "/remote/input.scs")],
+    )[0]
+    download_plan = build_tar_download_plan(
+        "tar",
+        "/remote/results",
+        tmp_path / "results",
+    )
+    text_plan = build_text_upload_plan("/remote/input.scs")
+
+    with pytest.raises(subprocess.TimeoutExpired) as caught:
+        if operation == "run_command":
+            backend.run_command("sleep 30", timeout=2)
+        elif operation == "upload_tar":
+            backend.upload_tar(upload_plan, timeout=2)
+        elif operation == "download_tar":
+            backend.download_tar(download_plan, timeout=2)
+        elif operation == "upload_text":
+            backend.upload_text(text_plan, "payload", timeout=2)
+        else:
+            backend.download_file(
+                "/remote/output.raw",
+                tmp_path / "output.raw",
+                timeout=2,
+            )
+
+    assert caught.value.timeout == 2
+    assert not list(tmp_path.glob(".vbtmp-*"))
+
+
 def test_sftp_file_error_does_not_close_active_transport(tmp_path: Path) -> None:
     tracker = _SessionTracker()
     transport = _FakeTransport(tracker)
@@ -816,6 +875,45 @@ def test_paramiko_tar_upload_streams_the_shared_archive_plan(tmp_path: Path) -> 
         member = archive.extractfile("input.scs")
         assert member is not None
         assert member.read() == local_path.read_bytes()
+
+
+def test_paramiko_text_upload_executes_shared_atomic_plan() -> None:
+    class _TextChannel(_FakeChannel):
+        def __init__(self, tracker: _SessionTracker) -> None:
+            super().__init__(tracker)
+            self.command: str | None = None
+            self.payload = bytearray()
+
+        def exec_command(self, command: str) -> None:
+            self.command = command
+
+        def sendall(self, payload: bytes) -> None:
+            self.payload.extend(payload)
+
+    tracker = _SessionTracker()
+    channel = _TextChannel(tracker)
+
+    class _TextTransport(_FakeTransport):
+        def open_session(self, timeout):
+            assert timeout > 0
+            return channel
+
+    backend = ParamikoSessionBackend.__new__(ParamikoSessionBackend)
+    backend._paramiko = SimpleNamespace(SSHException=_FakeSSHException)
+    backend._session_gate = threading.BoundedSemaphore(1)
+    backend._connect_lock = threading.RLock()
+    backend._target_client = _FakeClient(_TextTransport(tracker))
+    backend._jump_client = None
+    backend._jump_channel = None
+    backend.ensure_connected = lambda timeout=None: None
+    plan = build_text_upload_plan("/remote/input.scs")
+
+    result = backend.upload_text(plan, "exact payload", timeout=5)
+
+    assert result == (0, "", "")
+    assert channel.command == plan.remote_command
+    assert channel.payload == b"exact payload"
+    assert channel._closed
 
 
 def test_paramiko_tar_download_installs_only_completed_archive(tmp_path: Path) -> None:
@@ -984,48 +1082,3 @@ def test_connect_uses_resolved_identity_files_and_does_not_rescan_home(
     assert client.connect_kwargs["key_filename"] == str(available_key)
     assert client.connect_kwargs["allow_agent"] is True
     assert client.connect_kwargs["look_for_keys"] is False
-
-
-def test_concurrent_mkdir_accepts_directory_created_by_other_session() -> None:
-    class _RacingSftp:
-        def __init__(self) -> None:
-            self.barrier = threading.Barrier(2)
-            self.local = threading.local()
-            self.lock = threading.Lock()
-            self.exists = False
-            self.mkdir_calls = 0
-
-        def stat(self, _path):
-            if not getattr(self.local, "initial_probe_done", False):
-                self.local.initial_probe_done = True
-                self.barrier.wait(timeout=2)
-                raise FileNotFoundError(2, "not found")
-            with self.lock:
-                if not self.exists:
-                    raise FileNotFoundError(2, "not found")
-            return SimpleNamespace(st_mode=stat.S_IFDIR | 0o755)
-
-        def mkdir(self, _path) -> None:
-            with self.lock:
-                self.mkdir_calls += 1
-                if self.exists:
-                    raise FileExistsError(17, "already exists")
-                self.exists = True
-
-    sftp = _RacingSftp()
-    deadline = _Deadline.start(2)
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [
-            pool.submit(
-                ParamikoSessionBackend._mkdir_p,
-                sftp,
-                "/scratch",
-                deadline,
-            )
-            for _ in range(2)
-        ]
-        for future in futures:
-            future.result()
-
-    assert sftp.exists
-    assert sftp.mkdir_calls == 2
