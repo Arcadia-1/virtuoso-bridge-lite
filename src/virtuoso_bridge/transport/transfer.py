@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import os
 import posixpath
 import shlex
@@ -11,6 +12,9 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -288,7 +292,7 @@ def install_staged_item(
     staged_item: Path,
     local_path: Path,
 ) -> None:
-    """Atomically install one staged file or directory."""
+    """Atomically install one staged item, then retire the previous target."""
     backup_path: Path | None = None
     try:
         if local_path.exists() or local_path.is_symlink():
@@ -306,10 +310,18 @@ def install_staged_item(
         raise
     else:
         if backup_path is not None and (backup_path.exists() or backup_path.is_symlink()):
-            if backup_path.is_dir() and not backup_path.is_symlink():
-                shutil.rmtree(backup_path)
-            else:
-                backup_path.unlink()
+            try:
+                if backup_path.is_dir() and not backup_path.is_symlink():
+                    shutil.rmtree(backup_path)
+                else:
+                    backup_path.unlink()
+            except OSError as exc:
+                logger.warning(
+                    "Installed %s but could not remove previous content at %s: %s",
+                    local_path,
+                    backup_path,
+                    exc,
+                )
         discard_stage(stage_path)
 
 

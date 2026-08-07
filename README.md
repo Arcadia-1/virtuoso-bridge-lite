@@ -113,9 +113,10 @@ VB_SSH_MAX_SESSIONS=10
 
 Commands and file transfers then share one authenticated target SSH Transport;
 each operation opens a channel on that Transport. Bulk and recursive transfers
-use the same tar plans as the OpenSSH backend; text uploads and single-file
-downloads use SFTP. `VB_SSH_MAX_SESSIONS` is a client-side gate and must be no
-greater than the target sshd `MaxSessions`. Waiting work queues at the gate
+use the same tar plans as the OpenSSH backend; text uploads use the shared atomic
+staging plan, while single-file downloads use SFTP. `VB_SSH_MAX_SESSIONS` is a
+client-side gate and must be no greater than the target sshd `MaxSessions`.
+Waiting work queues at the gate
 instead of opening another command connection. There is no automatic fallback
 to independent SSH connections.
 
@@ -129,7 +130,9 @@ Both the target and jump host must already have keys in the applicable user or
 system `known_hosts` files; unknown and changed keys are rejected. The backend
 honors `UserKnownHostsFile`, `GlobalKnownHostsFile`, and `HostKeyAlias`. Run the
 documented prerequisite `ssh <host> echo ok` once with OpenSSH to review and
-record a new host key before selecting Paramiko.
+record a new host key before selecting Paramiko. Paramiko cannot enforce an
+OpenSSH `RevokedHostKeys` file or KRL, so any configured value other than `none`
+fails during initialization instead of silently bypassing revocation policy.
 
 `MaxStartups` governs unauthenticated TCP handshakes, while `MaxSessions`
 governs channels on one authenticated connection. The Paramiko backend avoids

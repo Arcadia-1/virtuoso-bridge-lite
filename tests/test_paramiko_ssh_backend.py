@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import queue
 import socket
 import subprocess
 import tarfile
@@ -205,6 +206,7 @@ def _resolved_config(**values: str) -> str:
         "port": "22",
         "identitiesonly": "no",
         "stricthostkeychecking": "ask",
+        "revokedhostkeys": "none",
         "userknownhostsfile": "none",
         "globalknownhostsfile": "none",
     }
@@ -448,6 +450,26 @@ def test_paramiko_rejects_non_strict_host_key_configuration(
         _configured_backend(config)
 
 
+def test_paramiko_fails_closed_when_revoked_host_keys_are_configured(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "config"
+    config.touch()
+    revoked_keys = tmp_path / "revoked_host_keys"
+    _mock_ssh_g(
+        monkeypatch,
+        {
+            ("compute", None, None): _resolved_config(
+                revokedhostkeys=revoked_keys.as_posix()
+            ),
+        },
+    )
+
+    with pytest.raises(ValueError, match="cannot enforce RevokedHostKeys"):
+        _configured_backend(config)
+
+
 def test_identityfile_none_preserves_agent_without_local_key_discovery(
     monkeypatch,
     tmp_path: Path,
@@ -581,6 +603,14 @@ class _FakeChannel:
     def exit_status_ready(self) -> bool:
         return time.monotonic() >= self._ready_at
 
+    @property
+    def eof_received(self) -> bool:
+        return self.exit_status_ready()
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
     def recv_exit_status(self) -> int:
         return 0
 
@@ -669,6 +699,47 @@ def test_channel_rejection_does_not_close_shared_transport() -> None:
     assert rejected == (255, "", "server refused one channel")
     assert accepted[0] == 0
     assert not client.closed
+
+
+def test_collect_channel_waits_for_eof_after_early_exit_status() -> None:
+    class _LateOutputChannel:
+        def __init__(self) -> None:
+            self.started = time.monotonic()
+            self.stdout_read = False
+
+        @property
+        def eof_received(self) -> bool:
+            return time.monotonic() - self.started >= 0.03
+
+        @property
+        def closed(self) -> bool:
+            return False
+
+        def exit_status_ready(self) -> bool:
+            return True
+
+        def recv_ready(self) -> bool:
+            return self.eof_received and not self.stdout_read
+
+        def recv(self, _size: int) -> bytes:
+            self.stdout_read = True
+            return b"late output"
+
+        def recv_stderr_ready(self) -> bool:
+            return False
+
+        def recv_exit_status(self) -> int:
+            return 0
+
+    backend = ParamikoSessionBackend.__new__(ParamikoSessionBackend)
+
+    result = backend._collect_channel(
+        _LateOutputChannel(),
+        _Deadline.start(1),
+        "printf late output",
+    )
+
+    assert result == (0, "late output", "")
 
 
 @pytest.mark.parametrize(
@@ -856,6 +927,47 @@ def _tar_backend(channel: _TarChannel) -> ParamikoSessionBackend:
     backend._jump_channel = None
     backend.ensure_connected = lambda timeout=None: None
     return backend
+
+
+def test_paramiko_tar_wait_checks_worker_failure_after_workers_exit() -> None:
+    failures: "queue.Queue[BaseException]" = queue.Queue()
+    expected = OSError("late worker failure")
+
+    class _CompletedChannel:
+        @staticmethod
+        def exit_status_ready() -> bool:
+            return True
+
+        @staticmethod
+        def recv_exit_status() -> int:
+            raise AssertionError("worker failure must win over exit status")
+
+    class _CompletedProcess:
+        @staticmethod
+        def poll() -> int:
+            return 0
+
+        @staticmethod
+        def wait(*, timeout: float) -> int:
+            raise AssertionError("worker failure must win over process status")
+
+    class _FailingWorker:
+        @staticmethod
+        def is_alive() -> bool:
+            failures.put(expected)
+            return False
+
+    with pytest.raises(OSError, match="late worker failure") as caught:
+        ParamikoSessionBackend._wait_tar_transfer(
+            _CompletedChannel(),
+            _CompletedProcess(),
+            [_FailingWorker()],
+            failures,
+            _Deadline.start(5),
+            "tar transfer",
+        )
+
+    assert caught.value is expected
 
 
 def test_paramiko_tar_upload_streams_the_shared_archive_plan(tmp_path: Path) -> None:

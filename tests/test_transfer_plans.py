@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 import re
 import shlex
+import shutil
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,7 @@ from virtuoso_bridge.transport.transfer import (
     build_tar_download_plan,
     build_tar_upload_plans,
     build_text_upload_plan,
+    install_staged_item,
 )
 
 
@@ -187,3 +190,43 @@ def test_persistent_text_upload_preserves_exact_payload_via_base64() -> None:
     assert "bGluZSBvbmUKbGluZSB0d28=" in command
     assert 'base64 -d > "$payload"' in command
     assert 'mv -fT -- "$payload" /remote/input.scs' in command
+
+
+def test_installed_item_remains_successful_when_backup_cleanup_fails(
+    monkeypatch,
+    tmp_path: Path,
+    caplog,
+) -> None:
+    local_path = tmp_path / "installed"
+    local_path.mkdir()
+    (local_path / "old.txt").write_text("old", encoding="utf-8")
+    stage_path = tmp_path / ".vbtmp-stage"
+    staged_item = stage_path / "installed"
+    staged_item.mkdir(parents=True)
+    (staged_item / "new.txt").write_text("new", encoding="utf-8")
+    real_rmtree = shutil.rmtree
+
+    def fail_backup_cleanup(path, *args, **kwargs):
+        if Path(path).name.startswith(".vbbak-"):
+            raise PermissionError("backup is busy")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.transfer.shutil.rmtree",
+        fail_backup_cleanup,
+    )
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger="virtuoso_bridge.transport.transfer",
+    ):
+        install_staged_item(stage_path, staged_item, local_path)
+
+    assert (local_path / "new.txt").read_text(encoding="utf-8") == "new"
+    assert not (local_path / "old.txt").exists()
+    backups = list(tmp_path.glob(".vbbak-*"))
+    assert len(backups) == 1
+    assert (backups[0] / "old.txt").read_text(encoding="utf-8") == "old"
+    assert not stage_path.exists()
+    assert "could not remove previous content" in caplog.text
+    assert str(backups[0]) in caplog.text

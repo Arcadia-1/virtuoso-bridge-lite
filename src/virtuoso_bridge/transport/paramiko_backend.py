@@ -433,6 +433,15 @@ class ParamikoSessionBackend:
                 f"StrictHostKeyChecking={strict_host_key_checking} is not supported "
                 f"for host {host!r}"
             )
+        revoked_host_keys = str(
+            lookup.get("revokedhostkeys") or "none"
+        ).strip()
+        if revoked_host_keys.lower() != "none":
+            raise ValueError(
+                "Paramiko backend cannot enforce "
+                f"RevokedHostKeys={revoked_host_keys!r} for host {host!r}; "
+                "use the OpenSSH backend"
+            )
 
         known_hosts_files = self._known_hosts_files(
             lookup,
@@ -785,6 +794,7 @@ class ParamikoSessionBackend:
                 stderr_chunks.append(channel.recv_stderr(65536))
             if (
                 channel.exit_status_ready()
+                and (channel.eof_received or channel.closed)
                 and not channel.recv_ready()
                 and not channel.recv_stderr_ready()
             ):
@@ -828,8 +838,12 @@ class ParamikoSessionBackend:
         command: object,
     ) -> tuple[int, int]:
         while True:
-            if not failures.empty():
-                raise failures.get()
+            try:
+                worker_failure = failures.get_nowait()
+            except queue.Empty:
+                pass
+            else:
+                raise worker_failure
             if (
                 channel.exit_status_ready()
                 and process.poll() is not None
@@ -838,6 +852,12 @@ class ParamikoSessionBackend:
                 break
             deadline.remaining(command)
             time.sleep(0.01)
+        try:
+            worker_failure = failures.get_nowait()
+        except queue.Empty:
+            pass
+        else:
+            raise worker_failure
         remote_rc = channel.recv_exit_status()
         local_rc = process.wait(timeout=deadline.remaining(command))
         return remote_rc, local_rc
