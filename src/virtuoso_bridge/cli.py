@@ -248,7 +248,7 @@ def _start_one_profile(profile: str | None) -> int:
             print("Try starting the tunnel manually:")
             ssh_env = remote_ssh_env_from_os(profile)
             port = ssh.port
-            manual_cmd = f"ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ExitOnForwardFailure=yes -N -L {port}:127.0.0.1:{port}"
+            manual_cmd = f"ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -N -L {port}:127.0.0.1:{port}"
             if ssh_env.jump_host:
                 jump = f"{ssh_env.jump_user or ssh_env.remote_user}@{ssh_env.jump_host}" if (ssh_env.jump_user or ssh_env.remote_user) else ssh_env.jump_host
                 manual_cmd += f" -J {jump}"

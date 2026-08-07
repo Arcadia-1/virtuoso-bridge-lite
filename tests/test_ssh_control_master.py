@@ -143,6 +143,20 @@ def test_remote_scp_target_preserves_simple_paths_and_rejects_controls() -> None
             runner._remote_scp_target(remote_path)
 
 
+def test_common_options_preserve_configured_host_key_policy(monkeypatch) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.ssh._setup_command_log",
+        lambda: None,
+    )
+    runner = SSHRunner(host="eda-host", user="designer", ssh_cmd="ssh")
+
+    options = runner._common_ssh_options()
+
+    assert "StrictHostKeyChecking=no" not in options
+    assert "BatchMode=yes" in options
+
+
 @pytest.mark.parametrize(
     ("remote_path", "escaped_path"),
     [

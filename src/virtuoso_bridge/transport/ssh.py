@@ -19,12 +19,20 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Callable, NamedTuple
 
 from virtuoso_bridge.env import load_vb_env
 from virtuoso_bridge.profile import resolve_profile
 from virtuoso_bridge.runtime_paths import command_log_file
+from virtuoso_bridge.transport.transfer import (
+    TarDownloadPlan,
+    TarUploadPlan,
+    build_tar_download_plan,
+    build_tar_upload_plans,
+    discard_stage,
+    install_staged_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -342,9 +350,10 @@ class SSHRunner:
                 host=host,
                 user=user,
                 jump_host=jump_host,
-                jump_user=self._jump_user,
+                jump_user=jump_user,
                 ssh_key_path=ssh_key_path,
                 ssh_config_path=self._ssh_config_path,
+                ssh_cmd=self._ssh_cmd,
                 connect_timeout=connect_timeout,
                 max_sessions=max_sessions,
             )
@@ -851,20 +860,11 @@ class SSHRunner:
         budget = _TimeoutBudget.start(timeout, self._timeout)
         if not local_path.exists():
             raise FileNotFoundError(f"Local path not found: {local_path}")
-
-        if self._paramiko_backend is not None:
-            rc, stdout, stderr = self._paramiko_backend.upload(
-                local_path,
-                remote_path,
-                timeout=budget.remaining(remote_path),
-            )
-            return CommandResult(returncode=rc, stdout=stdout, stderr=stderr)
-
-        result = self._upload_via_tar(
-            local_path,
-            remote_path,
-            _budget=budget,
+        plans = build_tar_upload_plans(
+            self._tar_cmd,
+            [(local_path, remote_path)],
         )
+        result = self._execute_tar_upload_plans(plans, budget)
         if result.returncode != 0:
             logger.warning("tar upload failed (rc=%d): %s", result.returncode, result.stderr.strip())
         else:
@@ -881,105 +881,8 @@ class SSHRunner:
             return CommandResult(returncode=0, stdout="", stderr="")
 
         budget = _TimeoutBudget.start(timeout, self._timeout)
-
-        if self._paramiko_backend is not None:
-            rc, stdout, stderr = self._paramiko_backend.upload_batch(
-                files,
-                timeout=budget.remaining("upload_batch"),
-            )
-            return CommandResult(returncode=rc, stdout=stdout, stderr=stderr)
-
-        # Group by remote directory (usually all the same)
-        by_remote_dir: dict[str, list[tuple[Path, str]]] = {}
-        for local_path, remote_path in files:
-            rdir = str(Path(remote_path).parent).replace("\\", "/")
-            by_remote_dir.setdefault(rdir, []).append((local_path, remote_path))
-
-        for remote_dir, entries in by_remote_dir.items():
-            remote_dir_q = shlex.quote(remote_dir)
-
-            # tar entry names are local basenames; for each entry whose
-            # remote basename differs, append a post-extract mv.  Use
-            # uuid-tagged temp names as a two-phase staging area so that
-            # one entry's local name colliding with another's remote name
-            # doesn't cause data to clobber data during the rename chain
-            # (issue #71 follow-up).
-            rename_pairs: list[tuple[str, str]] = []
-            for local_path, remote_path in entries:
-                local_basename = local_path.name
-                remote_basename = Path(remote_path).name
-                if remote_basename and remote_basename != local_basename:
-                    rename_pairs.append(
-                        (local_basename, remote_path.replace("\\", "/"))
-                    )
-
-            cmd_parts = [
-                f"mkdir -p {remote_dir_q}",
-                f"tar xf - -C {remote_dir_q}",
-            ]
-            if rename_pairs:
-                token = uuid.uuid4().hex[:8]
-                for i, (extracted, _) in enumerate(rename_pairs):
-                    tmp = f".vbatch-{token}-{i}"
-                    cmd_parts.append(
-                        f"mv {remote_dir_q}/{shlex.quote(extracted)} "
-                        f"{remote_dir_q}/{shlex.quote(tmp)}"
-                    )
-                for i, (_, target) in enumerate(rename_pairs):
-                    tmp = f".vbatch-{token}-{i}"
-                    cmd_parts.append(
-                        f"mv {remote_dir_q}/{shlex.quote(tmp)} "
-                        f"{shlex.quote(target)}"
-                    )
-            remote_cmd = " && ".join(cmd_parts)
-            ssh_cmd = self._build_ssh_base() + [remote_cmd]
-
-            tar_cmd = [self._tar_cmd, "cf", "-"]
-            for local_path, _ in entries:
-                tar_cmd += ["-C", str(local_path.resolve().parent).replace("\\", "/"), local_path.name]
-
-            logger.debug("Batch tar upload: %d file(s) -> %s:%s", len(entries), self._host, remote_dir)
-            budget.remaining(tar_cmd)
-            tar_proc = subprocess.Popen(
-                tar_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                **_windows_no_window_kwargs(),
-            )
-            try:
-                budget.remaining(ssh_cmd)
-                ssh_proc = subprocess.Popen(
-                    ssh_cmd,
-                    stdin=tar_proc.stdout,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    **_windows_no_window_kwargs(),
-                )
-            except Exception:
-                tar_proc.kill()
-                raise
-            if tar_proc.stdout:
-                tar_proc.stdout.close()
-            try:
-                ssh_out, ssh_err = ssh_proc.communicate(
-                    timeout=budget.remaining(ssh_cmd)
-                )
-                tar_proc.wait(timeout=budget.remaining(tar_cmd))
-            except subprocess.TimeoutExpired:
-                ssh_proc.kill()
-                tar_proc.kill()
-                raise
-
-            if ssh_proc.returncode != 0:
-                stderr_text = _as_text(ssh_err)
-                logger.warning("tar batch upload failed (rc=%d): %s", ssh_proc.returncode, stderr_text.strip())
-                return CommandResult(
-                    returncode=ssh_proc.returncode,
-                    stdout=_as_text(ssh_out),
-                    stderr=stderr_text,
-                )
-
-        return CommandResult(returncode=0, stdout="", stderr="")
+        plans = build_tar_upload_plans(self._tar_cmd, files)
+        return self._execute_tar_upload_plans(plans, budget)
 
     def upload_text(self, text: str, remote_path: str, timeout: float | None = None) -> CommandResult:
         """Upload a UTF-8 text string as a file to the remote host via SSH."""
@@ -1064,21 +967,20 @@ class SSHRunner:
         """Download a file or directory from the remote host via tar pipe or scp."""
         budget = _TimeoutBudget.start(timeout, self._timeout)
 
-        if self._paramiko_backend is not None:
-            rc, stdout, stderr = self._paramiko_backend.download(
-                remote_path,
-                local_path,
-                recursive=recursive,
-                timeout=budget.remaining(remote_path),
-            )
-            return CommandResult(returncode=rc, stdout=stdout, stderr=stderr)
-
         if recursive:
             return self._download_via_tar(
                 remote_path,
                 local_path,
                 _budget=budget,
             )
+
+        if self._paramiko_backend is not None:
+            rc, stdout, stderr = self._paramiko_backend.download_file(
+                remote_path,
+                local_path,
+                timeout=budget.remaining(remote_path),
+            )
+            return CommandResult(returncode=rc, stdout=stdout, stderr=stderr)
 
         local_path.parent.mkdir(parents=True, exist_ok=True)
         logger.debug("Downloading via scp %s:%s -> %s", self._host, remote_path, local_path)
@@ -1120,192 +1022,173 @@ class SSHRunner:
     ) -> CommandResult:
         """Download a directory recursively using tar czf piped over SSH."""
         budget = _budget or _TimeoutBudget.start(timeout, self._timeout)
-        # Extract into a sibling staging directory first; replace the requested
-        # target only after both SSH and local tar have succeeded.  The archive
-        # contains the remote directory itself rather than "." so BSD tar does
-        # not try to restore metadata on the pre-created staging directory.
-        # A short sibling name and subprocess cwd keep local paths out of tar's
-        # narrow argv on Windows without giving up same-volume atomic renames.
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-        stage_path = local_path.parent / f".vbtmp-{uuid.uuid4().hex}"
-        stage_path.mkdir(parents=True)
-        remote_basename = PurePosixPath(remote_path.rstrip("/")).name
-        if not remote_basename:
-            shutil.rmtree(stage_path, ignore_errors=True)
-            return CommandResult(returncode=1, stdout="", stderr=f"Invalid remote directory path: {remote_path}")
-
-        remote_path_q = shlex.quote(remote_path)
-        inner_cmd = (
-            f"p={remote_path_q}; "
-            'd=$(dirname "$p"); b=$(basename "$p"); '
-            'cd "$d" && tar czf - "$b"'
-        )
-        remote_cmd = f"sh -c {shlex.quote(inner_cmd)}"
-
-        ssh_cmd = self._build_ssh_base() + [remote_cmd]
-        tar_cmd = [self._tar_cmd, "xzf", "-"]
-
-        if self._verbose:
-            print(f"[cmd] {' '.join(ssh_cmd)} | {' '.join(tar_cmd)}  # download {remote_path} -> {local_path}", flush=True)
-        logger.debug("Downloading via tar pipe %s:%s -> %s", self._host, remote_path, local_path)
-
-        budget.remaining(ssh_cmd)
-        ssh_proc = subprocess.Popen(
-            ssh_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            **_windows_no_window_kwargs(),
-        )
         try:
-            budget.remaining(tar_cmd)
-            tar_proc = subprocess.Popen(
-                tar_cmd,
-                stdin=ssh_proc.stdout,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                cwd=stage_path,
-                **_windows_no_window_kwargs(),
+            plan = build_tar_download_plan(self._tar_cmd, remote_path, local_path)
+        except ValueError as exc:
+            return CommandResult(returncode=1, stdout="", stderr=str(exc))
+        if self._paramiko_backend is not None:
+            rc, stdout, stderr = self._paramiko_backend.download_tar(
+                plan,
+                timeout=budget.remaining(remote_path),
             )
-        except Exception:
-            ssh_proc.kill()
-            shutil.rmtree(stage_path, ignore_errors=True)
-            raise
-        if ssh_proc.stdout:
-            ssh_proc.stdout.close()
+            return CommandResult(returncode=rc, stdout=stdout, stderr=stderr)
+        return self._execute_openssh_download_plan(plan, budget)
 
-        try:
-            tar_out, tar_err = tar_proc.communicate(
-                timeout=budget.remaining(tar_cmd)
-            )
-            ssh_proc.wait(timeout=budget.remaining(ssh_cmd))
-        except subprocess.TimeoutExpired:
-            ssh_proc.kill()
-            tar_proc.kill()
-            shutil.rmtree(stage_path, ignore_errors=True)
-            raise
-
-        if ssh_proc.returncode != 0 or tar_proc.returncode != 0:
-            shutil.rmtree(stage_path, ignore_errors=True)
-            ssh_err = _as_text(ssh_proc.stderr.read()) if ssh_proc.stderr else ""
-            tar_err_str = _as_text(tar_err)
-            combined_err = f"SSH error: {ssh_err.strip()} | Tar error: {tar_err_str.strip()}"
-            logger.warning("download (tar) failed (rc=%d/%d): %s", ssh_proc.returncode, tar_proc.returncode, combined_err)
-            return CommandResult(returncode=ssh_proc.returncode or tar_proc.returncode, stdout="", stderr=combined_err)
-
-        backup_path: Path | None = None
-        extracted_path = stage_path / remote_basename
-        if not (extracted_path.exists() or extracted_path.is_symlink()):
-            shutil.rmtree(stage_path, ignore_errors=True)
-            return CommandResult(
-                returncode=1,
-                stdout="",
-                stderr=f"Downloaded archive did not contain expected directory: {remote_basename}",
-            )
-        try:
-            if local_path.exists() or local_path.is_symlink():
-                backup_path = local_path.parent / f".vbbak-{uuid.uuid4().hex}"
-                local_path.rename(backup_path)
-            extracted_path.rename(local_path)
-        except Exception:
-            if stage_path.exists():
-                shutil.rmtree(stage_path, ignore_errors=True)
-            if (
-                backup_path is not None
-                and not (local_path.exists() or local_path.is_symlink())
-                and (backup_path.exists() or backup_path.is_symlink())
-            ):
-                backup_path.rename(local_path)
-            raise
-        else:
-            if backup_path is not None and (backup_path.exists() or backup_path.is_symlink()):
-                if backup_path.is_dir() and not backup_path.is_symlink():
-                    shutil.rmtree(backup_path)
-                else:
-                    backup_path.unlink()
-            shutil.rmtree(stage_path, ignore_errors=True)
+    def _execute_tar_upload_plans(
+        self,
+        plans: tuple[TarUploadPlan, ...],
+        budget: _TimeoutBudget,
+    ) -> CommandResult:
+        for plan in plans:
+            if self._paramiko_backend is not None:
+                rc, stdout, stderr = self._paramiko_backend.upload_tar(
+                    plan,
+                    timeout=budget.remaining(plan.remote_command),
+                )
+                result = CommandResult(rc, stdout, stderr)
+            else:
+                result = self._execute_openssh_upload_plan(plan, budget)
+            if result.returncode != 0:
+                return result
         return CommandResult(returncode=0, stdout="", stderr="")
 
-    def _upload_via_tar(
+    def _execute_openssh_upload_plan(
         self,
-        local_path: Path,
-        remote_path: str,
-        *,
-        timeout: float | None = None,
-        _budget: _TimeoutBudget | None = None,
+        plan: TarUploadPlan,
+        budget: _TimeoutBudget,
     ) -> CommandResult:
-        budget = _budget or _TimeoutBudget.start(timeout, self._timeout)
-        remote_dir = str(Path(remote_path).parent).replace("\\", "/")
-        remote_dir_q = shlex.quote(remote_dir)
-        local_basename = local_path.name
-        remote_basename = Path(remote_path).name
-        if remote_basename and remote_basename != local_basename:
-            # tar entry name is local_basename, so naive extract lands at
-            # <remote_dir>/<local_basename>; mv to honor the caller's
-            # requested remote_path basename (issue #71).
-            remote_path_unix = remote_path.replace("\\", "/")
-            remote_cmd = (
-                f"mkdir -p {remote_dir_q} && tar xf - -C {remote_dir_q} && "
-                f"mv {remote_dir_q}/{shlex.quote(local_basename)} "
-                f"{shlex.quote(remote_path_unix)}"
-            )
-        else:
-            remote_cmd = f"mkdir -p {remote_dir_q} && tar xf - -C {remote_dir_q}"
-        tar_cmd = [self._tar_cmd, "cf", "-", "-C",
-                   str(local_path.parent).replace("\\", "/"), local_path.name]
-        logger.debug("Uploading via tar pipe %s -> %s:%s", local_path, self._host, remote_path)
+        local_command = list(plan.local_command)
 
         def _attempt() -> tuple[int, bytes, bytes]:
-            # Rebuild ssh command per attempt so a CM-disable mid-loop
-            # picks up the no-mux config on the next try.
-            ssh_cmd = self._build_ssh_base() + [remote_cmd]
+            ssh_command = self._build_ssh_base() + [plan.remote_command]
             if self._verbose:
                 print(
-                    f"[cmd] {' '.join(tar_cmd)} | {' '.join(ssh_cmd)}"
-                    f"  # upload {local_path} -> {remote_path}",
+                    f"[cmd] {' '.join(local_command)} | {' '.join(ssh_command)}",
                     flush=True,
                 )
-            budget.remaining(tar_cmd)
-            tar_proc = subprocess.Popen(
-                tar_cmd,
+            budget.remaining(local_command)
+            tar_process = subprocess.Popen(
+                local_command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 **_windows_no_window_kwargs(),
             )
             try:
-                budget.remaining(ssh_cmd)
-                ssh_proc = subprocess.Popen(
-                    ssh_cmd,
-                    stdin=tar_proc.stdout,
+                budget.remaining(ssh_command)
+                ssh_process = subprocess.Popen(
+                    ssh_command,
+                    stdin=tar_process.stdout,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     **_windows_no_window_kwargs(),
                 )
             except Exception:
-                tar_proc.kill()
+                tar_process.kill()
                 raise
-            if tar_proc.stdout:
-                tar_proc.stdout.close()
+            if tar_process.stdout:
+                tar_process.stdout.close()
             try:
-                ssh_out, ssh_err = ssh_proc.communicate(
-                    timeout=budget.remaining(ssh_cmd)
+                ssh_stdout, ssh_stderr = ssh_process.communicate(
+                    timeout=budget.remaining(ssh_command)
                 )
-                tar_proc.wait(timeout=budget.remaining(tar_cmd))
+                tar_process.wait(timeout=budget.remaining(local_command))
             except subprocess.TimeoutExpired:
-                ssh_proc.kill()
-                tar_proc.kill()
+                ssh_process.kill()
+                tar_process.kill()
                 raise
-            return ssh_proc.returncode, ssh_out or b"", ssh_err or b""
+            if tar_process.returncode != 0 and ssh_process.returncode == 0:
+                tar_stderr = tar_process.stderr.read() if tar_process.stderr else b""
+                return tar_process.returncode, ssh_stdout or b"", tar_stderr
+            return ssh_process.returncode, ssh_stdout or b"", ssh_stderr or b""
 
-        rc, out, err = self._attempt_with_cm_fallback(
+        rc, stdout, stderr = self._attempt_with_cm_fallback(
             _attempt,
             budget=budget,
-            command=remote_path,
+            command=plan.remote_command,
         )
-        return CommandResult(
-            returncode=rc,
-            stdout=_as_text(out),
-            stderr=_as_text(err),
+        return CommandResult(rc, _as_text(stdout), _as_text(stderr))
+
+    def _execute_openssh_download_plan(
+        self,
+        plan: TarDownloadPlan,
+        budget: _TimeoutBudget,
+    ) -> CommandResult:
+        plan.local_path.parent.mkdir(parents=True, exist_ok=True)
+        plan.stage_path.mkdir(parents=True)
+        ssh_command = self._build_ssh_base() + [plan.remote_command]
+        local_command = list(plan.local_command)
+        if self._verbose:
+            print(
+                f"[cmd] {' '.join(ssh_command)} | {' '.join(local_command)}"
+                f"  # download {plan.remote_path} -> {plan.local_path}",
+                flush=True,
+            )
+        logger.debug(
+            "Downloading via tar pipe %s:%s -> %s",
+            self._host,
+            plan.remote_path,
+            plan.local_path,
         )
+
+        budget.remaining(ssh_command)
+        ssh_process = subprocess.Popen(
+            ssh_command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **_windows_no_window_kwargs(),
+        )
+        try:
+            budget.remaining(local_command)
+            tar_process = subprocess.Popen(
+                local_command,
+                stdin=ssh_process.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=plan.stage_path,
+                **_windows_no_window_kwargs(),
+            )
+        except Exception:
+            ssh_process.kill()
+            discard_stage(plan.stage_path)
+            raise
+        if ssh_process.stdout:
+            ssh_process.stdout.close()
+
+        try:
+            _tar_stdout, tar_stderr = tar_process.communicate(
+                timeout=budget.remaining(local_command)
+            )
+            ssh_process.wait(timeout=budget.remaining(ssh_command))
+        except subprocess.TimeoutExpired:
+            ssh_process.kill()
+            tar_process.kill()
+            discard_stage(plan.stage_path)
+            raise
+
+        if ssh_process.returncode != 0 or tar_process.returncode != 0:
+            discard_stage(plan.stage_path)
+            ssh_stderr = _as_text(ssh_process.stderr.read()) if ssh_process.stderr else ""
+            combined = (
+                f"SSH error: {ssh_stderr.strip()} | "
+                f"Tar error: {_as_text(tar_stderr).strip()}"
+            )
+            return CommandResult(
+                returncode=ssh_process.returncode or tar_process.returncode,
+                stdout="",
+                stderr=combined,
+            )
+        if not (plan.staged_item.exists() or plan.staged_item.is_symlink()):
+            discard_stage(plan.stage_path)
+            return CommandResult(
+                returncode=1,
+                stdout="",
+                stderr=(
+                    "Downloaded archive did not contain expected directory: "
+                    f"{plan.staged_item.name}"
+                ),
+            )
+        install_staged_path(plan)
+        return CommandResult(returncode=0, stdout="", stderr="")
 
     def ensure_persistent_shell(
         self,
@@ -1652,7 +1535,6 @@ class SSHRunner:
         """SSH options shared by both ssh and scp commands."""
         opts: list[str] = [
             "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=no",
             "-o", f"ConnectTimeout={self._connect_timeout}",
             # Skip GSSAPI/Kerberos auth.  In many EDA environments the
             # Kerberos KDC is either unreachable from the client or on
