@@ -3,7 +3,7 @@ from __future__ import annotations
 import errno
 import socket
 from collections.abc import Iterator
-from typing import get_type_hints
+from typing import Optional, get_type_hints
 
 import pytest
 
@@ -169,7 +169,7 @@ def test_execute_skill_timeout_caps_jump_host_retry_grace(
 def test_execute_skill_timeout_annotation_accepts_float() -> None:
     annotations = get_type_hints(VirtuosoClient.execute_skill)
 
-    assert annotations["timeout"] == float | None
+    assert annotations["timeout"] == Optional[float]
 
 
 def test_execute_skill_preserves_successful_jump_host_retry(

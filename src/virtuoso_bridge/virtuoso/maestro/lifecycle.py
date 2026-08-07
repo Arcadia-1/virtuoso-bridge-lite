@@ -7,6 +7,8 @@ Two modes:
 Always use the GUI functions for simulation workflows.
 """
 
+from __future__ import annotations
+
 import logging
 import re
 

@@ -11,7 +11,7 @@ import socket
 import hashlib
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from virtuoso_bridge.env import load_vb_env
 from virtuoso_bridge.profile import resolve_profile
@@ -313,7 +313,7 @@ class VirtuosoClient(VirtuosoInterface):
     def execute_skill(
         self,
         skill_code: str,
-        timeout: float | None = None,
+        timeout: Optional[float] = None,
     ) -> VirtuosoResult:
         """Execute SKILL code in Virtuoso via the RAMIC Bridge daemon."""
         effective_timeout = timeout if timeout is not None else self._timeout
