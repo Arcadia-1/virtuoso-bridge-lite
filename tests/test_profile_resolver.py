@@ -234,14 +234,29 @@ def test_spectre_simulator_direct_constructor_uses_resolved_profile(monkeypatch,
     bind_venv_profile("t28_io")
     monkeypatch.setenv("VB_REMOTE_HOST_t28_io", "thu-wei")
     monkeypatch.setenv("VB_REMOTE_USER_t28_io", "designer")
+    monkeypatch.setenv("VB_SSH_BACKEND_t28_io", "paramiko")
+    monkeypatch.setenv("VB_SSH_MAX_SESSIONS_t28_io", "255")
     monkeypatch.setattr("virtuoso_bridge.spectre.runner.load_vb_env", lambda: None)
     monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
+    captured: dict[str, object] = {}
+
+    class _CapturedRunner:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "virtuoso_bridge.spectre.runner.SSHRunner",
+        _CapturedRunner,
+    )
 
     sim = SpectreSimulator(remote=True)
+    sim._get_ssh_runner()
 
     assert sim._profile == "t28_io"
     assert sim._remote_host == "thu-wei"
     assert sim._remote_user == "designer"
+    assert captured["backend"] == "paramiko"
+    assert captured["max_sessions"] == 255
 
 
 def test_cli_profile_bind_show_clear(monkeypatch, tmp_path, capsys) -> None:

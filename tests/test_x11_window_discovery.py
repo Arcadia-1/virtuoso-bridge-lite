@@ -178,6 +178,29 @@ def test_make_ssh_runner_skips_ssh_for_localhost(monkeypatch) -> None:
     assert user == "designer"
 
 
+def test_make_ssh_runner_uses_profile_backend_settings(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _CapturedRunner:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(cli, "_CLI_PROFILE", ["worker"])
+    monkeypatch.setenv("VB_REMOTE_HOST_worker", "compute")
+    monkeypatch.setenv("VB_REMOTE_USER_worker", "designer")
+    monkeypatch.setenv("VB_SSH_BACKEND_worker", "paramiko")
+    monkeypatch.setenv("VB_SSH_MAX_SESSIONS_worker", "255")
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.SSHRunner", _CapturedRunner)
+
+    runner, user = cli._make_ssh_runner()
+
+    assert runner is not None
+    assert user == "designer"
+    assert captured["backend"] == "paramiko"
+    assert captured["max_sessions"] == 255
+
+
 def test_helper_exports_auto_detected_display(monkeypatch, capsys) -> None:
     helper = _load_helper_module()
     calls = []

@@ -10,6 +10,7 @@ requires-python = ">=3.9"
 dependencies = [
     "python-dotenv>=1.0",
     "pydantic>=2.0",
+    "eval-type-backport>=0.2.0; python_version < '3.10'",
     "pyyaml>=6.0",
     "markdownify>=0.14",
 ]
@@ -19,8 +20,12 @@ dependencies = [
 # Microsoft Visio via COM, Windows-only.  The pure model layer in
 # `virtuoso/visio.py` has no extra deps and stays importable everywhere.
 visio = ["pywin32; sys_platform == 'win32'"]
-# Test runner.  Install with `pip install -e .[dev]` then `pytest`.
-dev = ["pytest>=7.0"]
+# Persistent SSH transport with real multi-session multiplexing. This avoids
+# Windows OpenSSH ControlMaster limitations while keeping local mode lightweight.
+ssh = ["paramiko>=3.5"]
+# Complete test environment, including the optional SSH backend exercised by
+# the transport suite.
+dev = ["pytest>=7.0", "paramiko>=3.5"]
 
 [project.scripts]
 virtuoso-bridge = "virtuoso_bridge.cli:main"
