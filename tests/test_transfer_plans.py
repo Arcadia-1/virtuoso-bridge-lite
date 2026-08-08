@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
 import re
 import shlex
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -170,26 +173,66 @@ def test_upload_plan_rejects_duplicate_remote_targets(tmp_path: Path) -> None:
 
 
 def test_text_upload_plan_stages_in_target_directory_before_install() -> None:
-    plan = build_text_upload_plan("/remote/path/input.scs")
+    payload = "simulator lang=spectre\n".encode("utf-8")
+    plan = build_text_upload_plan("/remote/path/input.scs", payload)
     script = shlex.split(plan.remote_command)[2]
 
     assert plan.work_path.startswith("/remote/path/.vbtmp-")
+    assert plan.payload_size == len(payload)
+    assert plan.payload_sha256 == hashlib.sha256(payload).hexdigest()
     assert 'cat > "$payload"' in script
+    assert 'actual_size=$(LC_ALL=C wc -c < "$payload"' in script
+    assert 'actual_sha256=$(sha256sum -- "$payload")' in script
     assert "chmod 755 /remote/path" not in script
     install = 'mv -fT -- "$payload" /remote/path/input.scs'
     assert install in script
-    assert script.index('cat > "$payload"') < script.index(install)
+    assert script.index('cat > "$payload"') < script.index("actual_size=")
+    assert script.index("actual_sha256=") < script.index(install)
     assert 'rm -rf -- "$work"' in script
 
 
 def test_persistent_text_upload_preserves_exact_payload_via_base64() -> None:
-    plan = build_text_upload_plan("/remote/input.scs")
+    payload = b"line one\nline two"
+    plan = build_text_upload_plan("/remote/input.scs", payload)
 
-    command = plan.persistent_command("line one\nline two")
+    command = plan.persistent_command(payload)
 
     assert "bGluZSBvbmUKbGluZSB0d28=" in command
     assert 'base64 -d > "$payload"' in command
+    assert f"expected_size={len(payload)}" in command
+    assert hashlib.sha256(payload).hexdigest() in command
     assert 'mv -fT -- "$payload" /remote/input.scs' in command
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX sh and sha256sum")
+@pytest.mark.parametrize(
+    ("sent_payload", "error_message"),
+    [
+        (b"expected payloa", "size mismatch"),
+        (b"expected payloae", "SHA-256 mismatch"),
+    ],
+)
+def test_text_upload_rejects_incomplete_or_corrupt_payload_before_install(
+    tmp_path: Path,
+    sent_payload: bytes,
+    error_message: str,
+) -> None:
+    expected_payload = b"expected payload"
+    target = tmp_path / "input.scs"
+    target.write_bytes(b"original payload")
+    plan = build_text_upload_plan(target.as_posix(), expected_payload)
+
+    completed = subprocess.run(
+        shlex.split(plan.remote_command),
+        input=sent_payload,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 65
+    assert error_message in completed.stderr.decode("utf-8")
+    assert target.read_bytes() == b"original payload"
+    assert not list(tmp_path.glob(".vbtmp-*"))
 
 
 def test_installed_item_remains_successful_when_backup_cleanup_fails(

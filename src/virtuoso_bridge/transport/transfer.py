@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 import os
 import posixpath
@@ -35,10 +36,12 @@ class TextUploadPlan:
     remote_path: str
     remote_dir: str
     work_path: str
+    payload_size: int
+    payload_sha256: str
 
-    def persistent_command(self, text: str) -> str:
+    def persistent_command(self, payload: bytes) -> str:
         """Build the equivalent command for an existing remote shell."""
-        encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
+        encoded = base64.b64encode(payload).decode("ascii")
         writer = f"printf %s {shlex.quote(encoded)} | base64 -d > \"$payload\""
         return _text_upload_script(self, writer)
 
@@ -142,6 +145,8 @@ def _text_upload_script(plan: TextUploadPlan, writer: str) -> str:
         "set -eu",
         f"work={work_path_q}",
         'payload="$work/payload"',
+        f"expected_size={plan.payload_size}",
+        f"expected_sha256={plan.payload_sha256}",
         "created=0",
         "cleanup() {",
         "  rc=$?",
@@ -157,6 +162,19 @@ def _text_upload_script(plan: TextUploadPlan, writer: str) -> str:
         'mkdir -- "$work"',
         "created=1",
         writer,
+        'actual_size=$(LC_ALL=C wc -c < "$payload" | tr -d \'[:space:]\')',
+        'if [ "$actual_size" != "$expected_size" ]; then',
+        "  printf 'Text upload size mismatch: expected %s bytes, received %s bytes\\n' "
+        '"$expected_size" "$actual_size" >&2',
+        "  exit 65",
+        "fi",
+        'actual_sha256=$(sha256sum -- "$payload")',
+        'actual_sha256=${actual_sha256%% *}',
+        'if [ "$actual_sha256" != "$expected_sha256" ]; then',
+        "  printf 'Text upload SHA-256 mismatch: expected %s, received %s\\n' "
+        '"$expected_sha256" "$actual_sha256" >&2',
+        "  exit 65",
+        "fi",
         f'mv -fT -- "$payload" {remote_path_q}',
         'rmdir -- "$work"',
         "created=0",
@@ -166,7 +184,7 @@ def _text_upload_script(plan: TextUploadPlan, writer: str) -> str:
     return "\n".join(lines)
 
 
-def build_text_upload_plan(remote_path: str) -> TextUploadPlan:
+def build_text_upload_plan(remote_path: str, payload: bytes) -> TextUploadPlan:
     """Build a same-directory staged text upload."""
     normalized_remote = remote_path.replace("\\", "/")
     remote_basename = posixpath.basename(normalized_remote)
@@ -179,6 +197,8 @@ def build_text_upload_plan(remote_path: str) -> TextUploadPlan:
         remote_path=normalized_remote,
         remote_dir=remote_dir,
         work_path=work_path,
+        payload_size=len(payload),
+        payload_sha256=hashlib.sha256(payload).hexdigest(),
     )
     script = _text_upload_script(plan, 'cat > "$payload"')
     return TextUploadPlan(
@@ -186,6 +206,8 @@ def build_text_upload_plan(remote_path: str) -> TextUploadPlan:
         remote_path=plan.remote_path,
         remote_dir=plan.remote_dir,
         work_path=plan.work_path,
+        payload_size=plan.payload_size,
+        payload_sha256=plan.payload_sha256,
     )
 
 

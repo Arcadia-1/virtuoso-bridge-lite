@@ -927,18 +927,19 @@ class SSHRunner:
     def upload_text(self, text: str, remote_path: str, timeout: float | None = None) -> CommandResult:
         """Upload a UTF-8 text string as a file to the remote host via SSH."""
         budget = _TimeoutBudget.start(timeout, self._timeout)
-        plan = build_text_upload_plan(remote_path)
+        text_bytes = text.encode("utf-8")
+        plan = build_text_upload_plan(remote_path, text_bytes)
         if self._paramiko_backend is not None:
             rc, stdout, stderr = self._paramiko_backend.upload_text(
                 plan,
-                text,
+                text_bytes,
                 timeout=budget.remaining(remote_path),
             )
             return CommandResult(returncode=rc, stdout=stdout, stderr=stderr)
         if self._persistent_shell_enabled:
             try:
                 return self._run_via_persistent_shell_with_retry(
-                    plan.persistent_command(text),
+                    plan.persistent_command(text_bytes),
                     _budget=budget,
                 )
             except subprocess.TimeoutExpired:
@@ -947,7 +948,6 @@ class SSHRunner:
                 self._log_persistent_shell_fallback("Persistent SSH text upload failed", exc)
 
         logger.debug("Uploading text payload (%d chars) -> %s:%s", len(text), self._host, remote_path)
-        text_bytes = text.encode("utf-8")
 
         def _attempt() -> tuple[int, bytes, bytes]:
             # Rebuild ssh command per attempt so a CM-disable mid-loop

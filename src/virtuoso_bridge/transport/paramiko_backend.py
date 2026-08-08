@@ -1145,7 +1145,7 @@ class ParamikoSessionBackend:
     def upload_text(
         self,
         plan: TextUploadPlan,
-        text: str,
+        payload: bytes,
         *,
         timeout: float,
     ) -> tuple[int, str, str]:
@@ -1158,7 +1158,7 @@ class ParamikoSessionBackend:
                 try:
                     channel.settimeout(deadline.remaining(plan.remote_command))
                     channel.exec_command(plan.remote_command)
-                    channel.sendall(text.encode("utf-8"))
+                    channel.sendall(payload)
                     channel.shutdown_write()
                     return self._collect_channel(
                         channel,

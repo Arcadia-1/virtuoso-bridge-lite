@@ -776,7 +776,7 @@ def test_paramiko_socket_timeout_uses_subprocess_timeout_contract(
         "/remote/results",
         tmp_path / "results",
     )
-    text_plan = build_text_upload_plan("/remote/input.scs")
+    text_plan = build_text_upload_plan("/remote/input.scs", b"payload")
 
     with pytest.raises(subprocess.TimeoutExpired) as caught:
         if operation == "run_command":
@@ -786,7 +786,7 @@ def test_paramiko_socket_timeout_uses_subprocess_timeout_contract(
         elif operation == "download_tar":
             backend.download_tar(download_plan, timeout=2)
         elif operation == "upload_text":
-            backend.upload_text(text_plan, "payload", timeout=2)
+            backend.upload_text(text_plan, b"payload", timeout=2)
         else:
             backend.download_file(
                 "/remote/output.raw",
@@ -1018,9 +1018,10 @@ def test_paramiko_text_upload_executes_shared_atomic_plan() -> None:
     backend._jump_client = None
     backend._jump_channel = None
     backend.ensure_connected = lambda timeout=None: None
-    plan = build_text_upload_plan("/remote/input.scs")
+    payload = b"exact payload"
+    plan = build_text_upload_plan("/remote/input.scs", payload)
 
-    result = backend.upload_text(plan, "exact payload", timeout=5)
+    result = backend.upload_text(plan, payload, timeout=5)
 
     assert result == (0, "", "")
     assert channel.command == plan.remote_command
