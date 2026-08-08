@@ -47,6 +47,16 @@ class TextUploadPlan:
 
 
 @dataclass(frozen=True)
+class FileDownloadPlan:
+    """One remote file to staged local file download operation."""
+
+    remote_path: str
+    local_path: Path
+    stage_path: Path
+    staged_item: Path
+
+
+@dataclass(frozen=True)
 class TarDownloadPlan:
     """One remote-tar to staged local-tar download operation."""
 
@@ -304,6 +314,20 @@ def build_tar_download_plan(
         local_path=local_path,
         stage_path=stage_path,
         staged_item=stage_path / remote_basename,
+    )
+
+
+def build_file_download_plan(
+    remote_path: str,
+    local_path: Path,
+) -> FileDownloadPlan:
+    """Build a single-file download staged beside its final target."""
+    stage_path = local_path.parent / f".vbtmp-{uuid.uuid4().hex}"
+    return FileDownloadPlan(
+        remote_path=remote_path,
+        local_path=local_path,
+        stage_path=stage_path,
+        staged_item=stage_path / local_path.name,
     )
 
 

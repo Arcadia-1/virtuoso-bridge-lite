@@ -12,11 +12,24 @@ from pathlib import Path
 import pytest
 
 from virtuoso_bridge.transport.transfer import (
+    build_file_download_plan,
     build_tar_download_plan,
     build_tar_upload_plans,
     build_text_upload_plan,
     install_staged_item,
 )
+
+
+def test_file_download_plan_stages_beside_target(tmp_path: Path) -> None:
+    local_path = tmp_path / "downloads" / "result.raw"
+
+    plan = build_file_download_plan("/remote/results/output.raw", local_path)
+
+    assert plan.remote_path == "/remote/results/output.raw"
+    assert plan.local_path == local_path
+    assert plan.stage_path.parent == local_path.parent
+    assert plan.stage_path.name.startswith(".vbtmp-")
+    assert plan.staged_item == plan.stage_path / "result.raw"
 
 
 def test_batch_upload_plan_stages_all_renames_before_install(tmp_path: Path) -> None:

@@ -28,10 +28,12 @@ from virtuoso_bridge.runtime_paths import command_log_file
 from virtuoso_bridge.transport.transfer import (
     TarDownloadPlan,
     TarUploadPlan,
+    build_file_download_plan,
     build_tar_download_plan,
     build_tar_upload_plans,
     build_text_upload_plan,
     discard_stage,
+    install_staged_item,
     install_staged_path,
 )
 
@@ -994,22 +996,28 @@ class SSHRunner:
                 _budget=budget,
             )
 
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        plan = build_file_download_plan(remote_path, local_path)
+
         if self._paramiko_backend is not None:
             rc, stdout, stderr = self._paramiko_backend.download_file(
-                remote_path,
-                local_path,
+                plan,
                 timeout=budget.remaining(remote_path),
             )
             return CommandResult(returncode=rc, stdout=stdout, stderr=stderr)
 
-        local_path.parent.mkdir(parents=True, exist_ok=True)
         logger.debug("Downloading via scp %s:%s -> %s", self._host, remote_path, local_path)
 
         def _attempt() -> tuple[int, bytes, bytes]:
+            discard_stage(plan.stage_path)
+            plan.stage_path.mkdir(parents=True)
             # Rebuild scp command per attempt so a CM-disable mid-loop
             # picks up the no-mux config on the next try.
             cmd = [self._scp_cmd] + self._common_ssh_options()
-            cmd += [self._remote_scp_target(remote_path), str(local_path)]
+            cmd += [
+                self._remote_scp_target(plan.remote_path),
+                str(plan.staged_item),
+            ]
             self._print_cmd(cmd)
             r = subprocess.run(
                 cmd,
@@ -1020,15 +1028,25 @@ class SSHRunner:
             )
             return r.returncode, r.stdout or b"", r.stderr or b""
 
-        rc, out, err = self._attempt_with_cm_fallback(
-            _attempt,
-            budget=budget,
-            command=remote_path,
-        )
+        try:
+            rc, out, err = self._attempt_with_cm_fallback(
+                _attempt,
+                budget=budget,
+                command=remote_path,
+            )
+        except Exception:
+            discard_stage(plan.stage_path)
+            raise
         if rc != 0:
+            discard_stage(plan.stage_path)
             err_text = _as_text(err).strip()
             logger.warning("download (scp) failed (rc=%d): %s", rc, err_text)
         else:
+            install_staged_item(
+                plan.stage_path,
+                plan.staged_item,
+                plan.local_path,
+            )
             logger.debug("Download completed successfully")
         return CommandResult(returncode=rc, stdout=_as_text(out), stderr=_as_text(err))
 

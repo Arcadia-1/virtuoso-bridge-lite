@@ -186,6 +186,7 @@ def test_nonrecursive_download_selects_safe_scp_mode(
 
     def fake_run(command: list[str], **_kwargs) -> subprocess.CompletedProcess:
         commands.append(command)
+        Path(command[-1]).write_bytes(b"downloaded result")
         return subprocess.CompletedProcess(command, 0, b"", b"")
 
     monkeypatch.setattr(
@@ -194,13 +195,77 @@ def test_nonrecursive_download_selects_safe_scp_mode(
     )
     runner = SSHRunner(host="eda-host", user="designer", ssh_cmd="ssh")
 
-    result = runner.download(remote_path, tmp_path / "result.gds")
+    local_path = tmp_path / "result.gds"
+    result = runner.download(remote_path, local_path)
 
     assert result.returncode == 0
     assert "-O" not in commands[0]
     target = commands[0][-2]
     assert target == f"designer@eda-host:{escaped_path}"
     assert shlex.split(target.partition(":")[2]) == [remote_path]
+    staged_target = Path(commands[0][-1])
+    assert staged_target != local_path
+    assert staged_target.parent.name.startswith(".vbtmp-")
+    assert local_path.read_bytes() == b"downloaded result"
+    assert not list(tmp_path.glob(".vbtmp-*"))
+
+
+def test_nonrecursive_download_preserves_target_when_scp_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.ssh._setup_command_log",
+        lambda: None,
+    )
+
+    def fake_run(command: list[str], **_kwargs) -> subprocess.CompletedProcess:
+        Path(command[-1]).write_bytes(b"partial result")
+        return subprocess.CompletedProcess(command, 1, b"", b"scp failed")
+
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.ssh.subprocess.run",
+        fake_run,
+    )
+    local_path = tmp_path / "result.gds"
+    local_path.write_bytes(b"existing result")
+    runner = SSHRunner(host="eda-host", user="designer", ssh_cmd="ssh")
+
+    result = runner.download("/remote/result.gds", local_path)
+
+    assert result.returncode == 1
+    assert local_path.read_bytes() == b"existing result"
+    assert not list(tmp_path.glob(".vbtmp-*"))
+
+
+def test_nonrecursive_download_preserves_target_on_timeout(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.ssh._setup_command_log",
+        lambda: None,
+    )
+
+    def fake_run(command: list[str], **kwargs) -> subprocess.CompletedProcess:
+        Path(command[-1]).write_bytes(b"partial result")
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.ssh.subprocess.run",
+        fake_run,
+    )
+    local_path = tmp_path / "result.gds"
+    local_path.write_bytes(b"existing result")
+    runner = SSHRunner(host="eda-host", user="designer", ssh_cmd="ssh")
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        runner.download("/remote/result.gds", local_path, timeout=1)
+
+    assert local_path.read_bytes() == b"existing result"
+    assert not list(tmp_path.glob(".vbtmp-*"))
 
 
 def test_remote_python_detection_error_includes_ssh_stderr() -> None:
@@ -578,6 +643,7 @@ def test_scp_download_cm_fallback_uses_remaining_timeout(
         attempt_timeouts.append(attempt_timeout)
         commands.append(command)
         if len(commands) == 1:
+            Path(command[-1]).write_bytes(b"partial result")
             clock.consume(0.02, attempt_timeout, command)
             return subprocess.CompletedProcess(
                 command,
@@ -586,6 +652,7 @@ def test_scp_download_cm_fallback_uses_remaining_timeout(
                 b"mux_client_request_session: master session id: 2",
             )
         clock.consume(0.01, attempt_timeout, command)
+        Path(command[-1]).write_bytes(b"complete result")
         return subprocess.CompletedProcess(command, 0, b"", b"")
 
     monkeypatch.setattr(
@@ -604,6 +671,8 @@ def test_scp_download_cm_fallback_uses_remaining_timeout(
     assert any("ControlMaster=auto" in part for part in commands[0])
     assert not any("ControlMaster=auto" in part for part in commands[1])
     assert runner._use_control_master is False
+    assert (tmp_path / "result.gds").read_bytes() == b"complete result"
+    assert not list(tmp_path.glob(".vbtmp-*"))
 
 
 def test_tar_upload_retries_share_one_timeout_budget(

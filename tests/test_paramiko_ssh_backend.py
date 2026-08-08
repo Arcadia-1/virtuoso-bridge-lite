@@ -23,9 +23,11 @@ from virtuoso_bridge.transport.paramiko_backend import (
 )
 from virtuoso_bridge.transport.ssh import SSHRunner
 from virtuoso_bridge.transport.transfer import (
+    FileDownloadPlan,
     TarDownloadPlan,
     TarUploadPlan,
     TextUploadPlan,
+    build_file_download_plan,
     build_tar_download_plan,
     build_tar_upload_plans,
     build_text_upload_plan,
@@ -61,8 +63,8 @@ class _DispatchBackend:
         self.calls.append(("download_tar", plan, timeout))
         return 0, "", ""
 
-    def download_file(self, remote_path, local_path, *, timeout):
-        self.calls.append(("download_file", remote_path, local_path, timeout))
+    def download_file(self, plan, *, timeout):
+        self.calls.append(("download_file", plan, timeout))
         return 0, "", ""
 
     def close(self) -> None:
@@ -127,6 +129,7 @@ def test_ssh_runner_dispatches_to_explicit_paramiko_backend(
     assert isinstance(backend.calls[3][1], TarUploadPlan)
     assert isinstance(backend.calls[4][1], TextUploadPlan)
     assert isinstance(backend.calls[5][1], TarDownloadPlan)
+    assert isinstance(backend.calls[6][1], FileDownloadPlan)
 
 
 def test_profile_specific_paramiko_settings_reach_ssh_runner(monkeypatch) -> None:
@@ -777,6 +780,10 @@ def test_paramiko_socket_timeout_uses_subprocess_timeout_contract(
         tmp_path / "results",
     )
     text_plan = build_text_upload_plan("/remote/input.scs", b"payload")
+    file_plan = build_file_download_plan(
+        "/remote/output.raw",
+        tmp_path / "output.raw",
+    )
 
     with pytest.raises(subprocess.TimeoutExpired) as caught:
         if operation == "run_command":
@@ -788,11 +795,7 @@ def test_paramiko_socket_timeout_uses_subprocess_timeout_contract(
         elif operation == "upload_text":
             backend.upload_text(text_plan, b"payload", timeout=2)
         else:
-            backend.download_file(
-                "/remote/output.raw",
-                tmp_path / "output.raw",
-                timeout=2,
-            )
+            backend.download_file(file_plan, timeout=2)
 
     assert caught.value.timeout == 2
     assert not list(tmp_path.glob(".vbtmp-*"))
@@ -820,12 +823,9 @@ def test_sftp_file_error_does_not_close_active_transport(tmp_path: Path) -> None
     backend._sftp = missing_sftp
     local_path = tmp_path / "missing.fc"
     local_path.write_text("existing result\n", encoding="utf-8")
+    plan = build_file_download_plan("/remote/missing.fc", local_path)
 
-    result = backend.download_file(
-        "/remote/missing.fc",
-        local_path,
-        timeout=2,
-    )
+    result = backend.download_file(plan, timeout=2)
 
     assert result[0] == 1
     assert "remote file not found" in result[2]
@@ -853,12 +853,9 @@ def test_nonrecursive_download_replaces_existing_file_after_success(
     backend._sftp = successful_sftp
     local_path = tmp_path / "spectre.fc"
     local_path.write_text("old result\n", encoding="utf-8")
+    plan = build_file_download_plan("/remote/spectre.fc", local_path)
 
-    result = backend.download_file(
-        "/remote/spectre.fc",
-        local_path,
-        timeout=2,
-    )
+    result = backend.download_file(plan, timeout=2)
 
     assert result == (0, "", "")
     assert local_path.read_text(encoding="utf-8") == "new result\n"

@@ -14,7 +14,6 @@ import socket
 import subprocess
 import threading
 import time
-import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +21,7 @@ from typing import Any, Iterator
 from urllib.parse import unquote, urlsplit
 
 from virtuoso_bridge.transport.transfer import (
+    FileDownloadPlan,
     TarDownloadPlan,
     TarUploadPlan,
     TextUploadPlan,
@@ -1180,36 +1180,39 @@ class ParamikoSessionBackend:
 
     def download_file(
         self,
-        remote_path: str,
-        local_path: Path,
+        plan: FileDownloadPlan,
         *,
         timeout: float,
     ) -> tuple[int, str, str]:
         deadline = _Deadline.start(timeout)
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-        stage_path = local_path.parent / f".vbtmp-{uuid.uuid4().hex}"
-        staged_item = stage_path / local_path.name
-        stage_path.mkdir(parents=True)
+        plan.local_path.parent.mkdir(parents=True, exist_ok=True)
+        plan.stage_path.mkdir(parents=True)
         try:
-            with self._sftp(deadline, remote_path) as sftp:
+            with self._sftp(deadline, plan.remote_path) as sftp:
                 sftp.get(
-                    remote_path,
-                    str(staged_item),
-                    callback=lambda _received, _total: deadline.remaining(remote_path),
+                    plan.remote_path,
+                    str(plan.staged_item),
+                    callback=lambda _received, _total: deadline.remaining(
+                        plan.remote_path
+                    ),
                 )
-            install_staged_item(stage_path, staged_item, local_path)
+            install_staged_item(
+                plan.stage_path,
+                plan.staged_item,
+                plan.local_path,
+            )
             return 0, "", ""
         except subprocess.TimeoutExpired:
-            discard_stage(stage_path)
+            discard_stage(plan.stage_path)
             raise
         except socket.timeout as exc:
-            discard_stage(stage_path)
+            discard_stage(plan.stage_path)
             raise subprocess.TimeoutExpired(
-                remote_path,
+                plan.remote_path,
                 deadline.timeout,
             ) from exc
         except Exception as exc:  # noqa: BLE001
-            discard_stage(stage_path)
+            discard_stage(plan.stage_path)
             self._invalidate_if_transport_failed(exc)
             return self._error_result(exc)
 
