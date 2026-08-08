@@ -184,6 +184,9 @@ def test_text_upload_plan_stages_in_target_directory_before_install() -> None:
     assert 'actual_size=$(LC_ALL=C wc -c < "$payload"' in script
     assert 'actual_sha256=$(sha256sum -- "$payload")' in script
     assert "chmod 755 /remote/path" not in script
+    assert (
+        'chmod --reference=/remote/path/input.scs -- "$payload"' in script
+    )
     install = 'mv -fT -- "$payload" /remote/path/input.scs'
     assert install in script
     assert script.index('cat > "$payload"') < script.index("actual_size=")
@@ -232,6 +235,27 @@ def test_text_upload_rejects_incomplete_or_corrupt_payload_before_install(
     assert completed.returncode == 65
     assert error_message in completed.stderr.decode("utf-8")
     assert target.read_bytes() == b"original payload"
+    assert not list(tmp_path.glob(".vbtmp-*"))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX file modes")
+def test_text_upload_preserves_existing_target_mode(tmp_path: Path) -> None:
+    target = tmp_path / "input.scs"
+    target.write_bytes(b"original payload")
+    target.chmod(0o640)
+    payload = b"replacement payload"
+    plan = build_text_upload_plan(target.as_posix(), payload)
+
+    completed = subprocess.run(
+        shlex.split(plan.remote_command),
+        input=payload,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr.decode("utf-8")
+    assert target.read_bytes() == payload
+    assert target.stat().st_mode & 0o7777 == 0o640
     assert not list(tmp_path.glob(".vbtmp-*"))
 
 
