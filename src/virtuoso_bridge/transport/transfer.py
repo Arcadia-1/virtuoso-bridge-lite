@@ -186,9 +186,16 @@ def _text_upload_script(plan: TextUploadPlan, writer: str) -> str:
         "  exit 65",
         "fi",
         f"if [ -e {remote_path_q} ]; then",
-        f"  chmod --reference={remote_path_q} -- \"$payload\"",
+        # GNU chmod has --reference, but BSD/macOS chmod does not.  Resolve
+        # the numeric mode with the platform's stat variant instead.
+        f"  if stat -c %a {remote_path_q} >/dev/null 2>&1; then",
+        f"    existing_mode=$(stat -c %a {remote_path_q})",
+        "  else",
+        f"    existing_mode=$(stat -f %Lp {remote_path_q})",
+        "  fi",
+        '  chmod "$existing_mode" "$payload"',
         "fi",
-        f'mv -fT -- "$payload" {remote_path_q}',
+        f'mv -f "$payload" {remote_path_q}',
         'rmdir -- "$work"',
         "created=0",
         "trap - EXIT HUP INT TERM",

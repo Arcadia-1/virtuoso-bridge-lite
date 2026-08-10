@@ -197,10 +197,10 @@ def test_text_upload_plan_stages_in_target_directory_before_install() -> None:
     assert 'actual_size=$(LC_ALL=C wc -c < "$payload"' in script
     assert 'actual_sha256=$(sha256sum -- "$payload")' in script
     assert "chmod 755 /remote/path" not in script
-    assert (
-        'chmod --reference=/remote/path/input.scs -- "$payload"' in script
-    )
-    install = 'mv -fT -- "$payload" /remote/path/input.scs'
+    assert 'stat -c %a /remote/path/input.scs' in script
+    assert 'stat -f %Lp /remote/path/input.scs' in script
+    assert 'chmod "$existing_mode" "$payload"' in script
+    install = 'mv -f "$payload" /remote/path/input.scs'
     assert install in script
     assert script.index('cat > "$payload"') < script.index("actual_size=")
     assert script.index("actual_sha256=") < script.index(install)
@@ -217,7 +217,7 @@ def test_persistent_text_upload_preserves_exact_payload_via_base64() -> None:
     assert 'base64 -d > "$payload"' in command
     assert f"expected_size={len(payload)}" in command
     assert hashlib.sha256(payload).hexdigest() in command
-    assert 'mv -fT -- "$payload" /remote/input.scs' in command
+    assert 'mv -f "$payload" /remote/input.scs' in command
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires POSIX sh and sha256sum")
