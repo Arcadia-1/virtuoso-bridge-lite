@@ -29,7 +29,13 @@ from virtuoso_bridge.transport.remote_paths import (
     resolve_client_id,
     resolve_remote_username,
 )
-from virtuoso_bridge.transport.ssh import SSHRunner, RemoteTaskResult, run_remote_task, remote_ssh_env_from_os
+from virtuoso_bridge.transport.ssh import (
+    SSHRunner,
+    RemoteTaskResult,
+    run_remote_task,
+    remote_ssh_env_from_os,
+    ssh_backend_env_from_os,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -535,10 +541,15 @@ class SpectreSimulator:
         self._keep_remote_files = keep_remote_files
         self._ssh_runner: SSHRunner | None = ssh_runner
         self._profile = profile
+        self._ssh_backend: str | None = None
+        self._ssh_max_sessions: int | None = None
 
         rh, ru, jh, ju = remote_host, remote_user, jump_host, jump_user
         if remote:
             env = remote_ssh_env_from_os(profile)
+            backend_env = ssh_backend_env_from_os(profile)
+            self._ssh_backend = backend_env.backend
+            self._ssh_max_sessions = backend_env.max_sessions
             if rh is None:
                 rh = env.remote_host
             if ru is None:
@@ -572,10 +583,9 @@ class SpectreSimulator:
         """Create a SpectreSimulator from environment variables.
 
         If the configured remote host is localhost (or unset with a localhost
-        env var), returns a local simulator.  Otherwise automatically reuses
-        the SSH connection managed by ``virtuoso-bridge start`` (via
-        ControlMaster).  Raises RuntimeError if no remote connection is
-        available.
+        env var), returns a local simulator. Otherwise it uses the selected
+        OpenSSH or Paramiko backend. Raises RuntimeError if the bridge tunnel
+        lifecycle state is unavailable.
         """
         profile = resolve_profile(profile)
         load_vb_env()
@@ -691,7 +701,9 @@ class SpectreSimulator:
         simulation runs in a worker thread. Each task gets its own local
         work directory and remote directory (when applicable), so repeated
         submissions of the same netlist cannot overwrite one another. The
-        SSH ControlMaster connection is shared automatically.
+        simulator's SSH runner is shared by all worker threads. With the
+        Paramiko backend, they multiplex channels on one authenticated
+        Transport.
 
         Example::
 
@@ -907,6 +919,8 @@ class SpectreSimulator:
                 ssh_config_path=self._ssh_config_path,
                 timeout=self._timeout,
                 persistent_shell=True,
+                backend=self._ssh_backend,
+                max_sessions=self._ssh_max_sessions,
                 verbose=True,
             )
         return self._ssh_runner

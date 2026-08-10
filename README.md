@@ -96,6 +96,51 @@ virtuoso-bridge status         # tunnel + Virtuoso daemon + Spectre availability
 On Windows PowerShell, replace the activation line with
 `.\.venv\Scripts\Activate.ps1`.
 
+### Single-connection SSH concurrency
+
+OpenSSH `ControlMaster` is not usable with every Windows SSH build. For real
+multi-session multiplexing inside one bridge process, install the Paramiko
+backend and select it explicitly:
+
+```bash
+uv pip install -e '.[ssh]'
+```
+
+```dotenv
+VB_SSH_BACKEND=paramiko
+VB_SSH_MAX_SESSIONS=10
+```
+
+Commands and file transfers then share one authenticated target SSH Transport;
+each operation opens a channel on that Transport. Bulk and recursive transfers
+use the same tar plans as the OpenSSH backend; text uploads use the shared atomic
+staging plan, while single-file downloads use SFTP. `VB_SSH_MAX_SESSIONS` is a
+client-side gate and must be no greater than the target sshd `MaxSessions`.
+Waiting work queues at the gate
+instead of opening another command connection. There is no automatic fallback
+to independent SSH connections.
+
+The Paramiko backend reads `VB_SSH_CONFIG` when set, otherwise the normal user
+and system SSH config files. It honors `Include`, host aliases,
+`HostName`/`User`/`Port`, `IdentityFile`, `IdentitiesOnly`, and one `ProxyJump`
+hop. Explicit `VB_REMOTE_*`, `VB_JUMP_*`, and key arguments take precedence.
+`ProxyCommand`, chained `ProxyJump` routes, and a missing explicit
+`VB_SSH_CONFIG` fail during initialization instead of being silently ignored.
+Both the target and jump host must already have keys in the applicable user or
+system `known_hosts` files; unknown and changed keys are rejected. The backend
+honors `UserKnownHostsFile`, `GlobalKnownHostsFile`, and `HostKeyAlias`. Run the
+documented prerequisite `ssh <host> echo ok` once with OpenSSH to review and
+record a new host key before selecting Paramiko. Paramiko cannot enforce an
+OpenSSH `RevokedHostKeys` file or KRL, so any configured value other than `none`
+fails during initialization instead of silently bypassing revocation policy.
+
+`MaxStartups` governs unauthenticated TCP handshakes, while `MaxSessions`
+governs channels on one authenticated connection. The Paramiko backend avoids
+one handshake per parallel job, but it cannot override the server's
+`MaxSessions`. The long-lived Virtuoso TCP port-forward created by
+`virtuoso-bridge start` remains a separate OpenSSH connection because it must
+survive after the starting CLI process exits.
+
 ```python
 from virtuoso_bridge import VirtuosoClient
 client = VirtuosoClient.from_env()
@@ -226,7 +271,7 @@ same pattern — point their skills path at `skills/` in this repo.
 
 - **VirtuosoClient** — pure TCP SKILL client. Sends SKILL as JSON, gets results. No SSH awareness.
 - **SpectreSimulator** — runs standalone Spectre simulations locally or through SSH, then parses PSF ASCII results into Python data.
-- **SSHClient** — maintains a persistent ControlMaster connection for TCP port-forwarding, remote shell commands, and file transfer. Optional — bypassed in local mode.
+- **SSHClient** — maintains the TCP port-forward and provides either OpenSSH or a process-local Paramiko Transport for remote commands and file transfer. The Paramiko backend multiplexes bounded concurrent channels on one authenticated connection. Optional — bypassed in local mode.
 
 Fully decoupled: VirtuosoClient works with any TCP endpoint — SSH tunnel, VPN, direct LAN, or local. Multiple connection profiles are supported, each managing an independent tunnel to a separate design server.
 

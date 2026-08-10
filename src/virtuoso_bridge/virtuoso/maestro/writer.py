@@ -4,6 +4,8 @@ All functions take a session string and call mae* SKILL functions.
 They return the raw SKILL output string.
 """
 
+from __future__ import annotations
+
 import logging
 
 from virtuoso_bridge import VirtuosoClient

@@ -60,7 +60,11 @@ configured local `work_dir`, as well as its own remote directory when
 applicable. This isolates PSF data, logs, initial-condition files, and other
 auxiliary files even when the same deck is submitted more than once. The
 synchronous `run_simulation()` path continues to use `work_dir` directly.
-SSH ControlMaster is shared automatically across threads.
+With `VB_SSH_BACKEND=paramiko`, all tasks in one simulator share one
+authenticated SSH Transport. `VB_SSH_MAX_SESSIONS` bounds its concurrent
+channels and must not exceed the target sshd `MaxSessions`; additional tasks
+wait for a permit. The backend does not fall back to one TCP connection per
+task.
 
 ## Multi-server simulation
 
@@ -90,6 +94,8 @@ VB_REMOTE_USER=username
 VB_REMOTE_PORT=65081
 VB_LOCAL_PORT=65082
 VB_CADENCE_CSHRC=/path/to/.cshrc.cadence
+VB_SSH_BACKEND=paramiko
+VB_SSH_MAX_SESSIONS=10
 
 # Additional profiles for multi-server
 VB_REMOTE_HOST_worker1=eda-node1

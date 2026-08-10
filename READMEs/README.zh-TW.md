@@ -215,7 +215,7 @@ Cursor 以及其他從使用者層級目錄載入 skills 的代理也遵循相�
 
 - **Virtuoso Client** — 純 TCP SKILL 用戶端。以 JSON 傳送 SKILL，並接收結果。不瞭解 SSH。
 - **Spectre Simulator** — 在本機或透過 SSH 執行獨立 Spectre，然後將 PSF ASCII 結果剖析為 Python 資料。
-- **SSH Client** — 為 TCP 連接埠轉送、遠端 shell 命令和檔案傳輸維護持久化 ControlMaster 連線。在本機模式下可選且會被繞過。
+- **SSH Client** — 維護 TCP 連接埠轉送，並為遠端 shell 命令和檔案傳輸提供 OpenSSH 或程序內 Paramiko Transport。Paramiko 後端會在一條已驗證連線上複用有上限的並行 channel。在本機模式下可選且會被繞過。
 
 各元件完全解耦：Virtuoso Client 可使用任意 TCP 端點——SSH 通道、VPN、直接區域網路連線或本機連線。支援多連線設定，每個設定都管理到獨立設計伺服器的獨立通道。
 
