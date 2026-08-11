@@ -70,8 +70,8 @@ When using `asi*`, read simulation results via OCEAN (`openResults` / `selectRes
 ## Design Variables
 
 ```python
-# List all global variables
-client.execute_skill('maeGetSetup(?typeName "globalVar")')
+# List design variables reliably, including in IC23.1.
+client.execute_skill('asiGetDesignVarList(asiGetCurrentSession())')
 
 # Get / Set
 client.execute_skill('maeGetVar("VDD")')
@@ -134,7 +134,7 @@ maeGetEnvOption("tb_cmp_SA" ?option "modelFiles")
 maeGetCurrentRunMode()  ; => "Single Run, Sweeps and Corners"
 ```
 
-**Note:** `maeGetSetup(?typeName "globalVar")` may return nil even when variables exist. Use `asiGetDesignVarList(asiGetCurrentSession())` instead to reliably read design variables.
+**Version compatibility:** Do not use `maeGetSetup(?typeName "globalVar")`. It is not a supported type in IC23.1 ISR16, where `maeGetSetup` accepts `"tests"`, `"corners"`, `"variables"`, and `"parameters"`. Use `asiGetDesignVarList(asiGetCurrentSession())` as the canonical design-variable read API. `maeGetVar` and `maeSetVar` remain appropriate for an individual variable.
 
 ### Creating Tests
 

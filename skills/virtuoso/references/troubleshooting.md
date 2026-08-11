@@ -178,8 +178,8 @@ Or skip SKILL string-matching entirely and filter on the Python side via `client
 ### `mae*` functions undefined (`*Error* undefined function`)
 Older Virtuoso versions may not have `mae*` API. Use `asi*` equivalents instead. See the "asi\* Fallback" section in `maestro-skill-api.md` for the full mapping table. Detection: `fboundp('maeRunSimulation)`.
 
-### `maeGetSetup(?typeName "globalVar")` may return nil
-Use `asiGetDesignVarList(asiGetCurrentSession())` as a fallback.
+### `maeGetSetup(?typeName "globalVar")` reports an unsupported type
+`"globalVar"` is not a valid `maeGetSetup` type in IC23.1 ISR16. Do not use it as a variable-discovery API. Use `asiGetDesignVarList(asiGetCurrentSession())` to read design variables; use `maeGetVar` / `maeSetVar` for one named variable. In IC23.1, `maeGetSetup` supports the types reported by its error message, including `"tests"`, `"corners"`, `"variables"`, and `"parameters"`.
 
 ### Global vs test-level variables
 `maeSetVar("f" "1G")` sets a **global** variable. To set a test-level variable:
