@@ -1571,7 +1571,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp_dismiss_window.add_argument(
         "--action",
         default="enter",
-        choices=["enter", "escape", "alt-y", "alt-n"],
+        choices=["enter", "escape", "alt-o", "alt-y", "alt-n"],
         help="Key action to send (default: enter)",
     )
     sp_dismiss_window.add_argument("-p", "--profile", default=None,

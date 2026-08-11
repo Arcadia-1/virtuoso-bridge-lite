@@ -29,6 +29,7 @@ except NameError:
 VIRTUOSO_WM_CLASSES = ["virtuoso", "libManager"]
 KNOWN_MODAL_ACTIONS = {
     "ade explorer update and run": "enter",
+    "ade assembler message 1749": "alt-o",
 }
 
 
@@ -339,6 +340,21 @@ def _send_alt_y(dpy, xlib, xtst):
     return kc_alt, kc_y
 
 
+def _send_alt_o(dpy, xlib, xtst):
+    """Send Alt+O to activate the standard OK button mnemonic."""
+    keysym_alt_l = 0xffe9  # XK_Alt_L
+    keysym_o = 0x006f      # XK_o
+    kc_alt = xlib.XKeysymToKeycode(dpy, keysym_alt_l)
+    kc_o = xlib.XKeysymToKeycode(dpy, keysym_o)
+
+    xtst.XTestFakeKeyEvent(dpy, kc_alt, True, 0)
+    xtst.XTestFakeKeyEvent(dpy, kc_o, True, 0)
+    xtst.XTestFakeKeyEvent(dpy, kc_o, False, 0)
+    xtst.XTestFakeKeyEvent(dpy, kc_alt, False, 0)
+    xlib.XFlush(dpy)
+    return kc_alt, kc_o
+
+
 def _send_escape(dpy, xlib, xtst):
     """Send Escape key (maps to Cancel on most dialogs)."""
     keysym_esc = 0xff1b  # XK_Escape
@@ -368,6 +384,9 @@ def _send_explicit_action(dpy, xlib, xtst, action):
     if normalized in ("alt-y", "yes"):
         kc_alt, kc_y = _send_alt_y(dpy, xlib, xtst)
         return "alt-y", {"keycode_alt": int(kc_alt), "keycode_y": int(kc_y)}
+    if normalized in ("alt-o", "ok"):
+        kc_alt, kc_o = _send_alt_o(dpy, xlib, xtst)
+        return "alt-o", {"keycode_alt": int(kc_alt), "keycode_o": int(kc_o)}
     if normalized in ("alt-n", "no"):
         kc_alt, kc_n = _send_alt_n(dpy, xlib, xtst)
         return "alt-n", {"keycode_alt": int(kc_alt), "keycode_n": int(kc_n)}
@@ -603,9 +622,7 @@ def main():
     if do_dismiss:
         for d in dialogs:
             if "window_id" in d:
-                explicit_action = None
-                if "ade explorer update and run" in (d.get("title", "") or "").lower():
-                    explicit_action = d.get("suggested_action") or "enter"
+                explicit_action = d.get("suggested_action")
                 result = dismiss_window(
                     display,
                     d["window_id"],

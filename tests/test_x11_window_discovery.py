@@ -97,6 +97,12 @@ xwininfo: Window id: 0xabc000 "Virtuoso Main"
     assert [d["window_id"] for d in dialogs] == ["0x4203583"]
 
 
+def test_assembler_1749_uses_the_ok_mnemonic() -> None:
+    helper = _load_helper_module()
+
+    assert helper._known_action("ADE Assembler Message 1749") == "alt-o"
+
+
 def test_find_x11_env_decodes_pgrep_pid_bytes(monkeypatch) -> None:
     helper = _load_helper_module()
     opened_paths = []
