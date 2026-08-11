@@ -33,12 +33,8 @@ KNOWN_MODAL_ACTIONS = {
 }
 
 
-def find_x11_env(user=None):
-    """Auto-detect DISPLAY and XAUTHORITY from running virtuoso process.
-
-    Skips batch virtuoso processes (those with -nograph in cmdline).
-    If multiple candidates, prefers the interactive one.
-    """
+def find_x11_envs(user=None):
+    """Return X11 environments for all interactive Virtuoso processes."""
     candidates = []
     try:
         pids = subprocess.check_output(
@@ -74,12 +70,22 @@ def find_x11_env(user=None):
     except (subprocess.CalledProcessError, OSError):
         pass
 
+    unique = []
+    seen = set()
+    for candidate in candidates:
+        key = (candidate.get("DISPLAY"), candidate.get("XAUTHORITY"))
+        if key not in seen:
+            seen.add(key)
+            unique.append(candidate)
+    return unique
+
+
+def find_x11_env(user=None):
+    """Return the first interactive Virtuoso X11 environment for compatibility."""
+    candidates = find_x11_envs(user)
     if not candidates:
         return {"DISPLAY": None, "XAUTHORITY": None}
 
-    # Prefer interactive display (not Xvfb-style small displays)
-    # Heuristic: Xvfb displays often use high display numbers (:99, :1024)
-    # Real user sessions use lower numbers or localhost:NN
     return candidates[0]
 
 
@@ -292,6 +298,38 @@ def find_dialogs(display):
             "suggested_action": win.get("suggested_action"),
         })
     return dialogs
+
+
+def _resolve_dismiss_target(display, requested_id):
+    """Accept either a WM frame id or an application's dismissable child id."""
+    for window in discover_windows(display):
+        if requested_id in (
+            window.get("frame_id"),
+            window.get("window_id"),
+            window.get("dismiss_id"),
+        ):
+            return window.get("dismiss_id") or requested_id
+    return requested_id
+
+
+def _apply_x11_env(x11_env):
+    """Make one discovered X11 environment active for ctypes and xwininfo."""
+    display = x11_env.get("DISPLAY")
+    os.environ["DISPLAY"] = display
+    xauth = x11_env.get("XAUTHORITY")
+    if isinstance(xauth, string_types) and xauth:
+        os.environ["XAUTHORITY"] = xauth
+    return display
+
+
+def _verify_dismissal(result):
+    """Report whether the target is still mapped after an injected action."""
+    if "dismissed" not in result:
+        return result
+    time.sleep(0.3)
+    target = result.get("child") or result.get("dismissed")
+    result["still_mapped"] = bool(_read_window_info(target).get("mapped"))
+    return result
 
 
 def _find_app_child(display, frame_id_str):
@@ -585,46 +623,64 @@ def main():
             display = args[i]
         i += 1
 
-    if not display:
-        x11_env = find_x11_env()
-        display = x11_env.get("DISPLAY")
-        if not display:
+    if display:
+        x11_envs = [{"DISPLAY": display, "XAUTHORITY": os.environ.get("XAUTHORITY")}]
+    else:
+        x11_envs = find_x11_envs()
+        if not x11_envs:
             print(json.dumps({"error": "cannot detect DISPLAY"}))
             sys.exit(2)
-        xauth = x11_env.get("XAUTHORITY")
-        if isinstance(xauth, string_types) and xauth:
-            os.environ["XAUTHORITY"] = xauth
-
-    # Export DISPLAY so ctypes XOpenDisplay(None) and xwininfo subprocesses
-    # (which read it from the environment) connect to the right X server.
-    # Without this, auto-detected DISPLAY stays a Python variable and
-    # XOpenDisplay(None) returns NULL -> segfault.
-    os.environ["DISPLAY"] = display
 
     if dismiss_target:
-        result = dismiss_window(display, dismiss_target, action=action)
-        print(json.dumps(result))
-        sys.exit(1 if "error" in result else 0)
+        matches = []
+        for x11_env in x11_envs:
+            active_display = _apply_x11_env(x11_env)
+            resolved_target = _resolve_dismiss_target(active_display, dismiss_target)
+            if resolved_target != dismiss_target or any(
+                dismiss_target in (w.get("frame_id"), w.get("window_id"), w.get("dismiss_id"))
+                for w in discover_windows(active_display)
+            ):
+                matches.append((active_display, resolved_target))
+        if not matches:
+            print(json.dumps({"error": "window id not found on any Virtuoso display", "window_id": dismiss_target}))
+            sys.exit(1)
+        failed = False
+        for active_display, resolved_target in matches:
+            result = dismiss_window(active_display, resolved_target, action=action)
+            result["display"] = active_display
+            result["requested_window_id"] = dismiss_target
+            verified = _verify_dismissal(result)
+            print(json.dumps(verified))
+            failed = failed or "error" in verified or verified.get("still_mapped", False)
+        sys.exit(1 if failed else 0)
 
     if list_windows:
-        windows = discover_windows(display)
-        for w in windows:
-            print(json.dumps(w))
+        windows = []
+        for x11_env in x11_envs:
+            active_display = _apply_x11_env(x11_env)
+            for window in discover_windows(active_display):
+                window["display"] = active_display
+                windows.append(window)
+                print(json.dumps(window))
         sys.exit(0 if windows else 1)
 
-    dialogs = find_dialogs(display)
-    for d in dialogs:
-        print(json.dumps(d))
-
+    dialogs = []
+    for x11_env in x11_envs:
+        active_display = _apply_x11_env(x11_env)
+        for dialog in find_dialogs(active_display):
+            dialog["display"] = active_display
+            dialogs.append(dialog)
+            print(json.dumps(dialog))
     if not dialogs:
         sys.exit(1)
 
     if do_dismiss:
+        failed = False
         for d in dialogs:
             if "window_id" in d:
                 explicit_action = d.get("suggested_action")
                 result = dismiss_window(
-                    display,
+                    d["display"],
                     d["window_id"],
                     d.get("title", ""),
                     d.get("x", 0),
@@ -633,7 +689,11 @@ def main():
                     d.get("h", 0),
                     explicit_action,
                 )
-                print(json.dumps(result))
+                verified = _verify_dismissal(result)
+                print(json.dumps(verified))
+                failed = failed or "error" in verified or verified.get("still_mapped", False)
+        if failed:
+            sys.exit(1)
 
     sys.exit(0)
 

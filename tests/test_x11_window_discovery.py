@@ -216,7 +216,17 @@ def test_helper_exports_auto_detected_display(monkeypatch, capsys) -> None:
         return {"dismissed": win_id}
 
     monkeypatch.delenv("DISPLAY", raising=False)
-    monkeypatch.setattr(helper, "find_x11_env", lambda: {"DISPLAY": ":7", "XAUTHORITY": ""})
+    monkeypatch.setattr(
+        helper,
+        "find_x11_envs",
+        lambda: [{"DISPLAY": ":7", "XAUTHORITY": ""}],
+    )
+    monkeypatch.setattr(
+        helper,
+        "discover_windows",
+        lambda _display: [{"frame_id": "0xframe", "dismiss_id": "0xabc"}],
+    )
+    monkeypatch.setattr(helper, "_verify_dismissal", lambda result: result)
     monkeypatch.setattr(helper, "dismiss_window", fake_dismiss_window)
     monkeypatch.setattr(helper.sys, "argv", ["x11_dismiss_dialog.py", "--dismiss-window", "0xabc"])
 
