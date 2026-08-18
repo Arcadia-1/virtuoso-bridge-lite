@@ -165,6 +165,56 @@ def test_legacy_readers_surface_skill_cleanup_errors(
         reader(Client(), "LIB", "CELL")
 
 
+@pytest.mark.parametrize(
+    ("reader", "operation"),
+    [
+        (read_placement, "read_placement"),
+        (read_connectivity, "read_connectivity"),
+        (read_instance_params, "read_instance_params"),
+    ],
+)
+def test_legacy_readers_reject_open_failure_sentinel(
+    reader: Callable[..., object],
+    operation: str,
+) -> None:
+    class Client:
+        def execute_skill(self, skill: str, timeout: int = 30):
+            return SimpleNamespace(output='"ERROR"', errors=[])
+
+    with pytest.raises(RuntimeError, match=rf"{operation} could not open schematic"):
+        reader(Client(), "LIB", "MISSING")
+
+
+@pytest.mark.parametrize(
+    "reader",
+    [read_schematic, read_placement, read_connectivity, read_instance_params],
+)
+@pytest.mark.parametrize(
+    ("lib", "cell"),
+    [
+        ("LIB_ONLY", None),
+        (None, "CELL_ONLY"),
+        ("", "CELL_ONLY"),
+        ("LIB_ONLY", ""),
+        ("", ""),
+    ],
+)
+def test_readers_reject_incomplete_named_target(
+    reader: Callable[..., object],
+    lib: str | None,
+    cell: str | None,
+) -> None:
+    class Client:
+        def execute_skill(self, skill: str, timeout: int = 300):
+            raise AssertionError("partial targets must fail before SKILL execution")
+
+    with pytest.raises(
+        ValueError,
+        match="lib and cell must both be non-empty when provided",
+    ):
+        reader(Client(), lib, cell)
+
+
 def test_client_bound_read_delegates_to_unified_reader(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
     owner = object()

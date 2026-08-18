@@ -62,7 +62,8 @@ _SKILL_TOPOLOGY = r'''
 let((cv result)
   {owned_read_start}
   cv = {cv_expr}
-  unless(cv return("ERROR"))
+  if(cv
+    then progn(
   result = "INSTANCES\n"
   foreach(inst cv~>instances
     when(inst~>purpose != "pin"
@@ -107,7 +108,8 @@ let((cv result)
       if(term~>numBits term~>numBits 1))))
   {notes_section}
   result = strcat(result "END\n")
-  result
+  result)
+    else "ERROR")
   {owned_read_cleanup})
 '''
 
@@ -128,17 +130,19 @@ def _build_cellview_read_skill(
     cell: str | None,
 ) -> str:
     """Bind a read template to either an owned named CV or the current CV."""
-    if lib and cell:
+    if lib is None and cell is None:
+        cv_expr = "geGetEditCellView()"
+        owned_read_start = ""
+        owned_read_cleanup = ""
+    elif not lib or not cell:
+        raise ValueError("lib and cell must both be non-empty when provided")
+    else:
         cv_expr = (
             f'dbOpenCellViewByType("{escape_skill_string(lib)}" '
             f'"{escape_skill_string(cell)}" "schematic" "schematic" "r")'
         )
         owned_read_start = _OWNED_READ_START
         owned_read_cleanup = _OWNED_READ_CLEANUP
-    else:
-        cv_expr = "geGetEditCellView()"
-        owned_read_start = ""
-        owned_read_cleanup = ""
 
     return (
         template.replace("{owned_read_start}", owned_read_start)
@@ -386,7 +390,8 @@ _READ_PLACEMENT_SKILL = '''
 let((cv instList pinList labelList wireList)
   {owned_read_start}
   cv = {cv_expr}
-  unless(cv return("ERROR"))
+  if(cv
+    then progn(
   instList = ""
   foreach(inst cv~>instances
     instList = strcat(instList sprintf(nil "%s|%s|%s|%L|%s\\n"
@@ -402,7 +407,8 @@ let((cv instList pinList labelList wireList)
   foreach(shape cv~>shapes
     when(shape~>objType == "line"
       wireList = strcat(wireList sprintf(nil "%L\\n" shape~>points))))
-  sprintf(nil "INSTANCES\\n%sPINS\\n%sLABELS\\n%sWIRES\\n%sEND" instList pinList labelList wireList)
+  sprintf(nil "INSTANCES\\n%sPINS\\n%sLABELS\\n%sWIRES\\n%sEND" instList pinList labelList wireList))
+    else "ERROR")
   {owned_read_cleanup})
 '''
 
@@ -418,6 +424,11 @@ def read_placement(
     if getattr(r, "errors", None):
         raise RuntimeError(f"read_placement SKILL error: {r.errors[0]}")
     raw = decode_skill_output(r.output)
+    if raw.strip() == "ERROR":
+        raise RuntimeError(
+            f"read_placement could not open schematic "
+            f"{lib or '(current)'}/{cell or '(current)'}"
+        )
 
     result: dict = {"instances": [], "pins": [], "labels": [], "wires": []}
     section = None
@@ -451,7 +462,8 @@ _READ_CONNECTIVITY_SKILL = '''
 let((cv instList netList pinList)
   {owned_read_start}
   cv = {cv_expr}
-  unless(cv return("ERROR"))
+  if(cv
+    then progn(
   instList = ""
   foreach(inst cv~>instances
     instList = strcat(instList sprintf(nil "%s|%s|%s\\n"
@@ -465,7 +477,8 @@ let((cv instList netList pinList)
   pinList = ""
   foreach(term cv~>terminals
     pinList = strcat(pinList sprintf(nil "%s|%s\\n" term~>name term~>direction)))
-  sprintf(nil "INSTANCES\\n%sNETS\\n%sPINS\\n%sEND" instList netList pinList)
+  sprintf(nil "INSTANCES\\n%sNETS\\n%sPINS\\n%sEND" instList netList pinList))
+    else "ERROR")
   {owned_read_cleanup})
 '''
 
@@ -481,6 +494,11 @@ def read_connectivity(
     if getattr(r, "errors", None):
         raise RuntimeError(f"read_connectivity SKILL error: {r.errors[0]}")
     raw = decode_skill_output(r.output)
+    if raw.strip() == "ERROR":
+        raise RuntimeError(
+            f"read_connectivity could not open schematic "
+            f"{lib or '(current)'}/{cell or '(current)'}"
+        )
 
     result: dict = {"instances": [], "nets": [], "pins": []}
     section = None
@@ -513,7 +531,8 @@ _READ_PARAMS_SKILL = '''
 let((cv result)
   {owned_read_start}
   cv = {cv_expr}
-  unless(cv return("ERROR"))
+  if(cv
+    then progn(
   result = ""
   foreach(inst cv~>instances
     let((cdf paramStr)
@@ -526,7 +545,8 @@ let((cv result)
             paramStr = strcat(paramStr sprintf(nil "|%s=%L" p~>name p~>value)))))
       result = strcat(result sprintf(nil "%s|%s|%s%s\\n"
         inst~>name inst~>libName inst~>cellName paramStr))))
-  result
+  result)
+    else "ERROR")
   {owned_read_cleanup})
 '''
 
@@ -543,6 +563,11 @@ def read_instance_params(
     if getattr(r, "errors", None):
         raise RuntimeError(f"read_instance_params SKILL error: {r.errors[0]}")
     raw = decode_skill_output(r.output)
+    if raw.strip() == "ERROR":
+        raise RuntimeError(
+            f"read_instance_params could not open schematic "
+            f"{lib or '(current)'}/{cell or '(current)'}"
+        )
 
     result = []
     for line in raw.splitlines():
