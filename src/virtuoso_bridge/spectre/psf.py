@@ -14,7 +14,8 @@ def read_psf_ascii(path: Path) -> dict[str, Any]:
     """Read one PSF ASCII result file or raise with its parser error."""
     result = parse_spectre_psf_ascii(path)
     if not result.ok:
-        raise ValueError("cannot parse PSF ASCII {}: {}".format(path, "; ".join(result.errors)))
+        details = "; ".join(result.errors) if result.errors else "no data parsed"
+        raise ValueError("cannot parse PSF ASCII {}: {}".format(path, details))
     return result.data
 
 
