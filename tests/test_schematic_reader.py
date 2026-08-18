@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
 
-from virtuoso_bridge.virtuoso.schematic.reader import _parse_schematic, read_schematic
+from virtuoso_bridge.virtuoso.schematic.reader import (
+    _parse_schematic,
+    read_connectivity,
+    read_instance_params,
+    read_placement,
+    read_schematic,
+)
 from virtuoso_bridge.virtuoso.schematic import SchematicOps
 
 
@@ -30,6 +37,132 @@ def test_read_schematic_forwards_timeout() -> None:
     read_schematic(client, "LIB", "CELL", param_filters=None, timeout=123)
 
     assert client.timeout == 123
+
+
+def test_named_read_closes_its_cellview_in_unwind_cleanup() -> None:
+    class Client:
+        skill: str | None = None
+
+        def execute_skill(self, skill: str, timeout: int = 300):
+            self.skill = skill
+            return SimpleNamespace(output="INSTANCES\nNETS\nPINS\nEND\n", errors=[])
+
+    client = Client()
+
+    read_schematic(client, "LIB", "CELL", param_filters=None)
+
+    assert client.skill is not None
+    assert 'dbOpenCellViewByType("LIB" "CELL" "schematic" "schematic" "r")' in client.skill
+    assert "unwindProtect(" in client.skill
+    assert "when(cv" in client.skill
+    assert "dbClose(cv)" in client.skill
+    assert client.skill.index("unwindProtect(") < client.skill.index(
+        "dbOpenCellViewByType("
+    )
+    assert client.skill.index('result = strcat(result "END\\n")') < client.skill.index(
+        "dbClose(cv)"
+    )
+
+
+def test_current_cellview_read_does_not_close_caller_owned_cellview() -> None:
+    class Client:
+        skill: str | None = None
+
+        def execute_skill(self, skill: str, timeout: int = 300):
+            self.skill = skill
+            return SimpleNamespace(output="INSTANCES\nNETS\nPINS\nEND\n", errors=[])
+
+    client = Client()
+
+    read_schematic(client, param_filters=None)
+
+    assert client.skill is not None
+    assert "cv = geGetEditCellView()" in client.skill
+    assert "unwindProtect(" not in client.skill
+    assert "dbClose(cv)" not in client.skill
+
+
+@pytest.mark.parametrize(
+    ("reader", "output"),
+    [
+        (read_placement, "INSTANCES\nPINS\nLABELS\nWIRES\nEND\n"),
+        (read_connectivity, "INSTANCES\nNETS\nPINS\nEND\n"),
+        (read_instance_params, ""),
+    ],
+)
+def test_legacy_named_readers_close_their_cellview_in_unwind_cleanup(
+    reader: Callable[..., object],
+    output: str,
+) -> None:
+    class Client:
+        skill: str | None = None
+
+        def execute_skill(self, skill: str, timeout: int = 30):
+            self.skill = skill
+            return SimpleNamespace(output=output, errors=[])
+
+    client = Client()
+
+    reader(client, "LIB", "CELL")
+
+    assert client.skill is not None
+    assert 'dbOpenCellViewByType("LIB" "CELL" "schematic" "schematic" "r")' in client.skill
+    assert "unwindProtect(" in client.skill
+    assert "when(cv" in client.skill
+    assert "dbClose(cv)" in client.skill
+    assert client.skill.index("unwindProtect(") < client.skill.index(
+        "dbOpenCellViewByType("
+    )
+    assert client.skill.index("dbOpenCellViewByType(") < client.skill.index("dbClose(cv)")
+
+
+@pytest.mark.parametrize(
+    ("reader", "output"),
+    [
+        (read_placement, "INSTANCES\nPINS\nLABELS\nWIRES\nEND\n"),
+        (read_connectivity, "INSTANCES\nNETS\nPINS\nEND\n"),
+        (read_instance_params, ""),
+    ],
+)
+def test_legacy_current_cellview_readers_do_not_close_caller_owned_cellview(
+    reader: Callable[..., object],
+    output: str,
+) -> None:
+    class Client:
+        skill: str | None = None
+
+        def execute_skill(self, skill: str, timeout: int = 30):
+            self.skill = skill
+            return SimpleNamespace(output=output, errors=[])
+
+    client = Client()
+
+    reader(client)
+
+    assert client.skill is not None
+    assert "cv = geGetEditCellView()" in client.skill
+    assert "unwindProtect(" not in client.skill
+    assert "dbClose(cv)" not in client.skill
+
+
+@pytest.mark.parametrize(
+    ("reader", "operation"),
+    [
+        (read_placement, "read_placement"),
+        (read_connectivity, "read_connectivity"),
+        (read_instance_params, "read_instance_params"),
+    ],
+)
+def test_legacy_readers_surface_skill_cleanup_errors(
+    reader: Callable[..., object],
+    operation: str,
+) -> None:
+    class Client:
+        def execute_skill(self, skill: str, timeout: int = 30):
+            return SimpleNamespace(output="", errors=["schematic reader close failed"])
+
+    with pytest.raises(RuntimeError, match=rf"{operation} SKILL error"):
+        reader(Client(), "LIB", "CELL")
 
 
 def test_client_bound_read_delegates_to_unified_reader(monkeypatch: pytest.MonkeyPatch) -> None:
