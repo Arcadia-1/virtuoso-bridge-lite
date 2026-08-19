@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import os
+import re
 import shlex
 import subprocess
 import threading
@@ -11,6 +13,17 @@ import pytest
 
 from virtuoso_bridge.transport.ssh import CommandResult, SSHRunner
 from virtuoso_bridge.transport.tunnel import SSHClient
+
+
+def _decode_remote_script(command: str) -> str:
+    argv = shlex.split(command)
+    assert argv[:2] == ["bash", "-c"]
+    match = re.fullmatch(
+        r'eval "\$\(printf %s ([A-Za-z0-9+/=]+) \| base64 -d\)"',
+        argv[2],
+    )
+    assert match is not None
+    return base64.b64decode(match.group(1)).decode("utf-8")
 
 
 class _Pipe:
@@ -406,7 +419,7 @@ def test_recursive_download_quotes_remote_path_components(monkeypatch, tmp_path)
 
     assert result.returncode == 0
     remote_cmd = commands[0][-1]
-    inner_cmd = shlex.split(remote_cmd)[2]
+    inner_cmd = _decode_remote_script(remote_cmd)
     assert f"p={shlex.quote(remote_path)}" in inner_cmd
     assert 'd=$(dirname "$p")' in inner_cmd
     assert 'b=$(basename "$p")' in inner_cmd
@@ -461,7 +474,7 @@ def test_recursive_download_extracts_into_requested_directory(monkeypatch, tmp_p
 
     assert result.returncode == 0
     remote_cmd = commands[0][-1]
-    inner_cmd = shlex.split(remote_cmd)[2]
+    inner_cmd = _decode_remote_script(remote_cmd)
     assert 'cd "$d"' in inner_cmd
     assert 'tar czf - -- "$b"' in inner_cmd
     assert commands[1] == [runner._tar_cmd, "xzf", "-"]

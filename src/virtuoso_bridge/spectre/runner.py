@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import time
 import uuid
+import warnings
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -38,6 +39,9 @@ from virtuoso_bridge.transport.ssh import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+DEFAULT_PARALLEL_WORKERS = 4
 
 
 SPECTRE_MODE_ARGS: dict[str, list[str]] = {
@@ -497,6 +501,86 @@ def _has_fatal_spectre_error(output: str) -> bool:
 # SpectreSimulator
 # ---------------------------------------------------------------------------
 
+def _validate_max_workers(max_workers: int) -> int:
+    """Validate a user-supplied Spectre job concurrency limit."""
+    if (
+        not isinstance(max_workers, int)
+        or isinstance(max_workers, bool)
+        or max_workers < 1
+    ):
+        raise ValueError("max_workers must be at least 1")
+    return max_workers
+
+
+class SpectrePool:
+    """Explicitly owned pool for incremental asynchronous simulations.
+
+    Prefer :meth:`SpectreSimulator.run_parallel` for a fixed batch. Use this
+    class when simulations need to be submitted over time while earlier jobs
+    are still running. The context manager makes the executor lifetime and
+    concurrency limit explicit.
+    """
+
+    def __init__(
+        self,
+        simulator: "SpectreSimulator",
+        max_workers: int = DEFAULT_PARALLEL_WORKERS,
+    ) -> None:
+        self._simulator = simulator
+        self._max_workers = _validate_max_workers(max_workers)
+        self._executor = ThreadPoolExecutor(max_workers=self._max_workers)
+        self._closed = False
+
+    @property
+    def max_workers(self) -> int:
+        """Maximum number of Spectre jobs that may run concurrently."""
+        return self._max_workers
+
+    def submit(
+        self,
+        netlist: Path,
+        params: dict | None = None,
+    ) -> Future[SimulationResult]:
+        """Submit one simulation and return its future immediately."""
+        if self._closed:
+            raise RuntimeError("SpectrePool has been shut down")
+        netlist = Path(netlist).resolve()
+        work_dir = self._simulator._new_parallel_work_dir(netlist)
+        return self._executor.submit(
+            self._simulator._run_in_work_dir,
+            netlist,
+            params or {},
+            work_dir,
+        )
+
+    def wait_all(
+        self,
+        futures: list[Future[SimulationResult]],
+    ) -> list[SimulationResult]:
+        """Wait for futures and return results in submission order."""
+        return self._simulator.wait_all(futures)
+
+    def shutdown(
+        self,
+        wait: bool = True,
+        *,
+        cancel_futures: bool = False,
+    ) -> None:
+        """Shut down this pool; subsequent submissions are rejected."""
+        if self._closed:
+            return
+        self._closed = True
+        self._executor.shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    def __enter__(self) -> "SpectrePool":
+        if self._closed:
+            raise RuntimeError("SpectrePool has been shut down")
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        self.shutdown()
+
+
 class SpectreSimulator:
     """Cadence Spectre simulator adapter."""
 
@@ -536,9 +620,11 @@ class SpectreSimulator:
         self._output_format = output_format
         self._ssh_key_path = ssh_key_path
         self._ssh_config_path = ssh_config_path
-        self._max_workers = 64
-        self._pool: ThreadPoolExecutor | None = None
         self._keep_remote_files = keep_remote_files
+        # Compatibility only. New code should use run_parallel() for a batch
+        # or parallel_pool() for incremental submission.
+        self._legacy_max_workers = DEFAULT_PARALLEL_WORKERS
+        self._legacy_pool: SpectrePool | None = None
         self._ssh_runner: SSHRunner | None = ssh_runner
         self._profile = profile
         self._ssh_backend: str | None = None
@@ -675,77 +761,88 @@ class SpectreSimulator:
 
     # -- parallel simulation API ---------------------------------------------
 
-    def _ensure_pool(self) -> ThreadPoolExecutor:
-        """Lazily create the thread pool on first submit."""
-        if self._pool is None:
-            self._pool = ThreadPoolExecutor(max_workers=self._max_workers)
-        return self._pool
+    def parallel_pool(
+        self,
+        max_workers: int = DEFAULT_PARALLEL_WORKERS,
+    ) -> SpectrePool:
+        """Create an explicitly owned pool for incremental submissions.
+
+        Use it as a context manager so all submitted work finishes and the
+        executor is released deterministically::
+
+            with sim.parallel_pool(max_workers=4) as pool:
+                first = pool.submit(Path("tb_comparator.scs"))
+                second = pool.submit(Path("tb_dac.scs"))
+                results = pool.wait_all([first, second])
+        """
+        return SpectrePool(self, max_workers=max_workers)
 
     def set_max_workers(self, n: int) -> None:
-        """Change the maximum number of concurrent simulations.
+        """Set concurrency for the deprecated simulator-level submit API.
 
-        Takes effect on the next :meth:`submit` call if the pool hasn't been
-        created yet, or after :meth:`shutdown` + next submit.
+        New code should pass ``max_workers`` to :meth:`run_parallel` or
+        :meth:`parallel_pool`. The compatibility pool cannot be resized after
+        its first submission; call :meth:`shutdown` before changing it.
         """
-        self._max_workers = n
-        if self._pool is not None:
-            logger.warning(
-                "Pool already running with previous max_workers. "
-                "Call shutdown() first to apply the new limit."
+        warnings.warn(
+            "SpectreSimulator.set_max_workers() is deprecated; pass "
+            "max_workers to run_parallel() or parallel_pool() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        n = _validate_max_workers(n)
+        if self._legacy_pool is not None and n != self._legacy_max_workers:
+            raise RuntimeError(
+                "Cannot resize an active compatibility pool; call shutdown() "
+                "first or use parallel_pool(max_workers=...)"
             )
+        self._legacy_max_workers = n
 
-    def submit(self, netlist: Path, params: dict | None = None) -> Future[SimulationResult]:
-        """Submit a simulation to run in the background.
+    def submit(
+        self,
+        netlist: Path,
+        params: dict | None = None,
+    ) -> Future[SimulationResult]:
+        """Submit through the deprecated simulator-owned compatibility pool."""
+        warnings.warn(
+            "SpectreSimulator.submit() is deprecated; submit through "
+            "an explicit parallel_pool() context instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if self._legacy_pool is None:
+            self._legacy_pool = self.parallel_pool(
+                max_workers=self._legacy_max_workers,
+            )
+        return self._legacy_pool.submit(netlist, params)
 
-        Returns a :class:`~concurrent.futures.Future` immediately.  The
-        simulation runs in a worker thread. Each task gets its own local
-        work directory and remote directory (when applicable), so repeated
-        submissions of the same netlist cannot overwrite one another. The
-        simulator's SSH runner is shared by all worker threads. With the
-        Paramiko backend, they multiplex channels on one authenticated
-        Transport.
-
-        Example::
-
-            sim = SpectreSimulator.from_env()
-            t1 = sim.submit(Path("tb_comparator.scs"))
-            t2 = sim.submit(Path("tb_dac.scs"))
-            # ... do other work ...
-            result1 = t1.result()
-            result2 = t2.result()
-        """
-        pool = self._ensure_pool()
-        netlist = Path(netlist).resolve()
-        params = params or {}
-        work_dir = self._new_parallel_work_dir(netlist)
-        return pool.submit(self._run_in_work_dir, netlist, params, work_dir)
+    def shutdown(self) -> None:
+        """Release the deprecated simulator-owned compatibility pool."""
+        if self._legacy_pool is None:
+            return
+        self._legacy_pool.shutdown()
+        self._legacy_pool = None
 
     def run_parallel(
         self,
         tasks: list[tuple[Path, dict]],
-        max_workers: int | None = None,
+        max_workers: int = DEFAULT_PARALLEL_WORKERS,
     ) -> list[SimulationResult]:
-        """Submit multiple simulations and wait for all to complete.
+        """Run one fixed batch with a scoped executor.
 
-        Convenience wrapper around :meth:`submit`.  For fire-and-forget or
-        incremental submission, use :meth:`submit` directly.
-
-        *max_workers* overrides the instance default for this batch only.
+        Each call owns its executor, so batches with different concurrency
+        limits cannot leak state into one another. For incremental submission,
+        use :meth:`parallel_pool`.
         """
-        old = self._max_workers
-        if max_workers is not None:
-            self._max_workers = max_workers
-            # Force new pool with the override
-            self.shutdown()
-
-        futures = [self.submit(Path(netlist), params) for netlist, params in tasks]
-        results = self.wait_all(futures)
-
-        if max_workers is not None:
-            self._max_workers = old
-            self.shutdown()
-
-        return results
+        _validate_max_workers(max_workers)
+        if not tasks:
+            return self.wait_all([])
+        with self.parallel_pool(max_workers=max_workers) as pool:
+            futures = [
+                pool.submit(Path(netlist), params)
+                for netlist, params in tasks
+            ]
+            return pool.wait_all(futures)
 
     @staticmethod
     def wait_all(futures: list[Future[SimulationResult]]) -> list[SimulationResult]:
@@ -765,12 +862,6 @@ class SpectreSimulator:
         passed = sum(1 for r in results if r.status == ExecutionStatus.SUCCESS)
         print(f"[parallel] Done: {passed}/{len(results)} succeeded")
         return results
-
-    def shutdown(self) -> None:
-        """Shut down the worker pool. A new pool is created on next submit."""
-        if self._pool is not None:
-            self._pool.shutdown(wait=True)
-            self._pool = None
 
     def check_license(self) -> dict[str, Any]:
         """Check Spectre license availability on the remote host.

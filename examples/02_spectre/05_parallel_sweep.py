@@ -3,11 +3,9 @@
 
 Demonstrates the parallel execution API:
 
-- ``SpectreSimulator.set_max_workers()``
-- ``SpectreSimulator.run_parallel()``
-- ``SpectreSimulator.wait_all()`` (called internally by ``run_parallel``)
-- ``SpectreSimulator.submit()`` (direct submit mode)
-- ``SpectreSimulator.shutdown()``
+- ``SpectreSimulator.run_parallel()`` with batch-scoped concurrency
+- ``SpectreSimulator.parallel_pool()`` for incremental submit mode
+- automatic executor cleanup
 
 Each simulation modifies the load capacitance (Cload) in the inverter
 netlist and runs remotely.  After all simulations complete, propagation
@@ -159,8 +157,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[Sweep] Cload values: {[f'{c * 1e15:.1f}fF' for c in CLOAD_VALUES]}")
     print(f"[Parallel] {len(tasks)} simulations, {max_workers} workers, mode '{mode}'")
 
-    # --- Run all sweep points in parallel via SpectreSimulator's pool ----
-    # One SpectreSimulator instance manages the worker pool. Each task gets
+    # --- Run all sweep points with a batch-scoped executor ---------------
+    # Each task gets
     # its own ``<netlist.stem>__<run-id>`` local work directory and a remote
     # uuid-based directory automatically, so PSF and auxiliary files cannot
     # collide even when the same netlist is submitted more than once.
@@ -170,17 +168,17 @@ def main(argv: list[str] | None = None) -> int:
         work_dir=OUT_DIR,
         output_format="psfascii",
     )
-    sim.set_max_workers(max_workers)
-
     # ``run_parallel`` is the one-shot convenience wrapper -- submit a list
     # of (netlist, params) tasks, get a list of SimulationResult back in
-    # the same order.  Equivalent low-level form:
-    #     futures = [sim.submit(n, p) for n, p in tasks]
-    #     results = SpectreSimulator.wait_all(futures)
-    try:
-        results: list[SimulationResult] = sim.run_parallel(tasks)
-    finally:
-        sim.shutdown()
+    # the same order. It owns and releases a fresh executor for this batch.
+    # Equivalent incremental form:
+    #     with sim.parallel_pool(max_workers=max_workers) as pool:
+    #         futures = [pool.submit(n, p) for n, p in tasks]
+    #         results = pool.wait_all(futures)
+    results: list[SimulationResult] = sim.run_parallel(
+        tasks,
+        max_workers=max_workers,
+    )
 
     # --- Analyze results -------------------------------------------------
     cloads_fF: list[float] = []

@@ -18,6 +18,19 @@ from typing import Iterable
 logger = logging.getLogger(__name__)
 
 
+def _remote_bash_command(script: str) -> str:
+    """Wrap a script so csh/tcsh login shells pass it intact to Bash.
+
+    SSH servers invoke the account's login shell to interpret command strings.
+    POSIX ``sh -c '...'`` quoting is therefore unsafe for csh users. Encoding
+    the generated script keeps the outer command free of nested shell syntax;
+    the escaped command substitution is expanded only after Bash starts. The
+    SSH stdin remains available to the decoded script for tar or text payloads.
+    """
+    encoded = base64.b64encode(script.encode("utf-8")).decode("ascii")
+    return f'''bash -c 'eval "$(printf %s {encoded} | base64 -d)"' '''.rstrip()
+
+
 @dataclass(frozen=True)
 class TarUploadPlan:
     """One local-tar to remote-tar upload operation."""
@@ -143,7 +156,7 @@ def _atomic_tar_upload_command(
             "trap - EXIT HUP INT TERM",
         ]
     )
-    return "sh -c " + shlex.quote("\n".join(lines))
+    return _remote_bash_command("\n".join(lines))
 
 
 def _text_upload_script(plan: TextUploadPlan, writer: str) -> str:
@@ -222,7 +235,7 @@ def build_text_upload_plan(remote_path: str, payload: bytes) -> TextUploadPlan:
     )
     script = _text_upload_script(plan, 'cat > "$payload"')
     return TextUploadPlan(
-        remote_command=f"sh -c {shlex.quote(script)}",
+        remote_command=_remote_bash_command(script),
         remote_path=plan.remote_path,
         remote_dir=plan.remote_dir,
         work_path=plan.work_path,
@@ -315,7 +328,7 @@ def build_tar_download_plan(
     )
     stage_path = local_path.parent / f".vbtmp-{uuid.uuid4().hex}"
     return TarDownloadPlan(
-        remote_command=f"sh -c {shlex.quote(inner_command)}",
+        remote_command=_remote_bash_command(inner_command),
         local_command=(tar_command, "xzf", "-"),
         remote_path=remote_path,
         local_path=local_path,

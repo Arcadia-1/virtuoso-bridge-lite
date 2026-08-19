@@ -1,44 +1,17 @@
 # Parallel Simulation & Job Management
 
 ## Table of Contents
-- Fire-and-forget with submit()
 - Batch with run_parallel()
-- Concurrency control
+- Incremental submission with SpectrePool
 - Multi-server simulation
 - .env configuration
 
 ---
 
-## Fire-and-forget with `submit()`
-
-`submit()` returns a `Future` immediately. The simulation runs in a background thread.
-
-```python
-sim = SpectreSimulator.from_env()
-
-# Submit simulations as needed — returns Future immediately
-t1 = sim.submit(Path("tb_comparator.scs"), {"include_files": ["comp.va"]})
-t2 = sim.submit(Path("tb_dac.scs"))
-
-# Do other work while simulations run...
-
-# Check without blocking
-if t1.done():
-    result = t1.result()
-
-# Block on a specific one
-result2 = t2.result()
-
-# Submit more while others are still running
-t3 = sim.submit(Path("tb_sar_logic.scs"))
-
-# Wait for a batch
-results = SpectreSimulator.wait_all([t1, t2, t3])
-```
-
 ## Batch with `run_parallel()`
 
-Submit all at once, wait for all to complete:
+Submit all at once and wait for completion. Each call creates and releases its
+own executor, so repeated batches may safely use different concurrency limits:
 
 ```python
 results = sim.run_parallel([
@@ -48,11 +21,28 @@ results = sim.run_parallel([
 ], max_workers=5)
 ```
 
-## Concurrency control
+`max_workers` is the number of independent Spectre processes, not the thread
+count used inside one Spectre process. The conservative default is 4; set it
+explicitly according to license, CPU, memory, and SSH session limits.
+
+## Incremental submission with `SpectrePool`
+
+When tasks arrive over time, create an explicitly owned pool. `submit()`
+returns a `Future` immediately, and leaving the context waits for outstanding
+work and releases the executor:
 
 ```python
-sim.set_max_workers(4)  # default is 8, adjust for license/CPU limits
-sim.shutdown()           # tear down pool, new one created on next submit
+sim = SpectreSimulator.from_env()
+
+with sim.parallel_pool(max_workers=4) as pool:
+    t1 = pool.submit(Path("tb_comparator.scs"), {"include_files": ["comp.va"]})
+    t2 = pool.submit(Path("tb_dac.scs"))
+
+    if t1.done():
+        result = t1.result()
+
+    t3 = pool.submit(Path("tb_sar_logic.scs"))
+    results = pool.wait_all([t1, t2, t3])
 ```
 
 Each task gets a unique `<netlist-stem>__<run-id>/` directory below the
@@ -75,10 +65,12 @@ Create a simulator per profile to distribute work across machines:
 sim1 = SpectreSimulator(remote=True, profile="worker1")
 sim2 = SpectreSimulator(remote=True, profile="worker2")
 
-t1 = sim1.submit(Path("tb_comp.scs"))
-t2 = sim2.submit(Path("tb_dac.scs"))
+with sim1.parallel_pool(max_workers=2) as pool1, \
+     sim2.parallel_pool(max_workers=2) as pool2:
+    t1 = pool1.submit(Path("tb_comp.scs"))
+    t2 = pool2.submit(Path("tb_dac.scs"))
 
-results = SpectreSimulator.wait_all([t1, t2])
+    results = SpectreSimulator.wait_all([t1, t2])
 ```
 
 ## .env configuration

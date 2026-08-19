@@ -90,18 +90,31 @@ These are silent or near-silent foot-guns from real lab runs:
 
 ## Parallel simulation
 
-Submit simulations that run concurrently. Each task gets a unique
-`<netlist-stem>__<run-id>/` directory below `work_dir`, plus its own remote
-directory when applicable, so even repeated submissions of the same deck do
-not overwrite PSF data or auxiliary files. For full API and multi-server
-setup, read `references/parallel.md`.
+For a fixed batch, use `run_parallel()`. It creates a scoped executor for that
+call and releases it automatically, so concurrency settings never leak between
+batches:
 
 ```python
-t1 = sim.submit(Path("tb_comp.scs"))    # returns Future immediately
-t2 = sim.submit(Path("tb_dac.scs"))     # submit more anytime
-result = t1.result()                     # block on one
-results = SpectreSimulator.wait_all([t1, t2])  # or wait for batch
+results = sim.run_parallel([
+    (Path("tb_comp.scs"), {}),
+    (Path("tb_dac.scs"), {}),
+], max_workers=4)
 ```
+
+For incremental asynchronous submission, use an explicitly owned pool:
+
+```python
+with sim.parallel_pool(max_workers=4) as pool:
+    t1 = pool.submit(Path("tb_comp.scs"))
+    t2 = pool.submit(Path("tb_dac.scs"))
+    result = t1.result()
+    results = pool.wait_all([t1, t2])
+```
+
+Each task gets a unique `<netlist-stem>__<run-id>/` directory below
+`work_dir`, plus its own remote directory when applicable, so even repeated
+submissions of the same deck do not overwrite PSF data or auxiliary files. For
+full API and multi-server setup, read `references/parallel.md`.
 
 ## Simulation modes
 

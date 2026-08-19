@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import logging
 import os
@@ -18,6 +19,17 @@ from virtuoso_bridge.transport.transfer import (
     build_text_upload_plan,
     install_staged_item,
 )
+
+
+def _decode_remote_script(command: str) -> str:
+    argv = shlex.split(command)
+    assert argv[:2] == ["bash", "-c"]
+    match = re.fullmatch(
+        r'eval "\$\(printf %s ([A-Za-z0-9+/=]+) \| base64 -d\)"',
+        argv[2],
+    )
+    assert match is not None
+    return base64.b64decode(match.group(1)).decode("utf-8")
 
 
 def test_file_download_plan_stages_beside_target(tmp_path: Path) -> None:
@@ -60,7 +72,7 @@ def test_batch_upload_plan_stages_all_renames_before_install(tmp_path: Path) -> 
         "first.txt",
         "second.txt",
     )
-    script = shlex.split(plan.remote_command)[2]
+    script = _decode_remote_script(plan.remote_command)
     assert re.search(r"work=/remote/\.vbtmp-[0-9a-f]{32}", script)
     assert 'tar xf - -C "$payload"' in script
     assert "chmod 755 /remote" not in script
@@ -92,8 +104,8 @@ def test_windows_directory_upload_restores_remote_owner_write(
         platform_name="posix",
     )[0]
 
-    windows_script = shlex.split(windows_plan.remote_command)[2]
-    posix_script = shlex.split(posix_plan.remote_command)[2]
+    windows_script = _decode_remote_script(windows_plan.remote_command)
+    posix_script = _decode_remote_script(posix_plan.remote_command)
     assert 'find "$payload"/\'source tree\' -type d -exec chmod u+w {} +' in (
         windows_script
     )
@@ -118,7 +130,7 @@ def test_download_plan_quotes_remote_path_and_stages_beside_target(
     assert plan.stage_path.parent == local_path.parent
     assert plan.stage_path.name.startswith(".vbtmp-")
     assert plan.staged_item == plan.stage_path / "netlist dir"
-    inner_command = shlex.split(plan.remote_command)[2]
+    inner_command = _decode_remote_script(plan.remote_command)
     assert shlex.split(inner_command)[0].removesuffix(";") == (
         "p=/remote/sim's results/netlist dir"
     )
@@ -148,10 +160,10 @@ def test_upload_plans_split_duplicate_archive_names_across_local_dirs(
     assert plans[0].local_command[-2:] == ("--", "input.scs")
     assert plans[1].local_command[-2:] == ("--", "input.scs")
     assert 'mv -- "$payload"/input.scs /remote/first.scs' in (
-        plans[0].remote_command
+        _decode_remote_script(plans[0].remote_command)
     )
     assert 'mv -- "$payload"/input.scs /remote/second.scs' in (
-        plans[1].remote_command
+        _decode_remote_script(plans[1].remote_command)
     )
 
 
@@ -188,7 +200,7 @@ def test_upload_plan_rejects_duplicate_remote_targets(tmp_path: Path) -> None:
 def test_text_upload_plan_stages_in_target_directory_before_install() -> None:
     payload = "simulator lang=spectre\n".encode("utf-8")
     plan = build_text_upload_plan("/remote/path/input.scs", payload)
-    script = shlex.split(plan.remote_command)[2]
+    script = _decode_remote_script(plan.remote_command)
 
     assert plan.work_path.startswith("/remote/path/.vbtmp-")
     assert plan.payload_size == len(payload)
@@ -270,6 +282,34 @@ def test_text_upload_preserves_existing_target_mode(tmp_path: Path) -> None:
     assert target.read_bytes() == payload
     assert target.stat().st_mode & 0o7777 == 0o640
     assert not list(tmp_path.glob(".vbtmp-*"))
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or shutil.which("csh") is None,
+    reason="requires POSIX tar and csh",
+)
+def test_tar_upload_command_survives_csh_login_shell(tmp_path: Path) -> None:
+    source = tmp_path / "source" / "input.scs"
+    source.parent.mkdir()
+    source.write_text("simulator lang=spectre\n", encoding="utf-8")
+    target = tmp_path / "remote" / "input.scs"
+    plan = build_tar_upload_plans("tar", [(source, target.as_posix())])[0]
+    archive = subprocess.run(
+        plan.local_command,
+        capture_output=True,
+        check=True,
+    ).stdout
+
+    completed = subprocess.run(
+        [shutil.which("csh") or "csh", "-fc", plan.remote_command],
+        input=archive,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr.decode("utf-8")
+    assert target.read_text(encoding="utf-8") == "simulator lang=spectre\n"
+    assert not list(target.parent.glob(".vbtmp-*"))
 
 
 def test_installed_item_remains_successful_when_backup_cleanup_fails(

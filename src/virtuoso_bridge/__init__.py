@@ -17,7 +17,7 @@ from virtuoso_bridge.models import (
     SkillResult,
     VirtuosoResult,
 )
-from virtuoso_bridge.spectre.runner import SpectreSimulator
+from virtuoso_bridge.spectre.runner import SpectrePool, SpectreSimulator
 from virtuoso_bridge.wrappers import SanitizingClient
 from virtuoso_bridge.profile import resolve_profile, resolve_profile_info
 
@@ -30,6 +30,7 @@ def decode_skill_output(raw: str | None) -> str:
 __all__ = [
     "VirtuosoClient",
     "SSHClient",
+    "SpectrePool",
     "SpectreSimulator",
     "SanitizingClient",
     "VirtuosoResult",
