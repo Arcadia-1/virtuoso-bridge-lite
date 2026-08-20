@@ -28,6 +28,7 @@ from typing import Any
 import yaml
 
 from virtuoso_bridge import VirtuosoClient, decode_skill_output
+from virtuoso_bridge.virtuoso.ops import escape_skill_string
 
 _DEFAULT_FILTERS_PATH = Path(__file__).parent / "cdf_param_filters.yaml"
 _DEFAULT_TIMEOUT_S = 300
@@ -59,8 +60,10 @@ def _match_filter(config: dict, lib: str, cell: str) -> list[str] | None:
 
 _SKILL_TOPOLOGY = r'''
 let((cv result)
+  {owned_read_start}
   cv = {cv_expr}
-  unless(cv return("ERROR"))
+  if(cv
+    then progn(
   result = "INSTANCES\n"
   foreach(inst cv~>instances
     when(inst~>purpose != "pin"
@@ -106,7 +109,47 @@ let((cv result)
   {notes_section}
   result = strcat(result "END\n")
   result)
+    else "ERROR")
+  {owned_read_cleanup})
 '''
+
+_OWNED_READ_START = r'''unwindProtect(
+    progn('''
+
+_OWNED_READ_CLEANUP = r''')
+    progn(
+      when(cv
+        unless(dbClose(cv)
+          error("schematic reader close failed"))
+        cv = nil)))'''
+
+
+def _build_cellview_read_skill(
+    template: str,
+    lib: str | None,
+    cell: str | None,
+) -> str:
+    """Bind a read template to either an owned named CV or the current CV."""
+    if lib is None and cell is None:
+        cv_expr = "geGetEditCellView()"
+        owned_read_start = ""
+        owned_read_cleanup = ""
+    elif not lib or not cell:
+        raise ValueError("lib and cell must both be non-empty when provided")
+    else:
+        cv_expr = (
+            f'dbOpenCellViewByType("{escape_skill_string(lib)}" '
+            f'"{escape_skill_string(cell)}" "schematic" "schematic" "r")'
+        )
+        owned_read_start = _OWNED_READ_START
+        owned_read_cleanup = _OWNED_READ_CLEANUP
+
+    return (
+        template.replace("{owned_read_start}", owned_read_start)
+        .replace("{owned_read_cleanup}", owned_read_cleanup)
+        .replace("{cv_expr}", cv_expr)
+    )
+
 
 _GEOMETRY_INST_EXPR = r'''
       result = strcat(result sprintf(nil "|%L|%s|%L|%d|%s"
@@ -147,10 +190,11 @@ def read_schematic(
     """Read a schematic in one SKILL call.
 
     Args:
-        lib, cell: library and cell name.  If omitted, uses the currently
-            open cellview (geGetEditCellView).
-        include_positions: if True (default), include xy/orient/bBox/numInst/view
-            on each instance.  False = pure topology + params only.
+        lib, cell: library and cell name. A named read closes the cellview
+            reference it opens. If omitted, uses the caller-owned current
+            cellview (geGetEditCellView) and leaves it open.
+        include_positions: if True, include xy/orient/bBox/numInst/view on each
+            instance. False = pure topology + params only.
             Notes are always returned regardless of this flag.
         param_filters: path to a YAML filter config.  Default uses the
             built-in cdf_param_filters.yaml.  Pass None to return all
@@ -166,15 +210,12 @@ def read_schematic(
         ``"ignore"`` when the designer shift+deleted the instance in the
         schematic editor to exclude it from netlisting.  Absent key = normal.
     """
-    if lib and cell:
-        cv_expr = f'dbOpenCellViewByType("{lib}" "{cell}" "schematic" "schematic" "r")'
-    else:
-        cv_expr = "geGetEditCellView()"
-
-    skill = _SKILL_TOPOLOGY.replace("{cv_expr}", cv_expr)
-    skill = skill.replace("{geometry_inst}", _GEOMETRY_INST_EXPR if include_positions else "")
+    skill = _SKILL_TOPOLOGY.replace(
+        "{geometry_inst}", _GEOMETRY_INST_EXPR if include_positions else ""
+    )
     # Notes are always included
     skill = skill.replace("{notes_section}", _NOTES_SECTION_EXPR)
+    skill = _build_cellview_read_skill(skill, lib, cell)
 
     r = client.execute_skill(skill, timeout=timeout)
     if getattr(r, "errors", None):
@@ -347,8 +388,10 @@ def _parse_bbox(s: str) -> list[list[float]]:
 
 _READ_PLACEMENT_SKILL = '''
 let((cv instList pinList labelList wireList)
+  {owned_read_start}
   cv = {cv_expr}
-  unless(cv return("ERROR"))
+  if(cv
+    then progn(
   instList = ""
   foreach(inst cv~>instances
     instList = strcat(instList sprintf(nil "%s|%s|%s|%L|%s\\n"
@@ -365,6 +408,8 @@ let((cv instList pinList labelList wireList)
     when(shape~>objType == "line"
       wireList = strcat(wireList sprintf(nil "%L\\n" shape~>points))))
   sprintf(nil "INSTANCES\\n%sPINS\\n%sLABELS\\n%sWIRES\\n%sEND" instList pinList labelList wireList))
+    else "ERROR")
+  {owned_read_cleanup})
 '''
 
 
@@ -374,14 +419,16 @@ def read_placement(
     cell: str | None = None,
 ) -> dict:
     """Read placement: instance positions, pins, labels, wires."""
-    if lib and cell:
-        cv_expr = f'dbOpenCellViewByType("{lib}" "{cell}" "schematic" "schematic" "r")'
-    else:
-        cv_expr = "geGetEditCellView()"
-
-    skill = _READ_PLACEMENT_SKILL.replace("{cv_expr}", cv_expr)
+    skill = _build_cellview_read_skill(_READ_PLACEMENT_SKILL, lib, cell)
     r = client.execute_skill(skill, timeout=30)
+    if getattr(r, "errors", None):
+        raise RuntimeError(f"read_placement SKILL error: {r.errors[0]}")
     raw = decode_skill_output(r.output)
+    if raw.strip() == "ERROR":
+        raise RuntimeError(
+            f"read_placement could not open schematic "
+            f"{lib or '(current)'}/{cell or '(current)'}"
+        )
 
     result: dict = {"instances": [], "pins": [], "labels": [], "wires": []}
     section = None
@@ -413,8 +460,10 @@ def read_placement(
 
 _READ_CONNECTIVITY_SKILL = '''
 let((cv instList netList pinList)
+  {owned_read_start}
   cv = {cv_expr}
-  unless(cv return("ERROR"))
+  if(cv
+    then progn(
   instList = ""
   foreach(inst cv~>instances
     instList = strcat(instList sprintf(nil "%s|%s|%s\\n"
@@ -429,6 +478,8 @@ let((cv instList netList pinList)
   foreach(term cv~>terminals
     pinList = strcat(pinList sprintf(nil "%s|%s\\n" term~>name term~>direction)))
   sprintf(nil "INSTANCES\\n%sNETS\\n%sPINS\\n%sEND" instList netList pinList))
+    else "ERROR")
+  {owned_read_cleanup})
 '''
 
 
@@ -438,14 +489,16 @@ def read_connectivity(
     cell: str | None = None,
 ) -> dict:
     """Read electrical connectivity: instances, nets, pins."""
-    if lib and cell:
-        cv_expr = f'dbOpenCellViewByType("{lib}" "{cell}" "schematic" "schematic" "r")'
-    else:
-        cv_expr = "geGetEditCellView()"
-
-    skill = _READ_CONNECTIVITY_SKILL.replace("{cv_expr}", cv_expr)
+    skill = _build_cellview_read_skill(_READ_CONNECTIVITY_SKILL, lib, cell)
     r = client.execute_skill(skill, timeout=30)
+    if getattr(r, "errors", None):
+        raise RuntimeError(f"read_connectivity SKILL error: {r.errors[0]}")
     raw = decode_skill_output(r.output)
+    if raw.strip() == "ERROR":
+        raise RuntimeError(
+            f"read_connectivity could not open schematic "
+            f"{lib or '(current)'}/{cell or '(current)'}"
+        )
 
     result: dict = {"instances": [], "nets": [], "pins": []}
     section = None
@@ -476,8 +529,10 @@ def read_connectivity(
 
 _READ_PARAMS_SKILL = '''
 let((cv result)
+  {owned_read_start}
   cv = {cv_expr}
-  unless(cv return("ERROR"))
+  if(cv
+    then progn(
   result = ""
   foreach(inst cv~>instances
     let((cdf paramStr)
@@ -491,6 +546,8 @@ let((cv result)
       result = strcat(result sprintf(nil "%s|%s|%s%s\\n"
         inst~>name inst~>libName inst~>cellName paramStr))))
   result)
+    else "ERROR")
+  {owned_read_cleanup})
 '''
 
 
@@ -501,14 +558,16 @@ def read_instance_params(
     filter_params: list[str] | None = None,
 ) -> list[dict]:
     """Read CDF parameters for all instances."""
-    if lib and cell:
-        cv_expr = f'dbOpenCellViewByType("{lib}" "{cell}" "schematic" "schematic" "r")'
-    else:
-        cv_expr = "geGetEditCellView()"
-
-    skill = _READ_PARAMS_SKILL.replace("{cv_expr}", cv_expr)
+    skill = _build_cellview_read_skill(_READ_PARAMS_SKILL, lib, cell)
     r = client.execute_skill(skill, timeout=30)
+    if getattr(r, "errors", None):
+        raise RuntimeError(f"read_instance_params SKILL error: {r.errors[0]}")
     raw = decode_skill_output(r.output)
+    if raw.strip() == "ERROR":
+        raise RuntimeError(
+            f"read_instance_params could not open schematic "
+            f"{lib or '(current)'}/{cell or '(current)'}"
+        )
 
     result = []
     for line in raw.splitlines():
