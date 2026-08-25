@@ -31,6 +31,7 @@ from virtuoso_bridge.transport.ssh import (
     SSHRunner,
     CommandResult,
     ssh_backend_env_from_os,
+    ssh_proxy_url_from_os,
 )
 
 logger = logging.getLogger(__name__)
@@ -215,6 +216,7 @@ class SSHClient:
         jump_host = os.getenv(f"VB_JUMP_HOST{suffix}", "").strip() or None
         jump_user = os.getenv(f"VB_JUMP_USER{suffix}", "").strip() or None
         backend_env = ssh_backend_env_from_os(profile)
+        ssh_proxy_url = ssh_proxy_url_from_os(profile)
 
         # Port
         from virtuoso_bridge.virtuoso.basic.bridge import _default_remote_port
@@ -243,7 +245,7 @@ class SSHClient:
             profile=profile,
             ssh_backend=backend_env.backend,
             ssh_max_sessions=backend_env.max_sessions,
-            ssh_proxy_url=backend_env.proxy_url,
+            ssh_proxy_url=ssh_proxy_url,
         )
 
     # -- properties ---------------------------------------------------------

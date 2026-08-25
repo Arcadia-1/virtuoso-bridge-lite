@@ -126,6 +126,9 @@ jump-host socket and Paramiko reaches the target through that SSH transport.
 Proxy failures are reported directly; the bridge does not fall back to a direct
 or OpenSSH command connection. The local `-L` tunnel managed by
 `virtuoso-bridge start` remains an OpenSSH port forward.
+While the proxy is active, SSH config lookup forces `CanonicalizeHostname=no`
+so OpenSSH cannot resolve the proxied first-hop hostname locally before
+Paramiko opens the SOCKS5 connection.
 
 The Paramiko backend reads `VB_SSH_CONFIG` when set, otherwise the normal user
 and system SSH config files. It honors `Include`, host aliases,

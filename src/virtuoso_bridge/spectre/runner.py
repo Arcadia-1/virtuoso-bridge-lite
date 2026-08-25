@@ -36,6 +36,7 @@ from virtuoso_bridge.transport.ssh import (
     run_remote_task,
     remote_ssh_env_from_os,
     ssh_backend_env_from_os,
+    ssh_proxy_url_from_os,
 )
 
 logger = logging.getLogger(__name__)
@@ -637,7 +638,7 @@ class SpectreSimulator:
             backend_env = ssh_backend_env_from_os(profile)
             self._ssh_backend = backend_env.backend
             self._ssh_max_sessions = backend_env.max_sessions
-            self._ssh_proxy_url = backend_env.proxy_url
+            self._ssh_proxy_url = ssh_proxy_url_from_os(profile)
             if rh is None:
                 rh = env.remote_host
             if ru is None:

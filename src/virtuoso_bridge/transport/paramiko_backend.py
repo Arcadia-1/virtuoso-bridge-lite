@@ -334,6 +334,11 @@ class ParamikoSessionBackend:
             return cached
 
         command = [self._ssh_cmd, "-G"]
+        if self._proxy is not None:
+            # ssh -G can otherwise perform local DNS lookups when a user's
+            # config enables hostname canonicalization. The SOCKS5 proxy must
+            # remain the resolver for the proxied first hop.
+            command.extend(["-o", "CanonicalizeHostname=no"])
         if self._ssh_config_path is not None:
             command.extend(["-F", str(self._ssh_config_path)])
         if user is not None:
@@ -676,6 +681,44 @@ class ParamikoSessionBackend:
             and transport.is_authenticated()
         )
 
+    @staticmethod
+    def _resolve_proxy_addresses(
+        proxy: _Socks5Proxy,
+        deadline: _Deadline,
+    ) -> list[tuple[Any, ...]]:
+        command = f"SOCKS5 proxy {proxy.host}:{proxy.port}"
+        results: "queue.Queue[tuple[list[tuple[Any, ...]] | None, Exception | None]]" = (
+            queue.Queue(maxsize=1)
+        )
+
+        def resolve() -> None:
+            try:
+                addresses = socket.getaddrinfo(
+                    proxy.host,
+                    proxy.port,
+                    type=socket.SOCK_STREAM,
+                )
+            except Exception as exc:  # noqa: BLE001 - propagated on caller thread
+                results.put((None, exc))
+            else:
+                results.put((list(addresses), None))
+
+        resolver = threading.Thread(
+            target=resolve,
+            name="virtuoso-bridge-socks5-resolver",
+            daemon=True,
+        )
+        resolver.start()
+        try:
+            addresses, error = results.get(timeout=deadline.remaining(command))
+        except queue.Empty as exc:
+            raise subprocess.TimeoutExpired(command, deadline.timeout) from exc
+        if error is not None:
+            raise error
+        if not addresses:
+            raise OSError(f"Could not resolve {command}")
+        return addresses
+
     def _open_proxy_socket(
         self,
         endpoint: _Endpoint,
@@ -685,14 +728,74 @@ class ParamikoSessionBackend:
         if proxy is None:
             return None
         assert self._socks is not None
-        return self._socks.create_connection(
-            (endpoint.hostname, endpoint.port),
-            timeout=deadline.remaining(endpoint.hostname),
-            proxy_type=self._socks.SOCKS5,
-            proxy_addr=proxy.host,
-            proxy_port=proxy.port,
-            proxy_rdns=True,
+        last_error: OSError | None = None
+        for family, socket_type, protocol, _canonical_name, address in (
+            self._resolve_proxy_addresses(proxy, deadline)
+        ):
+            proxy_socket = None
+            try:
+                proxy_socket = self._socks.socksocket(
+                    family,
+                    socket_type,
+                    protocol,
+                )
+                proxy_socket.settimeout(deadline.remaining(endpoint.hostname))
+                proxy_socket.set_proxy(
+                    proxy_type=self._socks.SOCKS5,
+                    addr=address[0],
+                    port=proxy.port,
+                    rdns=True,
+                )
+                self._connect_proxy_socket(proxy_socket, endpoint, deadline)
+                return proxy_socket
+            except subprocess.TimeoutExpired:
+                if proxy_socket is not None:
+                    proxy_socket.close()
+                raise
+            except OSError as exc:
+                last_error = exc
+                if proxy_socket is not None:
+                    proxy_socket.close()
+            except Exception:
+                if proxy_socket is not None:
+                    proxy_socket.close()
+                raise
+        if last_error is not None:
+            raise last_error
+        raise OSError(f"No usable address found for SOCKS5 proxy {proxy.host}")
+
+    @staticmethod
+    def _connect_proxy_socket(
+        proxy_socket: Any,
+        endpoint: _Endpoint,
+        deadline: _Deadline,
+    ) -> None:
+        results: "queue.Queue[Exception | None]" = queue.Queue(maxsize=1)
+
+        def connect() -> None:
+            try:
+                proxy_socket.connect((endpoint.hostname, endpoint.port))
+            except Exception as exc:  # noqa: BLE001 - propagated on caller thread
+                results.put(exc)
+            else:
+                results.put(None)
+
+        connector = threading.Thread(
+            target=connect,
+            name="virtuoso-bridge-socks5-connector",
+            daemon=True,
         )
+        connector.start()
+        try:
+            error = results.get(timeout=deadline.remaining(endpoint.hostname))
+        except queue.Empty as exc:
+            proxy_socket.close()
+            raise subprocess.TimeoutExpired(
+                endpoint.hostname,
+                deadline.timeout,
+            ) from exc
+        if error is not None:
+            raise error
 
     def _connect_client(
         self,

@@ -104,25 +104,27 @@ class SshBackendEnv(NamedTuple):
 
     backend: str | None
     max_sessions: int | None
-    proxy_url: str | None = None
+
+
+def _profile_or_global_ssh_setting(name: str, profile: str | None) -> str:
+    suffix = f"_{profile}" if profile else ""
+    if suffix:
+        profiled = os.environ.get(f"{name}{suffix}", "").strip()
+        if profiled:
+            return profiled
+    return os.environ.get(name, "").strip()
 
 
 def ssh_backend_env_from_os(profile: str | None = None) -> SshBackendEnv:
     """Read profile-specific SSH backend settings with global fallback."""
     profile = resolve_profile(profile)
     load_vb_env()
-    suffix = f"_{profile}" if profile else ""
 
-    def _profile_or_global(name: str) -> str:
-        if suffix:
-            profiled = os.environ.get(f"{name}{suffix}", "").strip()
-            if profiled:
-                return profiled
-        return os.environ.get(name, "").strip()
-
-    backend = _profile_or_global("VB_SSH_BACKEND") or None
-    proxy_url = _profile_or_global("VB_SSH_PROXY") or None
-    raw_max_sessions = _profile_or_global("VB_SSH_MAX_SESSIONS")
+    backend = _profile_or_global_ssh_setting("VB_SSH_BACKEND", profile) or None
+    raw_max_sessions = _profile_or_global_ssh_setting(
+        "VB_SSH_MAX_SESSIONS",
+        profile,
+    )
     max_sessions: int | None = None
     if raw_max_sessions:
         try:
@@ -131,11 +133,14 @@ def ssh_backend_env_from_os(profile: str | None = None) -> SshBackendEnv:
             raise ValueError("VB_SSH_MAX_SESSIONS must be a positive integer") from exc
         if max_sessions < 1:
             raise ValueError("VB_SSH_MAX_SESSIONS must be a positive integer")
-    return SshBackendEnv(
-        backend=backend,
-        max_sessions=max_sessions,
-        proxy_url=proxy_url,
-    )
+    return SshBackendEnv(backend=backend, max_sessions=max_sessions)
+
+
+def ssh_proxy_url_from_os(profile: str | None = None) -> str | None:
+    """Read the profile-aware Paramiko SOCKS5 proxy URL."""
+    profile = resolve_profile(profile)
+    load_vb_env()
+    return _profile_or_global_ssh_setting("VB_SSH_PROXY", profile) or None
 
 
 def remote_ssh_env_from_os(profile: str | None = None) -> RemoteSshEnv:
@@ -296,8 +301,8 @@ class SSHRunner:
         persistent_shell: bool = False,
         backend: str | None = None,
         max_sessions: int | None = None,
-        proxy_url: str | None = None,
         verbose: bool = False,
+        proxy_url: str | None = None,
     ) -> None:
         load_vb_env()
         _setup_command_log()
