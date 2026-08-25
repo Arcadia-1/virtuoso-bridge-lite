@@ -196,6 +196,7 @@ def test_make_ssh_runner_uses_profile_backend_settings(monkeypatch) -> None:
     monkeypatch.setenv("VB_REMOTE_USER_worker", "designer")
     monkeypatch.setenv("VB_SSH_BACKEND_worker", "paramiko")
     monkeypatch.setenv("VB_SSH_MAX_SESSIONS_worker", "255")
+    monkeypatch.setenv("VB_SSH_PROXY_worker", "socks5://127.0.0.1:10800")
     monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
     monkeypatch.setattr("virtuoso_bridge.transport.ssh.SSHRunner", _CapturedRunner)
 
@@ -205,6 +206,7 @@ def test_make_ssh_runner_uses_profile_backend_settings(monkeypatch) -> None:
     assert user == "designer"
     assert captured["backend"] == "paramiko"
     assert captured["max_sessions"] == 255
+    assert captured["proxy_url"] == "socks5://127.0.0.1:10800"
 
 
 def test_helper_exports_auto_detected_display(monkeypatch, capsys) -> None:

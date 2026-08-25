@@ -160,6 +160,7 @@ class SSHClient:
         profile: str | None = None,
         ssh_backend: str | None = None,
         ssh_max_sessions: int | None = None,
+        ssh_proxy_url: str | None = None,
     ) -> None:
         self._remote_host = remote_host
         self._remote_user = remote_user
@@ -182,6 +183,7 @@ class SSHClient:
                 persistent_shell=True,
                 backend=ssh_backend,
                 max_sessions=ssh_max_sessions,
+                proxy_url=ssh_proxy_url,
                 verbose=True,
             )
 
@@ -241,6 +243,7 @@ class SSHClient:
             profile=profile,
             ssh_backend=backend_env.backend,
             ssh_max_sessions=backend_env.max_sessions,
+            ssh_proxy_url=backend_env.proxy_url,
         )
 
     # -- properties ---------------------------------------------------------

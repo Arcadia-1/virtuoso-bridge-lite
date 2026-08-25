@@ -105,6 +105,8 @@ uv pip install -e '.[ssh]'
 ```dotenv
 VB_SSH_BACKEND=paramiko
 VB_SSH_MAX_SESSIONS=10
+# Optional: route the first SSH hop through an unauthenticated SOCKS5 proxy.
+VB_SSH_PROXY=socks5://127.0.0.1:10800
 ```
 
 Commands and file transfers then share one authenticated target SSH Transport;
@@ -116,12 +118,22 @@ Waiting work queues at the gate
 instead of opening another command connection. There is no automatic fallback
 to independent SSH connections.
 
+`VB_SSH_PROXY` is optional and only affects the Paramiko backend. It accepts an
+explicit `socks5://host:port` URL without credentials and asks the proxy to
+resolve the proxied first-hop hostname. For direct connections the proxy opens
+the target SSH socket. With `VB_JUMP_HOST` or one `ProxyJump` hop, it opens the
+jump-host socket and Paramiko reaches the target through that SSH transport.
+Proxy failures are reported directly; the bridge does not fall back to a direct
+or OpenSSH command connection. The local `-L` tunnel managed by
+`virtuoso-bridge start` remains an OpenSSH port forward.
+
 The Paramiko backend reads `VB_SSH_CONFIG` when set, otherwise the normal user
 and system SSH config files. It honors `Include`, host aliases,
 `HostName`/`User`/`Port`, `IdentityFile`, `IdentitiesOnly`, and one `ProxyJump`
 hop. Explicit `VB_REMOTE_*`, `VB_JUMP_*`, and key arguments take precedence.
-`ProxyCommand`, chained `ProxyJump` routes, and a missing explicit
-`VB_SSH_CONFIG` fail during initialization instead of being silently ignored.
+`ProxyCommand` fails during initialization unless an explicit `VB_SSH_PROXY`
+overrides it. Chained `ProxyJump` routes and a missing explicit `VB_SSH_CONFIG`
+also fail instead of being silently ignored.
 Both the target and jump host must already have keys in the applicable user or
 system `known_hosts` files; unknown and changed keys are rejected. The backend
 honors `UserKnownHostsFile`, `GlobalKnownHostsFile`, and `HostKeyAlias`. Run the

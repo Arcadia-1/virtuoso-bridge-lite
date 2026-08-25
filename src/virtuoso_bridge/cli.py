@@ -835,6 +835,7 @@ def _make_ssh_runner() -> tuple["SSHRunner | None", str]:
         jump_user=jump_user,
         backend=backend_env.backend,
         max_sessions=backend_env.max_sessions,
+        proxy_url=backend_env.proxy_url,
     ), remote_user
 
 

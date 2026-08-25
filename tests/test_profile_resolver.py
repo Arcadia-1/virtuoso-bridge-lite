@@ -236,6 +236,7 @@ def test_spectre_simulator_direct_constructor_uses_resolved_profile(monkeypatch,
     monkeypatch.setenv("VB_REMOTE_USER_t28_io", "designer")
     monkeypatch.setenv("VB_SSH_BACKEND_t28_io", "paramiko")
     monkeypatch.setenv("VB_SSH_MAX_SESSIONS_t28_io", "255")
+    monkeypatch.setenv("VB_SSH_PROXY_t28_io", "socks5://127.0.0.1:10800")
     monkeypatch.setattr("virtuoso_bridge.spectre.runner.load_vb_env", lambda: None)
     monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
     captured: dict[str, object] = {}
@@ -257,6 +258,7 @@ def test_spectre_simulator_direct_constructor_uses_resolved_profile(monkeypatch,
     assert sim._remote_user == "designer"
     assert captured["backend"] == "paramiko"
     assert captured["max_sessions"] == 255
+    assert captured["proxy_url"] == "socks5://127.0.0.1:10800"
 
 
 def test_cli_profile_bind_show_clear(monkeypatch, tmp_path, capsys) -> None:

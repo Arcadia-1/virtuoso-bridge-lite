@@ -629,6 +629,7 @@ class SpectreSimulator:
         self._profile = profile
         self._ssh_backend: str | None = None
         self._ssh_max_sessions: int | None = None
+        self._ssh_proxy_url: str | None = None
 
         rh, ru, jh, ju = remote_host, remote_user, jump_host, jump_user
         if remote:
@@ -636,6 +637,7 @@ class SpectreSimulator:
             backend_env = ssh_backend_env_from_os(profile)
             self._ssh_backend = backend_env.backend
             self._ssh_max_sessions = backend_env.max_sessions
+            self._ssh_proxy_url = backend_env.proxy_url
             if rh is None:
                 rh = env.remote_host
             if ru is None:
@@ -1012,6 +1014,7 @@ class SpectreSimulator:
                 persistent_shell=True,
                 backend=self._ssh_backend,
                 max_sessions=self._ssh_max_sessions,
+                proxy_url=self._ssh_proxy_url,
                 verbose=True,
             )
         return self._ssh_runner

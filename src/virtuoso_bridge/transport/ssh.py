@@ -104,6 +104,7 @@ class SshBackendEnv(NamedTuple):
 
     backend: str | None
     max_sessions: int | None
+    proxy_url: str | None = None
 
 
 def ssh_backend_env_from_os(profile: str | None = None) -> SshBackendEnv:
@@ -120,6 +121,7 @@ def ssh_backend_env_from_os(profile: str | None = None) -> SshBackendEnv:
         return os.environ.get(name, "").strip()
 
     backend = _profile_or_global("VB_SSH_BACKEND") or None
+    proxy_url = _profile_or_global("VB_SSH_PROXY") or None
     raw_max_sessions = _profile_or_global("VB_SSH_MAX_SESSIONS")
     max_sessions: int | None = None
     if raw_max_sessions:
@@ -129,7 +131,11 @@ def ssh_backend_env_from_os(profile: str | None = None) -> SshBackendEnv:
             raise ValueError("VB_SSH_MAX_SESSIONS must be a positive integer") from exc
         if max_sessions < 1:
             raise ValueError("VB_SSH_MAX_SESSIONS must be a positive integer")
-    return SshBackendEnv(backend=backend, max_sessions=max_sessions)
+    return SshBackendEnv(
+        backend=backend,
+        max_sessions=max_sessions,
+        proxy_url=proxy_url,
+    )
 
 
 def remote_ssh_env_from_os(profile: str | None = None) -> RemoteSshEnv:
@@ -290,6 +296,7 @@ class SSHRunner:
         persistent_shell: bool = False,
         backend: str | None = None,
         max_sessions: int | None = None,
+        proxy_url: str | None = None,
         verbose: bool = False,
     ) -> None:
         load_vb_env()
@@ -323,6 +330,11 @@ class SSHRunner:
         if max_sessions < 1:
             raise ValueError("VB_SSH_MAX_SESSIONS must be a positive integer")
         self._max_sessions = max_sessions
+        self._proxy_url = (
+            proxy_url
+            if proxy_url is not None
+            else (os.environ.get("VB_SSH_PROXY", "").strip() or None)
+        )
 
         env_ssh_cmd = _tool_override_from_env("VB_SSH_CMD")
         env_scp_cmd = _tool_override_from_env("VB_SCP_CMD")
@@ -398,6 +410,7 @@ class SSHRunner:
                 ssh_cmd=self._ssh_cmd,
                 connect_timeout=connect_timeout,
                 max_sessions=max_sessions,
+                proxy_url=self._proxy_url,
             )
 
     @property

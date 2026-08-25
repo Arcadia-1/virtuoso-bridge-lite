@@ -68,6 +68,12 @@ class _ProxyJump:
     port: int | None
 
 
+@dataclass(frozen=True)
+class _Socks5Proxy:
+    host: str
+    port: int
+
+
 _SSH_PATH_TOKEN_RE = re.compile(r"%([%CdhikLlnpru])")
 _PROXY_TOKEN_RE = re.compile(r"%([%hnpr])")
 
@@ -233,6 +239,7 @@ class ParamikoSessionBackend:
         ssh_cmd: str = "ssh",
         connect_timeout: float,
         max_sessions: int,
+        proxy_url: str | None = None,
     ) -> None:
         if max_sessions < 1:
             raise ValueError("Paramiko max_sessions must be at least 1")
@@ -254,6 +261,17 @@ class ParamikoSessionBackend:
         self._ssh_cmd = ssh_cmd
         self._connect_timeout = float(connect_timeout)
         self._max_sessions = max_sessions
+        self._proxy = self._parse_socks5_proxy(proxy_url)
+        self._socks: Any | None = None
+        if self._proxy is not None:
+            try:
+                import socks
+            except ImportError as exc:
+                raise RuntimeError(
+                    "VB_SSH_PROXY requires PySocks. "
+                    "Install virtuoso-bridge with `uv pip install -e '.[ssh]'`."
+                ) from exc
+            self._socks = socks
         self._session_gate = threading.BoundedSemaphore(max_sessions)
         self._connect_lock = threading.RLock()
         self._jump_client: Any | None = None
@@ -274,6 +292,35 @@ class ParamikoSessionBackend:
     @property
     def max_sessions(self) -> int:
         return self._max_sessions
+
+    @staticmethod
+    def _parse_socks5_proxy(value: str | None) -> _Socks5Proxy | None:
+        if value is None or not value.strip():
+            return None
+        spec = value.strip()
+        try:
+            parsed = urlsplit(spec)
+            hostname = parsed.hostname
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("VB_SSH_PROXY contains an invalid URL") from exc
+        if (
+            parsed.scheme.lower() != "socks5"
+            or hostname is None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise ValueError(
+                "VB_SSH_PROXY must use socks5://host:port without credentials"
+            )
+        if port is None:
+            raise ValueError("VB_SSH_PROXY must include an explicit port")
+        if not 1 <= port <= 65535:
+            raise ValueError("VB_SSH_PROXY contains an invalid port")
+        return _Socks5Proxy(host=hostname, port=port)
 
     def _lookup(
         self,
@@ -544,10 +591,10 @@ class ParamikoSessionBackend:
     ) -> _ProxyJump | None:
         lookup = self._lookup(host, user, port)
         proxy_command = lookup.get("proxycommand")
-        if proxy_command is not None:
+        if proxy_command is not None and self._proxy is None:
             raise ValueError(
                 f"Paramiko backend does not support ProxyCommand for host {host!r}; "
-                "use ProxyJump or VB_JUMP_HOST"
+                "use ProxyJump, VB_JUMP_HOST, or VB_SSH_PROXY"
             )
         raw_proxy_jump = str(lookup.get("proxyjump") or "")
         if raw_proxy_jump:
@@ -629,6 +676,24 @@ class ParamikoSessionBackend:
             and transport.is_authenticated()
         )
 
+    def _open_proxy_socket(
+        self,
+        endpoint: _Endpoint,
+        deadline: _Deadline,
+    ) -> Any | None:
+        proxy = self._proxy
+        if proxy is None:
+            return None
+        assert self._socks is not None
+        return self._socks.create_connection(
+            (endpoint.hostname, endpoint.port),
+            timeout=deadline.remaining(endpoint.hostname),
+            proxy_type=self._socks.SOCKS5,
+            proxy_addr=proxy.host,
+            proxy_port=proxy.port,
+            proxy_rdns=True,
+        )
+
     def _connect_client(
         self,
         endpoint: _Endpoint,
@@ -704,9 +769,16 @@ class ParamikoSessionBackend:
             jump_client = None
             jump_channel = None
             target_client = None
+            proxy_socket = None
             try:
                 if jump_endpoint is not None:
-                    jump_client = self._connect_client(jump_endpoint, deadline)
+                    proxy_socket = self._open_proxy_socket(jump_endpoint, deadline)
+                    jump_client = self._connect_client(
+                        jump_endpoint,
+                        deadline,
+                        sock=proxy_socket,
+                    )
+                    proxy_socket = None
                     jump_transport = jump_client.get_transport()
                     if jump_transport is None:
                         raise OSError("Jump-host SSH transport is unavailable")
@@ -716,11 +788,18 @@ class ParamikoSessionBackend:
                         ("127.0.0.1", 0),
                         timeout=deadline.remaining(target_endpoint.hostname),
                     )
+                else:
+                    proxy_socket = self._open_proxy_socket(target_endpoint, deadline)
                 target_client = self._connect_client(
                     target_endpoint,
                     deadline,
-                    sock=jump_channel,
+                    sock=(
+                        jump_channel
+                        if jump_channel is not None
+                        else proxy_socket
+                    ),
                 )
+                proxy_socket = None
             except Exception:
                 if target_client is not None:
                     target_client.close()
@@ -728,6 +807,8 @@ class ParamikoSessionBackend:
                     jump_channel.close()
                 if jump_client is not None:
                     jump_client.close()
+                if proxy_socket is not None:
+                    proxy_socket.close()
                 raise
 
             self._jump_client = jump_client
