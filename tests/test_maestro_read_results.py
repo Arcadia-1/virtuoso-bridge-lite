@@ -26,6 +26,7 @@ import pytest
 
 from virtuoso_bridge.virtuoso.maestro.reader.runs import (
     _parse_detail_csv,
+    export_waveform,
     read_results,
 )
 
@@ -198,3 +199,78 @@ def test_read_results_logs_when_test_lookup_fails(caplog):
     assert out == {}
     assert any("maeGetSetup returned no test" in r.message
                for r in caplog.records)
+
+
+def _waveform_client(history: str = "Interactive.7") -> _FakeClient:
+    return _FakeClient(
+        skill_responses=[
+            "t",
+            f'"/tmp/maestro/results/maestro/{history}/psf/"',
+            "t",
+        ],
+        on_download=lambda *_: None,
+    )
+
+
+def test_export_waveform_preserves_ocean_format_defaults():
+    client = _waveform_client()
+
+    export_waveform(
+        client,
+        session="sess_1",
+        expression='v("/OUT")',
+        local_path="wave.txt",
+        history="Interactive.7",
+    )
+
+    ocn_print = next(call for call in client.skill_calls
+                     if call.startswith("ocnPrint("))
+    assert "?precision" not in ocn_print
+    assert "?width" not in ocn_print
+
+
+def test_export_waveform_passes_explicit_format_options():
+    client = _waveform_client()
+
+    export_waveform(
+        client,
+        session="sess_1",
+        expression='v("/OUT")',
+        local_path="wave.txt",
+        history="Interactive.7",
+        precision=12,
+        width=20,
+    )
+
+    ocn_print = next(call for call in client.skill_calls
+                     if call.startswith("ocnPrint("))
+    assert "?precision 12" in ocn_print
+    assert "?width 20" in ocn_print
+
+
+@pytest.mark.parametrize(
+    ("option", "value", "error"),
+    [
+        ("precision", True, TypeError),
+        ("precision", "6", TypeError),
+        ("precision", 0, ValueError),
+        ("precision", 17, ValueError),
+        ("width", False, TypeError),
+        ("width", 14.0, TypeError),
+        ("width", 3, ValueError),
+    ],
+)
+def test_export_waveform_rejects_invalid_format_options(option, value, error):
+    client = _waveform_client()
+
+    with pytest.raises(error):
+        export_waveform(
+            client,
+            session="sess_1",
+            expression='v("/OUT")',
+            local_path="wave.txt",
+            history="Interactive.7",
+            **{option: value},
+        )
+
+    assert client.skill_calls == []
