@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from numbers import Number
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,19 @@ def result_file(raw_psf: Path, filename: str) -> Path:
     """Return the one required result file below an explicit raw PSF root."""
     if not raw_psf.is_dir():
         raise FileNotFoundError("raw PSF directory is absent: {}".format(raw_psf))
-    matches = sorted(path for path in raw_psf.rglob(filename) if path.is_file())
+    pattern = Path(filename)
+    if pattern.is_absolute() or ".." in pattern.parts:
+        raise ValueError("result-file pattern must be relative and stay below raw PSF root: {}".format(filename))
+
+    resolved_root = raw_psf.resolve()
+    matches = []
+    for path in raw_psf.rglob(filename):
+        if not path.is_file():
+            continue
+        if not path.resolve().is_relative_to(resolved_root):
+            raise ValueError("result-file match escapes raw PSF root: {}".format(path))
+        matches.append(path)
+    matches.sort()
     if len(matches) != 1:
         raise ValueError("expected exactly one {} below {}, found {}".format(filename, raw_psf, len(matches)))
     return matches[0]
@@ -36,10 +49,9 @@ def scalar(data: Mapping[str, Any], raw_key: str) -> float:
     value = data[raw_key]
     if isinstance(value, complex) or isinstance(value, (list, tuple)):
         raise ValueError("PSF key {} must be one real scalar".format(raw_key))
-    try:
-        result = float(value)
-    except (TypeError, ValueError, OverflowError) as error:
-        raise ValueError("PSF key {} is not numeric".format(raw_key)) from error
+    if isinstance(value, bool) or not isinstance(value, Number):
+        raise ValueError("PSF key {} is not numeric".format(raw_key))
+    result = float(value)
     if not math.isfinite(result):
         raise ValueError("PSF key {} is non-finite".format(raw_key))
     return result
@@ -52,10 +64,9 @@ def vector(data: Mapping[str, Any], raw_key: str) -> list[complex]:
     value = data[raw_key]
     if not isinstance(value, list) or not value:
         raise ValueError("PSF key {} must be a non-empty vector".format(raw_key))
-    try:
-        result = [complex(item) for item in value]
-    except (TypeError, ValueError, OverflowError) as error:
-        raise ValueError("PSF key {} is not a numeric vector".format(raw_key)) from error
+    if any(isinstance(item, bool) or not isinstance(item, Number) for item in value):
+        raise ValueError("PSF key {} is not a numeric vector".format(raw_key))
+    result = [complex(item) for item in value]
     if not all(math.isfinite(item.real) and math.isfinite(item.imag) for item in result):
         raise ValueError("PSF key {} has non-finite values".format(raw_key))
     return result
