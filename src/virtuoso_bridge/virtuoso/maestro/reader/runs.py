@@ -333,6 +333,8 @@ def export_waveform(
     *,
     analysis: str = "ac",
     history: str = "",
+    precision: int = 6,
+    width: int = 14,
 ) -> str:
     """Export a waveform via OCEAN to a local text file.
 
@@ -342,6 +344,9 @@ def export_waveform(
         local_path: where to save locally
         analysis: which analysis to select ("ac", "tran", "noise", etc.)
         history: explicit history name; auto-detected if empty
+        precision: ocnPrint significant digits (1-16)
+            Note: only prints `precision` digits if `width` >= `precision`.
+        width: ocnPrint column width in characters
 
     Returns the local file path.
     """
@@ -381,7 +386,7 @@ def export_waveform(
     client.execute_skill(f'selectResults("{analysis}")')
     client.execute_skill(
         f'ocnPrint({expression} '
-        f'?numberNotation \'scientific ?numSpaces 1 '
+        f'?numberNotation \'scientific ?precision {precision} ?width {width} ?numSpaces 1 '
         f'?output "{remote_path}")')
 
     client.download_file(remote_path, local_path)
