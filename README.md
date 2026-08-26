@@ -118,14 +118,16 @@ Waiting work queues at the gate
 instead of opening another command connection. There is no automatic fallback
 to independent SSH connections.
 
-`VB_SSH_PROXY` is optional and only affects the Paramiko backend. It accepts an
-explicit `socks5://host:port` URL without credentials and asks the proxy to
-resolve the proxied first-hop hostname. For direct connections the proxy opens
-the target SSH socket. With `VB_JUMP_HOST` or one `ProxyJump` hop, it opens the
-jump-host socket and Paramiko reaches the target through that SSH transport.
-Proxy failures are reported directly; the bridge does not fall back to a direct
-or OpenSSH command connection. The local `-L` tunnel managed by
-`virtuoso-bridge start` remains an OpenSSH port forward.
+`VB_SSH_PROXY` is optional and applies only to Paramiko-backed commands and file
+transfers, including SFTP. It does not affect the OpenSSH `-L` tunnel created by
+`virtuoso-bridge start`; environments that also need this tunnel to traverse
+SOCKS5 must configure an OpenSSH `ProxyCommand` in the SSH config used by the
+bridge. `VB_SSH_PROXY` accepts an explicit `socks5://host:port` URL without
+credentials and asks the proxy to resolve the proxied first-hop hostname. For
+direct connections the proxy opens the target SSH socket. With `VB_JUMP_HOST`
+or one `ProxyJump` hop, it opens the jump-host socket and Paramiko reaches the
+target through that SSH transport. Proxy failures are reported directly; the
+bridge does not fall back to a direct or OpenSSH command connection.
 While the proxy is active, SSH config lookup forces `CanonicalizeHostname=no`
 so OpenSSH cannot resolve the proxied first-hop hostname locally before
 Paramiko opens the SOCKS5 connection.
