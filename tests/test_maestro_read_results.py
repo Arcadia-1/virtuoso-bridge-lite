@@ -225,6 +225,7 @@ def test_export_waveform_preserves_ocean_format_defaults():
 
     ocn_print = next(call for call in client.skill_calls
                      if call.startswith("ocnPrint("))
+    assert "?numberNotation 'scientific" in ocn_print
     assert "?precision" not in ocn_print
     assert "?width" not in ocn_print
 
@@ -240,12 +241,35 @@ def test_export_waveform_passes_explicit_format_options():
         history="Interactive.7",
         precision=12,
         width=20,
+        number_notation="none",
     )
 
     ocn_print = next(call for call in client.skill_calls
                      if call.startswith("ocnPrint("))
     assert "?precision 12" in ocn_print
     assert "?width 20" in ocn_print
+    assert "?numberNotation 'none" in ocn_print
+
+
+@pytest.mark.parametrize(
+    "notation",
+    ["suffix", "engineering", "scientific", "none"],
+)
+def test_export_waveform_accepts_supported_number_notations(notation):
+    client = _waveform_client()
+
+    export_waveform(
+        client,
+        session="sess_1",
+        expression='v("/OUT")',
+        local_path="wave.txt",
+        history="Interactive.7",
+        number_notation=notation,
+    )
+
+    ocn_print = next(call for call in client.skill_calls
+                     if call.startswith("ocnPrint("))
+    assert f"?numberNotation '{notation}" in ocn_print
 
 
 @pytest.mark.parametrize(
@@ -258,6 +282,9 @@ def test_export_waveform_passes_explicit_format_options():
         ("width", False, TypeError),
         ("width", 14.0, TypeError),
         ("width", 3, ValueError),
+        ("number_notation", True, TypeError),
+        ("number_notation", ["none"], TypeError),
+        ("number_notation", "automatic", ValueError),
     ],
 )
 def test_export_waveform_rejects_invalid_format_options(option, value, error):

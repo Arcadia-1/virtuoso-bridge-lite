@@ -368,8 +368,13 @@ def export_waveform(
         if width < 4:
             raise ValueError("width must be at least 4")
     valid_notations = {"suffix", "engineering", "scientific", "none"}
-    if number_notation is not None and number_notation not in valid_notations:
-        raise ValueError(f"number_notation must be one of {sorted(valid_notations)}")
+    if number_notation is not None:
+        if type(number_notation) is not str:
+            raise TypeError("number_notation must be a str or None")
+        if number_notation not in valid_notations:
+            raise ValueError(
+                f"number_notation must be one of {sorted(valid_notations)}"
+            )
 
     format_args = f" ?numberNotation '{number_notation or 'scientific'}"
     if precision is not None:
