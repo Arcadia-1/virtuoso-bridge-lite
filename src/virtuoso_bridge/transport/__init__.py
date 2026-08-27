@@ -13,6 +13,7 @@ from virtuoso_bridge.transport.ssh import (
     run_remote_task,
     remote_ssh_env_from_os,
     ssh_backend_env_from_os,
+    ssh_proxy_url_from_os,
 )
 
 __all__ = [
@@ -23,6 +24,7 @@ __all__ = [
     "run_remote_task",
     "remote_ssh_env_from_os",
     "ssh_backend_env_from_os",
+    "ssh_proxy_url_from_os",
     "default_virtuoso_bridge_dir",
     "remote_scratch_root",
     "resolve_remote_username",

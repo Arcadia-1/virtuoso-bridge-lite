@@ -236,6 +236,7 @@ def test_spectre_simulator_direct_constructor_uses_resolved_profile(monkeypatch,
     monkeypatch.setenv("VB_REMOTE_USER_t28_io", "designer")
     monkeypatch.setenv("VB_SSH_BACKEND_t28_io", "paramiko")
     monkeypatch.setenv("VB_SSH_MAX_SESSIONS_t28_io", "255")
+    monkeypatch.setenv("VB_SSH_PROXY_t28_io", "socks5://127.0.0.1:10800")
     monkeypatch.setattr("virtuoso_bridge.spectre.runner.load_vb_env", lambda: None)
     monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
     captured: dict[str, object] = {}
@@ -257,6 +258,46 @@ def test_spectre_simulator_direct_constructor_uses_resolved_profile(monkeypatch,
     assert sim._remote_user == "designer"
     assert captured["backend"] == "paramiko"
     assert captured["max_sessions"] == 255
+    assert captured["proxy_url"] == "socks5://127.0.0.1:10800"
+
+
+def test_spectre_simulator_from_env_preserves_profile_ssh_runner(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    _isolate_profile_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("VB_REMOTE_HOST_worker", "compute")
+    monkeypatch.setenv("VB_REMOTE_USER_worker", "designer")
+    monkeypatch.setenv("VB_SSH_BACKEND_worker", "paramiko")
+    monkeypatch.setenv("VB_SSH_PROXY_worker", "socks5://127.0.0.1:10800")
+    monkeypatch.setattr("virtuoso_bridge.spectre.runner.load_vb_env", lambda: None)
+    expected_runner = object()
+    calls: list[tuple[bool, str | None]] = []
+
+    class _Client:
+        ssh_runner = expected_runner
+
+    class _SSHClient:
+        @staticmethod
+        def is_running(profile=None):
+            return profile == "worker"
+
+        @staticmethod
+        def from_env(*, keep_remote_files=False, profile=None):
+            calls.append((keep_remote_files, profile))
+            return _Client()
+
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHClient", _SSHClient)
+
+    simulator = SpectreSimulator.from_env(
+        profile="worker",
+        keep_remote_files=True,
+    )
+
+    assert simulator._ssh_runner is expected_runner
+    assert simulator._profile == "worker"
+    assert simulator._remote_host == "compute"
+    assert calls == [(True, "worker")]
 
 
 def test_cli_profile_bind_show_clear(monkeypatch, tmp_path, capsys) -> None:

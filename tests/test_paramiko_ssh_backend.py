@@ -19,9 +19,15 @@ from virtuoso_bridge.transport.paramiko_backend import (
     ParamikoSessionBackend,
     _Deadline,
     _Endpoint,
+    _Socks5Proxy,
     _default_known_hosts_files,
 )
-from virtuoso_bridge.transport.ssh import SSHRunner
+from virtuoso_bridge.transport.ssh import (
+    SSHRunner,
+    SshBackendEnv,
+    ssh_backend_env_from_os,
+    ssh_proxy_url_from_os,
+)
 from virtuoso_bridge.transport.transfer import (
     FileDownloadPlan,
     TarDownloadPlan,
@@ -89,10 +95,12 @@ def test_ssh_runner_dispatches_to_explicit_paramiko_backend(
         jump_user="designer",
         backend="paramiko",
         max_sessions=7,
+        proxy_url="socks5://127.0.0.1:10800",
     )
     backend = _DispatchBackend.instance
     assert backend is not None
     assert backend.init_args["max_sessions"] == 7
+    assert backend.init_args["proxy_url"] == "socks5://127.0.0.1:10800"
     assert runner.backend == "paramiko"
     assert runner.max_sessions == 7
     assert not runner._use_control_master
@@ -132,6 +140,80 @@ def test_ssh_runner_dispatches_to_explicit_paramiko_backend(
     assert isinstance(backend.calls[6][1], FileDownloadPlan)
 
 
+def test_openssh_backend_does_not_parse_paramiko_proxy_setting(monkeypatch) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh._setup_command_log", lambda: None)
+
+    runner = SSHRunner(
+        host="compute",
+        user="designer",
+        backend="openssh",
+        proxy_url="not-a-proxy-url",
+    )
+
+    assert runner.backend == "openssh"
+    assert runner._paramiko_backend is None
+
+
+def test_paramiko_proxy_does_not_change_openssh_port_forward_command(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _TunnelProcess:
+        pid = 12345
+
+        @staticmethod
+        def poll():
+            return None
+
+    class _TemporaryStderr:
+        name = str(tmp_path / "tunnel-stderr.log")
+
+        def close(self) -> None:
+            Path(self.name).touch()
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        stderr = kwargs.get("stderr")
+        if hasattr(stderr, "close"):
+            stderr.close()
+        return _TunnelProcess()
+
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh._setup_command_log", lambda: None)
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.paramiko_backend.ParamikoSessionBackend",
+        _DispatchBackend,
+    )
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.ssh.tempfile.NamedTemporaryFile",
+        lambda **_kwargs: _TemporaryStderr(),
+    )
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.ssh.subprocess.Popen",
+        fake_popen,
+    )
+
+    runner = SSHRunner(
+        host="compute",
+        user="designer",
+        backend="paramiko",
+        proxy_url="socks5://127.0.0.1:10800",
+    )
+    runner.can_reach_port = lambda _port: True  # type: ignore[method-assign]
+
+    runner.start_port_forward(65080, settle=0, remote_port=65081)
+
+    command = captured["command"]
+    assert isinstance(command, list)
+    assert ["-L", "65080:127.0.0.1:65081"] == command[
+        command.index("-L") : command.index("-L") + 2
+    ]
+    assert "socks5://127.0.0.1:10800" not in command
+
+
 def test_profile_specific_paramiko_settings_reach_ssh_runner(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -147,12 +229,61 @@ def test_profile_specific_paramiko_settings_reach_ssh_runner(monkeypatch) -> Non
     monkeypatch.setenv("VB_JUMP_HOST_worker", "bastion")
     monkeypatch.setenv("VB_SSH_BACKEND_worker", "paramiko")
     monkeypatch.setenv("VB_SSH_MAX_SESSIONS_worker", "255")
+    monkeypatch.setenv("VB_SSH_PROXY_worker", "socks5://127.0.0.1:10800")
 
     client = SSHClient.from_env(profile="worker")
 
     assert client.ssh_runner is not None
     assert captured["backend"] == "paramiko"
     assert captured["max_sessions"] == 255
+    assert captured["proxy_url"] == "socks5://127.0.0.1:10800"
+
+
+def test_profile_ssh_proxy_uses_global_fallback(monkeypatch) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
+    monkeypatch.delenv("VB_SSH_PROXY_worker", raising=False)
+    monkeypatch.setenv("VB_SSH_PROXY", "socks5://127.0.0.1:10800")
+
+    proxy_url = ssh_proxy_url_from_os("worker")
+
+    assert proxy_url == "socks5://127.0.0.1:10800"
+
+
+def test_ssh_backend_env_keeps_two_value_unpacking_compatible(monkeypatch) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
+    monkeypatch.setenv("VB_SSH_BACKEND", "paramiko")
+    monkeypatch.setenv("VB_SSH_MAX_SESSIONS", "10")
+    settings = SshBackendEnv("paramiko", 10)
+    backend, max_sessions = settings
+    resolved_backend, resolved_max_sessions = ssh_backend_env_from_os()
+
+    assert (backend, max_sessions) == ("paramiko", 10)
+    assert (resolved_backend, resolved_max_sessions) == ("paramiko", 10)
+
+
+def test_ssh_runner_keeps_legacy_verbose_positional_argument(monkeypatch) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh._setup_command_log", lambda: None)
+    monkeypatch.delenv("VB_SSH_PROXY", raising=False)
+
+    runner = SSHRunner(
+        "compute",
+        "designer",
+        None,
+        None,
+        None,
+        None,
+        "ssh",
+        600,
+        30,
+        False,
+        "openssh",
+        10,
+        True,
+    )
+
+    assert runner._verbose is True
+    assert runner._proxy_url is None
 
 
 def _configured_backend(
@@ -163,6 +294,7 @@ def _configured_backend(
     jump_host: str | None = None,
     jump_user: str | None = None,
     ssh_key_path: Path | None = None,
+    proxy_url: str | None = None,
 ) -> ParamikoSessionBackend:
     return ParamikoSessionBackend(
         host=host,
@@ -174,6 +306,7 @@ def _configured_backend(
         ssh_cmd="ssh",
         connect_timeout=5,
         max_sessions=10,
+        proxy_url=proxy_url,
     )
 
 
@@ -380,6 +513,67 @@ def test_unsupported_paramiko_config_routing_fails_before_connect(
         _configured_backend(config)
 
 
+def test_explicit_socks_proxy_overrides_proxycommand(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "config"
+    config.touch()
+    _mock_ssh_g(
+        monkeypatch,
+        {
+            ("compute", None, None): _resolved_config(
+                proxycommand=(
+                    "ncat --proxy 127.0.0.1:10800 "
+                    "--proxy-type socks5 %h %p"
+                )
+            ),
+        },
+    )
+
+    backend = _configured_backend(
+        config,
+        proxy_url="socks5://127.0.0.1:10800",
+    )
+
+    assert backend._proxy == _Socks5Proxy("127.0.0.1", 10800)
+    assert backend._jump_endpoint is None
+
+
+def test_socks5_proxy_disables_openssh_hostname_canonicalization(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "config"
+    config.touch()
+    calls = _mock_ssh_g(
+        monkeypatch,
+        {
+            ("private-compute", None, None): _resolved_config(
+                hostname="private-compute.internal",
+            ),
+        },
+    )
+
+    _configured_backend(
+        config,
+        host="private-compute",
+        proxy_url="socks5://127.0.0.1:10800",
+    )
+
+    assert calls == [
+        [
+            "ssh",
+            "-G",
+            "-o",
+            "CanonicalizeHostname=no",
+            "-F",
+            str(config),
+            "private-compute",
+        ]
+    ]
+
+
 def test_nested_proxyjump_fails_before_connect(monkeypatch, tmp_path: Path) -> None:
     config = tmp_path / "config"
     config.touch()
@@ -554,6 +748,387 @@ def test_proxyjump_token_expansion_preserves_url_percent_encoding() -> None:
     )
 
     assert expanded == "ssh://jump%40realm@compute.internal:2201"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("socks5://127.0.0.1:10800", ("127.0.0.1", 10800)),
+        ("socks5://proxy.example:1080", ("proxy.example", 1080)),
+        ("socks5://[2001:db8::1]:1080", ("2001:db8::1", 1080)),
+    ],
+)
+def test_socks5_proxy_parser_accepts_explicit_host_and_port(
+    value: str,
+    expected: tuple[str, int],
+) -> None:
+    parsed = ParamikoSessionBackend._parse_socks5_proxy(value)
+
+    assert parsed is not None
+    assert (parsed.host, parsed.port) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "http://127.0.0.1:1080",
+        "socks5://127.0.0.1",
+        "socks5://127.0.0.1:0",
+        "socks5://127.0.0.1:65536",
+        "socks5://user:password@127.0.0.1:1080",
+        "socks5://127.0.0.1:1080/route",
+        "socks5://127.0.0.1:1080?rdns=false",
+        "socks5://127.0.0.1:invalid",
+        "socks5://[::1:1080",
+    ],
+)
+def test_socks5_proxy_parser_rejects_unsupported_values(value: str) -> None:
+    with pytest.raises(ValueError, match="VB_SSH_PROXY"):
+        ParamikoSessionBackend._parse_socks5_proxy(value)
+
+
+def test_blank_socks5_proxy_preserves_direct_routing() -> None:
+    assert ParamikoSessionBackend._parse_socks5_proxy(None) is None
+    assert ParamikoSessionBackend._parse_socks5_proxy("  ") is None
+
+
+def test_socks5_proxy_dns_resolution_respects_total_deadline(monkeypatch) -> None:
+    resolver_started = threading.Event()
+    release_resolver = threading.Event()
+
+    def blocking_getaddrinfo(*_args, **_kwargs):
+        resolver_started.set()
+        release_resolver.wait(timeout=1)
+        return []
+
+    monkeypatch.setattr(socket, "getaddrinfo", blocking_getaddrinfo)
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            ParamikoSessionBackend._resolve_proxy_addresses(
+                _Socks5Proxy("proxy.example", 1080),
+                _Deadline.start(0.05),
+            )
+    finally:
+        release_resolver.set()
+
+    assert resolver_started.is_set()
+
+
+def test_socks5_proxy_handshake_respects_total_deadline() -> None:
+    release_connector = threading.Event()
+
+    class _BlockingProxySocket:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def connect(self, _destination) -> None:
+            release_connector.wait(timeout=1)
+
+        def close(self) -> None:
+            self.closed = True
+
+    proxy_socket = _BlockingProxySocket()
+    endpoint = _Endpoint(
+        host_alias="compute",
+        hostname="compute.internal",
+        username="designer",
+        port=22,
+        key_filenames=(),
+    )
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            ParamikoSessionBackend._connect_proxy_socket(
+                proxy_socket,
+                endpoint,
+                _Deadline.start(0.05),
+            )
+    finally:
+        release_connector.set()
+
+    assert proxy_socket.closed
+
+
+def test_socks5_proxy_address_attempts_use_remaining_deadline() -> None:
+    class _AddressSocket:
+        def __init__(self, index: int) -> None:
+            self.index = index
+            self.timeout: float | None = None
+            self.proxy_args: dict[str, object] = {}
+            self.closed = False
+
+        def settimeout(self, timeout: float) -> None:
+            self.timeout = timeout
+
+        def set_proxy(self, **kwargs) -> None:
+            self.proxy_args = kwargs
+
+        def connect(self, _destination) -> None:
+            if self.index == 0:
+                time.sleep(0.03)
+                raise OSError("first proxy address failed")
+
+        def close(self) -> None:
+            self.closed = True
+
+    class _AddressSocksModule:
+        SOCKS5 = object()
+
+        def __init__(self) -> None:
+            self.sockets: list[_AddressSocket] = []
+
+        def socksocket(self, _family, _socket_type, _protocol):
+            proxy_socket = _AddressSocket(len(self.sockets))
+            self.sockets.append(proxy_socket)
+            return proxy_socket
+
+    endpoint = _Endpoint(
+        host_alias="compute",
+        hostname="compute.internal",
+        username="designer",
+        port=22,
+        key_filenames=(),
+    )
+    backend = ParamikoSessionBackend.__new__(ParamikoSessionBackend)
+    backend._proxy = _Socks5Proxy("proxy.example", 1080)
+    backend._socks = _AddressSocksModule()
+    backend._resolve_proxy_addresses = lambda _proxy, _deadline: [
+        (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.1", 1080)),
+        (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.2", 1080)),
+    ]
+
+    connected = backend._open_proxy_socket(endpoint, _Deadline.start(0.2))
+
+    first, second = backend._socks.sockets
+    assert connected is second
+    assert first.closed
+    assert first.timeout is not None
+    assert second.timeout is not None
+    assert second.timeout < first.timeout
+    assert second.proxy_args == {
+        "proxy_type": backend._socks.SOCKS5,
+        "addr": "192.0.2.2",
+        "port": 1080,
+        "rdns": True,
+    }
+
+
+class _RoutingSocket:
+    def __init__(self, owner=None) -> None:
+        self.owner = owner
+        self.closed = False
+        self.timeout: float | None = None
+        self.proxy_args: dict[str, object] = {}
+
+    def settimeout(self, timeout: float) -> None:
+        self.timeout = timeout
+
+    def set_proxy(self, **kwargs) -> None:
+        self.proxy_args = kwargs
+
+    def connect(self, destination: tuple[str, int]) -> None:
+        assert self.owner is not None
+        self.owner.calls.append(
+            (
+                destination,
+                {
+                    "timeout": self.timeout,
+                    "proxy_type": self.proxy_args["proxy_type"],
+                    "proxy_addr": self.proxy_args["addr"],
+                    "proxy_port": self.proxy_args["port"],
+                    "proxy_rdns": self.proxy_args["rdns"],
+                },
+            )
+        )
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _RoutingTransport:
+    def __init__(self, channel: object | None = None) -> None:
+        self.channel = channel
+        self.open_channel_calls: list[tuple] = []
+
+    def is_active(self) -> bool:
+        return True
+
+    def is_authenticated(self) -> bool:
+        return True
+
+    def open_channel(self, *args, **kwargs):
+        self.open_channel_calls.append((args, kwargs))
+        return self.channel
+
+
+class _RoutingClient:
+    def __init__(self, transport: _RoutingTransport) -> None:
+        self.transport = transport
+        self.closed = False
+
+    def get_transport(self) -> _RoutingTransport:
+        return self.transport
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeSocksModule:
+    SOCKS5 = object()
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[tuple[str, int], dict[str, object]]] = []
+        self.sockets: list[_RoutingSocket] = []
+
+    def socksocket(self, _family, _socket_type, _protocol):
+        proxy_socket = _RoutingSocket(self)
+        self.sockets.append(proxy_socket)
+        return proxy_socket
+
+
+def _proxy_routing_backend(
+    *,
+    target: _Endpoint,
+    jump: _Endpoint | None = None,
+) -> tuple[ParamikoSessionBackend, _FakeSocksModule]:
+    backend = ParamikoSessionBackend.__new__(ParamikoSessionBackend)
+    socks_module = _FakeSocksModule()
+    backend._proxy = _Socks5Proxy("127.0.0.1", 10800)
+    backend._socks = socks_module
+    backend._host = target.host_alias
+    backend._connect_timeout = 5.0
+    backend._max_sessions = 8
+    backend._connect_lock = threading.RLock()
+    backend._target_endpoint = target
+    backend._jump_endpoint = jump
+    backend._target_client = None
+    backend._jump_client = None
+    backend._jump_channel = None
+    backend._resolve_proxy_addresses = lambda _proxy, _deadline: [
+        (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 10800))
+    ]
+    return backend, socks_module
+
+
+def test_socks5_proxy_connects_target_once_and_reuses_transport() -> None:
+    target = _Endpoint(
+        host_alias="compute",
+        hostname="compute.internal",
+        username="designer",
+        port=2201,
+        key_filenames=(),
+        host_key_alias="recorded-compute",
+    )
+    backend, socks_module = _proxy_routing_backend(target=target)
+    target_client = _RoutingClient(_RoutingTransport())
+    connect_calls: list[tuple[_Endpoint, object | None]] = []
+
+    def connect_client(endpoint, _deadline, *, sock=None):
+        connect_calls.append((endpoint, sock))
+        return target_client
+
+    backend._connect_client = connect_client  # type: ignore[method-assign]
+
+    backend.ensure_connected()
+    backend.ensure_connected()
+
+    assert len(socks_module.calls) == 1
+    destination, proxy_args = socks_module.calls[0]
+    assert destination == ("compute.internal", 2201)
+    assert proxy_args["proxy_type"] is socks_module.SOCKS5
+    assert proxy_args["proxy_addr"] == "127.0.0.1"
+    assert proxy_args["proxy_port"] == 10800
+    assert proxy_args["proxy_rdns"] is True
+    assert connect_calls == [(target, socks_module.sockets[0])]
+
+
+def test_socks5_proxy_connects_only_the_jump_host_first_hop() -> None:
+    target = _Endpoint(
+        host_alias="compute",
+        hostname="compute.internal",
+        username="designer",
+        port=22,
+        key_filenames=(),
+    )
+    jump = _Endpoint(
+        host_alias="bastion",
+        hostname="bastion.internal",
+        username="designer",
+        port=2202,
+        key_filenames=(),
+    )
+    backend, socks_module = _proxy_routing_backend(target=target, jump=jump)
+    jump_channel = _RoutingSocket()
+    jump_transport = _RoutingTransport(jump_channel)
+    jump_client = _RoutingClient(jump_transport)
+    target_client = _RoutingClient(_RoutingTransport())
+    connect_calls: list[tuple[_Endpoint, object | None]] = []
+
+    def connect_client(endpoint, _deadline, *, sock=None):
+        connect_calls.append((endpoint, sock))
+        return jump_client if endpoint is jump else target_client
+
+    backend._connect_client = connect_client  # type: ignore[method-assign]
+
+    backend.ensure_connected()
+
+    assert socks_module.calls[0][0] == ("bastion.internal", 2202)
+    assert connect_calls == [
+        (jump, socks_module.sockets[0]),
+        (target, jump_channel),
+    ]
+    assert jump_transport.open_channel_calls[0][0][:2] == (
+        "direct-tcpip",
+        ("compute.internal", 22),
+    )
+
+
+def test_socks5_proxy_socket_closes_when_ssh_connection_fails() -> None:
+    target = _Endpoint(
+        host_alias="compute",
+        hostname="compute.internal",
+        username="designer",
+        port=22,
+        key_filenames=(),
+    )
+    backend, socks_module = _proxy_routing_backend(target=target)
+
+    def connect_client(_endpoint, _deadline, *, sock=None):
+        raise OSError("SSH handshake failed")
+
+    backend._connect_client = connect_client  # type: ignore[method-assign]
+
+    with pytest.raises(OSError, match="SSH handshake failed"):
+        backend.ensure_connected()
+
+    assert socks_module.sockets[0].closed
+
+
+def test_socks5_proxy_failure_does_not_fall_back_to_direct_connection() -> None:
+    target = _Endpoint(
+        host_alias="compute",
+        hostname="compute.internal",
+        username="designer",
+        port=22,
+        key_filenames=(),
+    )
+    backend, _socks_module = _proxy_routing_backend(target=target)
+    direct_connect_called = False
+
+    def fail_proxy(_endpoint, _deadline):
+        raise OSError("SOCKS5 proxy refused the connection")
+
+    def connect_client(_endpoint, _deadline, *, sock=None):
+        nonlocal direct_connect_called
+        direct_connect_called = True
+        raise AssertionError("direct SSH connection must not be attempted")
+
+    backend._open_proxy_socket = fail_proxy  # type: ignore[method-assign]
+    backend._connect_client = connect_client  # type: ignore[method-assign]
+
+    with pytest.raises(OSError, match="SOCKS5 proxy refused"):
+        backend.ensure_connected()
+
+    assert not direct_connect_called
 
 
 class _FakeSSHException(Exception):
