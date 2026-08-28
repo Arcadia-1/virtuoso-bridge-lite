@@ -123,6 +123,7 @@ def list_windows(
     user: str,
     display: str | None = None,
     profile: str | None = None,
+    top_level: bool = False,
 ) -> list[dict[str, Any]]:
     """Enumerate Virtuoso-related X11 windows without dismissing anything."""
     load_vb_env()
@@ -130,6 +131,8 @@ def list_windows(
     py = _detect_remote_python(runner)
     resolved = _get_display(display)
     cmd = f"{py} {script} --list-windows --json"
+    if top_level:
+        cmd += " --top-level"
     if resolved:
         cmd += f" {resolved}"
     result = _run(runner, cmd, timeout=15)
@@ -157,6 +160,30 @@ def dismiss_window(
     if resolved:
         cmd += f" {resolved}"
     result = _run(runner, cmd, timeout=15)
+    return _parse_result(result)
+
+
+def bootstrap_ciw(
+    runner: SSHRunner | None,
+    user: str,
+    window_id: str,
+    setup_path: str,
+    *,
+    display: str | None = None,
+    profile: str | None = None,
+) -> list[dict[str, Any]]:
+    """Load the generated setup file in one explicit, verified CIW window."""
+    load_vb_env()
+    script = _ensure_helper(runner, user, profile)
+    py = _detect_remote_python(runner)
+    resolved = _get_display(display)
+    cmd = (
+        f"{py} {script} --bootstrap-window {shlex.quote(window_id)} "
+        f"--setup-path {shlex.quote(setup_path)}"
+    )
+    if resolved:
+        cmd += f" {resolved}"
+    result = _run(runner, cmd, timeout=20)
     return _parse_result(result)
 
 

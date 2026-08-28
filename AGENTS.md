@@ -6,7 +6,7 @@ Control Cadence Virtuoso via Python — remotely over SSH or locally on the same
 
 | Mode | When | Setup |
 |---|---|---|
-| **Remote** | Virtuoso on a server, you work locally | Set `VB_REMOTE_HOST` in `.env`, run `virtuoso-bridge start` |
+| **Remote** | Virtuoso on a server, you work locally | Set `VB_REMOTE_HOST` for one host, or explicit `VB_*_HOST` roles, then run `virtuoso-bridge start` |
 | **Local** | Virtuoso on your own machine | Set `VB_REMOTE_HOST=localhost`, run `virtuoso-bridge start`, load the path it prints into CIW |
 
 ## Prerequisites
@@ -45,13 +45,20 @@ Re-running `init` on an existing `.env` is a no-op; pass `--force` to overwrite.
 
 **2. Edit `.env`** (only if step 1 did not already fill it in)
 
-> **Where to put `.env`:** `--env FILE` has the highest priority. Without it, the bridge walks from the current directory upward and uses the first `.env` that looks like a Virtuoso Bridge config (`VB_REMOTE_HOST` or `VB_LOCAL_PORT`), then falls back to `~/.virtuoso-bridge/.env`.
+> **Where to put `.env`:** `--env FILE` has the highest priority. Without it, the bridge walks from the current directory upward and uses the first `.env` that looks like a Virtuoso Bridge config (a `VB_*_HOST` role or `VB_LOCAL_PORT`), then falls back to `~/.virtuoso-bridge/.env`.
 
 ```dotenv
 VB_REMOTE_HOST=my-server              # SSH host alias from ~/.ssh/config
 VB_REMOTE_USER=username               # SSH username on the remote
 VB_REMOTE_PORT=65081                  # port for the bridge daemon on remote
 VB_LOCAL_PORT=65082                   # local port forwarded via SSH tunnel
+
+# Split-host overrides (optional; VB_REMOTE_HOST remains the fallback)
+# VB_GUI_HOST=gui-host-a              # Virtuoso CIW and X11
+# VB_DEPLOY_HOST=gui-host-a           # receives generated files
+# VB_DAEMON_HOST=compute-host-b       # ipcBeginProcess daemon / tunnel target
+# VB_SPECTRE_HOST=compute-host-b      # standalone Spectre jobs
+# VB_REMOTE_SCRATCH_ROOT=/home/username/.virtuoso-bridge  # shared path
 
 # Optional — only needed if `spectre` is not already on PATH in the remote shell.
 # VB_CADENCE_CSHRC=/path/to/.cshrc   # cshrc that sets up Cadence tools on the remote
@@ -79,6 +86,18 @@ load("/tmp/virtuoso_bridge_<remote_user>/<client_id>/virtuoso_bridge/virtuoso_se
 (Run `virtuoso-bridge status` again at any time to re-print this line.
 Add it to your remote `~/.cdsinit` to auto-load on every Virtuoso
 startup.)
+
+If the SSH host's `/tmp` is not visible inside CIW, set
+`VB_REMOTE_SCRATCH_ROOT` to a home or scratch directory shared by the GUI,
+deployment, and daemon hosts, then rerun `start`.
+
+For an opt-in first load through X11, select one explicit CIW. The bootstrap
+command accepts no arbitrary SKILL and refuses non-CIW windows:
+
+```bash
+virtuoso-bridge list-windows --top-level --json
+virtuoso-bridge bootstrap --window 0x3000012
+```
 
 Loading the setup file does not replace an already-running daemon in the same
 CIW; stop the old daemon with `RBStop()` or `RBStopAll()` before loading another
@@ -113,6 +132,23 @@ VB_JUMP_HOST=jump-host        # the bastion you SSH through
 
 Common mistake: setting `VB_REMOTE_HOST` to the jump host. `VB_REMOTE_HOST` must be the machine where Virtuoso is actually running.
 
+Some Cadence environments are genuinely split: the CIW runs on the jump/login
+host while `ipcBeginProcess()` launches the daemon on a compute host. Represent
+that topology explicitly instead of overloading `VB_REMOTE_HOST`:
+
+```dotenv
+VB_GUI_HOST=gui-host-a
+VB_DEPLOY_HOST=gui-host-a
+VB_DAEMON_HOST=compute-host-b
+VB_SPECTRE_HOST=compute-host-b
+VB_JUMP_HOST=gui-host-a
+VB_REMOTE_SCRATCH_ROOT=/home/user/.virtuoso-bridge
+```
+
+The bridge suppresses the jump for the GUI target itself. `status` compares the
+CIW-persisted daemon banner with the hostname reached by the tunnel endpoint and
+prints a `VB_DAEMON_HOST` correction when they differ.
+
 ### Multi-profile setup
 
 Connect to multiple Virtuoso instances simultaneously with `-p`. Profile names are **case-sensitive** and appended as suffixes to env var names.
@@ -146,21 +182,23 @@ When a user first opens this project, run these checks **before anything else**:
 
 ### Remote check
 
-**Three-host model** (common in EDA environments):
+**Three-hop model** (common in EDA environments):
 ```
 Your machine  ──SSH──►  Jump host (bastion)  ──SSH──►  Compute host (Virtuoso)
               VB_JUMP_HOST                   VB_REMOTE_HOST
 ```
-`VB_REMOTE_HOST` must be the machine running Virtuoso, **not** the jump host. This is the most common misconfiguration.
+In the normal one-host model, `VB_REMOTE_HOST` is the daemon/tunnel target, not
+the jump host. If CIW and daemon are intentionally on different hosts, use
+`VB_GUI_HOST` and `VB_DAEMON_HOST` explicitly.
 
-1. **Check `.env`** — does it exist and have `VB_REMOTE_HOST` set?
-   - If not: install in the project venv (`uv pip install -e .`) then ask the user for their SSH target. If they give `user@host` (plus optional jump), run `virtuoso-bridge init user@host [-J user@jump]` — it fills everything in one shot. Otherwise run `virtuoso-bridge init` for an empty template and ask them to fill `VB_REMOTE_HOST`.
-   - Verify: `VB_REMOTE_HOST` = compute host (where Virtuoso runs), `VB_JUMP_HOST` = bastion (if any).
+1. **Check `.env`** — does it exist and define `VB_REMOTE_HOST`, or explicit GUI/daemon roles?
+   - If not: install in the project venv (`uv pip install -e .`) then ask the user for their SSH target. If they give `user@host` (plus optional jump), run `virtuoso-bridge init user@host [-J user@jump]` — it fills the one-host model in one shot. Otherwise run `virtuoso-bridge init` for an empty template and fill the role variables.
+   - Verify: `VB_GUI_HOST` owns CIW/X11, `VB_DAEMON_HOST` is the daemon tunnel endpoint, and `VB_JUMP_HOST` is only the route (if any). Unset roles fall back to `VB_REMOTE_HOST`.
 
-2. **Check SSH** — `ssh <VB_REMOTE_HOST> echo ok` (or via jump host if configured)
+2. **Check SSH** — `ssh <VB_DAEMON_HOST-or-VB_REMOTE_HOST> echo ok` (and the GUI/deployment hosts when split)
    - If this fails: tell the user to fix SSH first. The bridge assumes `ssh <host>` already works.
 
-3. **Check Virtuoso** — `ssh <VB_REMOTE_HOST> "pgrep -f virtuoso"`
+3. **Check Virtuoso** — `ssh <VB_GUI_HOST-or-VB_REMOTE_HOST> "pgrep -f virtuoso"`
    - If no process: tell the user to start Virtuoso first.
 
 4. **Start bridge** — `virtuoso-bridge start`
@@ -188,7 +226,7 @@ bridge.execute_skill("1+2")
 Two decoupled layers:
 
 - **VirtuosoClient** — pure TCP SKILL client. No SSH. Works with any `localhost:port` endpoint.
-- **SSHClient** — manages SSH tunnel + remote daemon deployment. Optional.
+- **SSHClient** — resolves GUI/deployment/daemon/Spectre roles, deploys files, and manages the daemon tunnel. Optional.
 
 ```python
 # Remote: SSHClient creates the TCP path
@@ -211,7 +249,7 @@ The bridge manages two **independent** capabilities on the remote host:
 | Service | What it does | Requires |
 |---|---|---|
 | **Virtuoso daemon** | Execute SKILL expressions in the Virtuoso CIW | A running Virtuoso process + `load("...virtuoso_setup.il")` in CIW (auto-generated by `start`) |
-| **Spectre** | Run circuit simulations via SSH | `spectre` on PATH (or `VB_CADENCE_CSHRC` set) |
+| **Spectre** | Run circuit simulations on the resolved Spectre host via SSH | `spectre` on PATH (or `VB_CADENCE_CSHRC` set) |
 
 They are fully independent — you can run Spectre without loading the SKILL bridge, and you can use the SKILL bridge without Spectre.
 
@@ -285,6 +323,8 @@ virtuoso-bridge export-visio LIB CELL -o out.vsdx  # Windows + Visio/pywin32 sch
 virtuoso-bridge screenshot      # screenshot CIW to the user artifact directory
 virtuoso-bridge dismiss-dialog  # dismiss blocking GUI dialogs via X11
 virtuoso-bridge list-windows --json  # list Virtuoso-related X11 windows
+virtuoso-bridge list-windows --top-level --json  # one deduplicated entry per frame
+virtuoso-bridge bootstrap --window WINDOW_ID  # opt-in generated first load in one CIW
 virtuoso-bridge dismiss-window WINDOW_ID --action enter  # dismiss one explicit X11 window
 virtuoso-bridge skill-find <query>  # search SKILL functions by name (fuzzy/prefix/suffix/exact/regex)
 virtuoso-bridge skill-info <fn>  # get detailed More Info docs for a SKILL function

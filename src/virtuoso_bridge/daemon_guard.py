@@ -21,6 +21,15 @@ class DaemonUserCheck:
     error: str = ""
 
 
+@dataclass(frozen=True)
+class DaemonHostCheck:
+    ok: bool
+    configured_host: str = ""
+    endpoint_hostname: str = ""
+    daemon_hostname: str = ""
+    error: str = ""
+
+
 def cross_user_override_enabled() -> bool:
     return os.getenv(OVERRIDE_ENV, "").strip().lower() in _TRUTHY
 
@@ -37,6 +46,41 @@ def clean_skill_output(value: str | None) -> str:
     if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
         text = text[1:-1]
     return text.replace("\\n", "\n").replace('\\"', '"')
+
+
+def _normalized_hostnames(host: str) -> set[str]:
+    value = (host or "").strip().rstrip(".").lower()
+    if not value:
+        return set()
+    return {value, value.split(".", 1)[0]}
+
+
+def check_daemon_host(
+    *,
+    daemon_hostname: str,
+    endpoint_hostname: str,
+    configured_host: str,
+) -> DaemonHostCheck:
+    """Compare the banner host with the OS host reached by the tunnel endpoint."""
+    daemon_names = _normalized_hostnames(daemon_hostname)
+    # SSH aliases are not necessarily related to the target's OS hostname.
+    # Only diagnose a mismatch after probing the endpoint hostname itself.
+    endpoint_names = _normalized_hostnames(endpoint_hostname)
+    ok = not daemon_names or not endpoint_names or bool(daemon_names & endpoint_names)
+    error = ""
+    if not ok:
+        error = (
+            f"daemon banner reports host {daemon_hostname!r}, but the configured "
+            f"tunnel endpoint {configured_host!r} resolves over SSH to "
+            f"{endpoint_hostname or '(unknown)'!r}"
+        )
+    return DaemonHostCheck(
+        ok=ok,
+        configured_host=configured_host,
+        endpoint_hostname=endpoint_hostname,
+        daemon_hostname=daemon_hostname,
+        error=error,
+    )
 
 
 def query_daemon_user(client: Any, *, timeout: int = 5) -> str:
