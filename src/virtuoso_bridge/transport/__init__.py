@@ -5,6 +5,10 @@ from virtuoso_bridge.transport.remote_paths import (
     remote_scratch_root,
     resolve_remote_username,
 )
+from virtuoso_bridge.transport.remote_roles import (
+    RemoteHostRoles,
+    remote_host_roles_from_os,
+)
 from virtuoso_bridge.transport.ssh import (
     SSHRunner,
     RemoteTaskResult,
@@ -28,4 +32,6 @@ __all__ = [
     "default_virtuoso_bridge_dir",
     "remote_scratch_root",
     "resolve_remote_username",
+    "RemoteHostRoles",
+    "remote_host_roles_from_os",
 ]

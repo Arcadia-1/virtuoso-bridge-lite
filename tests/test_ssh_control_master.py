@@ -688,6 +688,34 @@ def test_scp_download_cm_fallback_uses_remaining_timeout(
     assert not list(tmp_path.glob(".vbtmp-*"))
 
 
+def test_long_lived_port_forward_never_uses_control_master(monkeypatch) -> None:
+    captured: list[str] = []
+
+    class _Process:
+        pid = 4321
+        stderr = None
+
+        def poll(self):
+            return None
+
+    def fake_popen(command, **_kwargs):
+        captured.extend(command)
+        return _Process()
+
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh._setup_command_log", lambda: None)
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.subprocess.Popen", fake_popen)
+    runner = SSHRunner(host="compute", user="designer", jump_host="gui")
+
+    runner.start_port_forward(65080, settle=0, remote_port=65081)
+
+    command = " ".join(captured)
+    assert "ControlMaster=no" in command
+    assert "ControlPath=none" in command
+    assert "ControlPersist=no" in command
+    assert "ControlMaster=auto" not in command
+
+
 def test_tar_upload_retries_share_one_timeout_budget(
     monkeypatch,
     tmp_path: Path,

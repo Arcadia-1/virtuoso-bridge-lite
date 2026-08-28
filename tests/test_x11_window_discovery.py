@@ -97,6 +97,137 @@ xwininfo: Window id: 0xabc000 "Virtuoso Main"
     assert [d["window_id"] for d in dialogs] == ["0x4203583"]
 
 
+def test_top_level_discovery_returns_one_verified_ciw_per_frame(monkeypatch) -> None:
+    helper = _load_helper_module()
+    root = """
+     1 child:
+     0xf00 (has no name): () 1200x800+0+0 +0+0
+"""
+    children = """
+     3 children:
+     0xc10 "Virtuoso Command Interpreter Window": ("virtuoso" "Virtuoso") 1200x800+0+0 +0+0
+     0xd01 "Virtuoso Command Interpreter Window": ("virtuoso" "Virtuoso") 1200x800+0+0 +0+0
+     0xd02 "Virtuoso Command Interpreter Window": ("virtuoso" "Virtuoso") 1200x800+0+0 +0+0
+"""
+
+    def fake_check_output(cmd, stderr=None):
+        if cmd == ["xwininfo", "-root", "-children"]:
+            return root.encode()
+        if cmd == ["xwininfo", "-id", "0xf00"]:
+            return _xwininfo_window(w=1200, h=800).encode()
+        if cmd == ["xwininfo", "-id", "0xf00", "-children"]:
+            return children.encode()
+        raise AssertionError(f"unexpected command: {cmd!r}")
+
+    monkeypatch.setattr(helper.subprocess, "check_output", fake_check_output)
+
+    windows = helper.discover_windows(":7", top_level=True)
+
+    assert len(windows) == 1
+    assert windows[0]["frame_id"] == "0xf00"
+    assert windows[0]["dismiss_id"] == "0xc10"
+    assert windows[0]["kind"] == "ciw"
+
+
+def test_bootstrap_refuses_non_ciw_and_injects_only_generated_load(monkeypatch) -> None:
+    helper = _load_helper_module()
+    typed = []
+
+    monkeypatch.setattr(
+        helper,
+        "discover_windows",
+        lambda _display, top_level=False: [{
+            "frame_id": "0xframe",
+            "window_id": "0xchild",
+            "dismiss_id": "0xchild",
+            "title": "Virtuoso Schematic Editor",
+            "kind": "main_window",
+        }],
+    )
+    refused = helper.bootstrap_ciw(":7", "0xframe", "/shared/virtuoso_setup.il")
+    assert "refusing bootstrap" in refused["error"]
+
+    monkeypatch.setattr(
+        helper,
+        "discover_windows",
+        lambda _display, top_level=False: [{
+            "frame_id": "0xframe",
+            "window_id": "0xciw",
+            "dismiss_id": "0xciw",
+            "title": "Virtuoso Command Interpreter Window",
+            "kind": "ciw",
+        }],
+    )
+    monkeypatch.setattr(
+        helper,
+        "_type_ascii_into_window",
+        lambda display, window, text: typed.append((display, window, text)) or {"bootstrapped": window},
+    )
+
+    result = helper.bootstrap_ciw(":7", "0xframe", "/shared/virtuoso_setup.il")
+
+    assert "error" not in result
+    assert typed == [(":7", "0xciw", 'load("/shared/virtuoso_setup.il")')]
+
+
+def test_bootstrap_does_not_inject_when_window_id_matches_two_displays(monkeypatch, capsys) -> None:
+    helper = _load_helper_module()
+    monkeypatch.setattr(
+        helper,
+        "find_x11_envs",
+        lambda: [
+            {"DISPLAY": ":7", "XAUTHORITY": "/tmp/a"},
+            {"DISPLAY": ":8", "XAUTHORITY": "/tmp/b"},
+        ],
+    )
+    monkeypatch.setattr(
+        helper,
+        "discover_windows",
+        lambda _display, top_level=False: [{
+            "frame_id": "0xabc",
+            "window_id": "0xdef",
+            "dismiss_id": "0xdef",
+            "title": "Virtuoso Command Interpreter Window",
+            "kind": "ciw",
+        }],
+    )
+    monkeypatch.setattr(
+        helper,
+        "bootstrap_ciw",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("must validate uniqueness before injection")
+        ),
+    )
+    monkeypatch.setattr(
+        helper.sys,
+        "argv",
+        [
+            "x11_dismiss_dialog.py",
+            "--bootstrap-window",
+            "0xabc",
+            "--setup-path",
+            "/shared/virtuoso_setup.il",
+        ],
+    )
+
+    try:
+        helper.main()
+    except SystemExit as exc:
+        assert exc.code == 1
+
+    assert "more than one display" in capsys.readouterr().out
+
+
+def test_x11_wrapper_requests_top_level_mode(monkeypatch) -> None:
+    monkeypatch.setattr(x11, "load_vb_env", lambda: None)
+    runner = _Runner({"--list-windows": '{"kind":"ciw"}\n'})
+
+    windows = x11.list_windows(runner, "designer", top_level=True)
+
+    assert windows == [{"kind": "ciw"}]
+    assert any("--list-windows --json --top-level" in cmd for cmd in runner.commands)
+
+
 def test_assembler_1749_uses_the_ok_mnemonic() -> None:
     helper = _load_helper_module()
 

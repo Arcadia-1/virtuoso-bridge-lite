@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.resources
 import logging
 import os
 import re
@@ -30,11 +29,10 @@ from virtuoso_bridge.transport.remote_paths import (
     resolve_client_id,
     resolve_remote_username,
 )
+from virtuoso_bridge.transport.remote_roles import remote_host_roles_from_os
 from virtuoso_bridge.transport.ssh import (
     SSHRunner,
-    RemoteTaskResult,
     run_remote_task,
-    remote_ssh_env_from_os,
     ssh_backend_env_from_os,
     ssh_proxy_url_from_os,
 )
@@ -634,19 +632,19 @@ class SpectreSimulator:
 
         rh, ru, jh, ju = remote_host, remote_user, jump_host, jump_user
         if remote:
-            env = remote_ssh_env_from_os(profile)
+            roles = remote_host_roles_from_os(profile, load=False)
             backend_env = ssh_backend_env_from_os(profile)
             self._ssh_backend = backend_env.backend
             self._ssh_max_sessions = backend_env.max_sessions
             self._ssh_proxy_url = ssh_proxy_url_from_os(profile)
             if rh is None:
-                rh = env.remote_host
+                rh = roles.spectre_host
             if ru is None:
-                ru = env.remote_user
+                ru = roles.remote_user
             if jh is None:
-                jh = env.jump_host
+                jh = roles.jump_for(rh)
             if ju is None:
-                ju = env.jump_user
+                ju = roles.jump_user
 
         self._remote_host = rh
         self._remote_user = ru
@@ -679,8 +677,8 @@ class SpectreSimulator:
         profile = resolve_profile(profile)
         load_vb_env()
         # Check if we should run locally
-        suffix = f"_{profile}" if profile else ""
-        remote_host = os.environ.get(f"VB_REMOTE_HOST{suffix}", "") or os.environ.get("VB_REMOTE_HOST", "")
+        roles = remote_host_roles_from_os(profile, load=False)
+        remote_host = roles.spectre_host or ""
         if remote_host and _is_localhost(remote_host):
             return cls(
                 spectre_cmd=spectre_cmd,
@@ -694,10 +692,16 @@ class SpectreSimulator:
 
         if ssh_runner is None:
             from virtuoso_bridge.transport.tunnel import SSHClient
-            if not SSHClient.is_running(profile):
-                hint = f"Run `virtuoso-bridge start -p {profile}` first." if profile else "Run `virtuoso-bridge start` first."
-                raise RuntimeError(f"No virtuoso-bridge connection found. {hint}")
-            ssh_runner = SSHClient.from_env(keep_remote_files=keep_remote_files, profile=profile).ssh_runner
+            if SSHClient.is_running(profile):
+                ssh_client = SSHClient.from_env(
+                    keep_remote_files=keep_remote_files,
+                    profile=profile,
+                )
+                ssh_runner = getattr(
+                    ssh_client,
+                    "spectre_runner",
+                    getattr(ssh_client, "ssh_runner", None),
+                )
 
         return cls(
             spectre_cmd=spectre_cmd,

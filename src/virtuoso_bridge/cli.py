@@ -9,10 +9,10 @@ import re
 import shlex
 import time
 from collections.abc import Callable
-from datetime import datetime, timezone
 from pathlib import Path
 
 from virtuoso_bridge.env import default_user_env_path, load_vb_env, set_runtime_env_file
+from virtuoso_bridge.transport.remote_roles import remote_host_roles_from_os
 from virtuoso_bridge.transport.ssh import (
     SSHRunner,
     remote_ssh_env_from_os,
@@ -175,7 +175,7 @@ def cli_init(
 def _format_ssh_failure(ssh_env) -> None:
     """Print a user-friendly hint after ``warm`` fails for SSH-shaped reasons."""
     print(f"SSH to {ssh_env.remote_host} failed.")
-    print(f"  Check VB_REMOTE_HOST and VB_REMOTE_USER in your .env file.")
+    print("  Check VB_DAEMON_HOST (or legacy VB_REMOTE_HOST) and VB_REMOTE_USER in your .env file.")
     if ssh_env.jump_host:
         jump_user = ssh_env.jump_user or ssh_env.remote_user
         print(
@@ -184,16 +184,17 @@ def _format_ssh_failure(ssh_env) -> None:
         )
     else:
         print(f"  Verify: ssh {ssh_env.remote_user}@{ssh_env.remote_host}")
-    print(f"  For a local VM, use the VM's IP (run `ip addr` inside the VM).")
+    print("  For a local VM, use the VM's IP (run `ip addr` inside the VM).")
 
 
 def _start_one_profile(profile: str | None) -> int:
     """Start tunnel for a single profile (thread-safe, uses explicit profile)."""
     suffix = f"_{profile}" if profile else ""
-    remote_host = os.getenv(f"VB_REMOTE_HOST{suffix}", "").strip()
+    roles = remote_host_roles_from_os(profile, load=False)
+    remote_host = roles.daemon_host or ""
     if not remote_host:
         print(
-            f"VB_REMOTE_HOST{suffix} is not set. "
+            f"No daemon host is set (VB_DAEMON_HOST{suffix} or VB_REMOTE_HOST{suffix}). "
             "Use --env FILE, create ./.env, or run `virtuoso-bridge init` to create ~/.virtuoso-bridge/.env."
         )
         return 1
@@ -388,9 +389,12 @@ def cli_restart() -> int:
 
 def _print_load_hint(setup_path: str) -> None:
     """Print CIW load command and .cdsinit auto-load suggestion."""
-    print(f"\n  Load in Virtuoso CIW:")
+    print("\n  Load in Virtuoso CIW:")
     print(f"    load(\"{setup_path}\")")
-    print(f"\n  To auto-load on every Virtuoso startup, add to your .cdsinit:")
+    if setup_path.startswith("/tmp/"):
+        print("\n  If CIW reports `load: can't access file`, its /tmp is isolated from SSH.")
+        print("  Set VB_REMOTE_SCRATCH_ROOT to a shared home/scratch directory, then restart.")
+    print("\n  To auto-load on every Virtuoso startup, add to your .cdsinit:")
     print(f"    load(\"{setup_path}\")")
 
 
@@ -425,9 +429,10 @@ def _print_status() -> int:
     print(f"  Virtuoso Bridge v{__version__}{label}")
 
     suffix = f"_{profile}" if profile else ""
-    configured_host = os.getenv(f"VB_REMOTE_HOST{suffix}", "").strip()
-    configured_user = os.getenv(f"VB_REMOTE_USER{suffix}", "").strip()
-    jump_host = os.getenv(f"VB_JUMP_HOST{suffix}", "").strip()
+    roles = remote_host_roles_from_os(profile, load=False)
+    configured_host = roles.daemon_host or ""
+    configured_user = roles.remote_user or ""
+    jump_host = roles.jump_host or ""
     ssh_backend = (
         os.getenv(f"VB_SSH_BACKEND{suffix}", "").strip()
         or os.getenv("VB_SSH_BACKEND", "").strip()
@@ -463,7 +468,7 @@ def _print_status() -> int:
         return f"{work_dir}/virtuoso_setup.il"
 
     if is_local:
-        print(f"\n[mode] local (no SSH tunnel)")
+        print("\n[mode] local (no SSH tunnel)")
         if state:
             print(f"  port : {state.get('port')}")
             setup_path = state.get("setup_path")
@@ -472,7 +477,10 @@ def _print_status() -> int:
     else:
         # Remote tunnel mode
         print(f"\n[tunnel] {'running' if running else 'NOT running'}")
-        print(f"  remote host : {configured_host or '(not set)'}")
+        print(f"  daemon host : {configured_host or '(not set)'}")
+        print(f"  deploy host : {roles.deploy_host or '(not set)'}")
+        print(f"  GUI host    : {roles.gui_host or '(not set)'}")
+        print(f"  Spectre host: {roles.spectre_host or '(not set)'}")
         print(f"  remote user : {configured_user or '(not set)'}")
         if jump_host:
             print(f"  jump host   : {jump_host}")
@@ -488,6 +496,21 @@ def _print_status() -> int:
 
     if not setup_path:
         setup_path = _infer_setup_path()
+
+    daemon_identity: dict[str, str] = {}
+    daemon_endpoint_hostname = str((state or {}).get("daemon_endpoint_hostname") or "")
+    identity_client = None
+    if state:
+        try:
+            identity_client = SSHClient.from_env(keep_remote_files=True, profile=profile)
+            daemon_identity = identity_client.read_daemon_identity()
+            if not daemon_endpoint_hostname:
+                daemon_endpoint_hostname = identity_client.probe_daemon_endpoint_hostname()
+        except Exception:
+            pass
+        finally:
+            if identity_client is not None:
+                identity_client.close()
 
     # Daemon (Virtuoso CIW)
     # For local mode, check daemon if we have state (don't require 'running')
@@ -517,9 +540,20 @@ def _print_status() -> int:
                 except Exception as exc:
                     print(f"  daemon user: unavailable ({exc})")
 
+                try:
+                    r = vc.execute_skill(
+                        "if(boundp('RBLastHost) RBLastHost \"\")",
+                        timeout=5,
+                    )
+                    reported = (r.output or "").strip().strip('"')
+                    if reported:
+                        daemon_identity["host"] = reported
+                except Exception:
+                    pass
+
                 # Query Virtuoso environment info
                 for skill_expr, label in [
-                    ('getHostName()', 'hostname'),
+                    ('getHostName()', 'CIW host'),
                     ('getCurrentTime()', 'time'),
                     ('getVersion()', 'version'),
                     ('getWorkingDir()', 'workdir'),
@@ -543,9 +577,32 @@ def _print_status() -> int:
         except Exception as e:
             print(f"\n[daemon] error: {e}")
     elif not is_local and not running:
-        print(f"\n[daemon] cannot check (tunnel not running)")
+        print("\n[daemon] cannot check (tunnel not running)")
         if setup_path:
             _print_load_hint(setup_path)
+
+    reported_daemon_host = daemon_identity.get("host", "")
+    if reported_daemon_host:
+        from virtuoso_bridge.daemon_guard import check_daemon_host
+
+        host_check = check_daemon_host(
+            daemon_hostname=reported_daemon_host,
+            endpoint_hostname=daemon_endpoint_hostname,
+            configured_host=configured_host,
+        )
+        print("\n[daemon host]")
+        print(f"  banner host   : {reported_daemon_host}")
+        if daemon_identity.get("ip"):
+            print(f"  banner IP     : {daemon_identity['ip']}")
+        print(f"  tunnel target : {configured_host or '(not set)'}")
+        if daemon_endpoint_hostname:
+            print(f"  SSH hostname  : {daemon_endpoint_hostname}")
+        if not host_check.ok:
+            print(f"  WARNING: {host_check.error}")
+            print(
+                f"  Set VB_DAEMON_HOST{suffix}={reported_daemon_host} and route it "
+                "through VB_JUMP_HOST if required."
+            )
 
     # Spectre
     if is_local or running:
@@ -572,7 +629,7 @@ def _print_spectre_status(profile: str | None, suffix: str) -> None:
 
     from virtuoso_bridge.transport.tunnel import SSHClient, _is_localhost
 
-    configured_host = os.getenv(f"VB_REMOTE_HOST{suffix}", "").strip()
+    configured_host = remote_host_roles_from_os(profile, load=False).spectre_host or ""
     is_local = _is_localhost(configured_host) if configured_host else False
 
     if is_local:
@@ -596,12 +653,12 @@ def _print_spectre_status(profile: str | None, suffix: str) -> None:
                 except Exception:
                     pass
             if spectre_path:
-                print(f"\n[spectre] OK")
+                print("\n[spectre] OK")
                 print(f"  path    : {spectre_path}")
                 if version:
                     print(f"  version : {version}")
             else:
-                print(f"\n[spectre] NOT FOUND")
+                print("\n[spectre] NOT FOUND")
         except Exception as e:
             print(f"\n[spectre] error: {e}")
         return
@@ -610,7 +667,7 @@ def _print_spectre_status(profile: str | None, suffix: str) -> None:
     ssh = None
     try:
         ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
-        runner = ssh.ssh_runner
+        runner = ssh.spectre_runner
         if runner is None:
             print("\n[spectre] local mode (no SSH runner)")
             return
@@ -709,17 +766,21 @@ def _print_spectre_status(profile: str | None, suffix: str) -> None:
 
 
 def _discover_profiles() -> list[str | None]:
-    """Scan environment for all VB_REMOTE_HOST* variables and return profile list.
+    """Scan environment for configured legacy or role-specific hosts.
 
     Returns a list where None represents the default (unsuffixed) profile
     and strings represent named profiles.
     """
     profiles: list[str | None] = []
-    pattern = re.compile(r"^VB_REMOTE_HOST(?:_(.+))?$")
+    seen: set[str | None] = set()
+    pattern = re.compile(r"^VB_(?:REMOTE|GUI|DEPLOY|DAEMON|SPECTRE)_HOST(?:_(.+))?$")
     for key in sorted(os.environ):
         m = pattern.match(key)
         if m and os.environ[key].strip():
-            profiles.append(m.group(1))  # None for default, name for suffixed
+            value = m.group(1)  # None for default, name for suffixed
+            if value not in seen:
+                seen.add(value)
+                profiles.append(value)
     return profiles
 
 
@@ -733,7 +794,7 @@ def _for_each_profile(fn: Callable[[], int]) -> int:
         return fn()
     profiles = _discover_profiles()
     if not profiles:
-        print("No profiles found. Set VB_REMOTE_HOST in .env first.")
+        print("No profiles found. Set VB_REMOTE_HOST or explicit VB_*_HOST roles in .env first.")
         return 1
     any_ok = False
     for i, p in enumerate(profiles):
@@ -772,7 +833,7 @@ def cli_license() -> int:
     from virtuoso_bridge.spectre.runner import SpectreSimulator
 
     suffix = f"_{profile}" if profile else ""
-    configured_host = os.getenv(f"VB_REMOTE_HOST{suffix}", "").strip()
+    configured_host = remote_host_roles_from_os(profile, load=False).spectre_host or ""
 
     ssh = None
     try:
@@ -781,7 +842,7 @@ def cli_license() -> int:
         else:
             # Create SSHRunner with verbose=False to suppress [cmd] output
             ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
-            runner = ssh.ssh_runner
+            runner = ssh.spectre_runner
             if runner is None:
                 print("No SSH runner available for remote license check.")
                 return 1
@@ -810,7 +871,7 @@ def cli_license() -> int:
 def _make_ssh_runner() -> tuple["SSHRunner | None", str]:
     """Create an SSHRunner from .env config (for X11 commands).
 
-    In local mode (VB_REMOTE_HOST is this machine) return ``(None, user)`` so
+    In local mode (the resolved GUI host is this machine) return ``(None, user)`` so
     the X11 helper runs locally via subprocess instead of trying to SSH to
     localhost (which fails without passwordless key auth). Mirrors the local
     detection used by the daemon/tunnel path.
@@ -819,13 +880,13 @@ def _make_ssh_runner() -> tuple["SSHRunner | None", str]:
     from virtuoso_bridge.transport.tunnel import _is_localhost
 
     profile = _get_cli_profile()
-    suffix = f"_{profile}" if profile else ""
-    remote_host = os.getenv(f"VB_REMOTE_HOST{suffix}", "").strip()
-    remote_user = os.getenv(f"VB_REMOTE_USER{suffix}", "").strip()
-    jump_host = os.getenv(f"VB_JUMP_HOST{suffix}", "").strip() or None
-    jump_user = os.getenv(f"VB_JUMP_USER{suffix}", remote_user).strip() or None
+    roles = remote_host_roles_from_os(profile, load=False)
+    remote_host = roles.gui_host or ""
+    remote_user = roles.remote_user or ""
+    jump_host = roles.jump_for(remote_host)
+    jump_user = roles.jump_user or remote_user or None
     if not remote_host:
-        raise SystemExit("Error: VB_REMOTE_HOST not set")
+        raise SystemExit("Error: VB_GUI_HOST or VB_REMOTE_HOST not set")
     if _is_localhost(remote_host):
         return None, remote_user
     backend_env = ssh_backend_env_from_os(profile)
@@ -969,7 +1030,7 @@ def cli_dismiss_dialog() -> int:
     return 0
 
 
-def cli_list_windows(*, json_output: bool = False) -> int:
+def cli_list_windows(*, json_output: bool = False, top_level: bool = False) -> int:
     """List Virtuoso-related X11 windows without dismissing anything."""
     import json
 
@@ -980,7 +1041,12 @@ def cli_list_windows(*, json_output: bool = False) -> int:
     from virtuoso_bridge.virtuoso import x11
     runner, user = _make_ssh_runner()
 
-    windows = x11.list_windows(runner, user, profile=_get_cli_profile())
+    windows = x11.list_windows(
+        runner,
+        user,
+        profile=_get_cli_profile(),
+        top_level=top_level,
+    )
     if json_output:
         print(json.dumps(windows, indent=2, ensure_ascii=False, default=str))
         return 0
@@ -1026,6 +1092,92 @@ def cli_dismiss_window(*, window_id: str, action: str = "enter") -> int:
                 f"action={result.get('action', action)}"
             )
     return 0 if ok else 1
+
+
+def cli_bootstrap(*, window_id: str, timeout: int = 12) -> int:
+    """Load the generated setup file through one explicit X11 CIW window."""
+    _load_cli_env()
+    from virtuoso_bridge.daemon_guard import check_daemon_host
+    from virtuoso_bridge.transport.tunnel import SSHClient
+    from virtuoso_bridge.virtuoso import x11
+    from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
+
+    profile = _get_cli_profile()
+    state = SSHClient.read_state(profile)
+    setup_path = str((state or {}).get("setup_path") or "")
+    if not setup_path:
+        print("No generated setup file is recorded. Run `virtuoso-bridge start` first.")
+        return 1
+
+    runner, user = _make_ssh_runner()
+    results = x11.bootstrap_ciw(
+        runner,
+        user,
+        window_id,
+        setup_path,
+        profile=profile,
+    )
+    if not results:
+        print("No bootstrap result returned.")
+        return 1
+    result = results[0]
+    if "error" in result:
+        print(f"Bootstrap refused: {result['error']}")
+        if result.get("title"):
+            print(f"  selected title: {result['title']}")
+        return 1
+    print(f"Injected generated setup into CIW {window_id}:")
+    injected_command = str(result.get("command") or f'load("{setup_path}")')
+    print(f"  {injected_command}")
+
+    bridge = SSHClient.from_env(keep_remote_files=True, profile=profile)
+    try:
+        port = int((state or {}).get("port") or bridge.port)
+        deadline = time.monotonic() + max(timeout, 0)
+        identity: dict[str, str] = {}
+        while True:
+            try:
+                client = VirtuosoClient(host="127.0.0.1", port=port, timeout=1)
+                if client.test_connection(timeout=1):
+                    print("[daemon] OK - bootstrap completed and the CIW is reachable.")
+                    return 0
+            except Exception:
+                pass
+            try:
+                identity = bridge.read_daemon_identity()
+            except Exception:
+                identity = {}
+            reported = identity.get("host", "")
+            if reported:
+                endpoint_hostname = str(
+                    (state or {}).get("daemon_endpoint_hostname")
+                    or bridge.probe_daemon_endpoint_hostname()
+                )
+                host_check = check_daemon_host(
+                    daemon_hostname=reported,
+                    endpoint_hostname=endpoint_hostname,
+                    configured_host=bridge.daemon_host,
+                )
+                print(f"[daemon] banner host: {reported}")
+                if not host_check.ok:
+                    suffix = f"_{profile}" if profile else ""
+                    print(f"[daemon host] WARNING: {host_check.error}")
+                    print(
+                        f"Set VB_DAEMON_HOST{suffix}={reported}, keep the GUI host in "
+                        f"VB_GUI_HOST{suffix}, then restart the tunnel."
+                    )
+                    return 1
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.25)
+    finally:
+        bridge.close()
+
+    print("[daemon] NO RESPONSE after bootstrap.")
+    if setup_path.startswith("/tmp/") and not identity:
+        print("CIW may not see the SSH host's /tmp. Set VB_REMOTE_SCRATCH_ROOT to a shared path.")
+    print("Inspect the selected CIW for the exact load error or RAMIC ready banner.")
+    return 1
 
 
 
@@ -1318,7 +1470,7 @@ def cli_snapshot() -> int:
     if opts["output_root"] is not None:
         if kind != "maestro":
             print(f"[{kind}] {title}", file=sys.stderr)
-            print(f"-o ROOT only supports maestro for now.", file=sys.stderr)
+            print("-o ROOT only supports maestro for now.", file=sys.stderr)
             return 1
         result = client.maestro.snapshot(
             output_root=opts["output_root"],
@@ -1563,6 +1715,11 @@ def build_parser() -> argparse.ArgumentParser:
         "list-windows", help="List Virtuoso-related X11 windows")
     sp_list_windows.add_argument("--json", action="store_true",
                                  help="Output a JSON array")
+    sp_list_windows.add_argument(
+        "--top-level",
+        action="store_true",
+        help="Return one deduplicated entry per top-level Virtuoso frame",
+    )
     sp_list_windows.add_argument("-p", "--profile", default=None,
                                  help="Connection profile")
     sp_list_windows.add_argument("--env", default=None,
@@ -1581,6 +1738,26 @@ def build_parser() -> argparse.ArgumentParser:
                                    help="Connection profile")
     sp_dismiss_window.add_argument("--env", default=None,
                                    help="Explicit .env file path (highest priority)")
+
+    sp_bootstrap = subparsers.add_parser(
+        "bootstrap",
+        help="Opt-in first load of the generated setup into one explicit CIW",
+    )
+    sp_bootstrap.add_argument(
+        "--window",
+        required=True,
+        help="Explicit CIW window id from `list-windows --top-level`",
+    )
+    sp_bootstrap.add_argument(
+        "--timeout",
+        type=int,
+        default=12,
+        help="Seconds to wait for daemon identity/connectivity (default: 12)",
+    )
+    sp_bootstrap.add_argument("-p", "--profile", default=None,
+                              help="Connection profile")
+    sp_bootstrap.add_argument("--env", default=None,
+                              help="Explicit .env file path (highest priority)")
 
     sp_screenshot = subparsers.add_parser(
         "screenshot", help="Take a screenshot of a Virtuoso window")
@@ -1794,10 +1971,15 @@ def main(argv: list[str] | None = None) -> int:
         "dismiss-dialog": cli_dismiss_dialog,
         "list-windows": lambda: cli_list_windows(
             json_output=getattr(args, "json", False),
+            top_level=getattr(args, "top_level", False),
         ),
         "dismiss-window": lambda: cli_dismiss_window(
             window_id=getattr(args, "window_id"),
             action=getattr(args, "action", "enter"),
+        ),
+        "bootstrap": lambda: cli_bootstrap(
+            window_id=getattr(args, "window"),
+            timeout=getattr(args, "timeout", 12),
         ),
         "screenshot": cli_screenshot,
         "windows": cli_windows,

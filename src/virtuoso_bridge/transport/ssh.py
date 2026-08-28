@@ -9,12 +9,11 @@ import hashlib
 import logging
 import os
 import queue
-import shlex
 import shutil
 import signal
-import tempfile
 import socket
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -144,28 +143,20 @@ def ssh_proxy_url_from_os(profile: str | None = None) -> str | None:
 
 
 def remote_ssh_env_from_os(profile: str | None = None) -> RemoteSshEnv:
-    """Read remote SSH target from environment variables.
+    """Read the daemon/tunnel SSH target from environment variables.
 
     If *profile* is given (e.g. ``"gpu1"``), reads ``VB_REMOTE_HOST_GPU1``
     etc.  Otherwise resolves a profile binding before falling back to the
     default unsuffixed variables.
     """
-    profile = resolve_profile(profile)
-    load_vb_env()
-    suffix = f"_{profile}" if profile else ""
+    from virtuoso_bridge.transport.remote_roles import remote_host_roles_from_os
 
-    def _strip(name: str) -> str | None:
-        raw = os.environ.get(f"{name}{suffix}")
-        if raw is None:
-            return None
-        s = raw.strip()
-        return s or None
-
+    roles = remote_host_roles_from_os(profile)
     return RemoteSshEnv(
-        remote_host=_strip("VB_REMOTE_HOST"),
-        remote_user=_strip("VB_REMOTE_USER"),
-        jump_host=_strip("VB_JUMP_HOST"),
-        jump_user=_strip("VB_JUMP_USER"),
+        remote_host=roles.daemon_host,
+        remote_user=roles.remote_user,
+        jump_host=roles.jump_for(roles.daemon_host),
+        jump_user=roles.jump_user,
     )
 
 class CommandResult(NamedTuple):
@@ -458,11 +449,17 @@ class SSHRunner:
             remote_port = port
 
         cmd: list[str] = [self._ssh_cmd]
-        # Use ControlMaster options — if a master already exists, the slave
-        # will request port-forwarding from it and then exit.  The master
-        # keeps the forward alive.  If no master exists, this becomes the
-        # master (ControlMaster=auto).
-        cmd += self._common_ssh_options()
+        # A long-lived forward must own its own ssh process.  Attaching it to
+        # a command-session ControlMaster makes the local listener disappear
+        # when that master is retired (observed with macOS + ProxyJump after a
+        # successful initial health check).  Explicit ``none`` also overrides
+        # multiplexing enabled in ~/.ssh/config.
+        cmd += self._common_ssh_options(control_master=False)
+        cmd += [
+            "-o", "ControlMaster=no",
+            "-o", "ControlPath=none",
+            "-o", "ControlPersist=no",
+        ]
         cmd += [
             "-o", "ExitOnForwardFailure=yes",
             "-N",
@@ -566,9 +563,9 @@ class SSHRunner:
                     err_msg = proc.stderr.read().decode("utf-8", errors="ignore")
                 except (OSError, ValueError):
                     pass
-            # Slave exited — check if ControlMaster took over the forward
+            # A different, already-running forward may own the local port.
             if self.can_reach_port(port):
-                logger.info("Port forward active at localhost:%d (ControlMaster)", port)
+                logger.info("Port forward active at localhost:%d (external process)", port)
                 self._tunnel_using_external = True
                 return None
             if "address already in use" in err_msg.lower():
@@ -581,29 +578,7 @@ class SSHRunner:
         return proc  # running
 
     def stop_port_forward(self) -> None:
-        """Stop the port-forwarding tunnel.
-
-        If ControlMaster is managing the forward, use ``ssh -O exit`` to
-        cleanly shut it down.  Falls back to SIGTERM on a standalone tunnel
-        process.
-        """
-        # Try ControlMaster exit first
-        if self._use_control_master and Path(self._control_path).exists():
-            cmd = [self._ssh_cmd, "-o", f"ControlPath={self._control_path}", "-O", "exit"]
-            if self._user:
-                cmd.append(f"{self._user}@{self._host}")
-            else:
-                cmd.append(self._host)
-            try:
-                subprocess.run(
-                    cmd, capture_output=True, timeout=5,
-                    **_windows_no_window_kwargs(),
-                )
-                logger.info("ControlMaster exited via -O exit")
-            except (subprocess.TimeoutExpired, OSError):
-                pass
-
-        # Fallback: kill by PID
+        """Stop the standalone port-forwarding process by PID."""
         pid = None
         if self._tunnel_proc is not None and self._tunnel_proc.poll() is None:
             pid = self._tunnel_proc.pid
@@ -1656,7 +1631,7 @@ class SSHRunner:
         self._shell_queue = None
         self._shell_reader = None
 
-    def _common_ssh_options(self) -> list[str]:
+    def _common_ssh_options(self, *, control_master: bool = True) -> list[str]:
         """SSH options shared by both ssh and scp commands."""
         opts: list[str] = [
             "-o", "BatchMode=yes",
@@ -1674,7 +1649,7 @@ class SSHRunner:
             # risk of a slow reverse-DNS / IdentityFile probe).
             "-o", "HostbasedAuthentication=no",
         ]
-        if self._use_control_master:
+        if control_master and self._use_control_master:
             opts += [
                 "-o", "ControlMaster=auto",
                 "-o", f"ControlPath={self._control_path}",

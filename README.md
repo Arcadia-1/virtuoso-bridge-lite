@@ -57,8 +57,9 @@ Spectre.
 
 ### Python environment selection
 
-Python entry points discover the nearest parent `.env` containing
-`VB_REMOTE_HOST` or `VB_LOCAL_PORT`, then load it with `override=True`; this can
+Python entry points discover the nearest parent `.env` containing a bridge host
+role (`VB_REMOTE_HOST`, `VB_GUI_HOST`, `VB_DAEMON_HOST`, and related roles) or
+`VB_LOCAL_PORT`, then load it with `override=True`; this can
 change a long-lived process from local to remote mode. Pin the intended file
 before constructing a client when embedding the bridge:
 
@@ -88,6 +89,41 @@ virtuoso-bridge init user@host [-J user@jump-host]
 virtuoso-bridge start          # starts tunnel and prints the CIW load(...) line
 virtuoso-bridge status         # tunnel + Virtuoso daemon + Spectre availability
 ```
+
+If the daemon is not loaded yet, the normal manual `load(...)` remains valid.
+For an opt-in X11 bootstrap, first select an explicit top-level CIW and then
+inject only the generated setup command:
+
+```bash
+virtuoso-bridge list-windows --top-level --json
+virtuoso-bridge bootstrap --window 0x3000012
+```
+
+`bootstrap` refuses windows that are not identified as a CIW and does not
+accept arbitrary SKILL text.
+
+### Split GUI and daemon hosts
+
+`VB_REMOTE_HOST` remains the simple one-host setting. In installations where
+Virtuoso runs on a GUI/login host but `ipcBeginProcess()` launches the daemon on
+a compute host, configure the roles explicitly:
+
+```dotenv
+VB_GUI_HOST=gui-host-a
+VB_DEPLOY_HOST=gui-host-a
+VB_DAEMON_HOST=compute-host-b
+VB_SPECTRE_HOST=compute-host-b
+VB_REMOTE_USER=user
+VB_JUMP_HOST=gui-host-a
+
+# Must be readable from the CIW and daemon host; /tmp is often isolated.
+VB_REMOTE_SCRATCH_ROOT=/home/user/.virtuoso-bridge
+```
+
+The defaults are deployment = GUI and Spectre = legacy/daemon host. The shared
+jump host is suppressed automatically when the target itself is the jump host.
+`status` reads a daemon identity file written from the CIW banner, so it can
+diagnose a daemon/tunnel host mismatch even when the TCP endpoint is wrong.
 
 On Windows PowerShell, replace the activation line with
 `.\.venv\Scripts\Activate.ps1`.
@@ -151,8 +187,9 @@ fails during initialization instead of silently bypassing revocation policy.
 governs channels on one authenticated connection. The Paramiko backend avoids
 one handshake per parallel job, but it cannot override the server's
 `MaxSessions`. The long-lived Virtuoso TCP port-forward created by
-`virtuoso-bridge start` remains a separate OpenSSH connection because it must
-survive after the starting CLI process exits.
+`virtuoso-bridge start` remains a standalone, non-ControlMaster OpenSSH process
+because it must survive after the starting CLI and any shared command master
+exit.
 
 ```python
 from virtuoso_bridge import VirtuosoClient
@@ -212,7 +249,8 @@ All commands take `-p PROFILE` / `--env PATH` to pick a non-default config; run 
 | `windows` | List all open Virtuoso windows (number + name) |
 | `screenshot [ciw\|current\|N] [-o DIR\|FILE]` | Capture a window; defaults to the user artifact screenshots directory |
 | `dismiss-dialog` | X11 path: find and dismiss blocking GUI dialogs (saves you when SKILL channel deadlocks on a modal) |
-| `list-windows [--json]` | X11 path: enumerate Virtuoso-related windows, including frame/child IDs and suggested modal actions |
+| `list-windows [--top-level] [--json]` | X11 path: enumerate Virtuoso windows; `--top-level` returns one deduplicated entry per frame for CIW selection |
+| `bootstrap --window WINDOW_ID` | Opt-in X11 first load: inject only the generated `load(...)` into one explicit, verified CIW |
 | `dismiss-window WINDOW_ID [--action enter\|escape\|alt-y\|alt-n]` | X11 path: send an explicit action to one window ID returned by `list-windows` |
 | `snapshot [-o DIR] [--history H]` | Dump the focused Virtuoso window (maestro/schematic/...) — brief by default, full disk dump with `-o` |
 | **Export** | |
@@ -284,7 +322,7 @@ same pattern — point their skills path at `skills/` in this repo.
 
 - **VirtuosoClient** — pure TCP SKILL client. Sends SKILL as JSON, gets results. No SSH awareness.
 - **SpectreSimulator** — runs standalone Spectre simulations locally or through SSH, then parses PSF ASCII results into Python data.
-- **SSHClient** — maintains the TCP port-forward and provides either OpenSSH or a process-local Paramiko Transport for remote commands and file transfer. The Paramiko backend multiplexes bounded concurrent channels on one authenticated connection. Optional — bypassed in local mode.
+- **SSHClient** — resolves GUI, deployment, daemon, and Spectre host roles; maintains a standalone TCP port-forward to the daemon host and uses OpenSSH or process-local Paramiko transports for role-specific commands and files. Optional — bypassed in local mode.
 
 Fully decoupled: VirtuosoClient works with any TCP endpoint — SSH tunnel, VPN, direct LAN, or local. Multiple connection profiles are supported, each managing an independent tunnel to a separate design server.
 
