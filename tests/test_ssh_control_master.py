@@ -706,6 +706,7 @@ def test_long_lived_port_forward_never_uses_control_master(monkeypatch) -> None:
     monkeypatch.setattr("virtuoso_bridge.transport.ssh._setup_command_log", lambda: None)
     monkeypatch.setattr("virtuoso_bridge.transport.ssh.subprocess.Popen", fake_popen)
     runner = SSHRunner(host="compute", user="designer", jump_host="gui")
+    runner.can_reach_port = lambda _port: True  # type: ignore[method-assign]
 
     runner.start_port_forward(65080, settle=0, remote_port=65081)
 
