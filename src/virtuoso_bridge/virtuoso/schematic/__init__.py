@@ -32,6 +32,27 @@ from virtuoso_bridge.virtuoso.schematic.netlist import (
     schematic_export_netlist_skill,
     schematic_import_netlist_skill,
 )
+from virtuoso_bridge.virtuoso.schematic.planner import (
+    ConstraintDiagnostic,
+    ConstraintLevel,
+    ConstraintStrength,
+    DeviceKind,
+    DifferentialPairConstraint,
+    GridPlacement,
+    GridPositionConstraint,
+    PlannedInstance,
+    PlannedPin,
+    ReadbackMismatch,
+    SchematicInstanceSpec,
+    SchematicPinSpec,
+    SchematicPlan,
+    SchematicPlanRequest,
+    SchematicPlanner,
+    SchematicPlannerConfig,
+    SchematicPlanningError,
+    SchematicReadbackReport,
+    infer_device_kind,
+)
 
 if TYPE_CHECKING:
     from virtuoso_bridge import VirtuosoClient
@@ -118,6 +139,28 @@ class SchematicOps:
         if not isinstance(param_filters, _UseReaderDefault):
             kwargs["param_filters"] = param_filters
         return read_schematic(self._owner, lib, cell, **kwargs)
+
+    def plan(
+        self,
+        request: SchematicPlanRequest,
+        *,
+        config: SchematicPlannerConfig | None = None,
+    ) -> SchematicPlan:
+        """Create a deterministic, constraint-checked schematic plan."""
+        return SchematicPlanner(config).plan(request)
+
+    def create_from_plan(
+        self,
+        lib: str,
+        cell: str,
+        plan: SchematicPlan,
+        *,
+        view: str = "schematic",
+        timeout: int = 60,
+    ) -> None:
+        """Create a cellview from a plan and run the editor's check/save path."""
+        with self.create(lib, cell, view=view, timeout=timeout) as editor:
+            plan.apply(editor)
 
     def export_netlist(
         self,
@@ -210,4 +253,23 @@ __all__ = [
     "NetlistImportResult",
     "parse_netlist_import_output",
     "classify_netlist_import_log",
+    "ConstraintDiagnostic",
+    "ConstraintLevel",
+    "ConstraintStrength",
+    "DeviceKind",
+    "DifferentialPairConstraint",
+    "GridPlacement",
+    "GridPositionConstraint",
+    "PlannedInstance",
+    "PlannedPin",
+    "ReadbackMismatch",
+    "SchematicInstanceSpec",
+    "SchematicPinSpec",
+    "SchematicPlan",
+    "SchematicPlanRequest",
+    "SchematicPlanner",
+    "SchematicPlannerConfig",
+    "SchematicPlanningError",
+    "SchematicReadbackReport",
+    "infer_device_kind",
 ]

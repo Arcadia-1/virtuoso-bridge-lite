@@ -28,6 +28,7 @@ A new infrastructure for **Agentic Analog and Mixed-Signal Design**. LLM Agents 
 **1. Deep Virtuoso Integration** — Control across Schematic, Layout, Maestro, and Spectre.
 - **Flexible programming**: execute inline SKILL, load `.il` files, or use Python APIs
 - **Four design domains**: schematic editing, layout generation, simulation setup (Maestro), and standalone Spectre with PSF parsing
+- **Deterministic schematic planning**: explicit connectivity plus hard/soft grid, polarity-row, differential-pair, pin-column, and output-stage constraints
 
 **2. Scalable Architecture** — Multi-server, multi-session, built for distributed design clusters.
 - Multi-profile SSH: connect to N design servers, each with independent tunnel

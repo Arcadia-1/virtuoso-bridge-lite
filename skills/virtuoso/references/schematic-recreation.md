@@ -20,6 +20,25 @@ Analyze relative positions, assign (col, row) on a uniform grid:
 - Identify differential pairs (same row, symmetric x) -> left R0, right MY
 - Choose GRID spacing (1.5 works well for stub labels without collision)
 
+For repeatable generation, prefer the constraint planner over hand-assigned
+coordinates. It implements these fixed conventions in pure Python, reports
+hard conflicts before editing, and records every soft-rule relaxation:
+
+```python
+from virtuoso_bridge.virtuoso.schematic import SchematicPlanRequest
+
+request = SchematicPlanRequest.from_readback(data, grid_spacing=1.5)
+plan = client.schematic.plan(request)
+client.schematic.create_from_plan(DST_LIB, DST_CELL, plan)
+plan.verify_readback(
+    client.schematic.read(DST_LIB, DST_CELL, include_positions=True)
+).require_valid()
+```
+
+Use explicit `DifferentialPairConstraint` and `output_stage=True` metadata when
+recreation should apply those domain conventions; the planner intentionally
+does not guess design intent from net or instance names.
+
 ## Step 3: Redraw
 
 Place on grid with stubs and pins:
