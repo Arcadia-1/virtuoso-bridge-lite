@@ -50,6 +50,69 @@ Read a schematic through the same client-bound API:
 data = client.schematic.read(lib, cell, include_positions=False)
 ```
 
+## Deterministic constraint planning
+
+Use the optional Python-side planner when placement conventions should be
+repeatable and conflicts must be detected before editing Virtuoso. It keeps
+connectivity explicit and reuses the existing `SchematicEditor`; it does not
+synthesize topology or route wires.
+
+```python
+from virtuoso_bridge.virtuoso.schematic import (
+    DeviceKind,
+    DifferentialPairConstraint,
+    GridPositionConstraint,
+    SchematicInstanceSpec,
+    SchematicPinSpec,
+    SchematicPlanRequest,
+)
+
+request = SchematicPlanRequest(
+    instances=[
+        SchematicInstanceSpec("M_TAIL", PDK, NCH, kind=DeviceKind.NMOS,
+            terminals={"D": "VS", "G": "BIAS", "S": "VSS", "B": "VSS"}),
+        SchematicInstanceSpec("M_INP", PDK, NCH, kind=DeviceKind.NMOS,
+            terminals={"D": "VOP", "G": "VINP", "S": "VS", "B": "VSS"}),
+        SchematicInstanceSpec("M_INN", PDK, NCH, kind=DeviceKind.NMOS,
+            terminals={"D": "VON", "G": "VINN", "S": "VS", "B": "VSS"}),
+    ],
+    pins=[SchematicPinSpec("VINP", "input", row=1)],
+    positions=[GridPositionConstraint("M_TAIL", col=1.5, row=0)],
+    differential_pairs=[
+        DifferentialPairConstraint("M_INP", "M_INN", row=1, center_col=1.5)
+    ],
+)
+
+plan = client.schematic.plan(request)
+client.schematic.create_from_plan(lib, cell, plan)  # includes schCheck + save
+report = plan.verify_readback(
+    client.schematic.read(lib, cell, include_positions=True)
+)
+report.require_valid()
+```
+
+Built-in rules cover the 1.5-unit grid, NMOS/PMOS rows, `R0`/`MY`
+differential-pair symmetry, a dedicated pin column, and output-stage column
+offsets. `GridPositionConstraint` and `DifferentialPairConstraint` accept
+`strength=ConstraintStrength.HARD` or `.SOFT`:
+
+- incompatible hard constraints raise `SchematicPlanningError` before any edit;
+- relaxed soft constraints remain visible in `plan.diagnostics`;
+- input ordering does not change the resulting plan.
+
+To recreate an existing design, read positions and convert them to a request:
+
+```python
+source = client.schematic.read(src_lib, src_cell, include_positions=True)
+request = SchematicPlanRequest.from_readback(source)
+plan = client.schematic.plan(request)
+client.schematic.create_from_plan(dst_lib, dst_cell, plan)
+```
+
+See `examples/01_virtuoso/schematic/12_plan_differential_pair.py` and
+`docs/adr/0002-deterministic-schematic-planner.md` for the complete acceptance
+example, conflict model, and explicit non-goals.
+
 ### SKILL builder functions (ops)
 
 Use these with `sch.add(...)`:
