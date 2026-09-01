@@ -926,6 +926,8 @@ let((result winName ciwNum)
             finder_root = _Path(source_dir)
             doc_root = finder_root.parent.parent
         elif runner is not None:
+            from virtuoso_bridge.virtuoso.docs_search import to_remote_posix
+
             profile = getattr(self._tunnel, "_profile", None) if self._tunnel else None
             finder = SKILLFinder()
             finder_root = finder.discover(remote_runner=runner, profile=profile)
@@ -935,12 +937,15 @@ let((result winName ciwNum)
                     self._skill_finder_cache_host(),
                 )
                 return []
+            # Remote paths must stay POSIX even on a Windows client, where
+            # Path("/opt/cadence/...") would stringify with backslashes.
+            remote_finder_root = to_remote_posix(finder_root)
             # Download .fnd files if cache is stale
             cache_marker = cache_path / ".source_dir"
             needs_download = True
             if cache_path.exists() and cache_marker.exists():
                 cached = cache_marker.read_text().strip()
-                needs_download = cached != str(finder_root)
+                needs_download = cached != remote_finder_root
             if needs_download:
                 import shutil
                 # Clear stale cache
@@ -948,11 +953,11 @@ let((result winName ciwNum)
                     shutil.rmtree(cache_path)
                 cache_path.mkdir(parents=True, exist_ok=True)
                 logger.info(
-                    "find_skill: downloading SKILL Finder from %s", finder_root
+                    "find_skill: downloading SKILL Finder from %s", remote_finder_root
                 )
                 try:
                     result = runner.download(
-                        str(finder_root),
+                        remote_finder_root,
                         cache_path,
                         recursive=True,
                         timeout=120,
@@ -963,7 +968,7 @@ let((result winName ciwNum)
                             result.stderr.strip(),
                         )
                         return []
-                    cache_marker.write_text(str(finder_root))
+                    cache_marker.write_text(remote_finder_root)
                 except Exception as exc:
                     logger.warning("find_skill: download error — %s", exc)
                     return []
@@ -1045,8 +1050,13 @@ let((result winName ciwNum)
 
         # Determine doc root
         runner = self.ssh_runner
+        from virtuoso_bridge.virtuoso.docs_search import to_remote_posix
+
+        remote_doc_root: str | None = None
         if source_dir:
             doc_root = _Path(source_dir)
+            if runner is not None:
+                remote_doc_root = to_remote_posix(doc_root)
         elif runner is not None:
             profile = getattr(self._tunnel, "_profile", None) if self._tunnel else None
             finder = SKILLFinder()
@@ -1058,6 +1068,8 @@ let((result winName ciwNum)
                 )
                 return None
             doc_root = finder_root.parent.parent
+            # Remote paths must stay POSIX even on a Windows client.
+            remote_doc_root = to_remote_posix(doc_root)
         else:
             finder = SKILLFinder()
             finder_root = finder.discover(remote_runner=None)
@@ -1073,7 +1085,8 @@ let((result winName ciwNum)
 
         # Remote: download .tgf and needed HTML files
         if runner is not None:
-            tgf_remote_path = str(doc_root / "api_more_info" / "api_more_info.tgf")
+            assert remote_doc_root is not None
+            tgf_remote_path = f"{remote_doc_root}/api_more_info/api_more_info.tgf"
             tgf_local_path = mi_cache / "api_more_info.tgf"
 
             needs_download = (
@@ -1087,10 +1100,12 @@ let((result winName ciwNum)
                     "get_skill_more_info: downloading .tgf index from %s", tgf_remote_path
                 )
                 try:
-                    # Download just the .tgf file first
+                    # Download just the .tgf file first (into the cache dir,
+                    # not over it: a file download whose local path is a
+                    # directory would replace the directory with a file).
                     result = runner.download(
                         tgf_remote_path,
-                        mi_cache,
+                        tgf_local_path,
                         recursive=False,
                         timeout=30,
                     )
@@ -1122,7 +1137,7 @@ let((result winName ciwNum)
             # Check if the referenced HTML file is cached
             html_rel_path = entry.file_path.lstrip("$")  # e.g. "abstract/abstract_skill.html"
             html_local_path = mi_cache / html_rel_path
-            html_remote_path = str(doc_root / html_rel_path)
+            html_remote_path = f"{remote_doc_root}/{html_rel_path}"
 
             if not html_local_path.exists():
                 logger.info(
@@ -1320,6 +1335,49 @@ let((result winName ciwNum)
                 limit=safe_limit,
                 rebuild=rebuild_index,
             ),
+        }
+
+    def doc_info(
+        self,
+        doc_roots: list[str | Path] | None = None,
+    ) -> dict[str, object]:
+        """Report version + structure facts for the configured doc roots.
+
+        In SSH mode this discovers documentation roots on the remote Cadence
+        installation and reads version/structure facts there. With explicit
+        *doc_roots* (or without an SSH runner) it inspects local paths.
+        """
+        from virtuoso_bridge.virtuoso.docs_search import (
+            discover_remote_doc_roots,
+            doc_root_info_local,
+            doc_root_info_remote,
+            resolve_doc_roots,
+        )
+        from virtuoso_bridge.virtuoso.skill_finder import SKILLFinder
+
+        if doc_roots:
+            roots = resolve_doc_roots(doc_roots)
+            return {
+                "doc_roots": doc_root_info_local(roots),
+            }
+
+        runner = self.ssh_runner
+        if runner is not None:
+            profile = getattr(self._tunnel, "_profile", None) if self._tunnel else None
+            remote_roots = discover_remote_doc_roots(runner, profile=profile)
+            if not remote_roots:
+                return {"doc_roots": []}
+            return {
+                "doc_roots": doc_root_info_remote(runner, remote_roots),
+            }
+
+        roots = resolve_doc_roots()
+        if not roots:
+            finder_root = SKILLFinder().discover(remote_runner=None)
+            if finder_root is not None:
+                roots = [finder_root.parent.parent.resolve()]
+        return {
+            "doc_roots": doc_root_info_local(roots),
         }
 
 

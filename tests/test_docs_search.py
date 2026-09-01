@@ -14,9 +14,14 @@ from virtuoso_bridge.transport.ssh import CommandResult
 from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
 from virtuoso_bridge.virtuoso.docs_search import (
     _remote_doc_index_command,
+    _remote_doc_info_script,
+    doc_root_info_local,
+    doc_root_info_remote,
     parse_tgf_line,
+    parse_virtuoso_version,
     resolve_doc_roots,
     search_docs,
+    to_remote_posix,
 )
 from virtuoso_bridge.virtuoso import docs_search as docs_search_module
 
@@ -121,7 +126,14 @@ def test_doc_search_cli_uses_bridge_when_no_doc_root(capsys, monkeypatch) -> Non
             seen_profiles.append(profile)
             return cls()
 
-        def search_docs(self, query: str, *, limit: int = 10, rebuild_index: bool = False):
+        def search_docs(
+            self,
+            query: str,
+            *,
+            limit: int = 10,
+            rebuild_index: bool = False,
+            cache_dir: str | Path | None = None,
+        ):
             seen_calls.append((query, limit, rebuild_index))
             return {
                 "doc_roots": ["/cad/ic/doc"],
@@ -264,7 +276,7 @@ def test_client_search_docs_builds_remote_index_from_metadata(tmp_path: Path) ->
 
     payload = client.search_docs("net expression", limit=2, cache_dir=tmp_path / "cache")
 
-    assert payload["doc_roots"] == [str(remote_root)]
+    assert payload["doc_roots"] == [remote_root.as_posix()]
     assert payload["results"][0]["path"] == f"{remote_root}/schematic/guide.html"
     assert payload["results"][0]["relative_path"] == "schematic/guide.html"
     assert "inherited net expression" in payload["results"][0]["snippet"]
@@ -298,7 +310,7 @@ def test_client_search_docs_falls_back_to_candidate_download_when_remote_index_f
 
     payload = client.search_docs("net expression", limit=2, cache_dir=tmp_path / "cache")
 
-    assert payload["doc_roots"] == [str(remote_root)]
+    assert payload["doc_roots"] == [remote_root.as_posix()]
     assert payload["results"][0]["path"] == f"{remote_root}/schematic/guide.html"
     assert payload["results"][0]["relative_path"] == "schematic/guide.html"
     assert "inherited net expression" in payload["results"][0]["snippet"]
@@ -345,7 +357,14 @@ def test_doc_search_cli_passes_rebuild_index(capsys, monkeypatch) -> None:
         def from_env(cls, profile=None):
             return cls()
 
-        def search_docs(self, query: str, *, limit: int = 10, rebuild_index: bool = False):
+        def search_docs(
+            self,
+            query: str,
+            *,
+            limit: int = 10,
+            rebuild_index: bool = False,
+            cache_dir: str | Path | None = None,
+        ):
             seen_calls.append((query, limit, rebuild_index))
             return {"doc_roots": ["/cad/ic/doc"], "results": []}
 
@@ -600,3 +619,237 @@ def test_remote_doc_index_command_skips_broken_cadence_python(tmp_path: Path) ->
 
     assert summary["documents"] == 1
     assert records[0]["relative_path"] == "skdfref/dbOpenCellViewByType.html"
+
+
+# ---------------------------------------------------------------------------
+# doc-info: version + structure facts
+# ---------------------------------------------------------------------------
+
+
+def test_parse_virtuoso_version_from_install_dir_name() -> None:
+    assert parse_virtuoso_version("IC618") == "6.1.8"
+    assert parse_virtuoso_version("IC614") == "6.1.4"
+    assert parse_virtuoso_version("IC617") == "6.1.7"
+    assert parse_virtuoso_version("IC231") == "23.1"
+    assert parse_virtuoso_version("IC618", sdp_names=()) == "6.1.8"
+    assert parse_virtuoso_version("") == ""
+    assert parse_virtuoso_version("tools") == ""
+
+
+def test_parse_virtuoso_version_prefers_sdp_names() -> None:
+    # sdp names are unambiguous and win over the directory fallback.
+    assert parse_virtuoso_version(
+        "IC618", sdp_names=["Base_IC06.18.000_lnx86.sdp"]
+    ) == "6.1.8"
+    assert parse_virtuoso_version(
+        "IC618", sdp_names=["Hotfix_IC06.18.130_lnx86.sdp"]
+    ) == "6.1.8"
+    assert parse_virtuoso_version(
+        "IC231", sdp_names=["Hotfix_IC23.10.030_lnx86.sdp"]
+    ) == "23.1"
+    # No sdp match -> fall back to the directory name.
+    assert parse_virtuoso_version(
+        "IC231", sdp_names=["unrelated.sdp"]
+    ) == "23.1"
+
+
+def _make_fake_doc_root(tmp_path: Path, *, sdp: str | None = None, per_function: bool = False) -> Path:
+    install_root = tmp_path / ("IC618" if sdp and "06.18" in sdp else "IC231")
+    doc_root = install_root / "doc"
+    (doc_root / "skdfref").mkdir(parents=True)
+    (doc_root / "api_more_info").mkdir()
+    (doc_root / "finder" / "SKILL" / "Core_SKILL").mkdir(parents=True)
+    (doc_root / "DFII").mkdir()
+    (doc_root / "Schematics").mkdir()
+    (doc_root / "api_more_info" / "api_more_info.tgf").write_text(
+        "dbOpenCellViewByType $skdfref/cvio.html dbOpenCellViewByType HTML\n",
+        encoding="utf-8",
+    )
+    (doc_root / "finder" / "SKILL" / "Core_SKILL" / "sklangref.fnd").write_text(
+        "name\tsyntax\tdescription\n", encoding="utf-8"
+    )
+    (doc_root / "finder" / "SKILL" / "Core_SKILL" / "skoopref.fnd").write_text(
+        "name\tsyntax\tdescription\n", encoding="utf-8"
+    )
+    if per_function:
+        for i in range(150):
+            (doc_root / "skdfref" / f"cvio_re_fn{i}.html").write_text("<html></html>\n")
+    else:
+        (doc_root / "skdfref" / "cvio.html").write_text("<html></html>\n")
+        (doc_root / "skdfref" / "chap1.html").write_text("<html></html>\n")
+    if sdp:
+        (install_root / sdp).write_text("", encoding="utf-8")
+    return doc_root
+
+
+def test_doc_root_info_local_reports_version_and_structure(tmp_path: Path) -> None:
+    doc_root = _make_fake_doc_root(tmp_path, sdp="Base_IC06.18.000_lnx86.sdp")
+
+    infos = doc_root_info_local([doc_root])
+
+    assert len(infos) == 1
+    info = infos[0]
+    assert info["doc_root"] == doc_root.resolve().as_posix()
+    assert info["install_root"] == doc_root.resolve().parent.as_posix()
+    assert info["virtuoso_version"] == "6.1.8"
+    assert info["version_source"] == "sdp"
+    assert info["doc_set_count"] >= 3
+    assert "DFII" in info["doc_sets_sample"]
+    assert info["skill_finder"]["found"] is True
+    assert info["skill_finder"]["fnd_count"] == 2
+    assert info["api_more_info"]["found"] is True
+    assert info["api_more_info"]["tgf_bytes"] > 0
+    assert info["skdfref"]["style"] == "chapter"
+    assert info["skdfref"]["html_count"] == 2
+
+
+def test_doc_root_info_local_detects_per_function_skdfref(tmp_path: Path) -> None:
+    doc_root = _make_fake_doc_root(tmp_path, per_function=True)
+
+    info = doc_root_info_local([doc_root])[0]
+
+    # No .sdp files -> version falls back to the install directory name (IC231).
+    assert info["virtuoso_version"] == "23.1"
+    assert info["version_source"] == "install_dir"
+    assert info["skdfref"]["style"] == "per-function"
+    assert info["skdfref"]["html_count"] == 150
+
+
+def test_doc_root_info_local_skips_missing_roots(tmp_path: Path) -> None:
+    assert doc_root_info_local([tmp_path / "nope"]) == []
+
+
+class _RemoteDocInfoRunner:
+    host = "eda-host"
+
+    def __init__(self, info_payload: list[dict] | None, fail: bool = False) -> None:
+        self.info_payload = info_payload
+        self.fail = fail
+        self.commands: list[str] = []
+
+    def run_command(self, command: str, timeout: int | None = None) -> CommandResult:
+        self.commands.append(command)
+        if "which virtuoso" in command:
+            return CommandResult(0, "/cad/ic/bin/virtuoso\n", "")
+        if "doc/finder/SKILL" in command:
+            return CommandResult(0, "/cad/ic/doc/finder/SKILL\n", "")
+        if "vb_doc_info" in command:
+            if self.fail:
+                return CommandResult(1, "", "remote doc-info failed")
+            return CommandResult(0, json.dumps(self.info_payload or []) + "\n", "")
+        return CommandResult(1, "", "unexpected command")
+
+
+def test_doc_root_info_remote_parses_json_payload() -> None:
+    payload = [
+        {
+            "doc_root": "/opt/cadence/IC231/doc",
+            "install_root": "/opt/cadence/IC231",
+            "virtuoso_version": "23.1",
+            "version_source": "sdp",
+            "doc_set_count": 252,
+            "doc_sets_sample": ["DFII", "Schematics"],
+            "skill_finder": {"path": "/opt/cadence/IC231/doc/finder/SKILL", "found": True, "fnd_count": 39},
+            "api_more_info": {"tgf": "/opt/cadence/IC231/doc/api_more_info/api_more_info.tgf", "found": True, "tgf_bytes": 986632},
+            "skdfref": {"path": "/opt/cadence/IC231/doc/skdfref", "found": True, "html_count": 1925, "style": "per-function", "sample": []},
+        }
+    ]
+    runner = _RemoteDocInfoRunner(payload)
+
+    infos = doc_root_info_remote(runner, ["/opt/cadence/IC231/doc"])
+
+    assert infos == payload
+    assert any("vb_doc_info" in command for command in runner.commands)
+
+
+def test_doc_root_info_remote_empty_roots_and_failure() -> None:
+    assert doc_root_info_remote(_RemoteDocInfoRunner([]), []) == []
+
+    failing = _RemoteDocInfoRunner(None, fail=True)
+    try:
+        doc_root_info_remote(failing, ["/cad/ic/doc"])
+    except RuntimeError as exc:
+        assert "remote doc-info failed" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
+def test_remote_doc_info_script_selects_python_candidates(tmp_path: Path) -> None:
+    script = _remote_doc_info_script(["/opt/cadence/IC231/doc", "/opt/cadence/IC618/doc"])
+
+    assert "vb_doc_info" in script
+    assert "/opt/cadence/IC231/tools.lnx86/python/64bit/bin/python3" in script
+    assert "/opt/cadence/IC618/tools.lnx86/python/64bit/bin/python3" in script
+    assert "tools.lnx86/python/64bit/bin/python3" in script
+
+
+def test_doc_info_cli_local_json_output(tmp_path: Path, capsys) -> None:
+    doc_root = _make_fake_doc_root(tmp_path, sdp="Base_IC06.18.000_lnx86.sdp")
+
+    rc = main(["doc-info", "--doc-root", str(doc_root), "--json"])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["doc_roots"][0]["doc_root"] == doc_root.resolve().as_posix()
+    assert payload["doc_roots"][0]["virtuoso_version"] == "6.1.8"
+    assert payload["doc_roots"][0]["skdfref"]["style"] == "chapter"
+
+
+def test_client_doc_info_uses_remote_runner(tmp_path: Path) -> None:
+    remote_root = Path("/opt/cadence/IC231/doc")
+    runner = _RemoteDocInfoRunner(
+        [
+            {
+                "doc_root": remote_root.as_posix(),
+                "virtuoso_version": "23.1",
+                "version_source": "sdp",
+                "doc_set_count": 252,
+            }
+        ]
+    )
+    client = VirtuosoClient(tunnel=_RemoteDocsTunnel(runner))
+
+    payload = client.doc_info()
+
+    assert payload["doc_roots"][0]["doc_root"] == remote_root.as_posix()
+    assert payload["doc_roots"][0]["virtuoso_version"] == "23.1"
+
+
+def test_to_remote_posix_normalizes_locally_constructed_paths() -> None:
+    # On a Windows client, Path("/opt/...") stringifies with backslashes;
+    # remote path handling requires POSIX separators.
+    finder_root = Path("/opt/cadence/IC231/doc/finder/SKILL")
+    assert to_remote_posix(finder_root.parent.parent) == "/opt/cadence/IC231/doc"
+    assert to_remote_posix("/opt/cadence/IC618/doc") == "/opt/cadence/IC618/doc"
+    assert to_remote_posix(Path("/opt/cadence/IC618/doc")) == "/opt/cadence/IC618/doc"
+
+
+def test_remote_doc_info_script_embeds_roots_without_argv() -> None:
+    script = _remote_doc_info_script(["/opt/cadence/IC231/doc"])
+
+    # Roots must be embedded in the Python body: some remote shell/ssh
+    # chains mangle double quotes in command arguments, which would break
+    # JSON parsing of an argv-passed root list.
+    assert 'ROOTS = ["/opt/cadence/IC231/doc"]' in script
+    assert "sys.argv" not in script
+
+
+def test_discover_remote_doc_roots_yields_posix_root_on_any_client(monkeypatch) -> None:
+    # The SKILL Finder anchor comes back as a locally-constructed Path;
+    # the derived doc root must stay POSIX even when the client is Windows.
+    import virtuoso_bridge.virtuoso.skill_finder as sf
+    from virtuoso_bridge.virtuoso.docs_search import discover_remote_doc_roots
+
+    class _FinderStub:
+        def discover(self, remote_runner=None, profile=None):
+            return Path("/opt/cadence/IC231/doc/finder/SKILL")
+
+    monkeypatch.setattr(sf, "SKILLFinder", _FinderStub)
+    runner = _RemoteDocsRunner(Path("/opt/cadence/IC231/doc"), Path("/tmp/downloads"))
+
+    roots = discover_remote_doc_roots(runner)
+
+    assert roots == ["/opt/cadence/IC231/doc"]
+    for root in roots:
+        assert "\\" not in root
