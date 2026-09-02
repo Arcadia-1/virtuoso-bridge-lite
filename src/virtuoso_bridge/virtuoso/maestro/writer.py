@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 
 from virtuoso_bridge import VirtuosoClient
+from virtuoso_bridge.virtuoso.ops import escape_skill_string
 
 
 logger = logging.getLogger(__name__)
@@ -77,7 +78,7 @@ def add_output(client: VirtuosoClient, name: str, test: str, *,
     if signal_name:
         parts += f' ?signalName "{signal_name}"'
     if expr:
-        parts += f' ?expr "{expr}"'
+        parts += f' ?expr "{escape_skill_string(expr)}"'
     parts += f'{s})'
     return _q(client, parts)
 
@@ -330,7 +331,7 @@ def set_job_policy(client: VirtuosoClient, policy, *,
 
 
 def run_simulation(client: VirtuosoClient, *, session: str = "",
-                   callback: str = "") -> str:
+                   callback: str = "", timeout: int | None = None) -> str:
     """maeRunSimulation — run simulation (async, returns immediately).
 
     Returns the history name (e.g. "Interactive.1").
@@ -338,6 +339,7 @@ def run_simulation(client: VirtuosoClient, *, session: str = "",
     Args:
         session: session name (default: current session)
         callback: SKILL procedure name to call when run finishes
+        timeout: socket timeout for Maestro to accept the run request
     """
     parts = "maeRunSimulation("
     if session:
@@ -345,7 +347,7 @@ def run_simulation(client: VirtuosoClient, *, session: str = "",
     if callback:
         parts += f'?callback "{callback}" '
     parts = parts.rstrip() + ")"
-    return _q(client, parts)
+    return _q(client, parts, timeout=timeout)
 
 
 def _remove_marker(runner, marker: str) -> None:
@@ -505,8 +507,10 @@ procedure(_vb_sim_done_{nonce}(session runID)
     # Start simulation with callback — atomic, no race condition.
     # If Virtuoso returns nil here, no run was started and the callback
     # can never fire, so fail fast instead of entering endless marker polling.
+    # Cold Maestro netlisting may take longer than the bridge default before
+    # maeRunSimulation returns the history name; honor the caller's limit.
     history = run_simulation(client, session=session,
-                             callback=f"_vb_sim_done_{nonce}")
+                             callback=f"_vb_sim_done_{nonce}", timeout=timeout)
     history_name = _strip_skill_atom(history)
     if not history_name or history_name == "nil":
         info = _diagnose_run_not_started(client, session)
@@ -515,7 +519,7 @@ procedure(_vb_sim_done_{nonce}(session runID)
         # One retry after recovery if we had an active modal form.
         if recovered:
             history = run_simulation(client, session=session,
-                                     callback=f"_vb_sim_done_{nonce}")
+                                     callback=f"_vb_sim_done_{nonce}", timeout=timeout)
             history_name = _strip_skill_atom(history)
 
         if not history_name or history_name == "nil":
