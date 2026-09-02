@@ -102,6 +102,32 @@ def test_run_and_wait_uses_one_timeout_budget(monkeypatch) -> None:
     assert wait_timeouts == [48]
 
 
+def test_wait_until_done_caps_remote_poll_and_sleep_to_budget(monkeypatch) -> None:
+    clock = [100.0]
+    command_timeouts: list[float] = []
+    sleeps: list[float] = []
+
+    class _Runner:
+        def run_command(self, _command, *, timeout):
+            command_timeouts.append(timeout)
+            return SimpleNamespace(returncode=1, stdout="")
+
+    client = SimpleNamespace(ssh_runner=_Runner())
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(time, "sleep", fake_sleep)
+
+    with pytest.raises(TimeoutError, match=r"within 3s"):
+        writer._wait_until_done(client, "/tmp/missing-marker", timeout=3)
+
+    assert command_timeouts == [3, 1]
+    assert sleeps == [2, 1]
+
+
 def test_create_netlist_for_corner_passes_explicit_session() -> None:
     client = _RecordingClient()
 

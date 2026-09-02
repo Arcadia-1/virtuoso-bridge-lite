@@ -388,7 +388,11 @@ def _wait_until_done(client: VirtuosoClient, marker: str,
     runner = client.ssh_runner
 
     deadline = _time.monotonic() + timeout
-    while _time.monotonic() < deadline:
+    while True:
+        remaining = deadline - _time.monotonic()
+        if remaining <= 0:
+            break
+
         if runner is None:
             mp = _Path(marker)
             if mp.exists():
@@ -397,11 +401,18 @@ def _wait_until_done(client: VirtuosoClient, marker: str,
                     _remove_marker(runner, marker)
                     return content
         else:
-            r = runner.run_command(f"cat {marker} 2>/dev/null", timeout=10)
+            r = runner.run_command(
+                f"cat {marker} 2>/dev/null",
+                timeout=min(10.0, remaining),
+            )
             if r.returncode == 0 and r.stdout.strip():
                 _remove_marker(runner, marker)
                 return r.stdout.strip()
-        _time.sleep(2)
+
+        remaining = deadline - _time.monotonic()
+        if remaining <= 0:
+            break
+        _time.sleep(min(2.0, remaining))
 
     raise TimeoutError(f"Simulation did not finish within {timeout}s")
 

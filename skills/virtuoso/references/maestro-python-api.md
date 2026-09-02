@@ -242,7 +242,7 @@ client.maestro.set_analysis("TRAN2", "tran", enable=False)
 client.maestro.add_output("OutPlot", "TRAN2", output_type="net", signal_name="/OUT")
 
 # Expression output
-client.maestro.add_output("maxOut", "TRAN2", output_type="point", expr='ymax(VT(\\"/OUT\\"))')
+client.maestro.add_output("maxOut", "TRAN2", output_type="point", expr='ymax(VT("/OUT"))')
 
 # Spec: maxOut < 400mV
 client.maestro.set_spec("maxOut", "TRAN2", lt="400m")
@@ -334,8 +334,8 @@ client.maestro.set_job_control_mode("Local")
 
 | Python | SKILL | Description |
 |--------|-------|-------------|
-| `client.maestro.run_simulation(*, session="", callback="")` | `maeRunSimulation` | Run (async), returns history name |
-| `client.maestro.run_and_wait(*, session="", timeout=600)` | `maeRunSimulation(?callback ...)` + SSH poll | **Recommended.** Run + wait without blocking SKILL channel |
+| `client.maestro.run_simulation(*, session="", callback="", timeout=None)` | `maeRunSimulation` | Run (async), returns history name; `timeout` bounds acceptance of the run request |
+| `client.maestro.run_and_wait(*, session="", timeout=600)` | `maeRunSimulation(?callback ...)` + SSH poll | **Recommended.** Run + wait without blocking SKILL channel; `timeout` is one end-to-end budget for request acceptance and completion polling |
 
 ```python
 # Recommended: run_and_wait (no race condition, SKILL stays free)
