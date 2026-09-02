@@ -7,14 +7,17 @@ They return the raw SKILL output string.
 from __future__ import annotations
 
 import logging
+import time
+import uuid
 
 from virtuoso_bridge import VirtuosoClient
+from virtuoso_bridge.virtuoso.ops import escape_skill_string
 
 
 logger = logging.getLogger(__name__)
 
 
-def _q(client: VirtuosoClient, expr: str, timeout: int | None = None) -> str:
+def _q(client: VirtuosoClient, expr: str, timeout: float | None = None) -> str:
     kwargs = {"timeout": timeout} if timeout is not None else {}
     r = client.execute_skill(expr, **kwargs)
     if r.errors:
@@ -70,14 +73,17 @@ def add_output(client: VirtuosoClient, name: str, test: str, *,
                output_type: str = "", signal_name: str = "",
                expr: str = "", session: str = "") -> str:
     """maeAddOutput — add an output (waveform or expression)."""
-    s = f' ?session "{session}"' if session else ""
-    parts = f'maeAddOutput("{name}" "{test}"'
+    s = f' ?session "{escape_skill_string(session)}"' if session else ""
+    parts = (
+        f'maeAddOutput("{escape_skill_string(name)}" '
+        f'"{escape_skill_string(test)}"'
+    )
     if output_type:
-        parts += f' ?outputType "{output_type}"'
+        parts += f' ?outputType "{escape_skill_string(output_type)}"'
     if signal_name:
-        parts += f' ?signalName "{signal_name}"'
+        parts += f' ?signalName "{escape_skill_string(signal_name)}"'
     if expr:
-        parts += f' ?expr "{expr}"'
+        parts += f' ?expr "{escape_skill_string(expr)}"'
     parts += f'{s})'
     return _q(client, parts)
 
@@ -330,7 +336,7 @@ def set_job_policy(client: VirtuosoClient, policy, *,
 
 
 def run_simulation(client: VirtuosoClient, *, session: str = "",
-                   callback: str = "") -> str:
+                   callback: str = "", timeout: float | None = None) -> str:
     """maeRunSimulation — run simulation (async, returns immediately).
 
     Returns the history name (e.g. "Interactive.1").
@@ -338,14 +344,15 @@ def run_simulation(client: VirtuosoClient, *, session: str = "",
     Args:
         session: session name (default: current session)
         callback: SKILL procedure name to call when run finishes
+        timeout: socket timeout for Maestro to accept the run request
     """
     parts = "maeRunSimulation("
     if session:
-        parts += f'?session "{session}" '
+        parts += f'?session "{escape_skill_string(session)}" '
     if callback:
-        parts += f'?callback "{callback}" '
+        parts += f'?callback "{escape_skill_string(callback)}" '
     parts = parts.rstrip() + ")"
-    return _q(client, parts)
+    return _q(client, parts, timeout=timeout)
 
 
 def _remove_marker(runner, marker: str) -> None:
@@ -363,7 +370,7 @@ def _remove_marker(runner, marker: str) -> None:
 
 
 def _wait_until_done(client: VirtuosoClient, marker: str,
-                      timeout: int = 600) -> str:
+                      timeout: float = 600) -> str:
     """Internal: poll the marker file written by run_and_wait's SKILL callback.
 
     Cadence-side ``maeRunSimulation(?callback ...)`` registers a SKILL
@@ -381,7 +388,11 @@ def _wait_until_done(client: VirtuosoClient, marker: str,
     runner = client.ssh_runner
 
     deadline = _time.monotonic() + timeout
-    while _time.monotonic() < deadline:
+    while True:
+        remaining = deadline - _time.monotonic()
+        if remaining <= 0:
+            break
+
         if runner is None:
             mp = _Path(marker)
             if mp.exists():
@@ -390,11 +401,18 @@ def _wait_until_done(client: VirtuosoClient, marker: str,
                     _remove_marker(runner, marker)
                     return content
         else:
-            r = runner.run_command(f"cat {marker} 2>/dev/null", timeout=10)
+            r = runner.run_command(
+                f"cat {marker} 2>/dev/null",
+                timeout=min(10.0, remaining),
+            )
             if r.returncode == 0 and r.stdout.strip():
                 _remove_marker(runner, marker)
                 return r.stdout.strip()
-        _time.sleep(2)
+
+        remaining = deadline - _time.monotonic()
+        if remaining <= 0:
+            break
+        _time.sleep(min(2.0, remaining))
 
     raise TimeoutError(f"Simulation did not finish within {timeout}s")
 
@@ -481,9 +499,17 @@ def run_and_wait(client: VirtuosoClient, *, session: str = "",
     The SKILL channel remains free during the wait — you can still
     execute_skill, dismiss dialogs, take screenshots, etc.
 
-    Returns (history, status) — e.g. ('"Interactive.3"', 'done').
+    ``timeout`` is an end-to-end budget covering the simulation-start request
+    and completion polling. Returns (history, status) — e.g.
+    ('"Interactive.3"', 'done').
     """
-    import uuid
+    deadline = time.monotonic() + timeout
+
+    def remaining_timeout() -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"Simulation did not finish within {timeout}s")
+        return remaining
 
     # runner is None in local mode (Virtuoso on the same host); _remove_marker
     # and _wait_until_done both handle that case via local fs operations.
@@ -505,8 +531,11 @@ procedure(_vb_sim_done_{nonce}(session runID)
     # Start simulation with callback — atomic, no race condition.
     # If Virtuoso returns nil here, no run was started and the callback
     # can never fire, so fail fast instead of entering endless marker polling.
+    # Cold Maestro netlisting may take longer than the bridge default before
+    # maeRunSimulation returns the history name; use the remaining caller budget.
     history = run_simulation(client, session=session,
-                             callback=f"_vb_sim_done_{nonce}")
+                             callback=f"_vb_sim_done_{nonce}",
+                             timeout=remaining_timeout())
     history_name = _strip_skill_atom(history)
     if not history_name or history_name == "nil":
         info = _diagnose_run_not_started(client, session)
@@ -515,7 +544,8 @@ procedure(_vb_sim_done_{nonce}(session runID)
         # One retry after recovery if we had an active modal form.
         if recovered:
             history = run_simulation(client, session=session,
-                                     callback=f"_vb_sim_done_{nonce}")
+                                     callback=f"_vb_sim_done_{nonce}",
+                                     timeout=remaining_timeout())
             history_name = _strip_skill_atom(history)
 
         if not history_name or history_name == "nil":
@@ -541,7 +571,7 @@ procedure(_vb_sim_done_{nonce}(session runID)
             )
 
     # Poll marker via SSH (SKILL channel stays free)
-    status = _wait_until_done(client, marker, timeout=timeout)
+    status = _wait_until_done(client, marker, timeout=remaining_timeout())
     return history, status
 
 
