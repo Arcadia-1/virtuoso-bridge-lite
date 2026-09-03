@@ -332,6 +332,7 @@ def _restart_daemon_one(profile: str | None) -> None:
         timeout=5,
         log_to_ciw=False,
     )
+    client.daemon_token = _state_or_local_daemon_token(state, profile)
     try:
         user_check = check_daemon_user(client, profile=profile, timeout=5)
     except Exception as exc:
@@ -386,6 +387,37 @@ def cli_restart() -> int:
 
 
 # -- status -----------------------------------------------------------------
+
+def _state_or_local_daemon_token(state: dict | None, profile: str | None) -> str | None:
+    """Token for a bare client: state cache, else SSH fetch / local read.
+
+    Local fallback is read-only — the daemon (or `local()`) provisions the
+    file; diagnostics never create one.
+    """
+    from virtuoso_bridge import daemon_auth
+
+    token = (state or {}).get("daemon_token")
+    if daemon_auth.is_valid_token(token):
+        return token
+    from virtuoso_bridge.transport.tunnel import _is_localhost
+
+    remote = bool((state or {}).get("remote_host")) and not _is_localhost(
+        (state or {}).get("remote_host")
+    )
+    if remote:
+        try:
+            from virtuoso_bridge.transport.tunnel import SSHClient
+
+            ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
+            return ssh.ensure_daemon_token()
+        except Exception as exc:
+            print(f"[warning] daemon token unavailable: {exc}")
+            return None
+    try:
+        return daemon_auth.token_path().read_text(encoding="utf-8").strip().lower()
+    except OSError:
+        return None
+
 
 def _print_load_hint(setup_path: str) -> None:
     """Print CIW load command and .cdsinit auto-load suggestion."""
@@ -523,6 +555,7 @@ def _print_status() -> int:
         port = state["port"]
         try:
             vc = VirtuosoClient(host="127.0.0.1", port=port, timeout=5)
+            vc.daemon_token = _state_or_local_daemon_token(state, profile)
             ok = vc.test_connection(timeout=5)
             print(f"\n[daemon] {'OK - connected to Virtuoso CIW' if ok else 'NO RESPONSE'}")
             if ok:

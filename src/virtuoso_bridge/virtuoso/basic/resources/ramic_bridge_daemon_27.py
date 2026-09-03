@@ -9,7 +9,83 @@ import signal
 import threading
 import time
 import errno
+import hashlib
+import hmac as _hmac
+import binascii
 import traceback
+
+# ---------------------------------------------------------------------------
+# Bridge token authentication (see ramic_bridge_daemon_3.py): requests need
+# HMAC(token, nonce); responses carry HMAC(token, nonce + ":resp").
+# ---------------------------------------------------------------------------
+TOKEN_PATH_ENV = "RB_TOKEN_PATH"
+_RESP_SALT = ":resp"
+
+
+def _token_file_path():
+    override = os.environ.get(TOKEN_PATH_ENV, "").strip()
+    if override:
+        return override
+    return os.path.join(os.path.expanduser("~"), ".virtuoso-bridge", "bridge_token")
+
+
+def _load_or_create_token():
+    path = _token_file_path()
+    try:
+        with open(path, "r") as handle:
+            token = handle.read().strip()
+        if len(token) >= 32 and all(c in "0123456789abcdefABCDEF" for c in token):
+            return token.lower()
+    except (OSError, IOError):
+        pass
+    token = binascii.hexlify(os.urandom(32))
+    try:
+        parent = os.path.dirname(path)
+        if parent and not os.path.isdir(parent):
+            os.makedirs(parent)
+            os.chmod(parent, 0o700)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.write(fd, token + "\n")
+        os.close(fd)
+        os.chmod(path, 0o600)
+    except (OSError, IOError):
+        sys.stderr.write(
+            "[RB-auth] WARNING: cannot read or create token file {0}; "
+            "daemon runs UNAUTHENTICATED\n".format(path)
+        )
+        return None
+    return token
+
+
+BRIDGE_TOKEN = _load_or_create_token()
+
+
+def _hmac_hex(message):
+    return _hmac.new(
+        BRIDGE_TOKEN, message.encode("utf-8") if isinstance(message, unicode) else message,
+        hashlib.sha256
+    ).hexdigest()
+
+
+def _check_request_auth(request_data):
+    """Return an error string for unauthenticated requests, else None."""
+    if not BRIDGE_TOKEN:
+        return None
+    nonce = request_data.get("nonce")
+    mac = request_data.get("mac")
+    if not nonce or not mac:
+        return (
+            "AuthError: bridge token required — this daemon rejects "
+            "unauthenticated SKILL (client too old, or unauthorized)"
+        )
+    if not _hmac_hex(str(nonce)) == str(mac).lower():
+        return (
+            "AuthError: bridge token mismatch — the daemon on this port "
+            "belongs to a different user (or the token was rotated); run "
+            "`virtuoso-bridge restart` after RBStop()"
+        )
+    return None
+
 
 # Counters surfaced to the SKILL monitor via stderr [RB-stat] lines.
 # Throttled to ~1 Hz so heavy traffic doesn't flood stderr.
@@ -219,8 +295,17 @@ def handle_external_connection(conn, addr):
         # Python 2.7 compatibility: data is already bytes/string
         request_data = json.loads(data)
 
+        auth_error = _check_request_auth(request_data)
+        if auth_error:
+            # Unauthenticated or foreign client: refuse without executing.
+            if isinstance(auth_error, unicode):
+                auth_error = auth_error.encode("utf-8")
+            _safe_sendall(conn, "\x15" + auth_error)
+            return
+
         skill_code = request_data["skill"]
         timeout_seconds = request_data["timeout"]
+        request_nonce = request_data.get("nonce")
 
         # Reset timeout flag
         timeout_flag = False
@@ -280,9 +365,15 @@ def handle_external_connection(conn, addr):
 
         # Python 2.7 compatibility: handle returnData properly
         if isinstance(returnData, bytearray):
-            _safe_sendall(conn, str(returnData))
+            returnData = str(returnData)
         elif hasattr(returnData, 'encode'):  # Check if it's unicode
-            _safe_sendall(conn, returnData.encode('utf-8'))
+            returnData = returnData.encode('utf-8')
+
+        # Authenticate the response so the client can detect a squatted
+        # port: STX/NAK + HMAC(token, nonce + ":resp") prefix + body.
+        if BRIDGE_TOKEN and request_nonce:
+            resp_mac = _hmac_hex(str(request_nonce) + _RESP_SALT)
+            _safe_sendall(conn, returnData[:1] + resp_mac + returnData[1:])
         else:
             _safe_sendall(conn, returnData)
 
@@ -370,8 +461,9 @@ def start_server():
             except Exception:
                 _ip = ""
         sys.stderr.write(
-            "[RB-banner] pid={0} bind={1}:{2} host={3} ip={4}\n".format(
+            "[RB-banner] pid={0} bind={1}:{2} host={3} ip={4} auth={5}\n".format(
                 os.getpid(), HOST, PORT, _hn, (_ip or "unknown"),
+                ("on" if BRIDGE_TOKEN else "off"),
             )
         )
         sys.stderr.flush()

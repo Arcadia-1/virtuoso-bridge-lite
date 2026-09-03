@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import socket
 import hashlib
 import time
@@ -14,6 +15,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from virtuoso_bridge.env import load_vb_env
+from virtuoso_bridge import daemon_auth
 from virtuoso_bridge.profile import resolve_profile
 from virtuoso_bridge.virtuoso.basic.composition import compose_skill_script
 from virtuoso_bridge.models import ExecutionStatus, VirtuosoInterface, VirtuosoResult
@@ -59,6 +61,21 @@ def _path_to_posix(path: str | Path) -> str:
     return Path(path).as_posix()
 
 
+def _acquire_daemon_token(ssh: Any) -> str | None:
+    """Token for the daemon behind *ssh* (SSH-fetched) or the local machine.
+
+    The token is the SSH-bootstrapped shared secret gating the daemon
+    (see :mod:`virtuoso_bridge.daemon_auth`); None disables authentication
+    on the wire (legacy mode).
+    """
+    if ssh is not None and (
+        getattr(ssh, "ssh_runner", None) is not None
+        or getattr(ssh, "_ssh_runner", None) is not None
+    ):
+        return ssh.ensure_daemon_token()
+    return daemon_auth.read_or_create_local_token()
+
+
 def _escape_skill_string(s: str) -> str:
     return escape_skill_string(s)
 
@@ -90,12 +107,15 @@ class VirtuosoClient(VirtuosoInterface):
         timeout: int = 30,
         tunnel: Any = None,
         log_to_ciw: bool = True,
+        daemon_token: str | None = None,
     ) -> None:
         self._host = host
         self._port = port
         self._timeout = timeout
         self._tunnel = tunnel  # SSHClient, if provided
         self._log_to_ciw = log_to_ciw
+        self._daemon_token = daemon_token
+        self._pending_nonce: str | None = None
         self.layout = LayoutOps(self)
         self.library = LibraryOps(self)
         self.schematic = SchematicOps(self)
@@ -142,7 +162,11 @@ class VirtuosoClient(VirtuosoInterface):
                 raise RuntimeError("Tunnel state file is missing or invalid.")
             port = state["port"]
             ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
-            client = cls(host="127.0.0.1", port=port, timeout=timeout, tunnel=ssh, log_to_ciw=log_to_ciw)
+            token = state.get("daemon_token")
+            if not daemon_auth.is_valid_token(token):
+                token = _acquire_daemon_token(ssh)
+            client = cls(host="127.0.0.1", port=port, timeout=timeout, tunnel=ssh,
+                         log_to_ciw=log_to_ciw, daemon_token=token)
             client._reject_cross_user_daemon_if_reachable(profile=profile, timeout=min(timeout, 10))
             return client
 
@@ -157,7 +181,8 @@ class VirtuosoClient(VirtuosoInterface):
             )
 
         ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
-        client = cls(host="127.0.0.1", port=ssh.port, timeout=timeout, tunnel=ssh, log_to_ciw=log_to_ciw)
+        client = cls(host="127.0.0.1", port=ssh.port, timeout=timeout, tunnel=ssh,
+                     log_to_ciw=log_to_ciw, daemon_token=_acquire_daemon_token(ssh))
         client._reject_cross_user_daemon_if_reachable(profile=profile, timeout=min(timeout, 10))
         return client
 
@@ -168,8 +193,18 @@ class VirtuosoClient(VirtuosoInterface):
         port: int = 65432,
         timeout: int = 30,
     ) -> "VirtuosoClient":
-        """Create a bridge for a locally running daemon."""
-        return cls(host=host, port=port, timeout=timeout)
+        """Create a bridge for a locally running daemon.
+
+        The daemon token is read (or created, mode 0600) from the local
+        ``~/.virtuoso-bridge/bridge_token`` so local-mode sessions get the
+        same cross-user protection as SSH mode without any extra setup.
+        """
+        return cls(
+            host=host,
+            port=port,
+            timeout=timeout,
+            daemon_token=daemon_auth.read_or_create_local_token(),
+        )
 
     @classmethod
     def from_tunnel(
@@ -179,12 +214,16 @@ class VirtuosoClient(VirtuosoInterface):
         log_to_ciw: bool = True,
     ) -> "VirtuosoClient":
         """Create a bridge connected through a SSHClient."""
+        token = None
+        if hasattr(tunnel, "ensure_daemon_token"):
+            token = tunnel.ensure_daemon_token()
         client = cls(
             host="127.0.0.1",
             port=tunnel.port,
             timeout=timeout,
             tunnel=tunnel,
             log_to_ciw=log_to_ciw,
+            daemon_token=token,
         )
         # Remote tunnels only: a local SSHClient has no runner, and local
         # mode has no cross-user exposure over loopback.
@@ -254,6 +293,15 @@ class VirtuosoClient(VirtuosoInterface):
     def log_to_ciw(self, value: bool) -> None:
         self._log_to_ciw = bool(value)
 
+    @property
+    def daemon_token(self) -> str | None:
+        """Shared secret authenticating this client to the bridge daemon."""
+        return self._daemon_token
+
+    @daemon_token.setter
+    def daemon_token(self, value: str | None) -> None:
+        self._daemon_token = value
+
     # -- VirtuosoInterface --------------------------------------------------
 
     def ensure_ready(self, timeout: int = 10) -> VirtuosoResult:
@@ -265,6 +313,8 @@ class VirtuosoClient(VirtuosoInterface):
         if self._tunnel is not None:
             try:
                 self._tunnel.warm()
+                if self._daemon_token is None and hasattr(self._tunnel, "daemon_token"):
+                    self._daemon_token = self._tunnel.daemon_token
                 metadata["tunnel_alive"] = self.is_tunnel_alive
                 self._port = self._tunnel.port  # may have changed due to port auto-retry
                 logger.info("ensure_ready: tunnel alive=%s, port=%d",
@@ -389,6 +439,14 @@ class VirtuosoClient(VirtuosoInterface):
                                  exc, connect_deadline - now)
                     time.sleep(min(_TUNNEL_CONNECT_RETRY_DELAY, connect_deadline - now))
 
+        except daemon_auth.DaemonAuthError as exc:
+            elapsed = time.monotonic() - start_time
+            logger.warning("Daemon authentication failed: %s", exc)
+            return VirtuosoResult(
+                status=ExecutionStatus.ERROR,
+                errors=[f"Bridge authentication failed: {exc}"],
+                execution_time=elapsed,
+            )
         except socket.timeout:
             elapsed = time.monotonic() - start_time
             logger.warning("Socket timeout connecting to %s:%d after %gs",
@@ -1456,11 +1514,17 @@ let((result winName ciwNum)
             s.settimeout(self._remaining_timeout(deadline))
             logger.debug("TCP connect %s:%d", self._host, self._port)
             s.connect((self._host, self._port))
-            logger.debug("TCP connected, sending %d-byte payload", len(skill_code))
             request_timeout = min(timeout, self._remaining_timeout(deadline))
-            payload = json.dumps({"skill": skill_code, "timeout": request_timeout}).encode("utf-8")
+            payload: dict[str, Any] = {"skill": skill_code, "timeout": request_timeout}
+            nonce: str | None = None
+            if self._daemon_token:
+                nonce = secrets.token_hex(16)
+                payload["nonce"] = nonce
+                payload["mac"] = daemon_auth.sign_request(self._daemon_token, nonce)
+            self._pending_nonce = nonce
+            logger.debug("TCP connected, sending %d-byte payload", len(json.dumps(payload)))
             s.settimeout(self._remaining_timeout(deadline))
-            s.sendall(payload)
+            s.sendall(json.dumps(payload).encode("utf-8"))
             s.shutdown(socket.SHUT_WR)
             chunks: list[bytes] = []
             while True:
@@ -1471,6 +1535,12 @@ let((result winName ciwNum)
                 chunks.append(chunk)
             raw = b"".join(chunks).decode("utf-8", errors="ignore")
             logger.debug("TCP received %d bytes", len(raw))
+            if self._daemon_token and nonce:
+                if raw.startswith(_NAK) and raw[1:].startswith("AuthError"):
+                    # Authenticated daemon refused our token: it belongs to
+                    # a different user (or the token was rotated).
+                    raise daemon_auth.DaemonAuthError(raw[1:].strip())
+                raw = daemon_auth.verify_response(raw, self._daemon_token, nonce)
             return raw
 
     @staticmethod

@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from virtuoso_bridge import daemon_auth
 from virtuoso_bridge.env import load_vb_env, resolve_env_path
 from virtuoso_bridge.profile import resolve_profile
 from virtuoso_bridge.runtime_paths import legacy_cache_state_file, state_dir
@@ -248,6 +249,7 @@ class SSHClient:
         self._remote_virtuoso_setup_path: str | None = None
         self._remote_identity_path: str | None = None
         self._daemon_endpoint_hostname: str | None = None
+        self._daemon_token: str | None = None
 
     def _new_role_runner(
         self,
@@ -428,6 +430,68 @@ class SSHClient:
     @property
     def identity_path(self) -> str | None:
         return self._remote_identity_path
+
+    @property
+    def daemon_token(self) -> str | None:
+        return self._daemon_token
+
+    def ensure_daemon_token(self) -> str | None:
+        """Fetch (or create over SSH) the bridge daemon auth token.
+
+        The token lives in ``~/.virtuoso-bridge/bridge_token`` (mode 0600) on
+        the daemon's machine and only ever travels over this authenticated
+        SSH channel — it is the shared secret that lets clients and their
+        own user's daemon recognize each other (HMAC challenge/Response, see
+        :mod:`virtuoso_bridge.daemon_auth`).  Returns None when the token
+        cannot be provisioned; callers then fall back to legacy
+        unauthenticated behaviour.
+        """
+        if self._daemon_token and daemon_auth.is_valid_token(self._daemon_token):
+            return self._daemon_token
+        if self._ssh_runner is None:
+            self._daemon_token = daemon_auth.read_or_create_local_token()
+            return self._daemon_token
+        runner = self._ssh_runner
+        try:
+            result = runner.run_command(
+                "cat ~/.virtuoso-bridge/bridge_token 2>/dev/null"
+            )
+            existing = (result.stdout or "").strip()
+            if result.returncode == 0 and daemon_auth.is_valid_token(existing):
+                self._daemon_token = existing.lower()
+                return self._daemon_token
+            # Provision a fresh token through the SSH channel.
+            token = daemon_auth.generate_token()
+            home = (
+                runner.run_command('printf %s "$HOME"').stdout or ""
+            ).strip()
+            if not home:
+                logger.warning("Cannot resolve remote $HOME for bridge token")
+                return None
+            token_dir = f"{home}/.virtuoso-bridge"
+            token_path = f"{token_dir}/bridge_token"
+            mkdir = runner.run_command(
+                f"mkdir -p '{token_dir}' && chmod 700 '{token_dir}'"
+            )
+            if mkdir.returncode != 0:
+                logger.warning(
+                    "Cannot create %s for bridge token: %s",
+                    token_dir, mkdir.stderr.strip(),
+                )
+                return None
+            upload = runner.upload_text(token + "\n", token_path)
+            if upload.returncode != 0:
+                logger.warning(
+                    "Cannot upload bridge token: %s", upload.stderr.strip()
+                )
+                return None
+            runner.run_command(f"chmod 600 '{token_path}'")
+            self._daemon_token = token
+            logger.info("Provisioned bridge daemon token at %s", token_path)
+            return self._daemon_token
+        except Exception as exc:
+            logger.warning("Bridge token provisioning failed: %s", exc)
+            return None
 
     @property
     def is_tunnel_alive(self) -> bool:
@@ -724,10 +788,12 @@ class SSHClient:
         if _is_localhost(self._remote_host):
             self.ensure_local_setup()
             self._daemon_endpoint_hostname = socket.gethostname()
+            self._daemon_token = self.ensure_daemon_token()
             self.save_state()
             return
         try:
             self.ensure_remote_setup()
+            self._daemon_token = self.ensure_daemon_token()
             runners = {id(runner): runner for runner in self._role_runners.values()}
             for runner in runners.values():
                 if runner.persistent_shell_enabled:
@@ -851,6 +917,7 @@ class SSHClient:
             "daemon_endpoint_hostname": self._daemon_endpoint_hostname,
             "setup_path": self._remote_virtuoso_setup_path,
             "identity_path": self._remote_identity_path,
+            "daemon_token": self._daemon_token,
             "profile": self._profile,
             "started_at": time.time(),
         }

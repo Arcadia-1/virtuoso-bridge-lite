@@ -9,7 +9,88 @@ import signal
 import threading
 import time
 import errno
+import hashlib
+import hmac as _hmac
+import binascii
 import traceback
+
+# ---------------------------------------------------------------------------
+# Bridge token authentication.
+#
+# The daemon port is host-global: any local user can end up bound to it (or
+# deliberately squat it).  A token shared with legitimate clients via a
+# 0600 file (~/.virtuoso-bridge/bridge_token, or RB_TOKEN_PATH) gates every
+# request: no valid HMAC(token, nonce) -> no SKILL execution, and responses
+# carry HMAC(token, nonce + ":resp") so clients can detect a squatter.
+# ---------------------------------------------------------------------------
+TOKEN_PATH_ENV = "RB_TOKEN_PATH"
+_MAC_LEN = 64
+_RESP_SALT = ":resp"
+
+
+def _token_file_path():
+    override = os.environ.get(TOKEN_PATH_ENV, "").strip()
+    if override:
+        return override
+    return os.path.join(os.path.expanduser("~"), ".virtuoso-bridge", "bridge_token")
+
+
+def _load_or_create_token():
+    path = _token_file_path()
+    try:
+        with open(path, "r") as handle:
+            token = handle.read().strip()
+        if len(token) >= 32 and all(c in "0123456789abcdefABCDEF" for c in token):
+            return token.lower()
+    except OSError:
+        pass
+    token = binascii.hexlify(os.urandom(32)).decode("ascii")
+    try:
+        parent = os.path.dirname(path)
+        if parent and not os.path.isdir(parent):
+            os.makedirs(parent)
+            os.chmod(parent, 0o700)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(token + "\n")
+        os.chmod(path, 0o600)
+    except OSError:
+        sys.stderr.write(
+            "[RB-auth] WARNING: cannot read or create token file %s; "
+            "daemon runs UNAUTHENTICATED\n" % path
+        )
+        return None
+    return token
+
+
+BRIDGE_TOKEN = _load_or_create_token()
+
+
+def _hmac_hex(message):
+    return _hmac.new(
+        BRIDGE_TOKEN.encode("utf-8"), message.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+
+
+def _check_request_auth(request_data):
+    """Return an error string for unauthenticated requests, else None."""
+    if not BRIDGE_TOKEN:
+        return None
+    nonce = request_data.get("nonce")
+    mac = request_data.get("mac")
+    if not nonce or not mac:
+        return (
+            "AuthError: bridge token required — this daemon rejects "
+            "unauthenticated SKILL (client too old, or unauthorized)"
+        )
+    if not _hmac_hex(str(nonce)) == str(mac).lower():
+        return (
+            "AuthError: bridge token mismatch — the daemon on this port "
+            "belongs to a different user (or the token was rotated); run "
+            "`virtuoso-bridge restart` after RBStop()"
+        )
+    return None
+
 
 # Counters surfaced to the SKILL monitor via stderr [RB-stat] lines.
 # Throttled to ~1 Hz so heavy traffic doesn't flood stderr.
@@ -170,8 +251,15 @@ def handle_external_connection(conn, addr):
         data = b"".join(chunks)
         request_data = json.loads(data.decode("utf-8"))
 
+        auth_error = _check_request_auth(request_data)
+        if auth_error:
+            # Unauthenticated or foreign client: refuse without executing.
+            _safe_sendall(conn, ("\x15" + auth_error).encode("utf-8"))
+            return
+
         skill_code = request_data["skill"]
         timeout_seconds = request_data["timeout"]
+        request_nonce = request_data.get("nonce")
 
         timeout_flag = False
 
@@ -213,7 +301,16 @@ def handle_external_connection(conn, addr):
             timeout_flag = True
         watchdog_timer.cancel()
 
-        _safe_sendall(conn, returnData)
+        # Authenticate the response so the client can detect a squatted
+        # port: STX/NAK + HMAC(token, nonce + ":resp") prefix + body.
+        if BRIDGE_TOKEN and request_nonce:
+            resp_mac = _hmac_hex(str(request_nonce) + _RESP_SALT)
+            _safe_sendall(
+                conn,
+                returnData[:1] + resp_mac.encode("utf-8") + returnData[1:],
+            )
+        else:
+            _safe_sendall(conn, returnData)
 
         # Stats: count this call and tag as error if SKILL sent NAK
         # (0x15) or the response is empty/malformed.  Throttled emit
@@ -280,8 +377,9 @@ def start_server():
             except Exception:
                 _ip = ""
         sys.stderr.write(
-            "[RB-banner] pid={pid} bind={host}:{port} host={hn} ip={ip}\n".format(
+            "[RB-banner] pid={pid} bind={host}:{port} host={hn} ip={ip} auth={auth}\n".format(
                 pid=os.getpid(), host=HOST, port=PORT, hn=_hn, ip=(_ip or "unknown"),
+                auth=("on" if BRIDGE_TOKEN else "off"),
             )
         )
         sys.stderr.flush()

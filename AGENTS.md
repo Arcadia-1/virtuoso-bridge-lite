@@ -234,6 +234,12 @@ Two decoupled layers:
 - **VirtuosoClient** — pure TCP SKILL client. No SSH. Works with any `localhost:port` endpoint.
 - **SSHClient** — resolves GUI/deployment/daemon/Spectre roles, deploys files, and manages the daemon tunnel. Optional.
 
+Both sides authenticate each other with an HMAC over a bridge token
+(`~/.virtuoso-bridge/bridge_token`, mode 0600) that is provisioned over SSH
+by `start` (or auto-created by the daemon / `VirtuosoClient.local()`), so a
+port held by another user's daemon can neither execute your SKILL nor
+masquerade as it. The token never crosses the TCP wire.
+
 ```python
 # Remote: SSHClient creates the TCP path
 from virtuoso_bridge import SSHClient, VirtuosoClient
@@ -301,12 +307,20 @@ If `spectre` is already on PATH in the remote user's default shell (e.g., via `~
 - **The daemon port is host-global; another user's Virtuoso can own it.** On a
   shared server every bridge daemon binds `0.0.0.0` on a port in 65000-65499,
   and the SSH tunnel lands on whichever process holds that port — SKILL sent
-  through it executes in *their* session. Two defenses: (1) `start` shifts the
-  configured port off foreign listeners, and (2) every remote client
-  construction (`from_env`/`from_tunnel`) verifies the daemon's Unix user via
-  `daemon_guard` and refuses mismatches or unreachable identities. If a check
-  fires while your own CIW is merely busy, retry when idle; genuinely
-  intentional cross-user use needs `VB_ALLOW_CROSS_USER_DAEMON=1`.
+  through it executes in *their* session. Three defenses: (1) `start` shifts the
+  configured port off foreign listeners; (2) the daemon rejects SKILL from
+  clients that don't present a valid HMAC over the bridge token
+  (`~/.virtuoso-bridge/bridge_token`, mode 0600, provisioned over SSH by
+  `start` / auto-created by the daemon), and clients refuse daemon responses
+  that aren't signed with the same token — a squatter can neither execute
+  your SKILL nor impersonate your daemon, and the token never crosses the
+  wire; (3) `from_env`/`from_tunnel` additionally verify the daemon's Unix
+  user (`daemon_guard`) and refuse mismatches. If a check fires while your
+  own CIW is merely busy, retry when idle; `AuthError: token mismatch` means
+  the port is held by someone else — run `RBStop()` on that session or
+  `virtuoso-bridge restart` to move. Intentional cross-user use still needs
+  `VB_ALLOW_CROSS_USER_DAEMON=1` for the identity guard; token auth itself
+  has no bypass (delete the token file to rotate it).
 
 ## How to configure PDK paths
 
