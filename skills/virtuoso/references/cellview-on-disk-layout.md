@@ -203,7 +203,7 @@ Cadence creates `<primary_file>.cdslck` on write-open:
 
 ```
 sch.oa.cdslck                          # short lock: hostname:user:pid:session
-sch.oa.cdslck.RHEL30.thu-wei.212340    # detailed "Lock-Stake" text, hard-linked to above
+sch.oa.cdslck.RHEL30.compute01.212340  # detailed "Lock-Stake" text, hard-linked to above
 ```
 
 The two files share an inode (`ls -la` shows link count 2). Content of

@@ -24,6 +24,7 @@
 **1. 深度 Virtuoso 集成** — 覆盖原理图、版图、Maestro 和 Spectre 的控制能力。
 - **灵活编程**：执行内联 SKILL、加载 `.il` 文件，或使用 Python API
 - **四个设计领域**：原理图编辑、版图生成、仿真设置（Maestro）以及带 PSF 解析的独立 Spectre
+- **确定性原理图规划**：显式连接关系，以及网格、器件极性行、差分对、引脚列和输出级的软/硬约束
 
 **2. 可扩展架构** — 面向分布式设计集群，支持多服务器、多会话。
 - 多配置 SSH：连接 N 台设计服务器，每台都有独立隧道
@@ -31,9 +32,9 @@
 - 已在 macOS、Windows 和 Linux 上验证
 
 **3. AI 原生设计** — 专为通过编码智能体（Claude Code、Cursor 等）驱动 Virtuoso 而构建。
-- CLI 优先：`virtuoso-bridge start/status/restart`，无需图形操作界面
+- CLI 优先的生命周期和诊断：`virtuoso-bridge start/status/restart`
 - 提供预定义的智能体 skill 文件（`skills/`），智能体可以立即了解如何使用桥接器
-- 通过持久化 SSH 隧道优化高频智能体交互
+- 通过可恢复、角色感知的 SSH 路由优化高频智能体交互
 
 > **如果你是 AI 智能体**，请先阅读 [`AGENTS.md`](../AGENTS.md)，并遵循其中的设置检查清单。
 
@@ -51,7 +52,7 @@ Virtuoso SKILL 执行与 Spectre 仿真彼此独立。你可以在不使用 SKIL
 
 ### Python 环境选择
 
-Python 入口会查找最近的父级 `.env`（其中包含 `VB_REMOTE_HOST` 或 `VB_LOCAL_PORT`），然后以 `override=True` 加载它；这能够将长生命周期进程从本地模式切换到远程模式。在嵌入桥接器并构造客户端之前，请固定要使用的文件：
+Python 入口会查找最近的父级 `.env`（其中包含桥接器主机角色，如 `VB_REMOTE_HOST`、`VB_GUI_HOST`、`VB_DAEMON_HOST`，或包含 `VB_LOCAL_PORT`），然后以 `override=True` 加载它；这能够将长生命周期进程从本地模式切换到远程模式。在嵌入桥接器并构造客户端之前，请固定要使用的文件：
 
 ```python
 from virtuoso_bridge.env import set_runtime_env_file
@@ -80,13 +81,76 @@ virtuoso-bridge start          # 启动隧道并打印 CIW 的 load(...) 行
 virtuoso-bridge status         # 检查隧道、Virtuoso 守护进程和 Spectre 是否可用
 ```
 
+如果守护进程尚未加载，仍可把 `start` 打印的 `load(...)` 粘贴到 CIW。
+也可以选择一个明确的顶层 CIW，执行受限的首次 X11 bootstrap：
+
+```bash
+virtuoso-bridge list-windows --top-level --json
+virtuoso-bridge bootstrap --window 0x3000012
+```
+
+`bootstrap` 不接受任意 SKILL 文本，并会拒绝未识别为 CIW 的窗口。
+
+### 分离 GUI、部署、守护进程和 Spectre 主机
+
+普通单机环境继续只需设置 `VB_REMOTE_HOST`。如果 CIW、生成文件、RAMIC
+守护进程和 Spectre 分布在不同机器上，请显式配置角色：
+
+```dotenv
+VB_GUI_HOST=gui-host-a
+VB_DEPLOY_HOST=gui-host-a
+VB_DAEMON_HOST=compute-host-b
+VB_SPECTRE_HOST=compute-host-b
+VB_REMOTE_USER=user
+VB_JUMP_HOST=gui-host-a
+
+# 该路径必须同时对 GUI、部署和守护进程主机可见。
+VB_REMOTE_SCRATCH_ROOT=/home/user/.virtuoso-bridge
+```
+
+未设置的角色会回退到 `VB_REMOTE_HOST`；当目标本身就是跳板机时，桥接器会自动取消自跳转。
+`status` 还会比较 CIW 写入的守护进程身份与隧道终点，诊断主机不匹配。
+
+### 单连接 SSH 并发
+
+要在一个进程中通过单条已认证连接运行并发命令和文件传输，请安装并启用 Paramiko：
+
+```bash
+uv pip install -e '.[ssh]'
+```
+
+```dotenv
+VB_SSH_BACKEND=paramiko
+VB_SSH_MAX_SESSIONS=10
+# 可选：只代理 Paramiko 的第一跳；长期 OpenSSH -L 隧道仍由 SSH 配置路由。
+VB_SSH_PROXY=socks5://127.0.0.1:10800
+```
+
+`VB_SSH_MAX_SESSIONS` 不应高于目标 `sshd` 的 `MaxSessions`。长期守护进程隧道始终使用独立、非 ControlMaster 的 OpenSSH 进程。
+
 如果使用 Windows PowerShell，请将激活命令替换为
-`\.venv\Scripts\Activate.ps1`。
+`.\.venv\Scripts\Activate.ps1`。
 
 ```python
 from virtuoso_bridge import VirtuosoClient
 client = VirtuosoClient.from_env()
 client.execute_skill("1+2")  # VirtuosoResult(status=SUCCESS, output='3')
+```
+
+读取独立 Spectre 的 PSF ASCII 结果时，可用严格访问器对文件数量、原始键名和数据形状做快速校验：
+
+```python
+from pathlib import Path
+from virtuoso_bridge.spectre import SpectreSimulator
+from virtuoso_bridge.spectre.psf import frequency_hz, read_psf_ascii, result_file, vector
+
+result = SpectreSimulator.from_env(work_dir="output").run_simulation("tb.scs")
+if not result.ok:
+    raise RuntimeError(result.errors)
+raw_psf = Path(result.metadata["output_dir"])
+ac = read_psf_ascii(result_file(raw_psf, "*.ac"))
+frequency = frequency_hz(ac)
+vout = vector(ac, "VOUT")
 ```
 
 桥接器启动后可使用的实用命令：
@@ -141,7 +205,8 @@ virtuoso-bridge load my_script.il
 | `windows`                                                         | 列出所有 Virtuoso 窗口（编号和名称）                                                      |
 | `screenshot [ciw\|current\|N] [-o DIR\|FILE]`                     | 截取窗口；默认保存到用户产物截图目录                                                           |
 | `dismiss-dialog`                                                  | X11 路径：查找并关闭阻塞性的 GUI 对话框（在 SKILL 通道死锁时很有用）                                   |
-| `list-windows [--json]`                                           | X11 路径：枚举 Virtuoso 相关窗口，包括框架/子窗口 ID 和建议的模态操作                                 |
+| `list-windows [--top-level] [--json]`                             | X11 路径：枚举 Virtuoso 窗口；`--top-level` 为每个顶层框架返回一个去重条目                              |
+| `bootstrap --window WINDOW_ID`                                    | 选择一个明确且验证为 CIW 的窗口，仅注入生成的首次 `load(...)`                                         |
 | `dismiss-window WINDOW_ID [--action enter\|escape\|alt-y\|alt-n]` | 对 `list-windows` 返回的窗口 ID 发送指定操作                                             |
 | `snapshot [-o DIR] [--history H]`                                 | 转储当前聚焦的 Virtuoso 窗口（maestro/schematic/...）；默认简要转储，完整转储到磁盘                    |
 | **导出**                                                            |                                                                              |
@@ -170,11 +235,11 @@ output/20260422_142137__MyLib__myTB/
 └── Interactive.N/
     ├── Interactive.N.{log,rdb,msg.db}           # 运行级文件（rdb = SQLite）
     └── <pt>/<tb>/
-        ├── netlist/   → netlist, input.scs, qpInformation.ils, paramInfo.ils
+        ├── netlist/   → netlist, input.scs, qpInformation.ils, exprOutputs.json, paramInfo.ils
         └── psf/       → spectre.out, logFile, dcOp.dc, *.ac, *.tran, ...
 ```
 
-每个点的 `netlist/` 只保留实际描述设计的 4 个文件（主 SPICE 网表、测试平台顶层、FOM 定义和角标）。Psf 保留标准输出、日志及非二进制分析结果。完整规则（包括注释掉的内容及其原因）位于 [`src/virtuoso_bridge/virtuoso/maestro/snapshot_filter.yaml`](../src/virtuoso_bridge/virtuoso/maestro/snapshot_filter.yaml)；编辑 YAML（取消注释或注释行）即可增删文件，无需修改代码。二进制波形（`*.raw`、`wavedb/`）不会被拉取；请改用 `client.maestro.read_results()` 读取标量结果。
+每个点的 `netlist/` 只保留描述可运行设计和输出的 5 个文件（主 SPICE 网表、测试平台顶层、SKILL/JSON 输出表达式定义和角标）。Psf 保留标准输出、日志及非二进制分析结果。完整规则（包括注释掉的内容及其原因）位于 [`src/virtuoso_bridge/virtuoso/maestro/snapshot_filter.yaml`](../src/virtuoso_bridge/virtuoso/maestro/snapshot_filter.yaml)；编辑 YAML（取消注释或注释行）即可增删文件，无需修改代码。二进制波形（`*.raw`、`wavedb/`）不会被拉取；请改用 `client.maestro.read_results()` 读取标量结果。
 
 ## 向编码智能体公开 skills
 
@@ -211,7 +276,7 @@ Cursor 以及其他从用户级目录加载 skills 的智能体也遵循相同�
 
 - **Virtuoso Client** — 纯 TCP SKILL 客户端。以 JSON 发送 SKILL，并接收结果。不关心 SSH。
 - **Spectre Simulator** — 在本地或通过 SSH 运行独立 Spectre，然后将 PSF ASCII 结果解析为 Python 数据。
-- **SSH Client** — 维护 TCP 端口转发，并为远程命令和文件传输提供 OpenSSH 或进程内 Paramiko Transport。Paramiko 后端会在一条已认证连接上复用有上限的并发 channel。在本地模式下可选且会被绕过。
+- **SSH Client** — 解析 GUI、部署、守护进程和 Spectre 主机角色；维护到守护进程主机的独立 TCP 转发，并为各角色的命令和文件传输提供 OpenSSH 或进程内 Paramiko Transport。在本地模式下可选且会被绕过。
 
 各组件完全解耦：Virtuoso Client 可使用任意 TCP 端点——SSH 隧道、VPN、直接局域网连接或本地连接。支持多连接配置，每个配置都管理到独立设计服务器的独立隧道。
 

@@ -262,7 +262,7 @@ If the `axl*` functions are unavailable (older Virtuoso versions), corners can a
         <model enabled="1">toplevel_modified.scs
             <modeltest>All</modeltest>
             <modelblock>Global</modelblock>
-            <modelfile>/home/zhangz/T28/toplevel_modified.scs</modelfile>
+            <modelfile>/path/to/pdk/toplevel_modified.scs</modelfile>
             <modelsection>"top_tt"</modelsection>
         </model>
     </models>
@@ -540,47 +540,41 @@ client.download_file('/tmp/ac_db.txt', Path('output/ac_db.txt'))
 ```python
 client = VirtuosoClient.from_env()
 
-# 1. Open schematic in GUI (required!)
-client.open_window(lib, cell, view="schematic")
+# 1. Open Maestro in GUI mode (required for supported simulation flows)
+session = client.maestro.open_gui_session(lib, cell)
 
-# 2. Open/create maestro
-r = client.execute_skill(f'maeOpenSetup("{lib}" "{cell}" "maestro")')
-session = r.output.strip('"')
+try:
+    # 2. Create/configure the test with the high-level wrappers
+    client.maestro.create_test(
+        "AC", lib=lib, cell=cell, view="schematic", session=session)
+    client.maestro.set_analysis("AC", "tran", enable=False, session=session)
+    client.maestro.set_analysis(
+        "AC", "ac",
+        options='(("start" "1") ("stop" "10G") ("dec" "20"))',
+        session=session,
+    )
+    client.maestro.add_output(
+        "Vout", "AC", output_type="net", signal_name="/OUT", session=session)
+    client.maestro.set_var("c_val", "1p,100f", session=session)
+    client.maestro.save_setup(lib=lib, cell=cell, session=session)
 
-# 3. Create test + analysis
-client.execute_skill(
-    f'maeCreateTest("AC" ?lib "{lib}" ?cell "{cell}" '
-    f'?view "schematic" ?simulator "spectre" ?session "{session}")')
-client.execute_skill(
-    f'maeSetAnalysis("AC" "tran" ?enable nil ?session "{session}")')
-client.execute_skill(
-    f'maeSetAnalysis("AC" "ac" ?enable t '
-    f'?options `(("start" "1") ("stop" "10G") ("dec" "20")) '
-    f'?session "{session}")')
+    # 3. Recommended: callback + marker polling keeps the SKILL channel free.
+    # timeout is one end-to-end budget for request acceptance and completion.
+    history, status = client.maestro.run_and_wait(
+        session=session, timeout=300)
+    history = history.strip('"')
 
-# 4. Add outputs + variables
-client.execute_skill(
-    f'maeAddOutput("Vout" "AC" ?outputType "net" '
-    f'?signalName "/OUT" ?session "{session}")')
-client.execute_skill(f'maeSetVar("c_val" "1p,100f" ?session "{session}")')
-
-# 5. Save + run
-client.execute_skill(
-    f'maeSaveSetup(?lib "{lib}" ?cell "{cell}" '
-    f'?view "maestro" ?session "{session}")')
-
-# Option A: use run_and_wait() from Python API (recommended — uses ?callback, non-blocking)
-# history, status = client.maestro.run_and_wait(session=session, timeout=300)
-
-# Option B: blocking wait via SKILL (simpler but blocks SKILL channel)
-client.execute_skill(f'maeRunSimulation(?session "{session}")')
-client.execute_skill("maeWaitUntilDone('All)", timeout=300)
-
-# 6. Export results
-client.execute_skill(
-    'maeExportOutputView(?fileName "/tmp/results.csv" ?view "Detail")')
-client.download_file('/tmp/results.csv', 'output/results.csv')
+    # 4. Consume exactly the run that just completed.
+    results = client.maestro.read_results(
+        session, lib=lib, cell=cell, history=history)
+finally:
+    client.maestro.close_gui_session(session, save=False)
 ```
+
+Legacy low-level workflows may call `maeRunSimulation()` followed by
+`maeWaitUntilDone('All)`, but that blocks the SKILL channel and prevents
+out-of-band inspection through the bridge. Keep it only for manual diagnostics;
+new automation should use `run_and_wait()`.
 
 ## Examples
 
@@ -590,7 +584,7 @@ client.download_file('/tmp/results.csv', 'output/results.csv')
 - `examples/01_virtuoso/maestro/04_gui_open_snapshot_close.py` — GUI open → snapshot → close (full lifecycle)
 - `examples/01_virtuoso/maestro/05_gui_session_lifecycle.py` — GUI session lifecycle integration test
 - `examples/01_virtuoso/maestro/06a_rc_create.py` — create RC schematic + Maestro setup (auto-timestamped cell)
-- `examples/01_virtuoso/maestro/06b_rc_simulate_and_read.py` — run simulation in background, read results, export waveforms
+- `examples/01_virtuoso/maestro/06b_rc_simulate_and_read.py` — run simulation in GUI mode, read results, export waveforms
 
 ## axl* API -- variable management
 

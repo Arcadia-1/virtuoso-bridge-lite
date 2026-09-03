@@ -2,9 +2,12 @@
 
 Complete flow from opening Maestro to reading results. Follow this order exactly.
 
-> **Why GUI mode?** Background sessions (`open_session` / `maeOpenSetup`) can read/write config but cannot run simulations reliably — the completion callback `run_and_wait` relies on never fires, and `close_session` cancels in-flight runs. GUI mode is required for simulation.
+> **Why GUI mode?** Background sessions (`open_session` / `maeOpenSetup`) can
+> read/write config but cannot run simulations reliably: completion callbacks
+> may not fire, and `close_session` cancels in-flight runs. GUI mode is required
+> for the supported simulation flow.
 
-## The 8-Step Flow
+## The standard flow
 
 ```python
 from virtuoso_bridge import VirtuosoClient, decode_skill_output
@@ -40,8 +43,10 @@ print(f"Simulation {status}: {history}")
 
 # ── Step 4: Read results ─────────────────────────────────────────
 results = client.maestro.read_results(session, lib=LIB, cell=CELL, history=history)
-for key, (expr, raw) in results.items():
-    print(f"  {key}: {decode_skill_output(raw)[:200]}")
+for point in results.get("points", []):
+    print(f"Point {point['point']}: {point.get('parameters', {})}")
+    for name, info in point.get("outputs", {}).items():
+        print(f"  {name}: {info.get('value', '')} {info.get('pass_fail', '')}")
 
 # ── Step 5: (Optional) Export waveforms ──────────────────────────
 # client.maestro.export_waveform(session, 'VT("/VOUT")', "output/vout.txt",
@@ -50,14 +55,16 @@ for key, (expr, raw) in results.items():
 
 ## When you already have an open GUI session
 
-If Maestro is already open and editable (e.g. user opened it manually), skip steps 1-3:
+If Maestro is already open and editable (for example, the user opened it
+manually), skip the purge/open stages and resolve that window's session before
+saving and running:
 
 ```python
 # Find the existing session
 session = decode_skill_output(
     client.execute_skill('car(maeGetSessions())').output)
 
-# Save, run, wait, read — same as steps 6-7
+# Save, run, wait, read — same path as above
 client.maestro.save_setup(LIB, CELL, session=session)
 history, status = client.maestro.run_and_wait(session=session, timeout=600)
 history = history.strip('"')
@@ -68,10 +75,14 @@ results = client.maestro.read_results(session, lib=LIB, cell=CELL, history=histo
 
 1. Defines a SKILL callback procedure that writes a marker file when simulation finishes
 2. Calls `maeRunSimulation(?callback "proc_name")` — callback is registered atomically with the simulation start (no race condition)
-3. Polls the marker file via SSH (using `SSHRunner.run_command`, not the SKILL channel)
+3. Polls the marker file via SSH, or the local filesystem in local mode, without using the SKILL channel
 4. Returns `(history, status)` when marker appears
 
-The SKILL channel remains **completely free** during the wait — you can execute_skill, dismiss dialogs, take screenshots, read config, etc.
+`timeout` is one end-to-end budget shared by acceptance of the
+`maeRunSimulation` request and completion polling. Remote poll commands and
+sleep intervals are capped to the remaining deadline. After the run request is
+accepted, the SKILL channel remains free during the wait, so callers can read
+configuration or use out-of-band X11 recovery.
 
 ## Detecting Maestro session state
 

@@ -23,7 +23,7 @@ Four-step pipeline per design:
 
 The one Windows catch is **Git Bash / Cygwin / MSYS2**: those
 environments mangle Linux-style absolute paths
-(``/home/zhangz/foo`` becomes ``C:/Program Files/Git/home/zhangz/foo``)
+(``/home/user/foo`` becomes ``C:/Program Files/Git/home/user/foo``)
 before argv reaches Python.  Use PowerShell, native ``cmd``, or WSL on
 Windows; Linux and macOS users have nothing to worry about.
 

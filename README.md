@@ -36,9 +36,9 @@ A new infrastructure for **Agentic Analog and Mixed-Signal Design**. LLM Agents 
 - Verified across macOS, Windows, and Linux
 
 **3. AI-Native Design** — Built for coding agents (Claude Code, Cursor, etc.) to drive Virtuoso.
-- CLI-first: `virtuoso-bridge start/status/restart`, no GUI needed
+- CLI-first lifecycle and diagnostics: `virtuoso-bridge start/status/restart`
 - Ships with pre-defined agent skill files (`skills/`) — the agent knows how to use the bridge immediately
-- Optimized for high-frequency agent interactions with persistent SSH tunnels
+- Optimized for high-frequency agent interactions with resilient, role-aware SSH routing
 
 > **If you are an AI agent**, read [`AGENTS.md`](AGENTS.md) first and follow its setup checklist.
 
@@ -198,6 +198,23 @@ client = VirtuosoClient.from_env()
 client.execute_skill("1+2")  # VirtuosoResult(status=SUCCESS, output='3')
 ```
 
+For fail-fast access to standalone Spectre PSF ASCII artifacts, use the strict
+helpers instead of guessing filenames, keys, or value shapes:
+
+```python
+from pathlib import Path
+from virtuoso_bridge.spectre import SpectreSimulator
+from virtuoso_bridge.spectre.psf import frequency_hz, read_psf_ascii, result_file, vector
+
+result = SpectreSimulator.from_env(work_dir="output").run_simulation("tb.scs")
+if not result.ok:
+    raise RuntimeError(result.errors)
+raw_psf = Path(result.metadata["output_dir"])
+ac = read_psf_ascii(result_file(raw_psf, "*.ac"))
+frequency = frequency_hz(ac)
+vout = vector(ac, "VOUT")  # exact raw PSF key; missing/invalid data raises
+```
+
 Useful first commands after the bridge is up:
 
 ```bash
@@ -280,11 +297,11 @@ output/20260422_142137__MyLib__myTB/
 └── Interactive.N/
     ├── Interactive.N.{log,rdb,msg.db}           # run-level (rdb = SQLite)
     └── <pt>/<tb>/
-        ├── netlist/   → netlist, input.scs, qpInformation.ils, paramInfo.ils
+        ├── netlist/   → netlist, input.scs, qpInformation.ils, exprOutputs.json, paramInfo.ils
         └── psf/       → spectre.out, logFile, dcOp.dc, *.ac, *.tran, ...
 ```
 
-Per-point `netlist/` keeps only the 4 files that actually describe the design (main SPICE netlist, testbench top level, FOM definitions, corner label). Psf keeps stdout + logs + non-binary analysis results. The full rule set — including what's commented out and why — lives in [`src/virtuoso_bridge/virtuoso/maestro/snapshot_filter.yaml`](src/virtuoso_bridge/virtuoso/maestro/snapshot_filter.yaml); edit the YAML (uncomment / comment lines) to add or drop files, no code change needed. Binary waveforms (`*.raw`, `wavedb/`) are never pulled — read scalar results through `client.maestro.read_results()` instead.
+Per-point `netlist/` keeps only the 5 files that describe the runnable design and outputs (main SPICE netlist, testbench top level, SKILL and JSON output-expression definitions, corner label). Psf keeps stdout + logs + non-binary analysis results. The full rule set — including what's commented out and why — lives in [`src/virtuoso_bridge/virtuoso/maestro/snapshot_filter.yaml`](src/virtuoso_bridge/virtuoso/maestro/snapshot_filter.yaml); edit the YAML (uncomment / comment lines) to add or drop files, no code change needed. Binary waveforms (`*.raw`, `wavedb/`) are never pulled — read scalar results through `client.maestro.read_results()` instead.
 
 ## Exposing skills to your coding agent
 

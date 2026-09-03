@@ -61,9 +61,9 @@ task.
 Create a simulator per profile to distribute work across machines:
 
 ```python
-# .env defines VB_REMOTE_HOST_worker1, VB_REMOTE_HOST_worker2, etc.
-sim1 = SpectreSimulator(remote=True, profile="worker1")
-sim2 = SpectreSimulator(remote=True, profile="worker2")
+# .env defines VB_SPECTRE_HOST_worker1, VB_SPECTRE_HOST_worker2, etc.
+sim1 = SpectreSimulator.from_env(profile="worker1")
+sim2 = SpectreSimulator.from_env(profile="worker2")
 
 with sim1.parallel_pool(max_workers=2) as pool1, \
      sim2.parallel_pool(max_workers=2) as pool2:
@@ -75,13 +75,17 @@ with sim1.parallel_pool(max_workers=2) as pool1, \
 
 ## .env configuration
 
-The `.env` file can live in the virtuoso-bridge-lite directory or in your project root
-(recommended when virtuoso-bridge-lite is cloned as a subdirectory). Both locations
-are searched automatically.
+Without an explicit `--env` file, the bridge walks from the current directory
+upward and selects the nearest `.env` containing a `VB_*_HOST` role or
+`VB_LOCAL_PORT`, then falls back to `~/.virtuoso-bridge/.env`. This lets an
+application repository own its simulation profiles even when
+virtuoso-bridge-lite is installed elsewhere.
 
 ```dotenv
 # Default connection
 VB_REMOTE_HOST=my-server
+# Optional explicit role; falls back to VB_REMOTE_HOST when omitted.
+VB_SPECTRE_HOST=spectre-node
 VB_REMOTE_USER=username
 VB_REMOTE_PORT=65081
 VB_LOCAL_PORT=65082
@@ -90,8 +94,17 @@ VB_SSH_BACKEND=paramiko
 VB_SSH_MAX_SESSIONS=10
 
 # Additional profiles for multi-server
-VB_REMOTE_HOST_worker1=eda-node1
+VB_SPECTRE_HOST_worker1=eda-node1
 VB_REMOTE_USER_worker1=sim_user
 VB_REMOTE_PORT_worker1=65432
 VB_LOCAL_PORT_worker1=65433
 ```
+
+Profile suffixes are case-sensitive. For `profile="worker1"`,
+`VB_SPECTRE_HOST_worker1` selects the simulation host; when it is absent, the
+bridge falls back to `VB_REMOTE_HOST_worker1` and then the other compatible host
+roles. Jump-host settings are shared by the profile. For command/file transport,
+`VB_SSH_BACKEND=paramiko` reuses one authenticated connection, and an optional
+`VB_SSH_PROXY=socks5://127.0.0.1:10800` routes its first hop through an
+unauthenticated SOCKS5 proxy. The Virtuoso daemon tunnel remains a standalone
+OpenSSH `-L` process.

@@ -60,6 +60,37 @@ Spectre output, netlist read-in error, or explicit convergence failure returns
 `FAILURE`/`PARTIAL` even if the raw directory contains incomplete files. Do not
 use a non-empty `result.data` as proof that the simulation succeeded.
 
+## Strict PSF accessors
+
+Use the strict helpers when a downstream calculation must fail loudly instead
+of silently accepting the wrong file, signal spelling, or malformed data:
+
+```python
+from pathlib import Path
+from virtuoso_bridge.spectre.psf import (
+    frequency_hz,
+    read_psf_ascii,
+    result_file,
+    scalar,
+    vector,
+)
+
+raw = Path(result.metadata["output_dir"])
+ac = read_psf_ascii(result_file(raw, "ac.ac"))
+freq = frequency_hz(ac)                  # exact "freq" key; finite, increasing
+vout = vector(ac, r"VOUT")              # exact raw PSF key; finite, non-empty
+
+dc = read_psf_ascii(result_file(raw, "dcOp.dc"))
+gm = scalar(dc, r"M0:gm")                # exact raw PSF key; one finite real
+```
+
+`result_file()` requires exactly one matching file below the explicit raw PSF
+root. The value helpers never normalize names or guess aliases: pass the exact
+key emitted by the parser, including Spectre's `\<` / `\>` escapes. `scalar()`
+accepts one finite real number, `vector()` accepts a non-empty finite numeric
+vector, and `frequency_hz()` additionally requires real, strictly increasing
+samples.
+
 ## Gotchas (Spectre 21.1 + IC618 lab cluster)
 
 These are silent or near-silent foot-guns from real lab runs:

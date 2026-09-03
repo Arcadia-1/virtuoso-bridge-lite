@@ -39,7 +39,7 @@ client.run_shell_command(
     'mkdir -p /tmp/si_run ; '
     'cp /path/to/si.env /tmp/si_run/ ; '
     'cd /tmp/si_run ; '
-    'si -batch -cdslib /home/zhangz/tsmc28/RISCA/cds.lib -command nl')
+    'si -batch -cdslib /path/to/cds.lib -command nl')
 
 # Download the netlist
 client.download_file("/tmp/si_run/netlist", "output/si_netlist.scs")

@@ -32,7 +32,7 @@ uv pip install -e .
 
 ```bash
 # Preferred — fill host/user/jump in one shot:
-virtuoso-bridge init designer1@thu-wei -J designer1@bastion.example.com
+virtuoso-bridge init designer1@compute.example.com -J designer1@bastion.example.com
 
 # Or — empty template (you edit `.env` manually in step 2):
 virtuoso-bridge init
@@ -202,7 +202,9 @@ the jump host. If CIW and daemon are intentionally on different hosts, use
    - If no process: tell the user to start Virtuoso first.
 
 4. **Start bridge** — `virtuoso-bridge start`
-   - If "degraded": tell the user to paste the `load("...")` command in Virtuoso CIW.
+   - If "degraded": paste the printed `load("...")` command in CIW, or select
+     an explicit CIW with `virtuoso-bridge list-windows --top-level --json`
+     and run `virtuoso-bridge bootstrap --window WINDOW_ID`.
 
 5. **Verify** — `virtuoso-bridge status`
 
@@ -279,7 +281,11 @@ If `spectre` is already on PATH in the remote user's default shell (e.g., via `~
   `client.schematic.create()` / `modify()` context managers. The legacy
   `edit()` methods are deprecated and default to safe append mode.
 - Spectre simulation: `SpectreSimulator.from_env()`. See "How Spectre is located" above.
-- `core/` is the minimal reference implementation (3 source files, ~285 lines). Use the installed package for real work.
+- Strict Spectre PSF access: use `virtuoso_bridge.spectre.psf` helpers
+  (`result_file`, `read_psf_ascii`, `scalar`, `vector`, `frequency_hz`) when a
+  missing file/key or the wrong result shape must fail fast.
+- `src/virtuoso_bridge/` is the canonical implementation. Use the installed
+  package for real work.
 - `tools/` contains standalone utilities (e.g. `skill_exec.py` — zero-dependency SKILL execution tool).
 
 ## Common gotchas
@@ -339,19 +345,6 @@ virtuoso-bridge doc-search <query>  # search installed Cadence docs (or use --do
 uv venv .venv && source .venv/bin/activate   # Windows: source .venv/Scripts/activate
 uv pip install -e .
 ```
-
-## Windows: fix symlinks
-
-Git on Windows clones symlinks as plain text files (`core.symlinks = false`),
-which breaks skill loading for any agent that follows `.claude/skills/` (or
-similar) links. Run this **once** after cloning:
-
-```bash
-bash scripts/fix-symlinks.sh
-```
-
-The script replaces broken symlinks with NTFS junctions — no admin rights, no
-Developer Mode required.
 
 ## Traffic stats: manual cadence — run before any 14-day gap
 

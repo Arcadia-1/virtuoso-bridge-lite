@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Step 2: Simulate (background) → wait → read results → export waveforms.
+"""Step 2: Simulate (GUI mode) → wait → read results → export waveforms.
 
-Opens a *background* maestro session — no Virtuoso GUI window is created
-or focused.  Background-mode simulation cannot pop modal dialogs that
-block the SKILL channel, which makes the script automation-safe.
+Opens an editable Maestro GUI session, the supported mode for simulation and
+result evaluation. ``run_and_wait`` keeps the SKILL channel free after Cadence
+accepts the run so blocking dialogs can be diagnosed through the X11 rescue
+commands.
 
 Prerequisite: run 06a_rc_create.py first; copy the cell name it prints.
 
@@ -62,12 +63,10 @@ def main() -> int:
     print(f"[info] {lib}/{cell}")
     t_total = time.time()
 
-    # 1. Open background maestro session — no GUI window, no focus stealing,
-    #    no modal-dialog risk.  Important: we do NOT reuse some random
-    #    pre-existing session here, because that might point at a different
-    #    cell.  Always open a fresh bg session for this specific cell.
-    session = client.maestro.open_session(lib, cell)
-    print(f"[session] {session} (background)")
+    # 1. Open or reuse the editable GUI session for this exact Maestro cell.
+    #    The helper closes conflicting background/GUI sessions safely.
+    session = client.maestro.open_gui_session(lib, cell)
+    print(f"[session] {session} (GUI)")
 
     try:
         # 2. Run + wait.  run_and_wait registers a SKILL completion callback
@@ -75,12 +74,14 @@ def main() -> int:
         # so the SKILL channel stays free during the wait.
         t0 = time.time()
         history, _status = client.maestro.run_and_wait(session=session, timeout=600)
-        print(f"[sim] Done: {history} ({time.time() - t0:.1f}s)")
+        history_name = history.strip('"')
+        print(f"[sim] Done: {history_name} ({time.time() - t0:.1f}s)")
 
         # 3. Read structured results (per point × per output, with spec/pass).
         print("\n=== Results ===")
-        results = client.maestro.read_results(session, lib=lib, cell=cell)
-        history_name = results.get("history", "") or ""
+        results = client.maestro.read_results(
+            session, lib=lib, cell=cell, history=history_name
+        )
         print(f"History: {history_name}")
         for pt in results.get("points", []):
             pn = pt.get("point", "?")
@@ -101,7 +102,7 @@ def main() -> int:
         if results.get("overall_yield"):
             print(f"Overall yield: {results['overall_yield']}")
 
-        # 4. Export waveforms via OCEAN (no GUI maestro needed).
+        # 4. Export waveforms via OCEAN from the same explicit history.
         if history_name:
             output_dir = Path(__file__).parent / "output"
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -134,11 +135,11 @@ def main() -> int:
                         print(f"  f_3dB = {f_3db:.3e} Hz")
                         break
     finally:
-        # 5. Always release the background session, even on error.
+        # 5. Always release the GUI session, even on error.
         try:
-            client.maestro.close_session(session)
+            client.maestro.close_gui_session(session, save=False)
         except Exception as exc:  # noqa: BLE001
-            print(f"[WARN] close_session failed: {exc}", file=sys.stderr)
+            print(f"[WARN] close_gui_session failed: {exc}", file=sys.stderr)
 
     print(f"[total] {time.time() - t_total:.1f}s")
     return 0

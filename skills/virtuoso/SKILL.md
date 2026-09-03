@@ -70,9 +70,9 @@ All `virtuoso-bridge` CLI commands and Python scripts must run inside the activa
 
 ### Connection sequence (follow in order)
 
-1. **Check `.env`** — the bridge looks up `.env` in this order: `--env FILE` (CLI flag) → first parent `.env` that looks like a Virtuoso Bridge config (`VB_REMOTE_HOST` or `VB_LOCAL_PORT`) → `~/.virtuoso-bridge/.env` (user-level). If **any** of these exists, skip `init`. Only run **`virtuoso-bridge init`** when none exist — it creates `~/.virtuoso-bridge/.env` (user-level, shared across projects). If the user already told you their SSH target, prefer `virtuoso-bridge init user@host [-J user@jump]` to fill host/user/jump + port in one step; otherwise plain `virtuoso-bridge init` writes an empty template for them to edit.
+1. **Check `.env`** — the bridge looks up `.env` in this order: `--env FILE` (CLI flag) → first parent `.env` that looks like a Virtuoso Bridge config (any `VB_*_HOST` role or `VB_LOCAL_PORT`) → `~/.virtuoso-bridge/.env` (user-level). If **any** of these exists, skip `init`. Only run **`virtuoso-bridge init`** when none exist — it creates `~/.virtuoso-bridge/.env` (user-level, shared across projects). If the user already told you their SSH target, prefer `virtuoso-bridge init user@host [-J user@jump]` to fill the one-host model + ports in one step; otherwise plain `virtuoso-bridge init` writes a template. For split installations, verify `VB_GUI_HOST` owns CIW/X11, `VB_DEPLOY_HOST` receives generated files, `VB_DAEMON_HOST` is the tunnel endpoint, `VB_SPECTRE_HOST` runs standalone jobs, and `VB_REMOTE_SCRATCH_ROOT` is visible to every role that consumes deployed files. Unset roles fall back to `VB_REMOTE_HOST`.
 2. **`virtuoso-bridge start`** — starts the local bridge service and SSH tunnel.
-3. **If status is `degraded`** — the user must load the setup script in Virtuoso CIW (the `start` output tells them exactly what to run).
+3. **If status is `degraded`** — load the exact setup line printed by `start` in Virtuoso CIW. As an opt-in alternative, run `virtuoso-bridge list-windows --top-level --json`, select one explicit CIW, then run `virtuoso-bridge bootstrap --window WINDOW_ID`; bootstrap refuses non-CIW windows and accepts no arbitrary SKILL.
 4. **`virtuoso-bridge status`** — verify everything is `healthy` before proceeding.
 5. **`virtuoso-bridge windows`** — list all open Virtuoso windows (num + name).
 6. **`virtuoso-bridge eval 'EXPR'`** — run a one-line SKILL expression from the shell and print the full `VirtuosoResult` JSON.
@@ -236,7 +236,7 @@ Load on demand — each contains detailed API docs and edge-case guidance:
 | `references/library-python-api.md` | Library CRUD, technology binding, return/error contracts |
 | `references/maestro-skill-api.md` | mae* SKILL functions, OCEAN, corners, known blockers |
 | `references/maestro-python-api.md` | snapshot() (raw SKILL sections) + filter_*_xml + writer functions; read_results (per-point × per-output CSV), export_waveform (OCEAN), and waveform viewer lifecycle |
-| `references/simulation-flow.md` | **Standard simulation flow** — 8-step guide, pitfalls, optimization loops |
+| `references/simulation-flow.md` | **Standard simulation flow** — ordered lifecycle, pitfalls, optimization loops |
 | `references/netlist.md` | CDL/Spectre netlist formats, spiceIn import |
 | `references/troubleshooting.md` | Known gotchas, GUI blocking, CDF quirks, connection issues |
 | `references/cellview-on-disk-layout.md` | What's inside each view on disk (`sch.oa`, `data.dm` binary format, `maestro.sdb`/`active.state` XML skeleton, lock files, SOS markers); which files are text-editable vs must go through DFII API |
@@ -257,6 +257,7 @@ Load on demand — each contains detailed API docs and edge-case guidance:
 - `04_list_library_cells.py` — list libraries and cells
 - `05_multiline_skill.py` — multi-line SKILL with comments, loops, procedures
 - `06_screenshot.py` — capture layout/schematic screenshots
+- `07_sanitize_on_download.py` — download remote text while sanitizing unsafe path fragments
 - `08_library_management.py` — inspect a library, technology binding, categories, and members
 
 ### `examples/01_virtuoso/schematic/`
@@ -272,6 +273,7 @@ Load on demand — each contains detailed API docs and edge-case guidance:
 - `09_create_pins.py` — create schematic pins
 - `10_create_wire.py` — draw wires between pins
 - `11_read_schematic_unified.py` — read instances, nets, pins, geometry, and parameters
+- `12_plan_differential_pair.py` — deterministically plan, create, read back, and verify a constrained differential-pair schematic
 
 ### `examples/01_virtuoso/layout/`
 - `01_create_layout.py` — create layout with rects, paths, instances
@@ -281,6 +283,11 @@ Load on demand — each contains detailed API docs and edge-case guidance:
 - `05_bus_routing.py` — bus routing
 - `06_read_layout.py` — read layout shapes
 - `07–10` — delete/clear operations
+- `11_read_summary.py` — read a compact layout summary
+- `12_layer_visibility.py` — inspect and change layer visibility
+- `13_select_and_delete.py` — select and delete matching figures
+- `14_mosaic_and_nets.py` — create mosaics and assign nets
+- `15_export_gds.py` — stream out GDS with staged inputs and fail-fast log polling
 
 ### `examples/01_virtuoso/symbol/`
 - `01_rc_create_with_symbol.py` — native schematic-to-symbol generation
@@ -294,7 +301,7 @@ Load on demand — each contains detailed API docs and edge-case guidance:
 - `04_gui_open_snapshot_close.py` — GUI open → snapshot artifacts → close (owns lifecycle)
 - `05_gui_session_lifecycle.py` — GUI session lifecycle integration test (open/close edge cases)
 - `06a_rc_create.py` — create RC schematic + Maestro setup (cell name auto-timestamped)
-- `06b_rc_simulate_and_read.py` — run simulation in background, read results, export waveforms
+- `06b_rc_simulate_and_read.py` — run simulation in GUI mode, bind the exact history, export waveforms
 - `07_ensure_maestro_view.py` — bootstrap a missing maestro cellview (`maeOpenSetup` + `maeSaveSetup`) before `open_gui_session`
 - `08_set_simulator_mode.py` — switch between APS / Spectre X (LX/MX/AX/VX/CX) / Spectre FX via `asiSetHighPerformanceOptionVal`
 - `09_export_sweep_subpoints.py` — pull per-sweep-point waveforms via OCEAN `openResults(<abs path>)` (works around `maeOpenResults` rejecting `Interactive.N/M`)
@@ -479,26 +486,21 @@ client.execute_skill(f'maeSetVar("CL" "1p" ?session "{session}")')
 client.execute_skill(
     f'maeSaveSetup(?lib "{LIB}" ?cell "{CELL}" ?view "maestro" ?session "{session}")')
 
-# 3. Run (async — NEVER use ?waitUntilDone t, it deadlocks the event loop)
-r = client.execute_skill(f'maeRunSimulation(?session "{session}")', timeout=30)
-history = (r.output or "").strip('"')
+# 3. Start + wait without blocking the SKILL channel. The timeout is one
+#    end-to-end budget for Maestro to accept the run and for completion polling.
+history, status = client.maestro.run_and_wait(session=session, timeout=300)
+history = history.strip('"')
 
-# 4. Wait — blocks until simulation finishes (GUI mode only)
-r = client.execute_skill("maeWaitUntilDone('All)", timeout=300)
+# 4. Read every point/output from the exact history returned above.
+results = client.maestro.read_results(
+    session, lib=LIB, cell=CELL, history=history,
+)
 
-# 5. Check for GUI dialog blockage — if wait returned empty/nil,
-#    a dialog is blocking CIW. Try dismissing it:
-if not r.output or r.output.strip() in ("", "nil"):
-    client.execute_skill("hiFormDone(hiGetCurrentForm())", timeout=5)
-    # If still stuck, user must manually dismiss the dialog in Virtuoso
-
-# 6. Read results
-# For per-point x per-output results across sweeps/corners -> use read_results
-# (see references/simulation-flow.md). For ad-hoc single-output reads:
-client.execute_skill(f'maeOpenResults(?history "{history}")', timeout=15)
-r = client.execute_skill(f'maeGetOutputValue("myOutput" "myTest")', timeout=30)
-value = float(r.output) if r.output else None
-client.execute_skill("maeCloseResults()", timeout=10)
+# 5. If run_and_wait times out while a modal is visible, recover outside the
+#    blocked SKILL channel, then diagnose before deciding whether to rerun:
+#    $ virtuoso-bridge dismiss-dialog
+#    $ virtuoso-bridge list-windows --top-level --json
+#    $ virtuoso-bridge dismiss-window WINDOW_ID --action enter
 ```
 
 ### Output read/export guardrails (collision-safe)
@@ -521,18 +523,13 @@ Apply these rules whenever you read or export **any** maestro output (scalar or 
 
 **In optimization loops:** add `maeSaveSetup` and dialog-recovery in every iteration. GUI dialogs ("Specify history name", "No analyses enabled") block the entire SKILL channel — all subsequent `execute_skill` calls will timeout until the dialog is dismissed.
 
-**Debug with screenshots:** if simulation appears stuck or results are unexpected, capture the Maestro window to see its current state:
+**Debug with screenshots:** if simulation appears stuck or results are
+unexpected, use the X11/CLI path so capture does not depend on a responsive
+SKILL channel:
 
-```
-client.execute_skill('''
-hiWindowSaveImage(
-    ?target hiGetCurrentWindow()
-    ?path "/tmp/debug_maestro.png"
-    ?format "png"
-    ?toplevel t
-)
-''')
-client.download_file("/tmp/debug_maestro.png", "output/debug_maestro.png")
+```bash
+virtuoso-bridge list-windows --top-level --json
+virtuoso-bridge screenshot maestro -o output/debug_maestro.png
 ```
 
 This reveals dialog boxes, error messages, or unexpected variable values that are invisible through the SKILL channel alone.
@@ -545,7 +542,7 @@ This reveals dialog boxes, error messages, or unexpected variable values that ar
 
 ```bash
 # SSH to remote and check PSF directory
-ssh zhangz@zhangz-wei "ls /server_local_ssd/.../Interactive.N/psf/<test>/psf/"
+ssh user@compute-host "ls /path/to/results/Interactive.N/psf/<test>/psf/"
 # Expected: .raw, simdata, spectre.log files
 # Actual: only spectre.out, variables_file (NO waveform data!)
 ```
@@ -558,7 +555,7 @@ ssh zhangz@zhangz-wei "ls /server_local_ssd/.../Interactive.N/psf/<test>/psf/"
 **Check the RDB directly:**
 
 ```bash
-ssh zhangz@zhangz-wei "sqlite3 .../Interactive.N.rdb 'SELECT * FROM resultValue'"
+ssh user@compute-host "sqlite3 /path/to/Interactive.N.rdb 'SELECT * FROM resultValue'"
 # Returns rows like:
 # 1|7|0.000469         -> Noise_rms_out scalar (saved)
 # 1|8|wave             -> VF(/VOUT)/VF(/VSIN) is a waveform reference, not saved!
@@ -632,7 +629,7 @@ When `execute_skill()` times out, possible causes:
 | Cause | Symptom | Fix |
 |-------|---------|-----|
 | **Modal dialog** | GUI popup blocking CIW | `virtuoso-bridge dismiss-dialog` |
-| **Auto dialog finder missed a modal** | GUI popup visible, SKILL channel blocked | `virtuoso-bridge list-windows --json`, then `virtuoso-bridge dismiss-window WINDOW_ID --action enter` |
+| **Auto dialog finder missed a modal** | GUI popup visible, SKILL channel blocked | `virtuoso-bridge list-windows --top-level --json`, then `virtuoso-bridge dismiss-window WINDOW_ID --action enter` |
 | **Long operation** | Simulation or netlist running | Wait, or use `?waitUntilDone nil` |
 | **CIW input prompt** | CIW waiting for typed input | `dismiss-dialog` (sends Enter) |
 | **Bridge disconnected** | All calls fail immediately | `virtuoso-bridge restart` |
@@ -644,7 +641,7 @@ When `execute_skill()` times out, possible causes:
 virtuoso-bridge dismiss-dialog
 
 # Inspect X11 windows and dismiss one explicitly
-virtuoso-bridge list-windows --json
+virtuoso-bridge list-windows --top-level --json
 virtuoso-bridge dismiss-window 0x4203583 --action enter
 
 # From Python
