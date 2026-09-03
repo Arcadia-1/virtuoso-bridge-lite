@@ -151,6 +151,24 @@ def _profiled_env_key(base: str, profile: str | None) -> str:
     return f"{base}_{profile}" if profile else base
 
 
+def _remote_port_occupancy_cmd(port: int) -> str:
+    """POSIX-sh one-liner classifying who holds *port* on the remote host.
+
+    Returns FREE (nothing listening), OWN (a bridge daemon of the current
+    SSH user — its argv ends with the port), or FOREIGN (something else,
+    typically another user's Virtuoso bridge daemon).  ``ss`` is probed
+    first, ``netstat`` is the fallback; when neither exists the command
+    prints FREE and the caller keeps the default port.
+    """
+    return (
+        f"if (ss -tln 2>/dev/null || netstat -tln 2>/dev/null) "
+        f"| awk '{{print $4}}' | grep -E ':{port}$' >/dev/null 2>&1; then "
+        f"if pgrep -u \"$(id -un 2>/dev/null)\" -f "
+        f"'ramic_bridge_daemon_[23].py.* {port}$' >/dev/null 2>&1; then "
+        f"echo OWN; else echo FOREIGN; fi; else echo FREE; fi"
+    )
+
+
 # ---------------------------------------------------------------------------
 # SSHClient
 # ---------------------------------------------------------------------------
@@ -467,6 +485,55 @@ class SSHClient:
         logger.info("Detected remote Python: %s (version %d.%d)", python_cmd, python_major, python_minor)
         return python_cmd, python_major, python_minor
 
+    def _deconflict_remote_port(self, runner: SSHRunner) -> bool:
+        """Shift ``self._port`` off any port held by another user's process.
+
+        The daemon port is a host-global, first-come-first-served resource:
+        whoever binds it first owns it, and the SSH tunnel lands on their
+        Virtuoso no matter who we logged in as.  When the configured port is
+        held by a foreign listener, walk upward for a port that is free or
+        held by one of this user's own bridge daemons.  The chosen port is
+        written back to the .env so the mapping is stable.
+
+        Probe failures never block startup (the identity guard in
+        daemon_guard is the hard stop); returns True when the port changed.
+        """
+        port = self._port
+        for _ in range(40):
+            try:
+                result = runner.run_command(_remote_port_occupancy_cmd(port))
+            except Exception as exc:
+                logger.warning("Remote port occupancy probe failed; keeping port %d: %s", port, exc)
+                return False
+            stdout = (result.stdout or "").strip()
+            verdict = stdout.splitlines()[-1].strip() if stdout else ""
+            if verdict not in ("FREE", "OWN", "FOREIGN"):
+                logger.warning(
+                    "Remote port occupancy probe returned %r; keeping port %d", verdict, port
+                )
+                return False
+            if verdict != "FOREIGN":
+                break
+            logger.info("Remote port %d held by another user; probing %d", port, port + 1)
+            port += 1
+        else:
+            logger.warning(
+                "No foreign-free remote port found probing %d-%d; keeping %d",
+                self._port, port, self._port,
+            )
+            return False
+        if port == self._port:
+            return False
+        old_port = self._port
+        self._port = port
+        print(
+            f"[port] remote port {old_port} in use by another user, "
+            f"auto-switched to {port}",
+            flush=True,
+        )
+        _update_env_file(_profiled_env_key("VB_REMOTE_PORT", self._profile), str(port))
+        return True
+
     def ensure_remote_setup(self) -> None:
         """Upload daemon files and generate virtuoso_setup.il on the remote host."""
         if self._remote_setup_done:
@@ -474,6 +541,7 @@ class SSHClient:
 
         runner = self._require_deployment_runner()
         daemon_runner = self._require_runner()
+        self._deconflict_remote_port(daemon_runner)
         python_cmd, python_major, _python_minor = self._detect_remote_python()
         daemon_local = _find_ramic_bridge_daemon(
             3 if python_major >= 3 else 2

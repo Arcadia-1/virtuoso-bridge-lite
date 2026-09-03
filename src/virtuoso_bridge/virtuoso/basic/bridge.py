@@ -40,11 +40,19 @@ _TUNNEL_CONNECT_GRACE_SECONDS = 3.0
 
 
 def _default_remote_port(username: str | None = None) -> int:
-    """Return a stable per-user default port in the range 65000-65499."""
+    """Return a stable per-user default port in the range 65000-65499.
+
+    SHA-1 based: the previous ``sum(ord(c)) % 500`` assigned identical ports
+    to any anagram pair (and collided often on shared EDA hosts), which made
+    cross-user daemon squatting trivial.  Deployment-time occupancy probing
+    (SSHClient.ensure_remote_setup) additionally shifts away ports already
+    held by another user.
+    """
     user = username or os.getenv("VB_REMOTE_USER", "").strip()
     if not user:
         return 65432
-    return 65000 + (sum(ord(c) for c in user) % 500)
+    digest = hashlib.sha1(user.encode("utf-8")).hexdigest()
+    return 65000 + (int(digest[:8], 16) % 500)
 
 
 def _path_to_posix(path: str | Path) -> str:
@@ -135,7 +143,7 @@ class VirtuosoClient(VirtuosoInterface):
             port = state["port"]
             ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
             client = cls(host="127.0.0.1", port=port, timeout=timeout, tunnel=ssh, log_to_ciw=log_to_ciw)
-            client._reject_cross_user_daemon_if_reachable(profile=profile, timeout=min(timeout, 5))
+            client._reject_cross_user_daemon_if_reachable(profile=profile, timeout=min(timeout, 10))
             return client
 
         # No tunnel running — start one
@@ -150,7 +158,7 @@ class VirtuosoClient(VirtuosoInterface):
 
         ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
         client = cls(host="127.0.0.1", port=ssh.port, timeout=timeout, tunnel=ssh, log_to_ciw=log_to_ciw)
-        client._reject_cross_user_daemon_if_reachable(profile=profile, timeout=min(timeout, 5))
+        client._reject_cross_user_daemon_if_reachable(profile=profile, timeout=min(timeout, 10))
         return client
 
     @classmethod
@@ -171,13 +179,25 @@ class VirtuosoClient(VirtuosoInterface):
         log_to_ciw: bool = True,
     ) -> "VirtuosoClient":
         """Create a bridge connected through a SSHClient."""
-        return cls(
+        client = cls(
             host="127.0.0.1",
             port=tunnel.port,
             timeout=timeout,
             tunnel=tunnel,
             log_to_ciw=log_to_ciw,
         )
+        # Remote tunnels only: a local SSHClient has no runner, and local
+        # mode has no cross-user exposure over loopback.
+        has_runner = (
+            getattr(tunnel, "ssh_runner", None) is not None
+            or getattr(tunnel, "_ssh_runner", None) is not None
+        )
+        if has_runner:
+            client._reject_cross_user_daemon_if_reachable(
+                profile=getattr(tunnel, "_profile", None),
+                timeout=min(timeout, 10),
+            )
+        return client
 
     # -- context manager ----------------------------------------------------
 
@@ -296,16 +316,22 @@ class VirtuosoClient(VirtuosoInterface):
         profile: str | None,
         timeout: int = 5,
     ) -> None:
+        """Refuse to hand out a client whose daemon belongs to someone else.
+
+        check_daemon_user never raises: an unreachable daemon skips the check
+        (normal pre-load state), while a reachable daemon that cannot prove
+        its owner — or that belongs to a different user — comes back with
+        ok=False and we hard-fail here.
+        """
         from virtuoso_bridge.daemon_guard import OVERRIDE_ENV, check_daemon_user
 
-        try:
-            check = check_daemon_user(self, profile=profile, timeout=timeout)
-        except Exception:
-            return
+        check = check_daemon_user(self, profile=profile, timeout=timeout)
         if not check.ok:
             raise RuntimeError(
-                f"Virtuoso daemon identity mismatch: {check.error}. "
-                f"Set {OVERRIDE_ENV}=1 only if this cross-user connection is intentional."
+                f"Virtuoso daemon identity check failed: {check.error}. "
+                f"If the daemon is genuinely busy, retry once the CIW is idle; "
+                f"set {OVERRIDE_ENV}=1 only if this cross-user connection is "
+                f"intentional."
             )
 
     # -- SKILL execution ----------------------------------------------------

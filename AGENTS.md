@@ -40,7 +40,11 @@ virtuoso-bridge init
 
 Both forms create `~/.virtuoso-bridge/.env`. `-J/--jump` accepts `[user@]host`.
 `VB_REMOTE_PORT` / `VB_LOCAL_PORT` are auto-assigned by hashing the **remote**
-username (stable per remote user, so two users on the same host don't collide).
+username (stable per remote user, so two users on the same host usually don't
+collide). The remote port is host-global — whoever binds it first owns it — so
+`virtuoso-bridge start` also probes the port over SSH and shifts to the next
+free one if another user's process already holds it (the choice is written
+back to `.env`).
 Re-running `init` on an existing `.env` is a no-op; pass `--force` to overwrite.
 
 **2. Edit `.env`** (only if step 1 did not already fill it in)
@@ -294,6 +298,15 @@ If `spectre` is already on PATH in the remote user's default shell (e.g., via `~
 - **`procedurep()` returns `nil` for compiled/built-in functions.** Don't use it to check if `mae*` functions exist.
 - **Remote files stay remote.** Functions like `maeCreateNetlistForCorner` write to the remote filesystem. Use `client.download_file()` to retrieve them.
 - **`system()` rc is unreliable** for tools that fork-and-write to a log (strmin, ihdl, sometimes spectre). A wrapper that polls for the expected artifact (cellview, file, log line) MUST also tail the tool's own log for terminal-failure markers on every poll iteration — otherwise a `strmin` that died in 2 seconds with `XSTRM-273: Translation failed` makes the wrapper sleep for its full timeout (10 min observed 2026-05-14 on `examples/01_virtuoso/digital_import/import_gds.py`). Dual-defense template: (1) before invoking the tool, stage any local file args to the tool's cwd via `client.upload_file()` so file-not-found can't happen, and (2) in the poll loop, `tail -n 200 <tool.log>` for the tool's "translation failed / OPEN_FAILED / ERROR" sentinel and fast-exit with that line.
+- **The daemon port is host-global; another user's Virtuoso can own it.** On a
+  shared server every bridge daemon binds `0.0.0.0` on a port in 65000-65499,
+  and the SSH tunnel lands on whichever process holds that port — SKILL sent
+  through it executes in *their* session. Two defenses: (1) `start` shifts the
+  configured port off foreign listeners, and (2) every remote client
+  construction (`from_env`/`from_tunnel`) verifies the daemon's Unix user via
+  `daemon_guard` and refuses mismatches or unreachable identities. If a check
+  fires while your own CIW is merely busy, retry when idle; genuinely
+  intentional cross-user use needs `VB_ALLOW_CROSS_USER_DAEMON=1`.
 
 ## How to configure PDK paths
 
