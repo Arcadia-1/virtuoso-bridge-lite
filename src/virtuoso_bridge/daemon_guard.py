@@ -178,6 +178,13 @@ def _daemon_user_from_process(client: Any, runner: Any, timeout: int) -> str:
     pid = pid.strip()
     if not pid.isdigit():
         return ""
+    # Best-effort: retain the PID on the client so other consumers (status,
+    # process-owner cross-checks) reuse it instead of asking again.  Duck
+    # typed — guard callers may be plain test doubles.
+    try:
+        client._remote_virtuoso_pid = int(pid)
+    except Exception:
+        pass
     for cmd in (f"stat -c %U /proc/{pid} 2>/dev/null", f"ps -o user= -p {pid} 2>/dev/null"):
         try:
             result = runner.run_command(cmd)

@@ -196,6 +196,8 @@ def test_query_falls_back_to_process_owner_over_ssh() -> None:
     runner = FakeRunner(owner="user2")
     assert query_daemon_user(client, runner=runner) == "user2"
     assert any(cmd.startswith("stat -c %U /proc/424242") for cmd in runner.commands)
+    # The discovered PID is retained on the client for later cross-checks.
+    assert client._remote_virtuoso_pid == 424242
 
 
 def test_query_empty_when_every_layer_fails() -> None:

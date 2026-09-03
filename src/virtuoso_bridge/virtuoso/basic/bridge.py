@@ -116,6 +116,7 @@ class VirtuosoClient(VirtuosoInterface):
         self._log_to_ciw = log_to_ciw
         self._daemon_token = daemon_token
         self._pending_nonce: str | None = None
+        self._remote_virtuoso_pid: int | None = None
         self.layout = LayoutOps(self)
         self.library = LibraryOps(self)
         self.schematic = SchematicOps(self)
@@ -383,6 +384,31 @@ class VirtuosoClient(VirtuosoInterface):
                 f"set {OVERRIDE_ENV}=1 only if this cross-user connection is "
                 f"intentional."
             )
+
+    @property
+    def remote_virtuoso_pid(self) -> int | None:
+        """PID of the remote Virtuoso instance, once :meth:`get_virtuoso_pid`
+        has run (None before that)."""
+        return self._remote_virtuoso_pid
+
+    def get_virtuoso_pid(self, timeout: int | None = None) -> int | None:
+        """PID of the Virtuoso process executing this client's SKILL.
+
+        Asked via ``getpid()`` through the token-authenticated channel, so
+        once authentication has succeeded the answer belongs to the daemon
+        that proved it holds your bridge token — a squatted port cannot
+        produce one.  The value is cached for the client's lifetime and is
+        what ``daemon_guard`` cross-checks over SSH (``ps -o user=``).
+        """
+        if self._remote_virtuoso_pid is not None:
+            return self._remote_virtuoso_pid
+        result = self.execute_skill("getpid()", timeout=timeout if timeout is not None else 10)
+        if result.status != ExecutionStatus.SUCCESS:
+            return None
+        raw = (result.output or "").strip().strip('"')
+        if raw.isdigit():
+            self._remote_virtuoso_pid = int(raw)
+        return self._remote_virtuoso_pid
 
     # -- SKILL execution ----------------------------------------------------
 

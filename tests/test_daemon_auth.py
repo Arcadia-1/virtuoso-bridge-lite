@@ -85,7 +85,10 @@ class _AuthDaemon:
 
             skill = req["skill"]
             self.executed.append(skill)
-            body = '"2"' if skill.strip() == "1+1" else "nil"
+            if skill.strip() == "getpid()":
+                body = str(getattr(self, "virtuoso_pid", "4242"))
+            else:
+                body = '"2"' if skill.strip() == "1+1" else "nil"
             if self.token and req.get("nonce"):
                 resp_mac = hmac.new(
                     self.token.encode(),
@@ -347,6 +350,30 @@ def test_daemon_scripts_compile() -> None:
             capture_output=True,
         )
         assert rc.returncode == 0, rc.stderr.decode()
+
+
+# ---------------------------------------------------------------------------
+# Remote Virtuoso PID knowledge
+# ---------------------------------------------------------------------------
+
+
+def test_client_learns_and_caches_remote_virtuoso_pid(authed_daemon) -> None:
+    authed_daemon.virtuoso_pid = "424242"
+    client = VirtuosoClient(host="127.0.0.1", port=authed_daemon.port, daemon_token=TOKEN)
+    assert client.remote_virtuoso_pid is None
+
+    assert client.get_virtuoso_pid(timeout=5) == 424242
+    assert client.remote_virtuoso_pid == 424242
+    # Cached: a second call must not hit the wire again.
+    assert client.get_virtuoso_pid(timeout=5) == 424242
+    assert sum(1 for r in authed_daemon.requests if r["skill"].strip() == "getpid()") == 1
+
+
+def test_client_pid_query_unauthenticated_is_rejected(authed_daemon) -> None:
+    # A client without the token gets nothing from the daemon at all.
+    client = VirtuosoClient(host="127.0.0.1", port=authed_daemon.port)
+    assert client.get_virtuoso_pid(timeout=5) is None
+    assert authed_daemon.executed == []
 
 
 # ---------------------------------------------------------------------------
