@@ -435,21 +435,38 @@ class SSHClient:
     def daemon_token(self) -> str | None:
         return self._daemon_token
 
+    def _token_unavailable(self, message: str) -> None:
+        """Fail loudly about an unusable bridge token unless the explicit
+        insecure-legacy opt-in (``VB_ALLOW_UNAUTHENTICATED_DAEMON=1``) is set."""
+        if daemon_auth.allow_unauthenticated():
+            logger.warning(
+                "%s Continuing without a token (explicit %s=1 opt-in).",
+                message, daemon_auth.UNAUTH_OPTIN_ENV,
+            )
+            return
+        raise daemon_auth.DaemonTokenError(
+            f"{message} The bridge refuses to run without token "
+            f"authentication by default; fix token provisioning, or set "
+            f"{daemon_auth.UNAUTH_OPTIN_ENV}=1 to explicitly accept "
+            f"unauthenticated legacy mode."
+        )
+
     def ensure_daemon_token(self) -> str | None:
         """Fetch (or create over SSH) the bridge daemon auth token.
 
-        The token lives in ``~/.virtuoso-bridge/bridge_token`` (mode 0600) on
-        the daemon's machine and only ever travels over this authenticated
-        SSH channel — it is the shared secret that lets clients and their
-        own user's daemon recognize each other (HMAC challenge/Response, see
-        :mod:`virtuoso_bridge.daemon_auth`).  Returns None when the token
-        cannot be provisioned; callers then fall back to legacy
-        unauthenticated behaviour.
+        The token lives in ``~/.virtuoso-bridge/bridge_token`` (atomic 0600
+        file under a 0700 directory) on the daemon's machine and only ever
+        travels over this authenticated SSH channel — it is the shared secret
+        that lets clients and their own user's daemon recognize each other
+        (see :mod:`virtuoso_bridge.daemon_auth`).  Provisioning failures are
+        fatal by default (:class:`daemon_auth.DaemonTokenError`); they degrade
+        to returning None only under the explicit
+        ``VB_ALLOW_UNAUTHENTICATED_DAEMON=1`` opt-in.
         """
         if self._daemon_token and daemon_auth.is_valid_token(self._daemon_token):
             return self._daemon_token
         if self._ssh_runner is None:
-            self._daemon_token = daemon_auth.read_or_create_local_token()
+            self._daemon_token = daemon_auth.local_token_or_raise()
             return self._daemon_token
         runner = self._ssh_runner
         try:
@@ -460,13 +477,15 @@ class SSHClient:
             if result.returncode == 0 and daemon_auth.is_valid_token(existing):
                 self._daemon_token = existing.lower()
                 return self._daemon_token
-            # Provision a fresh token through the SSH channel.
+            # Provision a fresh token through the SSH channel: write to a
+            # temp file, chmod 600, then rename into place so readers never
+            # observe a partial or world-readable token.
             token = daemon_auth.generate_token()
             home = (
                 runner.run_command('printf %s "$HOME"').stdout or ""
             ).strip()
             if not home:
-                logger.warning("Cannot resolve remote $HOME for bridge token")
+                self._token_unavailable("Cannot resolve remote $HOME for bridge token")
                 return None
             token_dir = f"{home}/.virtuoso-bridge"
             token_path = f"{token_dir}/bridge_token"
@@ -474,23 +493,35 @@ class SSHClient:
                 f"mkdir -p '{token_dir}' && chmod 700 '{token_dir}'"
             )
             if mkdir.returncode != 0:
-                logger.warning(
-                    "Cannot create %s for bridge token: %s",
-                    token_dir, mkdir.stderr.strip(),
+                self._token_unavailable(
+                    f"Cannot create {token_dir} for bridge token: "
+                    f"{mkdir.stderr.strip()}"
                 )
                 return None
-            upload = runner.upload_text(token + "\n", token_path)
+            tmp_path = f"{token_path}.tmp.{os.getpid()}"
+            upload = runner.upload_text(token + "\n", tmp_path)
             if upload.returncode != 0:
-                logger.warning(
-                    "Cannot upload bridge token: %s", upload.stderr.strip()
+                self._token_unavailable(
+                    f"Cannot upload bridge token: {upload.stderr.strip()}"
                 )
                 return None
-            runner.run_command(f"chmod 600 '{token_path}'")
+            finalize = runner.run_command(
+                f"chmod 600 '{tmp_path}' && mv -f '{tmp_path}' '{token_path}'"
+            )
+            if finalize.returncode != 0:
+                runner.run_command(f"rm -f '{tmp_path}'")
+                self._token_unavailable(
+                    f"Cannot finalize bridge token at {token_path}: "
+                    f"{finalize.stderr.strip()}"
+                )
+                return None
             self._daemon_token = token
             logger.info("Provisioned bridge daemon token at %s", token_path)
             return self._daemon_token
+        except daemon_auth.DaemonTokenError:
+            raise
         except Exception as exc:
-            logger.warning("Bridge token provisioning failed: %s", exc)
+            self._token_unavailable(f"Bridge token provisioning failed: {exc}")
             return None
 
     @property
@@ -917,10 +948,12 @@ class SSHClient:
             "daemon_endpoint_hostname": self._daemon_endpoint_hostname,
             "setup_path": self._remote_virtuoso_setup_path,
             "identity_path": self._remote_identity_path,
-            "daemon_token": self._daemon_token,
             "profile": self._profile,
             "started_at": time.time(),
         }
+        # NOTE: the bridge token is deliberately NOT stored here — the state
+        # file is normally readable; the token lives only in its atomic 0600
+        # file under a 0700 directory (daemon_auth.token_path()).
         _state_file(self._profile).write_text(json.dumps(state, indent=2), encoding="utf-8")
 
     @staticmethod

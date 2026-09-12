@@ -65,15 +65,18 @@ def _acquire_daemon_token(ssh: Any) -> str | None:
     """Token for the daemon behind *ssh* (SSH-fetched) or the local machine.
 
     The token is the SSH-bootstrapped shared secret gating the daemon
-    (see :mod:`virtuoso_bridge.daemon_auth`); None disables authentication
-    on the wire (legacy mode).
+    (see :mod:`virtuoso_bridge.daemon_auth`).  Fails FATAL by default: an
+    unavailable token raises :class:`daemon_auth.DaemonTokenError` instead of
+    silently degrading to unauthenticated legacy mode — that insecure mode
+    requires the explicit ``VB_ALLOW_UNAUTHENTICATED_DAEMON=1`` opt-in (then
+    None is returned).
     """
     if ssh is not None and (
         getattr(ssh, "ssh_runner", None) is not None
         or getattr(ssh, "_ssh_runner", None) is not None
     ):
         return ssh.ensure_daemon_token()
-    return daemon_auth.read_or_create_local_token()
+    return daemon_auth.local_token_or_raise()
 
 
 def _escape_skill_string(s: str) -> str:
@@ -116,6 +119,7 @@ class VirtuosoClient(VirtuosoInterface):
         self._log_to_ciw = log_to_ciw
         self._daemon_token = daemon_token
         self._pending_nonce: str | None = None
+        self._daemon_caps: dict[str, Any] | None = None
         self._remote_virtuoso_pid: int | None = None
         self.layout = LayoutOps(self)
         self.library = LibraryOps(self)
@@ -163,11 +167,10 @@ class VirtuosoClient(VirtuosoInterface):
                 raise RuntimeError("Tunnel state file is missing or invalid.")
             port = state["port"]
             ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
-            token = state.get("daemon_token")
-            if not daemon_auth.is_valid_token(token):
-                token = _acquire_daemon_token(ssh)
+            # The token never lives in state.json (world-readable by
+            # design); it is fetched from the daemon host over SSH.
             client = cls(host="127.0.0.1", port=port, timeout=timeout, tunnel=ssh,
-                         log_to_ciw=log_to_ciw, daemon_token=token)
+                         log_to_ciw=log_to_ciw, daemon_token=_acquire_daemon_token(ssh))
             client._reject_cross_user_daemon_if_reachable(profile=profile, timeout=min(timeout, 10))
             return client
 
@@ -196,15 +199,17 @@ class VirtuosoClient(VirtuosoInterface):
     ) -> "VirtuosoClient":
         """Create a bridge for a locally running daemon.
 
-        The daemon token is read (or created, mode 0600) from the local
-        ``~/.virtuoso-bridge/bridge_token`` so local-mode sessions get the
-        same cross-user protection as SSH mode without any extra setup.
+        The daemon token is read (or created atomically, mode 0600 under a
+        0700 directory) from the local ``~/.virtuoso-bridge/bridge_token`` so
+        local-mode sessions get the same cross-user protection as SSH mode.
+        An unusable token file raises :class:`daemon_auth.DaemonTokenError`
+        unless ``VB_ALLOW_UNAUTHENTICATED_DAEMON=1`` is explicitly set.
         """
         return cls(
             host=host,
             port=port,
             timeout=timeout,
-            daemon_token=daemon_auth.read_or_create_local_token(),
+            daemon_token=daemon_auth.local_token_or_raise(),
         )
 
     @classmethod
@@ -301,6 +306,9 @@ class VirtuosoClient(VirtuosoInterface):
 
     @daemon_token.setter
     def daemon_token(self, value: str | None) -> None:
+        if value != self._daemon_token:
+            # A different secret invalidates any cached handshake result.
+            self._daemon_caps = None
         self._daemon_token = value
 
     # -- VirtuosoInterface --------------------------------------------------
@@ -1530,25 +1538,14 @@ let((result winName ciwNum)
             return remote_posix, True
         return _path_to_posix(p), False
 
-    def _execute_skill_once(
-        self,
-        skill_code: str,
-        timeout: float,
-        deadline: float,
-    ) -> str:
+    def _exchange_payload(self, payload: dict[str, Any], deadline: float) -> bytes:
+        """Send one JSON request and collect the raw response bytes."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(self._remaining_timeout(deadline))
             logger.debug("TCP connect %s:%d", self._host, self._port)
             s.connect((self._host, self._port))
-            request_timeout = min(timeout, self._remaining_timeout(deadline))
-            payload: dict[str, Any] = {"skill": skill_code, "timeout": request_timeout}
-            nonce: str | None = None
-            if self._daemon_token:
-                nonce = secrets.token_hex(16)
-                payload["nonce"] = nonce
-                payload["mac"] = daemon_auth.sign_request(self._daemon_token, nonce)
-            self._pending_nonce = nonce
-            logger.debug("TCP connected, sending %d-byte payload", len(json.dumps(payload)))
+            logger.debug("TCP connected, sending %d-byte payload",
+                         len(json.dumps(payload)))
             s.settimeout(self._remaining_timeout(deadline))
             s.sendall(json.dumps(payload).encode("utf-8"))
             s.shutdown(socket.SHUT_WR)
@@ -1559,15 +1556,171 @@ let((result winName ciwNum)
                 if not chunk:
                     break
                 chunks.append(chunk)
-            raw = b"".join(chunks).decode("utf-8", errors="ignore")
+            raw = b"".join(chunks)
             logger.debug("TCP received %d bytes", len(raw))
-            if self._daemon_token and nonce:
-                if raw.startswith(_NAK) and raw[1:].startswith("AuthError"):
-                    # Authenticated daemon refused our token: it belongs to
-                    # a different user (or the token was rotated).
-                    raise daemon_auth.DaemonAuthError(raw[1:].strip())
-                raw = daemon_auth.verify_response(raw, self._daemon_token, nonce)
             return raw
+
+    def _build_hello_payload(self) -> dict[str, Any]:
+        nonce = secrets.token_hex(16)
+        self._pending_nonce = nonce
+        payload: dict[str, Any] = {
+            "proto": daemon_auth.PROTOCOL_VERSION,
+            "nonce": nonce,
+            "op": "hello",
+        }
+        if self._daemon_token:
+            payload["mac"] = daemon_auth.hello_mac(self._daemon_token, nonce=nonce)
+        return payload
+
+    def _ensure_daemon_capabilities(self, deadline: float) -> dict[str, Any]:
+        """Perform the side-effect-free capability handshake exactly once.
+
+        The hello request carries NO ``skill`` field, so nothing can execute
+        on the far end before authentication is settled: an up-to-date daemon
+        answers with signed capabilities, a pre-token daemon fails on the
+        missing key, and any listener that cannot prove token possession is
+        rejected here — before the first real SKILL command is ever sent.
+
+        Raises :class:`daemon_auth.DaemonAuthError` on any mismatch;
+        ``ConnectionRefusedError``/``OSError`` propagate so callers can apply
+        their normal connect-retry policy.
+        """
+        if self._daemon_caps is not None:
+            return self._daemon_caps
+        payload = self._build_hello_payload()
+        nonce = payload["nonce"]
+        raw = self._exchange_payload(payload, deadline)
+
+        if raw[:1] == b"\x15":
+            message = raw[1:].decode("utf-8", errors="ignore").strip()
+            if message.startswith("AuthError"):
+                # Authenticated daemon refused our token: it belongs to a
+                # different user (or the token was rotated).
+                raise daemon_auth.DaemonAuthError(message)
+            raise daemon_auth.DaemonAuthError(
+                "daemon did not answer the bridge capability handshake — it "
+                "predates bridge token auth or runs with auth disabled; run "
+                "`virtuoso-bridge restart` (or re-load virtuoso_setup.il in "
+                "the CIW) to upgrade it"
+            )
+        if raw[:1] != b"\x02":
+            raise daemon_auth.DaemonAuthError(
+                "the service behind the port did not answer the bridge "
+                "capability handshake — it is not a bridge daemon"
+            )
+
+        body = raw[1:]
+        if self._daemon_token and daemon_auth.looks_like_hex_mac(body):
+            caps_raw = daemon_auth.verify_response_bytes(raw, self._daemon_token, nonce)
+        elif self._daemon_token:
+            # Unsigned hello reply while we hold a token: either an
+            # explicitly auth-disabled daemon (which cannot sign anything we
+            # could verify) or a pre-token/stale daemon.
+            try:
+                caps = json.loads(body.decode("utf-8", errors="ignore"))
+            except json.JSONDecodeError:
+                caps = None
+            if not (isinstance(caps, dict) and caps.get("auth") == "off"):
+                raise daemon_auth.DaemonAuthError(
+                    "daemon did not authenticate its handshake response — "
+                    "run `virtuoso-bridge restart` (or re-load "
+                    "virtuoso_setup.il in the CIW) to upgrade it"
+                )
+            if not daemon_auth.allow_unauthenticated():
+                raise daemon_auth.DaemonAuthError(
+                    "daemon runs with token authentication DISABLED (explicit "
+                    f"{daemon_auth.DAEMON_UNAUTH_OPTIN_ENV}=1 opt-in on the "
+                    "daemon host); refusing an unverifiable channel — set "
+                    f"{daemon_auth.UNAUTH_OPTIN_ENV}=1 to accept"
+                )
+            caps_raw = raw
+        else:
+            # No token (explicit legacy opt-in): a signing daemon cannot be
+            # verified by us, and an authed daemon would reject our commands
+            # anyway — only an explicitly auth-disabled daemon is usable.
+            if daemon_auth.looks_like_hex_mac(body):
+                raise daemon_auth.DaemonAuthError(
+                    "daemon requires bridge token authentication but this "
+                    "client has none"
+                )
+            try:
+                caps = json.loads(body.decode("utf-8", errors="ignore"))
+            except json.JSONDecodeError:
+                raise daemon_auth.DaemonAuthError(
+                    "daemon did not authenticate its handshake response — "
+                    "run `virtuoso-bridge restart` (or re-load "
+                    "virtuoso_setup.il in the CIW) to upgrade it"
+                )
+            if caps.get("auth") == "on":
+                raise daemon_auth.DaemonAuthError(
+                    "daemon requires bridge token authentication but this "
+                    "client has none"
+                )
+            caps_raw = raw
+
+        caps = json.loads(caps_raw[1:].decode("utf-8", errors="ignore"))
+
+        daemon_proto = caps.get("proto")
+        if daemon_proto != daemon_auth.PROTOCOL_VERSION:
+            raise daemon_auth.DaemonAuthError(
+                f"bridge protocol version mismatch: daemon speaks "
+                f"v{daemon_proto}, client speaks "
+                f"v{daemon_auth.PROTOCOL_VERSION}"
+            )
+        if self._daemon_token and caps.get("auth") != "on":
+            # Auth-off daemon cannot sign anything we could verify.
+            if not daemon_auth.allow_unauthenticated():
+                raise daemon_auth.DaemonAuthError(
+                    "daemon runs with token authentication DISABLED (explicit "
+                    f"{daemon_auth.DAEMON_UNAUTH_OPTIN_ENV}=1 opt-in on the "
+                    "daemon host); refusing an unverifiable channel — set "
+                    f"{daemon_auth.UNAUTH_OPTIN_ENV}=1 to accept"
+                )
+        # Free identity data from the signed handshake.
+        pid = caps.get("virtuoso_pid")
+        if isinstance(pid, int) and pid > 0:
+            self._remote_virtuoso_pid = pid
+        self._daemon_caps = caps
+        return caps
+
+    def _execute_skill_once(
+        self,
+        skill_code: str,
+        timeout: float,
+        deadline: float,
+    ) -> str:
+        # Handshake first: authentication failures must never cost an
+        # execution on a foreign or outdated daemon.
+        self._ensure_daemon_capabilities(deadline)
+        request_timeout = min(timeout, self._remaining_timeout(deadline))
+        payload: dict[str, Any] = {
+            "proto": daemon_auth.PROTOCOL_VERSION,
+            "skill": skill_code,
+            "timeout": request_timeout,
+        }
+        nonce: str | None = None
+        if self._daemon_token:
+            nonce = secrets.token_hex(16)
+            payload["nonce"] = nonce
+            payload["mac"] = daemon_auth.request_mac(
+                self._daemon_token,
+                nonce=nonce,
+                skill=skill_code,
+                timeout=request_timeout,
+            )
+        self._pending_nonce = nonce
+        raw = self._exchange_payload(payload, deadline)
+        if self._daemon_token and nonce:
+            if raw[:1] == b"\x15" and raw[1:].startswith(b"AuthError"):
+                # Authenticated daemon refused our token: it belongs to a
+                # different user (or the token was rotated).  Drop the cached
+                # handshake so a later retry re-negotiates.
+                self._daemon_caps = None
+                raise daemon_auth.DaemonAuthError(
+                    raw[1:].decode("utf-8", errors="ignore").strip()
+                )
+            raw = daemon_auth.verify_response_bytes(raw, self._daemon_token, nonce)
+        return raw.decode("utf-8", errors="ignore")
 
     @staticmethod
     def _remaining_timeout(deadline: float) -> float:

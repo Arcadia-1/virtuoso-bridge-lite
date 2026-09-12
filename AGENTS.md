@@ -307,20 +307,29 @@ If `spectre` is already on PATH in the remote user's default shell (e.g., via `~
 - **The daemon port is host-global; another user's Virtuoso can own it.** On a
   shared server every bridge daemon binds `0.0.0.0` on a port in 65000-65499,
   and the SSH tunnel lands on whichever process holds that port — SKILL sent
-  through it executes in *their* session. Three defenses: (1) `start` shifts the
-  configured port off foreign listeners; (2) the daemon rejects SKILL from
-  clients that don't present a valid HMAC over the bridge token
-  (`~/.virtuoso-bridge/bridge_token`, mode 0600, provisioned over SSH by
-  `start` / auto-created by the daemon), and clients refuse daemon responses
-  that aren't signed with the same token — a squatter can neither execute
-  your SKILL nor impersonate your daemon, and the token never crosses the
-  wire; (3) `from_env`/`from_tunnel` additionally verify the daemon's Unix
-  user (`daemon_guard`) and refuse mismatches. If a check fires while your
-  own CIW is merely busy, retry when idle; `AuthError: token mismatch` means
-  the port is held by someone else — run `RBStop()` on that session or
-  `virtuoso-bridge restart` to move. Intentional cross-user use still needs
-  `VB_ALLOW_CROSS_USER_DAEMON=1` for the identity guard; token auth itself
-  has no bypass (delete the token file to rotate it).
+  through it executes in *their* session. Defenses, in the order a connection
+  meets them: (1) `start` shifts the configured port off foreign listeners;
+  (2) the client runs a side-effect-free capability handshake (`op=hello`, no
+  SKILL payload) before its first command, so protocol/auth skew is detected
+  before anything can execute; (3) every request is signed with
+  `HMAC(token, canonical_frame(proto, nonce, timeout, skill))` — the whole
+  request, not just the nonce — and every response with
+  `HMAC(token, frame(nonce, marker, body))`; daemons also reject replayed
+  nonces server-side. The token lives only in an atomic 0600 file under a
+  0700 directory (`~/.virtuoso-bridge/bridge_token`, never in state.json),
+  provisioned over SSH by `start` / auto-created by the daemon, and never
+  crosses the wire — a squatter can neither execute your SKILL nor
+  impersonate your daemon; (4) `from_env`/`from_tunnel` additionally verify
+  the daemon's Unix user (`daemon_guard`) and refuse mismatches. If a check
+  fires while your own CIW is merely busy, retry when idle;
+  `AuthError: token mismatch` means the port is held by someone else — run
+  `RBStop()` on that session or `virtuoso-bridge restart` to move.
+  Intentional cross-user use still needs `VB_ALLOW_CROSS_USER_DAEMON=1` for
+  the identity guard. Insecure unauthenticated operation is fatal by default
+  and requires an explicit opt-in on both sides —
+  `VB_ALLOW_UNAUTHENTICATED_DAEMON=1` on the client,
+  `RB_ALLOW_UNAUTHENTICATED=1` on the daemon host. Rotating the token =
+  delete the file on the daemon host and re-run `start` / re-load in CIW.
 
 ## How to configure PDK paths
 

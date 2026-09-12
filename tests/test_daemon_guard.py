@@ -61,6 +61,16 @@ class FakeDaemon:
                     break
                 chunks.append(chunk)
             req = json.loads(b"".join(chunks).decode("utf-8"))
+            # Capability handshake (no skill field, nothing executes):
+            # these doubles model an explicitly auth-disabled daemon.
+            if req.get("op") == "hello":
+                pid = self.virtuoso_pid if str(self.virtuoso_pid).isdigit() else None
+                caps = json.dumps(
+                    {"proto": 1, "auth": "off", "daemon": "fake-guard",
+                     "virtuoso_pid": pid}
+                )
+                conn.sendall(f"{STX}{caps}".encode("utf-8"))
+                return
             skill = req["skill"]
             self.executed.append(skill)
             if 'getShellEnvVar("USER")' in skill or 'getShellEnvVar("LOGNAME")' in skill:

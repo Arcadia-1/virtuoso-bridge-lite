@@ -93,7 +93,7 @@ def test_status_infers_profile_scoped_setup_path(monkeypatch, capsys) -> None:
     )
 
 
-def test_status_no_response_prints_stale_daemon_hint(monkeypatch, capsys) -> None:
+def test_status_no_response_prints_stale_daemon_hint(monkeypatch, capsys, tmp_path) -> None:
     monkeypatch.setattr(cli, "_load_cli_env", lambda: None)
     monkeypatch.setattr(cli, "_print_spectre_status", lambda profile, suffix: None)
     monkeypatch.setattr(cli, "_CLI_PROFILE", ["t28_io"])
@@ -116,11 +116,21 @@ def test_status_no_response_prints_stale_daemon_hint(monkeypatch, capsys) -> Non
         def __init__(self, host, port, timeout):
             pass
 
+        daemon_token = None
+
+        def execute_skill(self, skill, timeout=5):
+            return VirtuosoResult(
+                status=ExecutionStatus.ERROR,
+                errors=["Empty response from daemon"],
+            )
+
         def test_connection(self, timeout=5):
             return False
 
     monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHClient", _FakeSSHClient)
     monkeypatch.setattr("virtuoso_bridge.virtuoso.basic.bridge.VirtuosoClient", _FakeVirtuosoClient)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
     rc = cli._print_status()
 
@@ -301,7 +311,7 @@ def test_status_allows_cross_user_with_explicit_override(monkeypatch, capsys) ->
     assert "[daemon identity] FAILED" not in out
 
 
-def test_status_diagnoses_banner_host_when_tunnel_endpoint_is_wrong(monkeypatch, capsys) -> None:
+def test_status_diagnoses_banner_host_when_tunnel_endpoint_is_wrong(monkeypatch, capsys, tmp_path) -> None:
     monkeypatch.setattr(cli, "_load_cli_env", lambda: None)
     monkeypatch.setattr(cli, "_print_spectre_status", lambda profile, suffix: None)
     monkeypatch.setattr(cli, "_CLI_PROFILE", ["split"])
@@ -340,11 +350,21 @@ def test_status_diagnoses_banner_host_when_tunnel_endpoint_is_wrong(monkeypatch,
         def __init__(self, host, port, timeout):
             pass
 
+        daemon_token = None
+
+        def execute_skill(self, skill, timeout=5):
+            return VirtuosoResult(
+                status=ExecutionStatus.ERROR,
+                errors=["Empty response from daemon"],
+            )
+
         def test_connection(self, timeout=5):
             return False
 
     monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHClient", _FakeSSHClient)
     monkeypatch.setattr("virtuoso_bridge.virtuoso.basic.bridge.VirtuosoClient", _FakeVirtuosoClient)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
     rc = cli._print_status()
 

@@ -31,8 +31,25 @@ import hmac
 STX = b'\x02'  # start-of-result (success)
 NAK = b'\x15'  # start-of-result (error)
 
-MAC_LEN = 64  # hex sha256 digest length
-RESP_SALT = b':resp'
+MAC_LEN = 64          # hex sha256 digest length
+PROTO = 1             # wire protocol version (daemon_auth.PROTOCOL_VERSION)
+REQ_DOMAIN = b'vb1-request'
+RESP_DOMAIN = b'vb1-response'
+HELLO_DOMAIN = b'vb1-hello'
+
+
+def _frame(*parts):
+    """Length-prefixed canonical byte frame (mirrors daemon_auth.py)."""
+    out = b""
+    for part in parts:
+        if isinstance(part, str):
+            part = part.encode('utf-8')
+        out += str(len(part)).encode('ascii') + b':' + part
+    return out
+
+
+def _mac(token_bytes, *parts):
+    return hmac.new(token_bytes, _frame(*parts), hashlib.sha256).hexdigest()
 
 
 def _load_token(path):
@@ -57,23 +74,13 @@ def _default_token_path():
     return os.path.join(home, '.virtuoso-bridge', 'bridge_token')
 
 
-def _mac(token_bytes, message):
-    return hmac.new(token_bytes, message, hashlib.sha256).hexdigest()
-
-
-def execute(skill, host="127.0.0.1", port=65432, timeout=60, token=None):
-    """Send a SKILL expression to the bridge daemon and return the result string."""
+def _exchange(payload, host, port, timeout):
+    """Send one JSON request; return (raw_bytes, None) or (None, error)."""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(timeout)
-    nonce = None
     try:
         s.connect((host, port))
-        request = {"skill": skill, "timeout": timeout}
-        if token:
-            nonce = binascii.hexlify(os.urandom(16)).decode('ascii')
-            request["nonce"] = nonce
-            request["mac"] = _mac(token.encode('utf-8'), nonce.encode('ascii'))
-        s.sendall(json.dumps(request).encode("utf-8"))
+        s.sendall(json.dumps(payload).encode("utf-8"))
         s.shutdown(socket.SHUT_WR)
         data = b""
         while True:
@@ -81,6 +88,7 @@ def execute(skill, host="127.0.0.1", port=65432, timeout=60, token=None):
             if not chunk:
                 break
             data += chunk
+        return data, None
     except socket.timeout:
         return None, "timeout waiting for response"
     except ConnectionRefusedError:
@@ -90,31 +98,102 @@ def execute(skill, host="127.0.0.1", port=65432, timeout=60, token=None):
     finally:
         s.close()
 
+
+def _verify_response(data, token, nonce):
+    """Authenticate a signed response; return (marker, body) or (None, error)."""
+    if len(data) < 1 + MAC_LEN:
+        return None, (
+            "daemon did not authenticate its response — it predates "
+            "bridge token auth or runs with auth disabled; re-load "
+            "virtuoso_setup.il in the CIW"
+        )
+    marker, mac, body = data[:1], data[1:1 + MAC_LEN], data[1 + MAC_LEN:]
+    try:
+        mac_ascii = mac.decode('ascii')
+    except UnicodeDecodeError:
+        return None, (
+            "daemon did not authenticate its response — it predates "
+            "bridge token auth or runs with auth disabled; re-load "
+            "virtuoso_setup.il in the CIW"
+        )
+    if not all(c in '0123456789abcdefABCDEF' for c in mac_ascii):
+        return None, (
+            "daemon did not authenticate its response — it predates "
+            "bridge token auth or runs with auth disabled; re-load "
+            "virtuoso_setup.il in the CIW"
+        )
+    expected = _mac(token.encode('utf-8'), RESP_DOMAIN, nonce, marker, body)
+    if not hmac.compare_digest(mac_ascii.lower(), expected):
+        return None, (
+            "daemon response failed token authentication — the service "
+            "behind the port does not hold your bridge token (another "
+            "user's daemon or a spoofed listener is bound to it)"
+        )
+    return marker, body
+
+
+def handshake(host, port, timeout, token):
+    """Side-effect-free capability probe (op=hello, no skill field).
+
+    Returns (caps_dict, None) on success or (None, error).  Because the
+    request carries nothing executable, an auth/protocol mismatch is
+    discovered before any SKILL can run on the wrong daemon.
+    """
+    nonce = binascii.hexlify(os.urandom(16)).decode('ascii')
+    request = {"proto": PROTO, "nonce": nonce, "op": "hello"}
+    if token:
+        request["mac"] = _mac(token.encode('utf-8'), HELLO_DOMAIN, str(PROTO), nonce)
+    data, error = _exchange(request, host, port, timeout)
+    if error:
+        return None, error
+    if data[:1] == NAK:
+        return None, data[1:].decode("utf-8", errors="replace").strip()
+    if data[:1] != STX:
+        return None, "no bridge capability handshake answer from %s:%d" % (host, port)
+    body = data
+    if token:
+        marker, body = _verify_response(data, token, nonce)
+        if marker is None:
+            return None, body
+    try:
+        return json.loads(body.decode("utf-8", errors="replace")), None
+    except ValueError:
+        return None, (
+            "daemon handshake payload was not valid JSON — it predates "
+            "bridge token auth; re-load virtuoso_setup.il in the CIW"
+        )
+
+
+def execute(skill, host="127.0.0.1", port=65432, timeout=60, token=None,
+            caps=None):
+    """Send a SKILL expression to the bridge daemon and return the result string.
+
+    When *caps* (from :func:`handshake`) is given it is trusted as already
+    validated; callers that skip the handshake bypass the pre-flight check.
+    """
+    request = {"proto": PROTO, "skill": skill, "timeout": timeout}
+    nonce = None
+    if token:
+        nonce = binascii.hexlify(os.urandom(16)).decode('ascii')
+        request["nonce"] = nonce
+        request["mac"] = _mac(
+            token.encode('utf-8'), REQ_DOMAIN, str(PROTO), nonce,
+            '%.6f' % float(timeout), skill,
+        )
+    data, error = _exchange(request, host, port, timeout)
+    if error:
+        return None, error
+
     if data and data[:1] == NAK:
-        message = data[1:].decode("utf-8", errors="replace")
-        if message.startswith("AuthError"):
-            return None, message
-        return None, message
+        return None, data[1:].decode("utf-8", errors="replace").strip()
     if data and data[:1] == STX:
-        body = data[1:]
         if token and nonce:
-            if len(body) < MAC_LEN:
-                return None, (
-                    "daemon did not authenticate its response — it predates "
-                    "bridge token auth or runs with auth disabled; re-load "
-                    "virtuoso_setup.il in the CIW"
-                )
-            mac, result = body[:MAC_LEN], body[MAC_LEN:]
-            expected = _mac(token.encode('utf-8'), nonce.encode('ascii') + RESP_SALT)
-            if not hmac.compare_digest(mac.decode('ascii', errors='replace').lower(), expected):
-                return None, (
-                    "daemon response failed token authentication — the service "
-                    "behind the port does not hold your bridge token (another "
-                    "user's daemon or a spoofed listener is bound to it)"
-                )
-            return result.decode("utf-8", errors="replace"), None
-        if not token:
+            marker, body = _verify_response(data, token, nonce)
+            if marker is None:
+                return None, body
             return body.decode("utf-8", errors="replace"), None
+        if not token:
+            return data[1:].decode("utf-8", errors="replace"), None
     return None, "no response from bridge"
 
 
@@ -179,7 +258,15 @@ def main():
     else:
         parser.error("provide a SKILL expression or use --load FILE")
 
-    result, error = execute(skill, host=args.host, port=port, timeout=args.timeout, token=token)
+    # Capability handshake first: refuse to send anything executable when
+    # the daemon's protocol or auth state does not match ours.
+    caps, error = handshake(args.host, port, min(args.timeout, 10), token)
+    if error:
+        sys.stderr.write("ERROR: %s\n" % error)
+        return 1
+
+    result, error = execute(skill, host=args.host, port=port, timeout=args.timeout,
+                            token=token, caps=caps)
     if error:
         sys.stderr.write("ERROR: %s\n" % error)
         return 1
