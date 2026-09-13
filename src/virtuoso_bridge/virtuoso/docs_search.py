@@ -21,8 +21,10 @@ DIRECT_DOC_ROOT_ENV_VARS = ("CADENCE_DOC_ROOT", "CADENCE_DOC_ROOTS")
 INSTALL_ROOT_ENV_VARS = ("CDS_INST_DIR", "CDSHOME", "CDS_HOME")
 SEARCH_SUFFIXES = {".html", ".htm", ".txt", ".xml", ".json", ".tgf"}
 CONTENT_SUFFIXES = SEARCH_SUFFIXES - {".tgf"}
-SCHEMA_VERSION = 3
-DOCUMENT_PREVIEW_BYTES = 64 * 1024
+# v4: documents are indexed in full — earlier schemas truncated content at
+# 64 KiB, so matches past that point were invisible.  Bumping the version
+# forces every existing (truncated) index to rebuild.
+SCHEMA_VERSION = 4
 QUERY_STOPWORDS = {
     "a",
     "all",
@@ -1006,7 +1008,7 @@ def _create_schema(con: sqlite3.Connection) -> None:
 
 def _index_document(con: sqlite3.Connection, root: Path, path: Path) -> bool:
     try:
-        raw = _read_preview_text(path)
+        raw = _read_text(path)
     except OSError:
         return False
     title, text = _extract_document_text(path, raw)
@@ -1061,16 +1063,6 @@ def _index_tgf(con: sqlite3.Connection, root: Path, path: Path) -> int:
         )
         count += 1
     return count
-
-
-def _read_preview_text(path: Path, max_bytes: int = DOCUMENT_PREVIEW_BYTES) -> str:
-    data = path.read_bytes()[:max_bytes]
-    for encoding in ("utf-8", "utf-16", "latin-1"):
-        try:
-            return data.decode(encoding)
-        except UnicodeDecodeError:
-            continue
-    return data.decode("utf-8", errors="replace")
 
 
 def _should_index_tgf(root: Path, path: Path) -> bool:
@@ -1302,7 +1294,7 @@ def _remote_doc_index_command(doc_root: str) -> str:
             [f"{install_root}/tools.lnx86/python/64bit/bin/python3"]
         )
         + _remote_python_probe_error("vb_doc_index")
-        + f"\"$vb_py\" - \"$vb_doc_root\" {DOCUMENT_PREVIEW_BYTES} <<'PY'\n"
+        + f"\"$vb_py\" - \"$vb_doc_root\" <<'PY'\n"
         f"{_REMOTE_DOC_INDEX_SCRIPT}\n"
         "PY\n"
     )
@@ -1324,8 +1316,7 @@ except ImportError:
     from HTMLParser import HTMLParser
     unescape = HTMLParser().unescape
 
-ROOT = sys.argv[1].rstrip("/")
-PREVIEW_BYTES = int(sys.argv[2])
+ROOT = sys.argv[1].replace("\\", "/").rstrip("/")
 SEARCH_SUFFIXES = set([".html", ".htm", ".txt", ".xml", ".json", ".tgf"])
 CONTENT_SUFFIXES = SEARCH_SUFFIXES - set([".tgf"])
 CANONICAL_TGF = "api_more_info/api_more_info.tgf"
@@ -1335,16 +1326,21 @@ def squash(text):
     return re.sub(r"\s+", " ", text or "").strip()
 
 
+def posix(path):
+    return str(path).replace("\\", "/")
+
+
 def relpath(path):
-    root = ROOT.rstrip("/")
+    path = posix(path)
+    root = ROOT
     if path.startswith(root + "/"):
         return path[len(root) + 1:]
     return os.path.relpath(path, root)
 
 
-def read_preview(path):
+def read_text(path):
     with open(path, "rb") as fh:
-        data = fh.read(PREVIEW_BYTES)
+        data = fh.read()
     for encoding in ("utf-8", "utf-16", "latin-1"):
         try:
             return data.decode(encoding)
@@ -1369,10 +1365,10 @@ def resolve_tgf_target(target_ref, tgf_path):
     match = re.match(r"^\$([^/\\]+)[/\\]?(.*)$", target_ref)
     if match:
         doc_dir, rest = match.groups()
-        return os.path.join(ROOT, doc_dir, rest)
+        return posix(os.path.join(ROOT, doc_dir, rest))
     if os.path.isabs(target_ref):
         return target_ref
-    return os.path.join(os.path.dirname(tgf_path), target_ref)
+    return posix(os.path.join(os.path.dirname(tgf_path), target_ref))
 
 
 def iter_tgf_records(path):
@@ -1412,7 +1408,7 @@ def iter_document_paths():
         dirnames.sort()
         for filename in sorted(filenames):
             if os.path.splitext(filename)[1].lower() in CONTENT_SUFFIXES:
-                yield os.path.join(dirpath, filename)
+                yield posix(os.path.join(dirpath, filename))
 
 
 fd, out_path = tempfile.mkstemp(prefix="vb_doc_index_", suffix=".jsonl.gz")
@@ -1425,7 +1421,7 @@ with gzip.open(out_path, "wb") as out:
         filename = os.path.basename(path)
         suffix = os.path.splitext(filename)[1].lower()
         try:
-            raw = read_preview(path)
+            raw = read_text(path)
             title, text = extract_text(path, raw)
         except Exception:
             continue
@@ -1439,7 +1435,7 @@ with gzip.open(out_path, "wb") as out:
         })
         documents += 1
 
-    canonical_tgf_path = os.path.join(ROOT, CANONICAL_TGF)
+    canonical_tgf_path = posix(os.path.join(ROOT, CANONICAL_TGF))
     if os.path.isfile(canonical_tgf_path):
         for record in iter_tgf_records(canonical_tgf_path):
             emit(out, record)

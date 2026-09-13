@@ -1286,7 +1286,7 @@ def cli_doc_search(
         roots = resolve_doc_roots(doc_roots)
         payload: dict[str, object]
         if list_roots:
-            payload = {"ok": True, "doc_roots": [str(root) for root in roots]}
+            payload = {"ok": True, "doc_roots": [str(root) for root in roots], "results": []}
         else:
             if not query:
                 print("Error: query argument required for 'doc-search'", file=sys.stderr)

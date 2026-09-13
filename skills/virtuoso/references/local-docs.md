@@ -198,6 +198,14 @@ Both sources are merged and de-duplicated. Override explicitly with
 | `api_more_info.tgf` + referenced HTMLs (skill-info) | user cache dir under `skill_finder/<host>/more_info/` | re-downloaded when the remote tgf path changes |
 | Doc index + downloaded match files (doc-search) | user cache dir under `docs_search/<host>/` | `--rebuild-index` (force), `--cache-dir` (move) |
 
+`<host>` is the **GUI/documentation host** — the machine whose Cadence
+installation is being read. In one-host setups that is the same host the
+tunnel targets; with split `VB_GUI_HOST` / `VB_DAEMON_HOST` roles the caches
+key by the GUI host, so pointing `VB_GUI_HOST` at a different install
+re-downloads instead of serving the old host's cache. Discovery, indexing,
+and More Info downloads all run against the GUI host — the daemon host never
+needs the doc tree.
+
 The user cache dir is overridable with the `VB_CACHE_DIR` environment variable
 (useful on machines where the default AppData/`~/.cache` location is
 restricted). A stale index (docs updated on the host) is the most common cause

@@ -489,6 +489,26 @@ def test_client_search_docs_deduplicates_topic_and_document_hits(tmp_path: Path)
     assert locations == ["skdfref/dbOpenCellViewByType.html"]
 
 
+def _run_remote_script(
+    script: str,
+    tmp_path: Path,
+    *,
+    env: dict[str, str] | None = None,
+    timeout: int = 60,
+) -> subprocess.CompletedProcess:
+    """Run a generated remote script through local bash."""
+    script_path = tmp_path / "vb_remote_script.sh"
+    script_path.write_text(script, encoding="utf-8", newline="\n")
+    return subprocess.run(
+        ["bash", str(script_path)],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+        env=env,
+    )
+
+
 def test_remote_doc_index_command_extracts_records(tmp_path: Path) -> None:
     doc_root = tmp_path / "doc"
     html_path = doc_root / "skdfref" / "dbOpenCellViewByType.html"
@@ -504,13 +524,7 @@ def test_remote_doc_index_command_extracts_records(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    result = subprocess.run(
-        ["bash", "-lc", _remote_doc_index_command(str(doc_root))],
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
-    )
+    result = _run_remote_script(_remote_doc_index_command(str(doc_root)), tmp_path)
 
     assert result.returncode == 0, result.stderr
     summary = json.loads(result.stdout.strip().splitlines()[-1])
@@ -547,13 +561,7 @@ def test_remote_doc_index_command_orders_records_deterministically(tmp_path: Pat
         encoding="utf-8",
     )
 
-    result = subprocess.run(
-        ["bash", "-lc", _remote_doc_index_command(str(doc_root))],
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
-    )
+    result = _run_remote_script(_remote_doc_index_command(str(doc_root)), tmp_path)
 
     assert result.returncode == 0, result.stderr
     summary = json.loads(result.stdout.strip().splitlines()[-1])
@@ -598,14 +606,7 @@ def test_remote_doc_index_command_skips_broken_cadence_python(tmp_path: Path) ->
     env = os.environ.copy()
     env["CDSHOME"] = str(install_root)
     env["PATH"] = f"{good_bin}{os.pathsep}{env.get('PATH', '')}"
-    result = subprocess.run(
-        ["bash", "-lc", _remote_doc_index_command(str(doc_root))],
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
-        env=env,
-    )
+    result = _run_remote_script(_remote_doc_index_command(str(doc_root)), tmp_path, env=env)
 
     assert result.returncode == 0, result.stderr
     assert "broken cadence python" not in result.stderr
@@ -812,6 +813,7 @@ def test_client_doc_info_uses_remote_runner(tmp_path: Path) -> None:
 
     payload = client.doc_info()
 
+    assert payload["ok"] is True
     assert payload["doc_roots"][0]["doc_root"] == remote_root.as_posix()
     assert payload["doc_roots"][0]["virtuoso_version"] == "23.1"
 
@@ -853,3 +855,202 @@ def test_discover_remote_doc_roots_yields_posix_root_on_any_client(monkeypatch) 
     assert roots == ["/opt/cadence/IC231/doc"]
     for root in roots:
         assert "\\" not in root
+
+
+# ---------------------------------------------------------------------------
+# Full-text indexing: no 64 KiB preview truncation
+# ---------------------------------------------------------------------------
+
+
+def _write_chapter_style_document(doc_root: Path, *, filler_paragraphs: int = 4000) -> Path:
+    """IC618-style chapter page: one big HTML file holding many topics.
+
+    The needle topic sits after more than 64 KiB of preceding content, the
+    point where the old preview-truncated indexer stopped reading.
+    """
+    chapter = doc_root / "skdfref" / "cvio.html"
+    chapter.parent.mkdir(parents=True, exist_ok=True)
+    filler = "".join(
+        f"<p>Cellview chapter filler {index}: routine reference text.</p>\n"
+        for index in range(filler_paragraphs)
+    )
+    chapter.write_text(
+        "<html><head><title>Cellview Database Functions</title></head><body>\n"
+        + filler
+        + "<h4>dbZebraOpenCellView</h4>\n"
+        "<p>Opens a zebra-striped cellview for offline debugging.</p>\n"
+        "</body></html>",
+        encoding="utf-8",
+    )
+    return chapter
+
+
+def test_indexed_search_finds_match_after_64kib(tmp_path: Path) -> None:
+    doc_root = tmp_path / "doc"
+    chapter = _write_chapter_style_document(doc_root)
+    assert chapter.stat().st_size > 128 * 1024
+
+    payload = VirtuosoClient.local().search_docs(
+        "dbZebraOpenCellView",
+        doc_roots=[doc_root],
+        cache_dir=tmp_path / "cache",
+    )
+
+    assert payload["results"], "match after 64 KiB must be indexed"
+    result = payload["results"][0]
+    assert result["relative_path"] == "skdfref/cvio.html"
+    assert "zebra-striped" in result["snippet"]
+
+
+def test_remote_doc_index_command_indexes_beyond_64kib(tmp_path: Path) -> None:
+    doc_root = tmp_path / "doc"
+    _write_chapter_style_document(doc_root)
+
+    result = _run_remote_script(_remote_doc_index_command(str(doc_root)), tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(result.stdout.strip().splitlines()[-1])
+    records_path = Path(summary["path"])
+    try:
+        with gzip.open(records_path, "rt", encoding="utf-8") as fh:
+            records = [json.loads(line) for line in fh if line.strip()]
+    finally:
+        records_path.unlink(missing_ok=True)
+
+    assert summary["documents"] == 1
+    text = records[0]["text"]
+    assert len(text) > 64 * 1024, "remote index must not truncate document text"
+    assert "dbZebraOpenCellView" in text
+    assert "zebra-striped" in text
+
+
+def test_search_rebuilds_index_from_older_schema_version(tmp_path: Path) -> None:
+    from virtuoso_bridge.virtuoso.docs_search import SCHEMA_VERSION, _index_dir_for_root
+
+    doc_root = tmp_path / "doc"
+    doc_root.mkdir()
+    (doc_root / "guide.html").write_text(
+        "<html><title>Net Expression Guide</title><body>Use net expression labels.</body></html>",
+        encoding="utf-8",
+    )
+    cache_root = tmp_path / "cache"
+    index_dir = _index_dir_for_root(cache_root, doc_root.resolve())
+    index_dir.mkdir(parents=True)
+    # A pre-existing index at the previous schema version (truncated text)
+    # plus a placeholder db must be rejected and rebuilt.
+    (index_dir / "index.sqlite").write_bytes(b"")
+    (index_dir / "manifest.json").write_text(
+        json.dumps(
+            {"schema_version": SCHEMA_VERSION - 1, "doc_root": doc_root.resolve().as_posix()}
+        ),
+        encoding="utf-8",
+    )
+
+    results = search_docs("net expression", [doc_root], cache_root=cache_root)
+
+    assert results and results[0]["relative_path"] == "guide.html"
+    manifest = json.loads((index_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == SCHEMA_VERSION
+
+
+# ---------------------------------------------------------------------------
+# doc-info --json schema parity between local and remote modes
+# ---------------------------------------------------------------------------
+
+
+def test_remote_doc_info_script_payload_keys_match_local(tmp_path: Path) -> None:
+    doc_root = _make_fake_doc_root(tmp_path, sdp="Base_IC06.18.000_lnx86.sdp")
+    local_info = doc_root_info_local([doc_root])[0]
+
+    good_bin = tmp_path / "bin"
+    good_bin.mkdir()
+    good_python = good_bin / "python3"
+    good_python.write_text(
+        f"#!/bin/sh\nexec {shlex.quote(sys.executable)} \"$@\"\n",
+        encoding="utf-8",
+    )
+    good_python.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{good_bin}{os.pathsep}{env.get('PATH', '')}"
+
+    result = _run_remote_script(
+        _remote_doc_info_script([doc_root.resolve().as_posix()]), tmp_path, env=env
+    )
+
+    assert result.returncode == 0, result.stderr
+    remote_info = json.loads(result.stdout.strip().splitlines()[-1])[0]
+
+    assert list(remote_info.keys()) == list(local_info.keys())
+    assert remote_info["virtuoso_version"] == local_info["virtuoso_version"]
+    assert remote_info["version_source"] == local_info["version_source"]
+    assert remote_info["skdfref"]["style"] == local_info["skdfref"]["style"]
+    for section in ("skill_finder", "api_more_info", "skdfref"):
+        assert list(remote_info[section].keys()) == list(local_info[section].keys())
+
+
+def test_client_doc_info_includes_ok_key_in_every_mode(tmp_path: Path, monkeypatch) -> None:
+    doc_root = _make_fake_doc_root(tmp_path, sdp="Base_IC06.18.000_lnx86.sdp")
+
+    # Explicit doc roots
+    explicit = VirtuosoClient.local().doc_info(doc_roots=[doc_root])
+    assert explicit["ok"] is True
+    assert explicit["doc_roots"]
+
+    # Remote runner
+    remote = VirtuosoClient(
+        tunnel=_RemoteDocsTunnel(
+            _RemoteDocInfoRunner(
+                [
+                    {
+                        "doc_root": "/opt/cadence/IC231/doc",
+                        "virtuoso_version": "23.1",
+                        "version_source": "sdp",
+                        "doc_set_count": 252,
+                    }
+                ]
+            )
+        )
+    ).doc_info()
+    assert remote["ok"] is True
+    assert remote["doc_roots"]
+
+    # Local fallback without configured docs
+    monkeypatch.delenv("CADENCE_DOC_ROOT", raising=False)
+    monkeypatch.delenv("CADENCE_DOC_ROOTS", raising=False)
+    monkeypatch.delenv("CDS_INST_DIR", raising=False)
+    monkeypatch.delenv("CDSHOME", raising=False)
+    monkeypatch.delenv("CDS_HOME", raising=False)
+    fallback = VirtuosoClient.local().doc_info()
+    assert fallback["ok"] is True
+    assert fallback["doc_roots"] == []
+
+    assert list(explicit.keys()) == list(remote.keys()) == list(fallback.keys())
+
+
+def test_doc_info_cli_bridge_mode_json_schema_matches_local(tmp_path: Path, capsys, monkeypatch) -> None:
+    doc_root = _make_fake_doc_root(tmp_path, sdp="Base_IC06.18.000_lnx86.sdp")
+    local_infos = doc_root_info_local([doc_root])
+
+    class _FakeDocsClient:
+        @classmethod
+        def from_env(cls, profile=None):
+            return cls()
+
+        def doc_info(self):
+            return {"ok": True, "doc_roots": local_infos}
+
+    monkeypatch.setattr(virtuoso_bridge, "VirtuosoClient", _FakeDocsClient)
+    monkeypatch.setattr("virtuoso_bridge.cli._load_cli_env", lambda: None)
+    monkeypatch.setattr("virtuoso_bridge.profile.resolve_profile", lambda explicit=None: explicit)
+
+    rc = main(["doc-info", "--json"])
+    assert rc == 0
+    bridge_payload = json.loads(capsys.readouterr().out)
+
+    rc = main(["doc-info", "--doc-root", str(doc_root), "--json"])
+    assert rc == 0
+    local_payload = json.loads(capsys.readouterr().out)
+
+    assert list(bridge_payload.keys()) == list(local_payload.keys()) == ["ok", "doc_roots"]
+    assert bridge_payload["ok"] is local_payload["ok"] is True
+    assert list(bridge_payload["doc_roots"][0].keys()) == list(local_payload["doc_roots"][0].keys())
