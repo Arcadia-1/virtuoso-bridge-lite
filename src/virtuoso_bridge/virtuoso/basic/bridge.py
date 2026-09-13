@@ -138,16 +138,8 @@ class VirtuosoClient(VirtuosoInterface):
             client._reject_cross_user_daemon_if_reachable(profile=profile, timeout=min(timeout, 5))
             return client
 
-        # No tunnel running — start one
-        suffix = f"_{profile}" if profile else ""
-        remote_host = os.getenv(f"VB_REMOTE_HOST{suffix}", "").strip()
-        if not remote_host:
-            raise RuntimeError(
-                f"VB_REMOTE_HOST{suffix} must be set. "
-                "Use an explicit env file, create ./.env, or run `virtuoso-bridge init` "
-                "to create ~/.virtuoso-bridge/.env."
-            )
-
+        # No tunnel running — let the role-aware SSH factory validate either
+        # the legacy VB_REMOTE_HOST setting or the split GUI/daemon hosts.
         ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
         client = cls(host="127.0.0.1", port=ssh.port, timeout=timeout, tunnel=ssh, log_to_ciw=log_to_ciw)
         client._reject_cross_user_daemon_if_reachable(profile=profile, timeout=min(timeout, 5))

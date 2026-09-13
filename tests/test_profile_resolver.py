@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sys
 
@@ -168,6 +169,45 @@ def test_virtuoso_client_from_env_uses_resolved_profile(monkeypatch, tmp_path) -
         ("read_state", "t28_digital"),
         ("from_env", "t28_digital"),
     ]
+
+
+def test_virtuoso_client_from_env_accepts_role_only_hosts_without_tunnel(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    _isolate_profile_env(monkeypatch, tmp_path)
+    monkeypatch.delenv("VB_REMOTE_HOST", raising=False)
+    monkeypatch.setenv("VB_GUI_HOST", "gui-a")
+    monkeypatch.setenv("VB_DAEMON_HOST", "compute-b")
+    monkeypatch.setattr(
+        "virtuoso_bridge.virtuoso.basic.bridge.load_vb_env",
+        lambda: None,
+    )
+    seen: list[tuple[str, str | None]] = []
+
+    class _FakeSSHClient:
+        port = 65432
+
+        @staticmethod
+        def is_running(profile=None):
+            seen.append(("is_running", profile))
+            return False
+
+        @classmethod
+        def from_env(cls, keep_remote_files=True, profile=None):
+            assert keep_remote_files
+            assert not os.environ.get("VB_REMOTE_HOST")
+            assert os.environ["VB_GUI_HOST"] == "gui-a"
+            assert os.environ["VB_DAEMON_HOST"] == "compute-b"
+            seen.append(("from_env", profile))
+            return cls()
+
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHClient", _FakeSSHClient)
+
+    client = VirtuosoClient.from_env()
+
+    assert client.port == 65432
+    assert seen == [("is_running", None), ("from_env", None)]
 
 
 def test_virtuoso_client_from_env_rejects_cross_user_daemon(monkeypatch, tmp_path) -> None:
