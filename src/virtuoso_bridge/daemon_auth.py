@@ -130,8 +130,9 @@ def create_token_exclusive(target: str | Path, token: str) -> str:
     (create-if-absent), so under a first-time creation race the winner's
     complete file is always the one on disk and every racer **adopts** it —
     concurrent creators converge on one secret instead of holding different
-    tokens.  Falls back to ``os.replace`` (last-writer-wins, mitigated by the
-    read-back) where hard links are unsupported.  Raises OSError on failure.
+    tokens.  If the filesystem cannot provide create-if-absent hard links,
+    creation fails closed rather than falling back to an overwrite-prone
+    rename.  Raises OSError on failure.
     """
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -152,7 +153,7 @@ def create_token_exclusive(target: str | Path, token: str) -> str:
             os.link(tmp_name, str(target))
         except OSError as exc:
             if exc.errno != errno.EEXIST:
-                os.replace(tmp_name, str(target))
+                raise
         _tighten_perms(target)
         disk = read_local_token(target)
         if disk is None:

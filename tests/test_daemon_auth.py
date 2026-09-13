@@ -9,6 +9,7 @@ insecure opt-in still works end to end.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import hmac
 import importlib.util
@@ -459,6 +460,19 @@ def test_token_race_adopts_disk_token(token_home, monkeypatch) -> None:
     assert daemon_auth.read_local_token() == winner_token
 
 
+def test_token_creation_fails_closed_without_exclusive_link(
+    token_home,
+    monkeypatch,
+) -> None:
+    def unsupported_link(_source, _target):
+        raise OSError(errno.EPERM, "hard links unavailable")
+
+    monkeypatch.setattr(os, "link", unsupported_link)
+
+    assert daemon_auth.read_or_create_local_token() is None
+    assert daemon_auth.read_local_token() is None
+
+
 def test_server_rejects_replayed_nonce(authed_daemon) -> None:
     """Even a validly signed request must not replay: nonce is single-use."""
     payload = {
@@ -521,6 +535,43 @@ def test_local_mode_token_failure_is_fatal(tmp_path, monkeypatch) -> None:
         VirtuosoClient.local(port=1, timeout=5)
 
 
+def test_from_env_without_tunnel_defers_daemon_auth(monkeypatch) -> None:
+    class _NoTunnelSSHClient:
+        port = 65001
+
+        @staticmethod
+        def is_running(profile=None):
+            return False
+
+        @classmethod
+        def from_env(cls, keep_remote_files=True, profile=None):
+            assert keep_remote_files
+            return cls()
+
+    monkeypatch.setattr(
+        "virtuoso_bridge.virtuoso.basic.bridge.load_vb_env",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.tunnel.SSHClient",
+        _NoTunnelSSHClient,
+    )
+    monkeypatch.setattr(
+        "virtuoso_bridge.virtuoso.basic.bridge._acquire_daemon_token",
+        lambda _ssh: pytest.fail("daemon token was acquired before tunnel startup"),
+    )
+    monkeypatch.setattr(
+        VirtuosoClient,
+        "_reject_cross_user_daemon_if_reachable",
+        lambda *_args, **_kwargs: pytest.fail("daemon was probed before tunnel startup"),
+    )
+
+    client = VirtuosoClient.from_env()
+
+    assert client.port == 65001
+    assert client.daemon_token is None
+
+
 def test_skill_exec_tool_signs_and_verifies(authed_daemon, tmp_path) -> None:
     spec = importlib.util.spec_from_file_location(
         "skill_exec", Path(__file__).resolve().parents[1] / "tools" / "skill_exec.py"
@@ -565,6 +616,64 @@ def test_skill_exec_handshake_parses_unsigned_caps(authoff_daemon) -> None:
     caps, error = tool.handshake("127.0.0.1", authoff_daemon.port, 5, None)
     assert error is None
     assert caps["proto"] == 1 and caps["auth"] == "off"
+
+
+@pytest.mark.parametrize(
+    "caps_body",
+    [
+        "null",
+        '{"proto": 2, "auth": "off"}',
+        '{"proto": 1, "auth": "on"}',
+        '{"proto": 1, "auth": "off", "virtuoso_pid": "4242"}',
+    ],
+)
+def test_skill_exec_handshake_rejects_bad_unsigned_caps(caps_body) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "skill_exec", Path(__file__).resolve().parents[1] / "tools" / "skill_exec.py"
+    )
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    daemon = _AuthDaemon(token=None, caps_body=caps_body)
+    try:
+        caps, error = tool.handshake("127.0.0.1", daemon.port, 5, None)
+        assert caps is None
+        assert error
+        assert daemon.executed == []
+    finally:
+        daemon.close()
+
+
+def test_skill_exec_rejects_unvalidated_supplied_caps(authoff_daemon) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "skill_exec", Path(__file__).resolve().parents[1] / "tools" / "skill_exec.py"
+    )
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+
+    result, error = tool.execute(
+        "1+1",
+        host="127.0.0.1",
+        port=authoff_daemon.port,
+        timeout=5,
+        token=None,
+        caps={},
+    )
+
+    assert result is None and error
+    assert authoff_daemon.executed == []
+
+
+def test_skill_exec_cli_missing_token_fails_closed(monkeypatch, capsys) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "skill_exec", Path(__file__).resolve().parents[1] / "tools" / "skill_exec.py"
+    )
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    monkeypatch.setattr(sys, "argv", ["skill_exec.py", "1+1"])
+    monkeypatch.setattr(tool, "_load_token", lambda _path: None)
+
+    assert tool.main() == 1
+    assert "refusing to send SKILL unauthenticated" in capsys.readouterr().err
 
 
 def test_skill_exec_execute_handshakes_itself(legacy_daemon) -> None:
@@ -970,9 +1079,15 @@ def test_client_pid_query_unauthenticated_is_rejected(authed_daemon) -> None:
 
 
 class _FakeRunner:
-    def __init__(self, remote_token: str | None = None, home: str = "/home/user1"):
+    def __init__(
+        self,
+        remote_token: str | None = None,
+        home: str = "/home/user1",
+        race_winner_token: str | None = None,
+    ):
         self.remote_token = remote_token
         self.home = home
+        self.race_winner_token = race_winner_token
         self.uploads: list[tuple[str, str]] = []
         self.commands: list[str] = []
 
@@ -984,6 +1099,11 @@ class _FakeRunner:
             return CommandResult(1, "", "no such file")
         if command.startswith("printf"):
             return CommandResult(0, self.home, "")
+        if "(ln " in command and "bridge_token" in command:
+            if self.remote_token is None:
+                uploaded = self.uploads[-1][0].strip()
+                self.remote_token = self.race_winner_token or uploaded
+            return CommandResult(0, self.remote_token + "\n", "")
         return CommandResult(0, "", "")
 
     def upload_text(self, text: str, remote_path: str, timeout=None) -> CommandResult:
@@ -1014,14 +1134,28 @@ def test_sshclient_ensure_daemon_token_provisions_atomically() -> None:
     token = client.ensure_daemon_token()
 
     assert daemon_auth.is_valid_token(token)
-    # Token goes to a temp path first, then is renamed into place.
+    # Token goes to a unique temp path, then is linked into place only if
+    # absent and read back so concurrent starters converge on one value.
     uploaded_path = runner.uploads[0][1]
     assert uploaded_path.startswith("/home/user1/.virtuoso-bridge/bridge_token.tmp.")
     assert any(
-        "chmod 600" in cmd and "mv -f" in cmd and "bridge_token'" in cmd
+        "chmod 600" in cmd and "(ln " in cmd and "cat " in cmd
         for cmd in runner.commands
     )
+    assert not any("mv -f" in cmd for cmd in runner.commands)
     assert any("chmod 700" in cmd for cmd in runner.commands)
+
+
+def test_sshclient_ensure_daemon_token_adopts_remote_race_winner() -> None:
+    from virtuoso_bridge.transport.tunnel import SSHClient
+
+    client = SSHClient(remote_host="server2", remote_user="user1", port=65061)
+    runner = _FakeRunner(remote_token=None, race_winner_token=TOKEN)
+    client._ssh_runner = runner
+
+    assert client.ensure_daemon_token() == TOKEN
+    assert client.daemon_token == TOKEN
+    assert runner.uploads[0][0].strip() != TOKEN
 
 
 def test_sshclient_ensure_daemon_token_fatal_without_optin(monkeypatch) -> None:

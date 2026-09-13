@@ -477,9 +477,10 @@ class SSHClient:
             if result.returncode == 0 and daemon_auth.is_valid_token(existing):
                 self._daemon_token = existing.lower()
                 return self._daemon_token
-            # Provision a fresh token through the SSH channel: write to a
-            # temp file, chmod 600, then rename into place so readers never
-            # observe a partial or world-readable token.
+            # Provision a fresh token through the SSH channel.  Stage a
+            # complete 0600 file, then hard-link it into place only if the
+            # target is still absent.  Every concurrent starter reads back
+            # and adopts the winner instead of overwriting it with mv -f.
             token = daemon_auth.generate_token()
             home = (
                 runner.run_command('printf %s "$HOME"').stdout or ""
@@ -498,24 +499,33 @@ class SSHClient:
                     f"{mkdir.stderr.strip()}"
                 )
                 return None
-            tmp_path = f"{token_path}.tmp.{os.getpid()}"
+            tmp_path = (
+                f"{token_path}.tmp.{os.getpid()}."
+                f"{daemon_auth.generate_token()[:16]}"
+            )
             upload = runner.upload_text(token + "\n", tmp_path)
             if upload.returncode != 0:
                 self._token_unavailable(
                     f"Cannot upload bridge token: {upload.stderr.strip()}"
                 )
                 return None
+            tmp_q = shlex.quote(tmp_path)
+            token_q = shlex.quote(token_path)
             finalize = runner.run_command(
-                f"chmod 600 '{tmp_path}' && mv -f '{tmp_path}' '{token_path}'"
+                f"chmod 600 {tmp_q} && "
+                f"(ln {tmp_q} {token_q} 2>/dev/null || test -r {token_q}) && "
+                f"rm -f {tmp_q} && chmod 600 {token_q} && cat {token_q}"
             )
-            if finalize.returncode != 0:
-                runner.run_command(f"rm -f '{tmp_path}'")
+            disk_token = (finalize.stdout or "").strip()
+            if finalize.returncode != 0 or not daemon_auth.is_valid_token(disk_token):
+                runner.run_command(f"rm -f {tmp_q}")
+                detail = finalize.stderr.strip() or "installed token is unreadable or invalid"
                 self._token_unavailable(
                     f"Cannot finalize bridge token at {token_path}: "
-                    f"{finalize.stderr.strip()}"
+                    f"{detail}"
                 )
                 return None
-            self._daemon_token = token
+            self._daemon_token = disk_token.lower()
             logger.info("Provisioned bridge daemon token at %s", token_path)
             return self._daemon_token
         except daemon_auth.DaemonTokenError:

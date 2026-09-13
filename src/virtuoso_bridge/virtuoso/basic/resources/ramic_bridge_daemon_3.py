@@ -112,7 +112,11 @@ def _load_or_create_token():
     try:
         parent = os.path.dirname(path) or "."
         if not os.path.isdir(parent):
-            os.makedirs(parent)
+            try:
+                os.makedirs(parent)
+            except OSError as exc:
+                if exc.errno != errno.EEXIST or not os.path.isdir(parent):
+                    raise
         _harden_perms(parent, dir_mode=0o700)
         fd, tmp_path = tempfile.mkstemp(dir=parent, prefix=".bridge_token.", suffix=".tmp")
         try:
@@ -130,8 +134,7 @@ def _load_or_create_token():
             if exc.errno == errno.EEXIST:
                 created = False
             else:
-                os.replace(tmp_path, path)  # links unsupported: best effort
-                created = True
+                raise
         try:
             os.unlink(tmp_path)
         except OSError:

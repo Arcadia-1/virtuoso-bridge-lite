@@ -132,6 +132,29 @@ def _verify_response(data, token, nonce):
     return marker, body
 
 
+def _validate_caps(caps, token):
+    """Return None for a usable handshake payload, otherwise an error."""
+    if not isinstance(caps, dict):
+        return "daemon handshake payload is malformed (expected a JSON object)"
+    proto = caps.get("proto")
+    if not isinstance(proto, int) or isinstance(proto, bool) or proto != PROTO:
+        return "bridge protocol version mismatch: daemon speaks %r, client speaks v%d" % (
+            proto, PROTO,
+        )
+    auth = caps.get("auth")
+    expected_auth = "on" if token else "off"
+    if auth != expected_auth:
+        return "daemon handshake authentication mode mismatch: expected %s, got %r" % (
+            expected_auth, auth,
+        )
+    pid = caps.get("virtuoso_pid")
+    if pid is not None and (
+        not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0
+    ):
+        return "daemon handshake payload is malformed (bad virtuoso_pid)"
+    return None
+
+
 def handshake(host, port, timeout, token):
     """Side-effect-free capability probe (op=hello, no skill field).
 
@@ -169,8 +192,9 @@ def handshake(host, port, timeout, token):
             "daemon handshake payload was not valid JSON — it predates "
             "bridge token auth; re-load virtuoso_setup.il in the CIW"
         )
-    if not isinstance(caps, dict):
-        return None, "daemon handshake payload is malformed (expected a JSON object)"
+    error = _validate_caps(caps, token)
+    if error:
+        return None, error
     return caps, None
 
 
@@ -185,6 +209,10 @@ def execute(skill, host="127.0.0.1", port=65432, timeout=60, token=None,
     """
     if caps is None:
         caps, error = handshake(host, port, min(timeout, 10), token)
+        if error:
+            return None, error
+    else:
+        error = _validate_caps(caps, token)
         if error:
             return None, error
     request = {"proto": PROTO, "skill": skill, "timeout": timeout}
@@ -257,13 +285,16 @@ def main():
 
     token = None
     if not args.no_token:
-        token = _load_token(args.token_file or _default_token_path())
+        selected_token_path = args.token_file or _default_token_path()
+        token = _load_token(selected_token_path)
         if not token:
             sys.stderr.write(
-                "WARNING: no bridge token found (%s); sending unauthenticated "
-                "request — token-secured daemons will reject it\n"
-                % (args.token_file or _default_token_path())
+                "ERROR: no valid bridge token found at %s; refusing to send "
+                "SKILL unauthenticated. Use --no-token only for a daemon "
+                "explicitly started with authentication disabled.\n"
+                % selected_token_path
             )
+            return 1
 
     if args.load:
         normalized = _normalize_path(args.load)
