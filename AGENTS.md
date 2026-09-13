@@ -334,8 +334,15 @@ virtuoso-bridge bootstrap --window WINDOW_ID  # opt-in generated first load in o
 virtuoso-bridge dismiss-window WINDOW_ID --action enter  # dismiss one explicit X11 window
 virtuoso-bridge skill-find <query>  # search SKILL functions by name (fuzzy/prefix/suffix/exact/regex)
 virtuoso-bridge skill-info <fn>  # get detailed More Info docs for a SKILL function
-virtuoso-bridge doc-search <query>  # search installed Cadence docs (or use --doc-root locally)
+virtuoso-bridge doc-info  # Virtuoso version + doc-root structure (once per host before doc work)
+virtuoso-bridge doc-search <query>  # search installed Cadence docs (--doc-root for local,
+                                     #   --rebuild-index, --cache-dir, --json, -p PROFILE)
 ```
+
+> **Doc-first rule:** SKILL code and PDK device parameters are not reliably in LLM
+> training data and differ across Virtuoso versions. Verify against the installed
+> docs (`doc-info` → `skill-find`/`skill-info` → `doc-search`) before writing SKILL
+> or using library cells — see `skills/virtuoso/references/local-docs.md`.
 
 ## Build
 
@@ -387,7 +394,7 @@ When working on a task, check this table to find relevant skills and references.
 | **Spectre simulation** | `spectre` | `skills/spectre/SKILL.md` | `references/netlist_syntax.md`, `references/parallel.md` |
 | **Netlist cleanup / curation** | `netlist` | `skills/netlist/SKILL.md` | `references/cleaning.md`, `scripts/check_spectre_netlist.py` |
 | **Netlist export/import** | `virtuoso` | `skills/virtuoso/SKILL.md` | `references/netlist.md`, `references/batch-netlist-si.md` |
-| **Cadence documentation search** | `virtuoso` | `skills/virtuoso/SKILL.md` | `virtuoso-bridge doc-search <query>` |
+| **Cadence documentation (doc-first protocol)** | `virtuoso` | `skills/virtuoso/SKILL.md` | `references/local-docs.md` (`doc-info` / `skill-find` / `skill-info` / `doc-search`) |
 | **Parameter optimization** | `optimizer` | `skills/optimizer/SKILL.md` | — |
 
 All reference paths are relative to the skill directory (e.g. `skills/virtuoso/references/layout-skill-api.md`).
