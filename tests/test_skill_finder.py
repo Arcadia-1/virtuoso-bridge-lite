@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import virtuoso_bridge
 from virtuoso_bridge.cli import main
+from virtuoso_bridge.transport.ssh import CommandResult
 from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
 from virtuoso_bridge.virtuoso.skill_finder import SKILLFinder
 
@@ -159,3 +161,83 @@ def test_skill_more_info_uses_local_discovery_when_tunnel_has_no_ssh_runner(monk
     assert result is not None
     assert result["func_name"] == "dbOpenCellViewByType"
     assert "Open a cellview." in result["plain_text"]
+
+
+class _RemoteMoreInfoTunnel:
+    _remote_host = "eda-host"
+    remote_host = "eda-host"
+
+    def __init__(self, runner) -> None:
+        self._ssh_runner = runner
+
+
+class _RemoteMoreInfoRunner:
+    """Fake SSH runner that serves a remote doc root's More Info files."""
+
+    host = "eda-host"
+
+    def __init__(self, remote_doc_root: str) -> None:
+        self.remote_doc_root = remote_doc_root
+        self.download_calls: list[tuple[str, Path]] = []
+
+    def run_command(self, command: str, timeout: int | None = None) -> CommandResult:
+        if "which virtuoso" in command:
+            return CommandResult(0, f"{self.remote_doc_root.rstrip('/')}/../tools/dfII/bin/virtuoso\n", "")
+        if "doc/finder/SKILL" in command:
+            return CommandResult(0, f"{self.remote_doc_root}/finder/SKILL\n", "")
+        return CommandResult(1, "", "unexpected command")
+
+    def download(
+        self,
+        remote_path: str,
+        local_path: Path,
+        recursive: bool = False,
+        timeout: int | None = None,
+    ) -> CommandResult:
+        self.download_calls.append((remote_path, Path(local_path)))
+        local_path = Path(local_path)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        if remote_path.endswith(".tgf"):
+            local_path.write_text(
+                'dbOpenCellViewByType $skdfref/cvio.html "pgfId-5447242" HTML\n',
+                encoding="utf-8",
+            )
+        else:
+            local_path.write_text(
+                "<html><body>\n"
+                "<!-- [TOPIC_START_OPEN] [TOPIC_START_ATTR]text=pgfId-5447242 -->\n"
+                "<h1>dbOpenCellViewByType</h1><p>Opens a cellview.</p>\n"
+                "<!-- [TOPIC_END] -->\n"
+                "</body></html>",
+                encoding="utf-8",
+            )
+        return CommandResult(0, "", "")
+
+
+def test_skill_more_info_remote_downloads_tgf_into_cache_file(monkeypatch, tmp_path):
+    # Regression: the remote .tgf index must be downloaded to a file inside
+    # the more_info cache directory.  Targeting the directory itself replaced
+    # the directory with a file and broke every later More Info lookup.
+    remote_root = Path("/opt/cadence/IC618/doc")
+    runner = _RemoteMoreInfoRunner(remote_root.as_posix())
+    client = VirtuosoClient(tunnel=_RemoteMoreInfoTunnel(runner))
+
+    result = client.get_skill_more_info("dbOpenCellViewByType", cache_dir=tmp_path / "cache")
+
+    assert result is not None
+    assert result["func_name"] == "dbOpenCellViewByType"
+    assert "Opens a cellview." in result["plain_text"]
+
+    tgf_calls = [
+        (remote_path, local_path)
+        for remote_path, local_path in runner.download_calls
+        if remote_path.endswith(".tgf")
+    ]
+    assert len(tgf_calls) == 1
+    remote_path, local_path = tgf_calls[0]
+    # Remote path stays POSIX (Windows client safety).
+    assert remote_path == "/opt/cadence/IC618/doc/api_more_info/api_more_info.tgf"
+    # Local target is a file inside the cache dir, never the dir itself.
+    assert local_path.name == "api_more_info.tgf"
+    assert local_path.parent == tmp_path / "cache" / "more_info"
+    assert local_path.parent.is_dir()

@@ -21,8 +21,10 @@ DIRECT_DOC_ROOT_ENV_VARS = ("CADENCE_DOC_ROOT", "CADENCE_DOC_ROOTS")
 INSTALL_ROOT_ENV_VARS = ("CDS_INST_DIR", "CDSHOME", "CDS_HOME")
 SEARCH_SUFFIXES = {".html", ".htm", ".txt", ".xml", ".json", ".tgf"}
 CONTENT_SUFFIXES = SEARCH_SUFFIXES - {".tgf"}
-SCHEMA_VERSION = 3
-DOCUMENT_PREVIEW_BYTES = 64 * 1024
+# v4: documents are indexed in full — earlier schemas truncated content at
+# 64 KiB, so matches past that point were invisible.  Bumping the version
+# forces every existing (truncated) index to rebuild.
+SCHEMA_VERSION = 4
 QUERY_STOPWORDS = {
     "a",
     "all",
@@ -239,6 +241,17 @@ def search_docs(
     return _finalize_results(results, limit)
 
 
+def to_remote_posix(path: str | Path) -> str:
+    """Normalize a locally-constructed path into a remote POSIX string.
+
+    Remote Cadence installs are POSIX, but on a Windows client
+    ``Path("/opt/cadence/IC618/doc")`` stringifies with backslashes, which
+    breaks every remote path operation (scp targets, bash scripts).  This
+    converts the separators back; on POSIX clients it is a no-op.
+    """
+    return str(path).replace("\\", "/")
+
+
 def discover_remote_doc_roots(runner, *, profile: str | None = None) -> list[str]:
     """Discover Cadence documentation roots on a remote host.
 
@@ -256,7 +269,7 @@ def discover_remote_doc_roots(runner, *, profile: str | None = None) -> list[str
     except Exception:
         finder_root = None
     if finder_root is not None:
-        _append_remote_root(roots, seen, str(finder_root.parent.parent))
+        _append_remote_root(roots, seen, to_remote_posix(finder_root.parent.parent))
 
     env_result = runner.run_command(_remote_doc_env_script(profile), timeout=30)
     if env_result.returncode == 0:
@@ -995,7 +1008,7 @@ def _create_schema(con: sqlite3.Connection) -> None:
 
 def _index_document(con: sqlite3.Connection, root: Path, path: Path) -> bool:
     try:
-        raw = _read_preview_text(path)
+        raw = _read_text(path)
     except OSError:
         return False
     title, text = _extract_document_text(path, raw)
@@ -1050,16 +1063,6 @@ def _index_tgf(con: sqlite3.Connection, root: Path, path: Path) -> int:
         )
         count += 1
     return count
-
-
-def _read_preview_text(path: Path, max_bytes: int = DOCUMENT_PREVIEW_BYTES) -> str:
-    data = path.read_bytes()[:max_bytes]
-    for encoding in ("utf-8", "utf-16", "latin-1"):
-        try:
-            return data.decode(encoding)
-        except UnicodeDecodeError:
-            continue
-    return data.decode("utf-8", errors="replace")
 
 
 def _should_index_tgf(root: Path, path: Path) -> bool:
@@ -1237,21 +1240,28 @@ def _looks_like_identifier(value: str) -> bool:
     )
 
 
-def _remote_doc_index_command(doc_root: str) -> str:
+def _remote_python_probe(extra_candidates: Sequence[str] = ()) -> str:
+    """Bash snippet that sets ``vb_py`` to the first usable python3.
+
+    Candidates: ``$CDSHOME`` python, one per Cadence install root supplied
+    in *extra_candidates* (typically ``<install>/tools.lnx86/python/64bit/bin/python3``),
+    then whatever is on PATH.
+    """
+    candidates = [
+        '"$CDSHOME/tools.lnx86/python/64bit/bin/python3"',
+    ]
+    for candidate in extra_candidates:
+        candidates.append(f"{shlex.quote(candidate)}")
+    candidates += [
+        '"$(command -v python3 2>/dev/null || true)"',
+        '"$(command -v python 2>/dev/null || true)"',
+    ]
+    lines = "  " + " \\\n  ".join(candidates)
     return (
-        "# vb_doc_index\n"
-        "set -e\n"
-        f"vb_doc_root={shlex.quote(doc_root)}\n"
-        "vb_install_root=${vb_doc_root%/doc}\n"
         "vb_py=\n"
-        "for vb_candidate in \\\n"
-        "  \"$CDSHOME/tools.lnx86/python/64bit/bin/python3\" \\\n"
-        "  \"$vb_install_root/tools.lnx86/python/64bit/bin/python3\" \\\n"
-        "  \"$(command -v python3 2>/dev/null || true)\" \\\n"
-        "  \"$(command -v python 2>/dev/null || true)\"\n"
+        f"for vb_candidate in \\\n{lines}\n"
         "do\n"
         "  if [ -n \"$vb_candidate\" ] && [ -x \"$vb_candidate\" ] && \"$vb_candidate\" - <<'PYPROBE' >/dev/null 2>&1\n"
-        "import gzip\n"
         "import json\n"
         "PYPROBE\n"
         "  then\n"
@@ -1259,11 +1269,32 @@ def _remote_doc_index_command(doc_root: str) -> str:
         "    break\n"
         "  fi\n"
         "done\n"
-        "if [ -z \"$vb_py\" ]; then\n"
-        "  echo 'vb_doc_index: usable python not found' >&2\n"
+    )
+
+
+def _remote_python_probe_error(label: str) -> str:
+    return (
+        f"if [ -z \"$vb_py\" ]; then\n"
+        f"  echo '{label}: usable python not found' >&2\n"
         "  exit 127\n"
         "fi\n"
-        f"\"$vb_py\" - \"$vb_doc_root\" {DOCUMENT_PREVIEW_BYTES} <<'PY'\n"
+    )
+
+
+def _remote_doc_index_command(doc_root: str) -> str:
+    install_root = doc_root.rstrip("/")
+    if install_root.endswith("/doc"):
+        install_root = install_root[: -len("/doc")]
+    return (
+        "# vb_doc_index\n"
+        "set -e\n"
+        f"vb_doc_root={shlex.quote(doc_root)}\n"
+        f"vb_install_root={shlex.quote(install_root)}\n"
+        + _remote_python_probe(
+            [f"{install_root}/tools.lnx86/python/64bit/bin/python3"]
+        )
+        + _remote_python_probe_error("vb_doc_index")
+        + f"\"$vb_py\" - \"$vb_doc_root\" <<'PY'\n"
         f"{_REMOTE_DOC_INDEX_SCRIPT}\n"
         "PY\n"
     )
@@ -1285,8 +1316,7 @@ except ImportError:
     from HTMLParser import HTMLParser
     unescape = HTMLParser().unescape
 
-ROOT = sys.argv[1].rstrip("/")
-PREVIEW_BYTES = int(sys.argv[2])
+ROOT = sys.argv[1].replace("\\", "/").rstrip("/")
 SEARCH_SUFFIXES = set([".html", ".htm", ".txt", ".xml", ".json", ".tgf"])
 CONTENT_SUFFIXES = SEARCH_SUFFIXES - set([".tgf"])
 CANONICAL_TGF = "api_more_info/api_more_info.tgf"
@@ -1296,16 +1326,21 @@ def squash(text):
     return re.sub(r"\s+", " ", text or "").strip()
 
 
+def posix(path):
+    return str(path).replace("\\", "/")
+
+
 def relpath(path):
-    root = ROOT.rstrip("/")
+    path = posix(path)
+    root = ROOT
     if path.startswith(root + "/"):
         return path[len(root) + 1:]
     return os.path.relpath(path, root)
 
 
-def read_preview(path):
+def read_text(path):
     with open(path, "rb") as fh:
-        data = fh.read(PREVIEW_BYTES)
+        data = fh.read()
     for encoding in ("utf-8", "utf-16", "latin-1"):
         try:
             return data.decode(encoding)
@@ -1330,10 +1365,10 @@ def resolve_tgf_target(target_ref, tgf_path):
     match = re.match(r"^\$([^/\\]+)[/\\]?(.*)$", target_ref)
     if match:
         doc_dir, rest = match.groups()
-        return os.path.join(ROOT, doc_dir, rest)
+        return posix(os.path.join(ROOT, doc_dir, rest))
     if os.path.isabs(target_ref):
         return target_ref
-    return os.path.join(os.path.dirname(tgf_path), target_ref)
+    return posix(os.path.join(os.path.dirname(tgf_path), target_ref))
 
 
 def iter_tgf_records(path):
@@ -1373,7 +1408,7 @@ def iter_document_paths():
         dirnames.sort()
         for filename in sorted(filenames):
             if os.path.splitext(filename)[1].lower() in CONTENT_SUFFIXES:
-                yield os.path.join(dirpath, filename)
+                yield posix(os.path.join(dirpath, filename))
 
 
 fd, out_path = tempfile.mkstemp(prefix="vb_doc_index_", suffix=".jsonl.gz")
@@ -1386,7 +1421,7 @@ with gzip.open(out_path, "wb") as out:
         filename = os.path.basename(path)
         suffix = os.path.splitext(filename)[1].lower()
         try:
-            raw = read_preview(path)
+            raw = read_text(path)
             title, text = extract_text(path, raw)
         except Exception:
             continue
@@ -1400,7 +1435,7 @@ with gzip.open(out_path, "wb") as out:
         })
         documents += 1
 
-    canonical_tgf_path = os.path.join(ROOT, CANONICAL_TGF)
+    canonical_tgf_path = posix(os.path.join(ROOT, CANONICAL_TGF))
     if os.path.isfile(canonical_tgf_path):
         for record in iter_tgf_records(canonical_tgf_path):
             emit(out, record)
@@ -1408,3 +1443,290 @@ with gzip.open(out_path, "wb") as out:
 
 print(json.dumps({"path": out_path, "documents": documents, "topics": topics}))
 '''
+
+
+# ---------------------------------------------------------------------------
+# Doc-root info: version + structure facts for one or more doc roots.
+#
+# Documentation trees differ between Virtuoso versions (e.g. IC618 uses
+# chapter-based ``skdfref`` pages with anchors while IC231 ships one page per
+# function), so agents must identify the *active* version and structure before
+# relying on any doc path.  ``virtuoso-bridge doc-info`` reports these facts.
+# ---------------------------------------------------------------------------
+
+_SDP_VERSION_RE = re.compile(r"IC(\d{1,2})\.(\d{2})(?:\.(\d{3}))?", re.IGNORECASE)
+_INSTALL_DIR_VERSION_RE = re.compile(r"^IC(\d{3})$", re.IGNORECASE)
+
+
+def parse_virtuoso_version(
+    install_dir_name: str = "",
+    sdp_names: Sequence[str] = (),
+) -> str:
+    """Best-effort Virtuoso version string from install-root evidence.
+
+    Cadence install roots are named ``IC<NNN>`` (e.g. ``IC618``, ``IC231``),
+    and each root normally contains ``*.sdp`` files whose names embed the
+    version, e.g. ``Base_IC06.18.000_lnx86.sdp`` (6.1.8) or
+    ``Hotfix_IC23.10.030_lnx86.sdp`` (23.1).  The sdp name is preferred when
+    present because it is unambiguous; the directory name is a fallback.
+
+    Directory-name fallback rules: old-series roots (5.x / 6.x) are
+    ``X.YZ`` digits mapped to ``X.Y.Z`` (``IC618`` -> ``6.1.8``); new-series
+    roots (>= 18) are ``XY.Z`` (``IC231`` -> ``23.1``).
+
+    Returns ``""`` when no evidence matches.
+    """
+    for name in sdp_names:
+        match = _SDP_VERSION_RE.search(str(Path(name).name))
+        if match:
+            major = int(match.group(1))
+            minor, patch = divmod(int(match.group(2)), 10)
+            version = f"{major}.{minor}"
+            if patch:
+                version += f".{patch}"
+            return version
+    match = _INSTALL_DIR_VERSION_RE.match((install_dir_name or "").strip())
+    if match:
+        digits = match.group(1)
+        if digits[0] in ("5", "6"):
+            return f"{digits[0]}.{digits[1]}.{digits[2]}"
+        return f"{int(digits[:2])}.{digits[2]}"
+    return ""
+
+
+def _skdfref_style(skdfref_dir: Path) -> dict[str, object]:
+    """Detect whether a ``skdfref`` tree is chapter-based or per-function.
+
+    Chapter-based (e.g. IC618): a few dozen large files such as
+    ``cvio.html`` with per-function anchors.  Per-function (e.g. IC231):
+    one page per function (``cvio_re_dbOpenCellViewByType.html``, ~2000 files).
+    """
+    info: dict[str, object] = {
+        "path": skdfref_dir.as_posix(),
+        "found": skdfref_dir.is_dir(),
+        "html_count": 0,
+        "style": "unknown",
+        "sample": [],
+    }
+    if not skdfref_dir.is_dir():
+        return info
+    try:
+        entries = sorted(
+            (
+                p
+                for p in skdfref_dir.iterdir()
+                if p.suffix.lower() in (".html", ".htm")
+            ),
+            key=lambda p: p.name,
+        )
+    except OSError:
+        return info
+    info["html_count"] = len(entries)
+    if entries:
+        info["sample"] = [p.name for p in entries[:5]]
+        # Per-function trees are an order of magnitude larger than chapter
+        # trees; the threshold sits far outside both observed layouts.
+        info["style"] = "per-function" if len(entries) > 100 else "chapter"
+    return info
+
+
+def _doc_root_info_local(root: Path) -> dict[str, object]:
+    """Collect version + structure facts for one local doc root."""
+    root = root.resolve()
+    install = root.parent if root.name.lower() == "doc" else root
+    sdp_names: list[str] = []
+    try:
+        sdp_names = sorted(
+            p.name for p in install.iterdir() if p.suffix == ".sdp"
+        )
+    except OSError:
+        sdp_names = []
+    version = parse_virtuoso_version(install.name, sdp_names)
+    finder_root = root / "finder" / "SKILL"
+    fnd_count = 0
+    if finder_root.is_dir():
+        fnd_count = sum(1 for _ in finder_root.rglob("*.fnd"))
+    tgf = root / "api_more_info" / "api_more_info.tgf"
+    try:
+        top_level = sorted(p.name for p in root.iterdir() if p.is_dir())
+    except OSError:
+        top_level = []
+    return {
+        "doc_root": root.as_posix(),
+        "install_root": install.as_posix(),
+        "virtuoso_version": version,
+        "version_source": (
+            "sdp" if version and sdp_names else ("install_dir" if version else "none")
+        ),
+        "doc_set_count": len(top_level),
+        "doc_sets_sample": top_level[:20],
+        "skill_finder": {
+            "path": finder_root.as_posix(),
+            "found": finder_root.is_dir(),
+            "fnd_count": fnd_count,
+        },
+        "api_more_info": {
+            "tgf": tgf.as_posix(),
+            "found": tgf.is_file(),
+            "tgf_bytes": tgf.stat().st_size if tgf.is_file() else 0,
+        },
+        "skdfref": _skdfref_style(root / "skdfref"),
+    }
+
+
+def doc_root_info_local(doc_roots: Sequence[str | Path]) -> list[dict[str, object]]:
+    """Collect version + structure facts for local doc roots."""
+    infos: list[dict[str, object]] = []
+    for raw in doc_roots:
+        root = Path(raw).expanduser()
+        if root.is_dir():
+            infos.append(_doc_root_info_local(root))
+    return infos
+
+
+def _remote_doc_info_script(doc_roots: Sequence[str]) -> str:
+    """Bash script that prints a JSON array of doc-root facts.
+
+    The doc roots are embedded in the Python source itself (a quoted
+    heredoc), never passed as argv: some remote shell/ssh chains mangle
+    double quotes in command arguments, which would break JSON parsing.
+    """
+    roots_literal = json.dumps([str(root) for root in doc_roots])
+    install_candidates = []
+    for root in doc_roots:
+        r = str(root).rstrip("/")
+        install = r[: -len("/doc")] if r.endswith("/doc") else r
+        install_candidates.append(
+            f"{install}/tools.lnx86/python/64bit/bin/python3"
+        )
+    body = _REMOTE_DOC_INFO_SCRIPT.replace("__VB_DOC_ROOTS__", roots_literal)
+    return (
+        "# vb_doc_info\n"
+        "set -e\n"
+        + _remote_python_probe(install_candidates)
+        + _remote_python_probe_error("vb_doc_info")
+        + '"$vb_py" - <<\'PY\'\n'
+        f"{body}\n"
+        "PY\n"
+    )
+
+
+_REMOTE_DOC_INFO_SCRIPT = r'''
+import json
+import os
+import re
+
+ROOTS = __VB_DOC_ROOTS__
+
+SDP_RE = re.compile(r"IC(\d{1,2})\.(\d{2})(?:\.(\d{3}))?", re.IGNORECASE)
+DIR_RE = re.compile(r"^IC(\d{3})$", re.IGNORECASE)
+
+
+def parse_version(install_name, sdp_names):
+    for name in sdp_names:
+        m = SDP_RE.search(os.path.basename(name))
+        if m:
+            major = int(m.group(1))
+            minor, patch = divmod(int(m.group(2)), 10)
+            version = "%d.%d" % (major, minor)
+            if patch:
+                version += ".%d" % patch
+            return version
+    m = DIR_RE.match(install_name or "")
+    if m:
+        digits = m.group(1)
+        if digits[0] in ("5", "6"):
+            return "%s.%s.%s" % (digits[0], digits[1], digits[2])
+        return "%d.%s" % (int(digits[:2]), digits[2])
+    return ""
+
+
+def info(root):
+    root = root.rstrip("/")
+    install = root[:-4] if root.endswith("/doc") else root
+    sdp_names = []
+    try:
+        sdp_names = sorted(
+            name for name in os.listdir(install)
+            if name.endswith(".sdp")
+        )
+    except OSError:
+        sdp_names = []
+    version = parse_version(os.path.basename(install), sdp_names)
+    finder_root = os.path.join(root, "finder", "SKILL")
+    fnd_count = 0
+    if os.path.isdir(finder_root):
+        for _dirpath, _dirnames, filenames in os.walk(finder_root):
+            fnd_count += sum(1 for f in filenames if f.endswith(".fnd"))
+    tgf = os.path.join(root, "api_more_info", "api_more_info.tgf")
+    top_level = []
+    try:
+        top_level = sorted(
+            name for name in os.listdir(root)
+            if os.path.isdir(os.path.join(root, name))
+        )
+    except OSError:
+        top_level = []
+    skdfref = {"path": os.path.join(root, "skdfref"),
+               "found": False, "html_count": 0, "style": "unknown",
+               "sample": []}
+    skdfref_dir = os.path.join(root, "skdfref")
+    if os.path.isdir(skdfref_dir):
+        skdfref["found"] = True
+        htmls = sorted(
+            name for name in os.listdir(skdfref_dir)
+            if name.lower().endswith((".html", ".htm"))
+        )
+        skdfref["html_count"] = len(htmls)
+        skdfref["sample"] = htmls[:5]
+        skdfref["style"] = "per-function" if len(htmls) > 100 else "chapter"
+    tgf_bytes = 0
+    if os.path.isfile(tgf):
+        tgf_bytes = os.path.getsize(tgf)
+    return {
+        "doc_root": root,
+        "install_root": install,
+        "virtuoso_version": version,
+        "version_source": ("sdp" if version and sdp_names
+                           else ("install_dir" if version else "none")),
+        "doc_set_count": len(top_level),
+        "doc_sets_sample": top_level[:20],
+        "skill_finder": {"path": finder_root,
+                         "found": os.path.isdir(finder_root),
+                         "fnd_count": fnd_count},
+        "api_more_info": {"tgf": tgf,
+                          "found": os.path.isfile(tgf),
+                          "tgf_bytes": tgf_bytes},
+        "skdfref": skdfref,
+    }
+
+
+print(json.dumps([info(r) for r in ROOTS], ensure_ascii=False))
+'''
+
+
+def doc_root_info_remote(
+    runner, doc_roots: Sequence[str]
+) -> list[dict[str, object]]:
+    """Collect version + structure facts for remote doc roots via SSH."""
+    if not doc_roots:
+        return []
+    result = runner.run_command(_remote_doc_info_script(doc_roots), timeout=180)
+    if result.returncode != 0:
+        raise RuntimeError(
+            "remote doc-info failed "
+            f"(rc={result.returncode}): {(result.stderr or '').strip()[:500]}"
+        )
+    payload_lines = [
+        line for line in result.stdout.splitlines()
+        if line.strip().startswith("[")
+    ]
+    if not payload_lines:
+        raise RuntimeError(
+            "remote doc-info returned no JSON payload: "
+            f"{(result.stdout or '').strip()[:300]}"
+        )
+    payload = json.loads(payload_lines[-1])
+    if not isinstance(payload, list):
+        raise RuntimeError("remote doc-info returned an unexpected payload")
+    return [item for item in payload if isinstance(item, dict)]
