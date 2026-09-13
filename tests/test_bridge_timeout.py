@@ -181,19 +181,28 @@ def test_execute_skill_preserves_successful_jump_host_retry(
         connect_duration=0.05,
         connect_error=ConnectionRefusedError(errno.ECONNREFUSED, "refused"),
     )
+    hello = _FakeSocket(
+        clock,
+        connect_duration=0.05,
+        send_duration=0.05,
+        # Skill-less capability handshake: fake daemon answers auth=off.
+        recv_results=((0.05, b'\x02{"proto": 1, "auth": "off"}'), (0.0, b"")),
+    )
     connected = _FakeSocket(
         clock,
         connect_duration=0.05,
         send_duration=0.05,
         recv_results=((0.05, b"\x023"), (0.0, b"")),
     )
-    factory = _SocketFactory([refused, connected])
+    factory = _SocketFactory([refused, hello, connected])
     _use_fake_network(monkeypatch, clock, factory)
+    # Bare client + auth-off fake daemon: explicit legacy opt-in.
+    monkeypatch.setenv("VB_ALLOW_UNAUTHENTICATED_DAEMON", "1")
 
     result = VirtuosoClient().execute_skill("1+2", timeout=1.0)
 
     assert result.status == ExecutionStatus.SUCCESS
     assert result.output == "3"
-    assert result.execution_time == pytest.approx(0.4)
+    assert result.execution_time == pytest.approx(0.55)
     assert clock.sleeps == [0.2]
-    assert len(factory.created) == 2
+    assert len(factory.created) == 3

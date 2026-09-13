@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from virtuoso_bridge import daemon_auth
 from virtuoso_bridge.env import load_vb_env, resolve_env_path
 from virtuoso_bridge.profile import resolve_profile
 from virtuoso_bridge.runtime_paths import legacy_cache_state_file, state_dir
@@ -151,6 +152,24 @@ def _profiled_env_key(base: str, profile: str | None) -> str:
     return f"{base}_{profile}" if profile else base
 
 
+def _remote_port_occupancy_cmd(port: int) -> str:
+    """POSIX-sh one-liner classifying who holds *port* on the remote host.
+
+    Returns FREE (nothing listening), OWN (a bridge daemon of the current
+    SSH user — its argv ends with the port), or FOREIGN (something else,
+    typically another user's Virtuoso bridge daemon).  ``ss`` is probed
+    first, ``netstat`` is the fallback; when neither exists the command
+    prints FREE and the caller keeps the default port.
+    """
+    return (
+        f"if (ss -tln 2>/dev/null || netstat -tln 2>/dev/null) "
+        f"| awk '{{print $4}}' | grep -E ':{port}$' >/dev/null 2>&1; then "
+        f"if pgrep -u \"$(id -un 2>/dev/null)\" -f "
+        f"'ramic_bridge_daemon_[23].py.* {port}$' >/dev/null 2>&1; then "
+        f"echo OWN; else echo FOREIGN; fi; else echo FREE; fi"
+    )
+
+
 # ---------------------------------------------------------------------------
 # SSHClient
 # ---------------------------------------------------------------------------
@@ -230,6 +249,7 @@ class SSHClient:
         self._remote_virtuoso_setup_path: str | None = None
         self._remote_identity_path: str | None = None
         self._daemon_endpoint_hostname: str | None = None
+        self._daemon_token: str | None = None
 
     def _new_role_runner(
         self,
@@ -412,6 +432,109 @@ class SSHClient:
         return self._remote_identity_path
 
     @property
+    def daemon_token(self) -> str | None:
+        return self._daemon_token
+
+    def _token_unavailable(self, message: str) -> None:
+        """Fail loudly about an unusable bridge token unless the explicit
+        insecure-legacy opt-in (``VB_ALLOW_UNAUTHENTICATED_DAEMON=1``) is set."""
+        if daemon_auth.allow_unauthenticated():
+            logger.warning(
+                "%s Continuing without a token (explicit %s=1 opt-in).",
+                message, daemon_auth.UNAUTH_OPTIN_ENV,
+            )
+            return
+        raise daemon_auth.DaemonTokenError(
+            f"{message} The bridge refuses to run without token "
+            f"authentication by default; fix token provisioning, or set "
+            f"{daemon_auth.UNAUTH_OPTIN_ENV}=1 to explicitly accept "
+            f"unauthenticated legacy mode."
+        )
+
+    def ensure_daemon_token(self) -> str | None:
+        """Fetch (or create over SSH) the bridge daemon auth token.
+
+        The token lives in ``~/.virtuoso-bridge/bridge_token`` (atomic 0600
+        file under a 0700 directory) on the daemon's machine and only ever
+        travels over this authenticated SSH channel — it is the shared secret
+        that lets clients and their own user's daemon recognize each other
+        (see :mod:`virtuoso_bridge.daemon_auth`).  Provisioning failures are
+        fatal by default (:class:`daemon_auth.DaemonTokenError`); they degrade
+        to returning None only under the explicit
+        ``VB_ALLOW_UNAUTHENTICATED_DAEMON=1`` opt-in.
+        """
+        if self._daemon_token and daemon_auth.is_valid_token(self._daemon_token):
+            return self._daemon_token
+        if self._ssh_runner is None:
+            self._daemon_token = daemon_auth.local_token_or_raise()
+            return self._daemon_token
+        runner = self._ssh_runner
+        try:
+            result = runner.run_command(
+                "cat ~/.virtuoso-bridge/bridge_token 2>/dev/null"
+            )
+            existing = (result.stdout or "").strip()
+            if result.returncode == 0 and daemon_auth.is_valid_token(existing):
+                self._daemon_token = existing.lower()
+                return self._daemon_token
+            # Provision a fresh token through the SSH channel.  Stage a
+            # complete 0600 file, then hard-link it into place only if the
+            # target is still absent.  Every concurrent starter reads back
+            # and adopts the winner instead of overwriting it with mv -f.
+            token = daemon_auth.generate_token()
+            home = (
+                runner.run_command('printf %s "$HOME"').stdout or ""
+            ).strip()
+            if not home:
+                self._token_unavailable("Cannot resolve remote $HOME for bridge token")
+                return None
+            token_dir = f"{home}/.virtuoso-bridge"
+            token_path = f"{token_dir}/bridge_token"
+            mkdir = runner.run_command(
+                f"mkdir -p '{token_dir}' && chmod 700 '{token_dir}'"
+            )
+            if mkdir.returncode != 0:
+                self._token_unavailable(
+                    f"Cannot create {token_dir} for bridge token: "
+                    f"{mkdir.stderr.strip()}"
+                )
+                return None
+            tmp_path = (
+                f"{token_path}.tmp.{os.getpid()}."
+                f"{daemon_auth.generate_token()[:16]}"
+            )
+            upload = runner.upload_text(token + "\n", tmp_path)
+            if upload.returncode != 0:
+                self._token_unavailable(
+                    f"Cannot upload bridge token: {upload.stderr.strip()}"
+                )
+                return None
+            tmp_q = shlex.quote(tmp_path)
+            token_q = shlex.quote(token_path)
+            finalize = runner.run_command(
+                f"chmod 600 {tmp_q} && "
+                f"(ln {tmp_q} {token_q} 2>/dev/null || test -r {token_q}) && "
+                f"rm -f {tmp_q} && chmod 600 {token_q} && cat {token_q}"
+            )
+            disk_token = (finalize.stdout or "").strip()
+            if finalize.returncode != 0 or not daemon_auth.is_valid_token(disk_token):
+                runner.run_command(f"rm -f {tmp_q}")
+                detail = finalize.stderr.strip() or "installed token is unreadable or invalid"
+                self._token_unavailable(
+                    f"Cannot finalize bridge token at {token_path}: "
+                    f"{detail}"
+                )
+                return None
+            self._daemon_token = disk_token.lower()
+            logger.info("Provisioned bridge daemon token at %s", token_path)
+            return self._daemon_token
+        except daemon_auth.DaemonTokenError:
+            raise
+        except Exception as exc:
+            self._token_unavailable(f"Bridge token provisioning failed: {exc}")
+            return None
+
+    @property
     def is_tunnel_alive(self) -> bool:
         if self._ssh_runner is None:
             return False
@@ -467,6 +590,55 @@ class SSHClient:
         logger.info("Detected remote Python: %s (version %d.%d)", python_cmd, python_major, python_minor)
         return python_cmd, python_major, python_minor
 
+    def _deconflict_remote_port(self, runner: SSHRunner) -> bool:
+        """Shift ``self._port`` off any port held by another user's process.
+
+        The daemon port is a host-global, first-come-first-served resource:
+        whoever binds it first owns it, and the SSH tunnel lands on their
+        Virtuoso no matter who we logged in as.  When the configured port is
+        held by a foreign listener, walk upward for a port that is free or
+        held by one of this user's own bridge daemons.  The chosen port is
+        written back to the .env so the mapping is stable.
+
+        Probe failures never block startup (the identity guard in
+        daemon_guard is the hard stop); returns True when the port changed.
+        """
+        port = self._port
+        for _ in range(40):
+            try:
+                result = runner.run_command(_remote_port_occupancy_cmd(port))
+            except Exception as exc:
+                logger.warning("Remote port occupancy probe failed; keeping port %d: %s", port, exc)
+                return False
+            stdout = (result.stdout or "").strip()
+            verdict = stdout.splitlines()[-1].strip() if stdout else ""
+            if verdict not in ("FREE", "OWN", "FOREIGN"):
+                logger.warning(
+                    "Remote port occupancy probe returned %r; keeping port %d", verdict, port
+                )
+                return False
+            if verdict != "FOREIGN":
+                break
+            logger.info("Remote port %d held by another user; probing %d", port, port + 1)
+            port += 1
+        else:
+            logger.warning(
+                "No foreign-free remote port found probing %d-%d; keeping %d",
+                self._port, port, self._port,
+            )
+            return False
+        if port == self._port:
+            return False
+        old_port = self._port
+        self._port = port
+        print(
+            f"[port] remote port {old_port} in use by another user, "
+            f"auto-switched to {port}",
+            flush=True,
+        )
+        _update_env_file(_profiled_env_key("VB_REMOTE_PORT", self._profile), str(port))
+        return True
+
     def ensure_remote_setup(self) -> None:
         """Upload daemon files and generate virtuoso_setup.il on the remote host."""
         if self._remote_setup_done:
@@ -474,6 +646,7 @@ class SSHClient:
 
         runner = self._require_deployment_runner()
         daemon_runner = self._require_runner()
+        self._deconflict_remote_port(daemon_runner)
         python_cmd, python_major, _python_minor = self._detect_remote_python()
         daemon_local = _find_ramic_bridge_daemon(
             3 if python_major >= 3 else 2
@@ -656,10 +829,12 @@ class SSHClient:
         if _is_localhost(self._remote_host):
             self.ensure_local_setup()
             self._daemon_endpoint_hostname = socket.gethostname()
+            self._daemon_token = self.ensure_daemon_token()
             self.save_state()
             return
         try:
             self.ensure_remote_setup()
+            self._daemon_token = self.ensure_daemon_token()
             runners = {id(runner): runner for runner in self._role_runners.values()}
             for runner in runners.values():
                 if runner.persistent_shell_enabled:
@@ -786,6 +961,9 @@ class SSHClient:
             "profile": self._profile,
             "started_at": time.time(),
         }
+        # NOTE: the bridge token is deliberately NOT stored here — the state
+        # file is normally readable; the token lives only in its atomic 0600
+        # file under a 0700 directory (daemon_auth.token_path()).
         _state_file(self._profile).write_text(json.dumps(state, indent=2), encoding="utf-8")
 
     @staticmethod

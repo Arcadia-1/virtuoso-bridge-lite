@@ -332,6 +332,7 @@ def _restart_daemon_one(profile: str | None) -> None:
         timeout=5,
         log_to_ciw=False,
     )
+    client.daemon_token = _state_or_local_daemon_token(state, profile)
     try:
         user_check = check_daemon_user(client, profile=profile, timeout=5)
     except Exception as exc:
@@ -386,6 +387,32 @@ def cli_restart() -> int:
 
 
 # -- status -----------------------------------------------------------------
+
+def _state_or_local_daemon_token(state: dict | None, profile: str | None) -> str | None:
+    """Token for a bare diagnostics client: SSH fetch or local read.
+
+    The token never lives in state.json (normally readable); it is fetched
+    over SSH for remote daemons or read from the local token file.  Both
+    fallbacks are read-only — the daemon (or `local()`) provisions the file;
+    diagnostics never create one and never raise.
+    """
+    from virtuoso_bridge import daemon_auth
+    from virtuoso_bridge.transport.tunnel import _is_localhost
+
+    remote = bool((state or {}).get("remote_host")) and not _is_localhost(
+        (state or {}).get("remote_host")
+    )
+    if remote:
+        try:
+            from virtuoso_bridge.transport.tunnel import SSHClient
+
+            ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
+            return ssh.ensure_daemon_token()
+        except Exception as exc:
+            print(f"[warning] daemon token unavailable: {exc}")
+            return None
+    return daemon_auth.read_local_token()
+
 
 def _print_load_hint(setup_path: str) -> None:
     """Print CIW load command and .cdsinit auto-load suggestion."""
@@ -522,9 +549,18 @@ def _print_status() -> int:
             return 1
         port = state["port"]
         try:
+            from virtuoso_bridge.models import ExecutionStatus
+
             vc = VirtuosoClient(host="127.0.0.1", port=port, timeout=5)
-            ok = vc.test_connection(timeout=5)
-            print(f"\n[daemon] {'OK - connected to Virtuoso CIW' if ok else 'NO RESPONSE'}")
+            vc.daemon_token = _state_or_local_daemon_token(state, profile)
+            probe = vc.execute_skill("1+1", timeout=5)
+            ok = probe.status == ExecutionStatus.SUCCESS
+            if not ok and any(
+                "authentication" in err.lower() for err in probe.errors or []
+            ):
+                print(f"\n[daemon] AUTH FAILED - {probe.errors[0]}")
+            else:
+                print(f"\n[daemon] {'OK - connected to Virtuoso CIW' if ok else 'NO RESPONSE'}")
             if ok:
                 from virtuoso_bridge.daemon_guard import check_daemon_user
 
@@ -553,6 +589,7 @@ def _print_status() -> int:
 
                 # Query Virtuoso environment info
                 for skill_expr, label in [
+                    ('getpid()', 'virtuoso pid'),
                     ('getHostName()', 'CIW host'),
                     ('getCurrentTime()', 'time'),
                     ('getVersion()', 'version'),

@@ -9,7 +9,271 @@ import signal
 import threading
 import time
 import errno
+import hashlib
+import hmac as _hmac
+import binascii
+import tempfile
 import traceback
+
+# ---------------------------------------------------------------------------
+# Bridge token authentication (wire protocol v1, see ramic_bridge_daemon_3.py
+# and virtuoso_bridge.daemon_auth).
+#
+# NOTE: this file is parsed by Python 2.7, whose default source encoding is
+# ASCII -- keep every byte of this file ASCII-only (no em-dashes, no unicode
+# punctuation) or the daemon dies with SyntaxError before it can serve.
+#
+# Requests need HMAC(token, canonical frame of the COMPLETE request: proto,
+# nonce, timeout, skill); responses carry HMAC(token, frame(nonce, marker,
+# body)); request nonces are single-use (server-side replay protection); the
+# "op=hello" handshake returns signed capabilities without executing SKILL.
+# An unusable token file is FATAL unless RB_ALLOW_UNAUTHENTICATED=1 is
+# explicitly set.
+# ---------------------------------------------------------------------------
+TOKEN_PATH_ENV = "RB_TOKEN_PATH"
+ALLOW_UNAUTH_ENV = "RB_ALLOW_UNAUTHENTICATED"
+_PROTO = 1
+_REQ_DOMAIN = "vb1-request"
+_RESP_DOMAIN = "vb1-response"
+_HELLO_DOMAIN = "vb1-hello"
+_HEX_DIGITS = set("0123456789abcdefABCDEF")
+_TRUTHY = ("1", "true", "yes", "on")
+
+
+def _frame(parts):
+    """Length-prefixed canonical byte frame (mirrors daemon_auth.py)."""
+    out = []
+    for part in parts:
+        if isinstance(part, unicode):
+            part = part.encode("utf-8")
+        elif not isinstance(part, str):
+            part = str(part)  # bytearray (e.g. response body) -> bytes
+        out.append(str(len(part)) + ":")
+        out.append(part)
+    return "".join(out)
+
+
+def _mac_hex(*parts):
+    return _hmac.new(
+        BRIDGE_TOKEN, _frame(parts), hashlib.sha256
+    ).hexdigest()
+
+
+try:
+    _compare_digest = _hmac.compare_digest  # python2.7.7+
+except AttributeError:  # python2.7.0 - 2.7.6: constant-time fallback
+    def _compare_digest(a, b):
+        if len(a) != len(b):
+            return False
+        diff = 0
+        for x, y in zip(bytearray(a), bytearray(b)):
+            diff |= x ^ y
+        return diff == 0
+
+
+def _is_hex_token(text, min_len, max_len):
+    return (
+        isinstance(text, basestring)
+        and min_len <= len(text) <= max_len
+        and all(c in _HEX_DIGITS for c in text)
+    )
+
+
+def _opted_out_of_auth():
+    return os.environ.get(ALLOW_UNAUTH_ENV, "").strip().lower() in _TRUTHY
+
+
+def _harden_perms(path, dir_mode=None, file_mode=None):
+    try:
+        if dir_mode is not None:
+            os.chmod(path, dir_mode)
+        elif file_mode is not None:
+            os.chmod(path, file_mode)
+    except (OSError, IOError):
+        pass
+
+
+def _token_file_path():
+    override = os.environ.get(TOKEN_PATH_ENV, "").strip()
+    if override:
+        return override
+    return os.path.join(os.path.expanduser("~"), ".virtuoso-bridge", "bridge_token")
+
+
+def _load_or_create_token():
+    """Read the token file, provisioning it atomically (0600, dir 0700).
+
+    Unusable token files are FATAL unless RB_ALLOW_UNAUTHENTICATED=1 was
+    explicitly set.
+    """
+    path = _token_file_path()
+    try:
+        with open(path, "r") as handle:
+            token = handle.read().strip()
+        if len(token) >= 32 and all(c in "0123456789abcdefABCDEF" for c in token):
+            _harden_perms(os.path.dirname(path) or ".", dir_mode=0o700)
+            _harden_perms(path, file_mode=0o600)
+            return token.lower()
+    except (OSError, IOError):
+        pass
+    token = binascii.hexlify(os.urandom(32))
+    try:
+        parent = os.path.dirname(path) or "."
+        if not os.path.isdir(parent):
+            try:
+                os.makedirs(parent)
+            except OSError as exc:
+                if getattr(exc, "errno", None) != errno.EEXIST \
+                        or not os.path.isdir(parent):
+                    raise
+        _harden_perms(parent, dir_mode=0o700)
+        fd, tmp_path = tempfile.mkstemp(dir=parent, prefix=".bridge_token.", suffix=".tmp")
+        try:
+            os.fchmod(fd, 0o600)
+        except (OSError, IOError, AttributeError):
+            pass
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(token + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(tmp_path, path)  # create-if-absent: under a first-time
+            created = True           # creation race the winner's complete
+        except OSError as exc:       # file is always the one on disk
+            if getattr(exc, "errno", None) == errno.EEXIST:
+                created = False
+            else:
+                raise
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        _harden_perms(path, file_mode=0o600)
+        # Adopt the on-disk token so all racers converge on one secret.
+        try:
+            with open(path, "r") as handle:
+                disk = handle.read().strip()
+            if len(disk) >= 32 and all(c in "0123456789abcdefABCDEF" for c in disk):
+                return disk.lower()
+        except (OSError, IOError):
+            pass
+        if not created:
+            raise OSError("lost token creation race and winner's file unreadable")
+    except (OSError, IOError) as exc:
+        if _opted_out_of_auth():
+            sys.stderr.write(
+                "[RB-auth] WARNING: cannot read or create token file {0} "
+                "({1}); daemon runs UNAUTHENTICATED (explicit opt-in)\n".format(path, exc)
+            )
+            return None
+        sys.stderr.write(
+            "[RB-auth] FATAL: cannot read or create token file {0} ({1}).\n"
+            "[RB-auth] Refusing to serve unauthenticated SKILL; set {2}=1 to "
+            "explicitly opt into insecure legacy mode.\n".format(path, exc, ALLOW_UNAUTH_ENV)
+        )
+        sys.exit(1)
+    return token
+
+
+BRIDGE_TOKEN = _load_or_create_token()
+
+# Server-side replay protection: nonce -> expiry.  Requests are served
+# serially (single accept loop), so a plain dict is safe.
+_NONCE_MARK = {}
+_NONCE_MARK_MAX = 4096
+
+
+def _consume_nonce(nonce, ttl_seconds):
+    """Mark *nonce* as used.  Returns "ok", "replay", or "full".
+
+    Fail-closed at capacity: when the cache is full even after expiring old
+    entries, NEW requests are rejected ("full") -- live entries are never
+    dropped, so no replay window can be opened by memory pressure.
+    """
+    now = time.time()
+    expiry = _NONCE_MARK.get(nonce)
+    if expiry is not None and expiry > now:
+        return "replay"
+    if len(_NONCE_MARK) >= _NONCE_MARK_MAX:
+        for key in [k for k, v in _NONCE_MARK.items() if v <= now]:
+            del _NONCE_MARK[key]
+        if len(_NONCE_MARK) >= _NONCE_MARK_MAX:
+            return "full"
+    _NONCE_MARK[nonce] = now + max(900.0, 2.0 * float(ttl_seconds or 0) + 60.0)
+    return "ok"
+
+
+def _auth_error(request_data, kind):
+    """Return an error string for unauthenticated/invalid requests, else None.
+
+    *kind* selects the MAC domain: "hello" (capability handshake) or "req"
+    (regular SKILL execution).  The MAC covers the complete request for its
+    kind, so no field can be tampered with in flight.
+    """
+    if not BRIDGE_TOKEN:
+        return None
+    nonce = request_data.get("nonce")
+    mac = request_data.get("mac")
+    if not nonce or not mac:
+        return (
+            "AuthError: bridge token required - this daemon rejects "
+            "unauthenticated SKILL (client too old, or unauthorized)"
+        )
+    nonce = str(nonce)
+    if not _is_hex_token(nonce, 16, 128):
+        return "AuthError: invalid nonce"
+    try:
+        proto = int(request_data.get("proto") or 0)
+    except (TypeError, ValueError):
+        return "AuthError: invalid protocol field"
+    if kind == "hello":
+        expected = _mac_hex(_HELLO_DOMAIN, str(proto), nonce)
+        ttl = 300.0
+    else:
+        try:
+            timeout = float(request_data.get("timeout"))
+        except (TypeError, ValueError):
+            return "AuthError: invalid timeout field"
+        skill = request_data.get("skill")
+        if not isinstance(skill, basestring):
+            return "AuthError: invalid skill field"
+        expected = _mac_hex(
+            _REQ_DOMAIN, str(proto), nonce, "%.6f" % timeout, skill
+        )
+        ttl = timeout
+    if not _compare_digest(expected, str(mac).lower()):
+        return (
+            "AuthError: bridge token mismatch - the daemon on this port "
+            "belongs to a different user (or the token was rotated); run "
+            "`virtuoso-bridge restart` after RBStop()"
+        )
+    verdict = _consume_nonce(nonce, ttl)
+    if verdict == "replay":
+        return (
+            "AuthError: replayed request nonce - rejected by server-side "
+            "replay protection"
+        )
+    if verdict == "full":
+        return (
+            "AuthError: nonce cache at capacity - request rejected "
+            "(fail-closed; retry shortly)"
+        )
+    if proto != _PROTO:
+        return "AuthError: protocol version mismatch (daemon speaks v1)"
+    return None
+
+
+def _capabilities_body():
+    """Side-effect-free handshake payload describing this daemon."""
+    return json.dumps(
+        {
+            "proto": _PROTO,
+            "auth": "on" if BRIDGE_TOKEN else "off",
+            "daemon": "ramic-bridge",
+            "virtuoso_pid": virtuoso_pid,
+        }
+    )
+
 
 # Counters surfaced to the SKILL monitor via stderr [RB-stat] lines.
 # Throttled to ~1 Hz so heavy traffic doesn't flood stderr.
@@ -68,38 +332,39 @@ PORT = int(sys.argv[2])
 # Global timeout control flag
 timeout_flag = False
 
-# Get Virtuoso's PID - this is the process we need to send signals to
-if PSUTIL_AVAILABLE and psutil is not None:
-    # Use psutil if available
-    current_process = psutil.Process()
-    parent_process = current_process.parent()
-    grandparent_process = parent_process.parent() if parent_process else None
-    # Python 2.7 compatibility: handle None case
-    if grandparent_process:
-        virtuoso_pid = grandparent_process.pid
-    else:
-        virtuoso_pid = os.getppid()
-else:
-    # Fallback: use /proc filesystem to get parent process info
-    def get_grandparent_pid():
+# Get Virtuoso's PID - this is the process we need to send signals to.
+# psutil -> /proc -> getppid: degrade gracefully instead of dying at import
+# time on kernels without /proc.
+def _resolve_virtuoso_pid():
+    if PSUTIL_AVAILABLE and psutil is not None:
         try:
-            # Read current process info from /proc
-            with open('/proc/self/stat', 'r') as f:
-                stat_data = f.read().split()
-                # Parent PID is the 4th field (index 3)
-                parent_pid = int(stat_data[3])
+            parent_process = psutil.Process().parent()
+            if parent_process is not None:
+                grandparent_process = parent_process.parent()
+                if grandparent_process is not None:
+                    return grandparent_process.pid, "psutil"
+        except Exception:
+            pass
+        return os.getppid(), "getppid"
+    try:
+        # Read current process info from /proc; parent PID is the 4th field.
+        with open('/proc/self/stat', 'r') as f:
+            parent_pid = int(f.read().split()[3])
+        with open('/proc/{0}/stat'.format(parent_pid), 'r') as f2:
+            return int(f2.read().split()[3]), "proc"
+    except Exception:
+        return os.getppid(), "getppid"
 
-                # Now get the parent's parent PID (grandparent)
-                with open('/proc/{0}/stat'.format(parent_pid), 'r') as f2:
-                    stat_data2 = f2.read().split()
-                    # Grandparent PID is the 4th field (index 3) of parent's stat
-                    grandparent_pid = int(stat_data2[3])
-                    return grandparent_pid
-        except:
-            # If /proc is not available, raise an error
-            raise Exception("Failed to get Virtuoso PID")
 
-    virtuoso_pid = get_grandparent_pid()
+virtuoso_pid, _pid_source = _resolve_virtuoso_pid()
+if _pid_source == "getppid":
+    sys.stderr.write(
+        "[RB-pid] WARNING: no /proc and no psutil; watchdog falls back to "
+        "the direct parent PID {0} (timeout interrupts may be imprecise)\n".format(
+            virtuoso_pid
+        )
+    )
+    sys.stderr.flush()
 
 # Python 2.7 compatibility: print statement instead of print() function
 # print("Virtuoso PID: {0}".format(virtuoso_pid))
@@ -156,6 +421,10 @@ def read_until_delimiter(start_ok=b'\x02', start_err=b'\x15', end=b'\x1e'):
             ch = sys.stdin.read(1)
             if ch in [start_ok, start_err]:
                 break
+            if not ch:
+                # EOF: Virtuoso (or its pipe) is gone -- fail fast instead
+                # of waiting for the watchdog.
+                return "\x15TimeoutError"
         except IOError as e:
             if e.errno == errno.EAGAIN or e.errno == errno.EWOULDBLOCK:
                 # No data available, check timeout and continue
@@ -182,8 +451,8 @@ def read_until_delimiter(start_ok=b'\x02', start_err=b'\x15', end=b'\x1e'):
             if timeout_flag:
                 # Python 2.7 compatibility: return string directly
                 return "\x15TimeoutError"
-            if not ch:  # Python 2.7: empty string means no data
-                continue
+            if not ch:  # EOF: Virtuoso died mid-response
+                return "\x15TimeoutError"
             if ch == end:
                 break
             # Python 2.7 compatibility: convert string to bytes for bytearray
@@ -218,6 +487,36 @@ def handle_external_connection(conn, addr):
         data = b"".join(chunks)
         # Python 2.7 compatibility: data is already bytes/string
         request_data = json.loads(data)
+        request_nonce = request_data.get("nonce")
+
+        # Capability handshake: describe this daemon WITHOUT executing
+        # anything (no "skill" field in the request, so even a pre-token
+        # daemon cannot act on it).
+        if request_data.get("op") == "hello":
+            auth_error = _auth_error(request_data, "hello")
+            if BRIDGE_TOKEN:
+                if auth_error:
+                    _safe_sendall(conn, "\x15" + auth_error)
+                    return
+                body = _capabilities_body()
+                if isinstance(body, unicode):
+                    body = body.encode("utf-8")
+                resp_mac = _mac_hex(_RESP_DOMAIN, str(request_nonce), "\x02", body)
+                _safe_sendall(conn, "\x02" + resp_mac + body)
+            else:
+                body = _capabilities_body()
+                if isinstance(body, unicode):
+                    body = body.encode("utf-8")
+                _safe_sendall(conn, "\x02" + body)
+            return
+
+        auth_error = _auth_error(request_data, "req")
+        if auth_error:
+            # Unauthenticated or foreign client: refuse without executing.
+            if isinstance(auth_error, unicode):
+                auth_error = auth_error.encode("utf-8")
+            _safe_sendall(conn, "\x15" + auth_error)
+            return
 
         skill_code = request_data["skill"]
         timeout_seconds = request_data["timeout"]
@@ -225,10 +524,10 @@ def handle_external_connection(conn, addr):
         # Reset timeout flag
         timeout_flag = False
 
-        # Send skill script to Virtuoso
-        # Python 2.7 compatibility: ensure skill_code is string
-        if hasattr(skill_code, 'encode'):  # Check if it's unicode
-            skill_code = skill_code.encode('utf-8')
+        # Python 2.7: json.loads yields unicode; normalize SKILL to utf-8
+        # bytes once so every later use (temp file, stdout) is byte-exact.
+        if isinstance(skill_code, unicode):
+            skill_code = skill_code.encode("utf-8")
 
         # Clear stdin buffer before writing (non-blocking read until empty)
 
@@ -247,18 +546,17 @@ def handle_external_connection(conn, addr):
         # This preserves comments (;) which would break single-line flattening.
         # We wrap the code so the return value is captured in a global variable,
         # because load() itself only returns t, not the last expression's value.
+        # The file is written in binary mode so arbitrary utf-8 SKILL cannot
+        # trip the implicit ascii codec of Python 2 text streams.
         tmp_il_path = None
-        if "\n" in skill_code or (hasattr(skill_code, 'decode') and b"\n" in skill_code):
-            import tempfile
+        if b"\n" in skill_code:
             fd, tmp_il_path = tempfile.mkstemp(suffix=".il", prefix="vb_eval_")
-            f = os.fdopen(fd, "w")
-            code_str = skill_code.decode("utf-8") if isinstance(skill_code, bytes) else skill_code
-            f.write("_vb_eval_result = progn(\n%s\n)\n" % code_str)
-            f.close()
+            with os.fdopen(fd, "wb") as f:
+                f.write(b"_vb_eval_result = progn(\n" + skill_code + b"\n)\n")
             escaped_path = tmp_il_path.replace("\\", "/")
             send_code = 'load("%s") hiFlush() _vb_eval_result\n' % escaped_path
         else:
-            send_code = 'let(((__vb_r %s)) hiFlush() __vb_r)\n' % skill_code
+            send_code = b'let(((__vb_r ' + skill_code + b')) hiFlush() __vb_r)\n'
 
         sys.stdout.write(send_code)
         sys.stdout.flush()
@@ -280,9 +578,17 @@ def handle_external_connection(conn, addr):
 
         # Python 2.7 compatibility: handle returnData properly
         if isinstance(returnData, bytearray):
-            _safe_sendall(conn, str(returnData))
+            returnData = str(returnData)
         elif hasattr(returnData, 'encode'):  # Check if it's unicode
-            _safe_sendall(conn, returnData.encode('utf-8'))
+            returnData = returnData.encode('utf-8')
+
+        # Authenticate the response so the client can detect a squatted
+        # port: the MAC covers the status marker AND the full body.
+        if BRIDGE_TOKEN and request_nonce:
+            resp_mac = _mac_hex(
+                _RESP_DOMAIN, str(request_nonce), returnData[:1], returnData[1:]
+            )
+            _safe_sendall(conn, returnData[:1] + resp_mac + returnData[1:])
         else:
             _safe_sendall(conn, returnData)
 
@@ -370,8 +676,9 @@ def start_server():
             except Exception:
                 _ip = ""
         sys.stderr.write(
-            "[RB-banner] pid={0} bind={1}:{2} host={3} ip={4}\n".format(
+            "[RB-banner] pid={0} bind={1}:{2} host={3} ip={4} auth={5}\n".format(
                 os.getpid(), HOST, PORT, _hn, (_ip or "unknown"),
+                ("on" if BRIDGE_TOKEN else "off"),
             )
         )
         sys.stderr.flush()

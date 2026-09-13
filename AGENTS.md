@@ -40,7 +40,11 @@ virtuoso-bridge init
 
 Both forms create `~/.virtuoso-bridge/.env`. `-J/--jump` accepts `[user@]host`.
 `VB_REMOTE_PORT` / `VB_LOCAL_PORT` are auto-assigned by hashing the **remote**
-username (stable per remote user, so two users on the same host don't collide).
+username (stable per remote user, so two users on the same host usually don't
+collide). The remote port is host-global — whoever binds it first owns it — so
+`virtuoso-bridge start` also probes the port over SSH and shifts to the next
+free one if another user's process already holds it (the choice is written
+back to `.env`).
 Re-running `init` on an existing `.env` is a no-op; pass `--force` to overwrite.
 
 **2. Edit `.env`** (only if step 1 did not already fill it in)
@@ -230,6 +234,12 @@ Two decoupled layers:
 - **VirtuosoClient** — pure TCP SKILL client. No SSH. Works with any `localhost:port` endpoint.
 - **SSHClient** — resolves GUI/deployment/daemon/Spectre roles, deploys files, and manages the daemon tunnel. Optional.
 
+Both sides authenticate each other with an HMAC over a bridge token
+(`~/.virtuoso-bridge/bridge_token`, mode 0600) that is provisioned over SSH
+by `start` (or auto-created by the daemon / `VirtuosoClient.local()`), so a
+port held by another user's daemon can neither execute your SKILL nor
+masquerade as it. The token never crosses the TCP wire.
+
 ```python
 # Remote: SSHClient creates the TCP path
 from virtuoso_bridge import SSHClient, VirtuosoClient
@@ -294,6 +304,32 @@ If `spectre` is already on PATH in the remote user's default shell (e.g., via `~
 - **`procedurep()` returns `nil` for compiled/built-in functions.** Don't use it to check if `mae*` functions exist.
 - **Remote files stay remote.** Functions like `maeCreateNetlistForCorner` write to the remote filesystem. Use `client.download_file()` to retrieve them.
 - **`system()` rc is unreliable** for tools that fork-and-write to a log (strmin, ihdl, sometimes spectre). A wrapper that polls for the expected artifact (cellview, file, log line) MUST also tail the tool's own log for terminal-failure markers on every poll iteration — otherwise a `strmin` that died in 2 seconds with `XSTRM-273: Translation failed` makes the wrapper sleep for its full timeout (10 min observed 2026-05-14 on `examples/01_virtuoso/digital_import/import_gds.py`). Dual-defense template: (1) before invoking the tool, stage any local file args to the tool's cwd via `client.upload_file()` so file-not-found can't happen, and (2) in the poll loop, `tail -n 200 <tool.log>` for the tool's "translation failed / OPEN_FAILED / ERROR" sentinel and fast-exit with that line.
+- **The daemon port is host-global; another user's Virtuoso can own it.** On a
+  shared server every bridge daemon binds `0.0.0.0` on a port in 65000-65499,
+  and the SSH tunnel lands on whichever process holds that port — SKILL sent
+  through it executes in *their* session. Defenses, in the order a connection
+  meets them: (1) `start` shifts the configured port off foreign listeners;
+  (2) the client runs a side-effect-free capability handshake (`op=hello`, no
+  SKILL payload) before its first command, so protocol/auth skew is detected
+  before anything can execute; (3) every request is signed with
+  `HMAC(token, canonical_frame(proto, nonce, timeout, skill))` — the whole
+  request, not just the nonce — and every response with
+  `HMAC(token, frame(nonce, marker, body))`; daemons also reject replayed
+  nonces server-side. The token lives only in an atomic 0600 file under a
+  0700 directory (`~/.virtuoso-bridge/bridge_token`, never in state.json),
+  provisioned over SSH by `start` / auto-created by the daemon, and never
+  crosses the wire — a squatter can neither execute your SKILL nor
+  impersonate your daemon; (4) `from_env`/`from_tunnel` additionally verify
+  the daemon's Unix user (`daemon_guard`) and refuse mismatches. If a check
+  fires while your own CIW is merely busy, retry when idle;
+  `AuthError: token mismatch` means the port is held by someone else — run
+  `RBStop()` on that session or `virtuoso-bridge restart` to move.
+  Intentional cross-user use still needs `VB_ALLOW_CROSS_USER_DAEMON=1` for
+  the identity guard. Insecure unauthenticated operation is fatal by default
+  and requires an explicit opt-in on both sides —
+  `VB_ALLOW_UNAUTHENTICATED_DAEMON=1` on the client,
+  `RB_ALLOW_UNAUTHENTICATED=1` on the daemon host. Rotating the token =
+  delete the file on the daemon host and re-run `start` / re-load in CIW.
 
 ## How to configure PDK paths
 

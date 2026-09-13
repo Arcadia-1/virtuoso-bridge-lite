@@ -93,7 +93,7 @@ def test_status_infers_profile_scoped_setup_path(monkeypatch, capsys) -> None:
     )
 
 
-def test_status_no_response_prints_stale_daemon_hint(monkeypatch, capsys) -> None:
+def test_status_no_response_prints_stale_daemon_hint(monkeypatch, capsys, tmp_path) -> None:
     monkeypatch.setattr(cli, "_load_cli_env", lambda: None)
     monkeypatch.setattr(cli, "_print_spectre_status", lambda profile, suffix: None)
     monkeypatch.setattr(cli, "_CLI_PROFILE", ["t28_io"])
@@ -116,11 +116,21 @@ def test_status_no_response_prints_stale_daemon_hint(monkeypatch, capsys) -> Non
         def __init__(self, host, port, timeout):
             pass
 
+        daemon_token = None
+
+        def execute_skill(self, skill, timeout=5):
+            return VirtuosoResult(
+                status=ExecutionStatus.ERROR,
+                errors=["Empty response from daemon"],
+            )
+
         def test_connection(self, timeout=5):
             return False
 
     monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHClient", _FakeSSHClient)
     monkeypatch.setattr("virtuoso_bridge.virtuoso.basic.bridge.VirtuosoClient", _FakeVirtuosoClient)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
     rc = cli._print_status()
 
@@ -301,7 +311,7 @@ def test_status_allows_cross_user_with_explicit_override(monkeypatch, capsys) ->
     assert "[daemon identity] FAILED" not in out
 
 
-def test_status_diagnoses_banner_host_when_tunnel_endpoint_is_wrong(monkeypatch, capsys) -> None:
+def test_status_diagnoses_banner_host_when_tunnel_endpoint_is_wrong(monkeypatch, capsys, tmp_path) -> None:
     monkeypatch.setattr(cli, "_load_cli_env", lambda: None)
     monkeypatch.setattr(cli, "_print_spectre_status", lambda profile, suffix: None)
     monkeypatch.setattr(cli, "_CLI_PROFILE", ["split"])
@@ -340,11 +350,21 @@ def test_status_diagnoses_banner_host_when_tunnel_endpoint_is_wrong(monkeypatch,
         def __init__(self, host, port, timeout):
             pass
 
+        daemon_token = None
+
+        def execute_skill(self, skill, timeout=5):
+            return VirtuosoResult(
+                status=ExecutionStatus.ERROR,
+                errors=["Empty response from daemon"],
+            )
+
         def test_connection(self, timeout=5):
             return False
 
     monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHClient", _FakeSSHClient)
     monkeypatch.setattr("virtuoso_bridge.virtuoso.basic.bridge.VirtuosoClient", _FakeVirtuosoClient)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
     rc = cli._print_status()
 
@@ -354,3 +374,136 @@ def test_status_diagnoses_banner_host_when_tunnel_endpoint_is_wrong(monkeypatch,
     assert "compute-b" in out
     assert "gui-a.example.edu" in out
     assert "VB_DAEMON_HOST_split=compute-b" in out
+
+
+# ---------------------------------------------------------------------------
+# Remote port de-confliction (cross-user port squatting)
+# ---------------------------------------------------------------------------
+
+from virtuoso_bridge.transport.tunnel import (  # noqa: E402
+    _remote_port_occupancy_cmd,
+    _update_env_file,
+)
+
+
+class _ScriptedRunner:
+    """FakeRunner whose occupancy probes replay scripted verdicts."""
+
+    def __init__(self, verdicts: list[str]) -> None:
+        self.verdicts = list(verdicts)
+        self.commands: list[str] = []
+        self.uploads: dict[str, str] = {}
+
+    def run_command(self, command: str, timeout=None) -> CommandResult:
+        self.commands.append(command)
+        if "echo OWN" in command:
+            verdict = self.verdicts.pop(0) if self.verdicts else "FREE"
+            return CommandResult(returncode=0, stdout=f"{verdict}\n", stderr="")
+        return CommandResult(returncode=0, stdout="", stderr="")
+
+    def upload_text(self, text: str, remote_path: str, timeout=None) -> CommandResult:
+        self.uploads[remote_path] = text
+        return CommandResult(returncode=0, stdout="", stderr="")
+
+
+def _make_remote_client(port: int) -> SSHClient:
+    client = SSHClient(
+        remote_host="thu-wei",
+        remote_user="designer",
+        port=port,
+        profile="t28_digital",
+    )
+    return client
+
+
+def test_occupancy_cmd_targets_port() -> None:
+    cmd = _remote_port_occupancy_cmd(65061)
+    assert ":65061$" in cmd
+    assert "pgrep" in cmd and "id -un" in cmd
+
+
+def test_deconflict_shifts_off_foreign_listener(monkeypatch) -> None:
+    client = _make_remote_client(65061)
+    runner = _ScriptedRunner(["FOREIGN", "FOREIGN", "FREE"])
+    updates: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.tunnel._update_env_file",
+        lambda key, value: updates.append((key, value)) or True,
+    )
+
+    changed = client._deconflict_remote_port(runner)
+
+    assert changed
+    assert client._port == 65063
+    assert updates == [("VB_REMOTE_PORT_t28_digital", "65063")]
+
+
+def test_deconflict_keeps_free_and_own_ports(monkeypatch) -> None:
+    updates: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.tunnel._update_env_file",
+        lambda key, value: updates.append((key, value)) or True,
+    )
+
+    client = _make_remote_client(65061)
+    assert not client._deconflict_remote_port(_ScriptedRunner(["FREE"]))
+    assert client._port == 65061
+
+    # A port held by this user's own bridge daemon stays ours.
+    client = _make_remote_client(65061)
+    assert not client._deconflict_remote_port(_ScriptedRunner(["OWN"]))
+    assert client._port == 65061
+    assert updates == []
+
+
+def test_deconflict_survives_probe_failure(monkeypatch) -> None:
+    client = _make_remote_client(65061)
+
+    class _BrokenRunner(_ScriptedRunner):
+        def run_command(self, command: str, timeout=None) -> CommandResult:
+            raise RuntimeError("ssh down")
+
+    assert not client._deconflict_remote_port(_BrokenRunner([]))
+    assert client._port == 65061
+
+
+def test_deconflict_untouched_when_probe_output_unrecognized() -> None:
+    client = _make_remote_client(65061)
+    runner = _ScriptedRunner([])
+    runner.verdicts = []  # probes answer FREE (empty script) — fine
+    # A runner returning garbage stdout must keep the configured port.
+    class _GarbageRunner(_ScriptedRunner):
+        def run_command(self, command: str, timeout=None) -> CommandResult:
+            return CommandResult(returncode=0, stdout="", stderr="")
+
+    assert not client._deconflict_remote_port(_GarbageRunner([]))
+    assert client._port == 65061
+
+
+def test_deconflict_gives_up_when_range_exhausted() -> None:
+    client = _make_remote_client(65061)
+    runner = _ScriptedRunner(["FOREIGN"] * 100)
+    assert not client._deconflict_remote_port(runner)
+    assert client._port == 65061
+
+
+def test_ensure_remote_setup_deploys_shifted_port(monkeypatch) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
+    monkeypatch.delenv("VB_REMOTE_SCRATCH_ROOT", raising=False)
+    monkeypatch.delenv("VB_CLIENT_ID_t28_digital", raising=False)
+    monkeypatch.setenv("VB_CLIENT_ID", "90590")
+    fake = _ScriptedRunner(["FOREIGN", "FREE"])
+    client = _make_remote_client(65263)
+    client._ssh_runner = fake
+    monkeypatch.setattr(client, "_detect_remote_python", lambda: ("python3", 3, 11))
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.tunnel._update_env_file", lambda key, value: True
+    )
+
+    client.ensure_remote_setup()
+
+    setup_path = "/tmp/virtuoso_bridge_designer/90590/virtuoso_bridge_t28_digital/virtuoso_setup.il"
+    setup = fake.uploads[setup_path]
+    # 65263 was FOREIGN -> setup must target the next free port, 65264.
+    assert 'setShellEnvVar("RB_PORT" "65264")' in setup
+    assert client._port == 65264
