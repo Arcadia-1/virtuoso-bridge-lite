@@ -64,7 +64,7 @@ class FakeDaemon:
             # Capability handshake (no skill field, nothing executes):
             # these doubles model an explicitly auth-disabled daemon.
             if req.get("op") == "hello":
-                pid = self.virtuoso_pid if str(self.virtuoso_pid).isdigit() else None
+                pid = int(self.virtuoso_pid) if str(self.virtuoso_pid).isdigit() else None
                 caps = json.dumps(
                     {"proto": 1, "auth": "off", "daemon": "fake-guard",
                      "virtuoso_pid": pid}
@@ -326,6 +326,9 @@ def test_from_tunnel_refuses_foreign_daemon(monkeypatch, foreign_daemon) -> None
 def test_from_tunnel_executes_only_after_identity_match(monkeypatch, foreign_daemon) -> None:
     monkeypatch.delenv("VB_REMOTE_USER", raising=False)
     monkeypatch.delenv(OVERRIDE_ENV, raising=False)
+    # The fake daemon advertises auth=off: an explicit client opt-in is
+    # required for a token-less client to talk to it at all.
+    monkeypatch.setenv("VB_ALLOW_UNAUTHENTICATED_DAEMON", "1")
     # Same user on both sides: guard passes, execution reaches the daemon.
     runner = FakeRunner(whoami="user2", owner="user2")
     client = VirtuosoClient.from_tunnel(_FakeTunnel(foreign_daemon.port, runner))
@@ -337,6 +340,7 @@ def test_from_tunnel_executes_only_after_identity_match(monkeypatch, foreign_dae
 def test_from_tunnel_skips_guard_for_local_tunnels(monkeypatch, foreign_daemon) -> None:
     # No SSH runner -> local mode semantics: no cross-user exposure check.
     monkeypatch.delenv("VB_REMOTE_USER", raising=False)
+    monkeypatch.setenv("VB_ALLOW_UNAUTHENTICATED_DAEMON", "1")
     client = VirtuosoClient.from_tunnel(_FakeTunnel(foreign_daemon.port, None))
     result = client.execute_skill("1+1", timeout=5)
     assert result.status == ExecutionStatus.SUCCESS

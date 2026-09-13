@@ -123,8 +123,30 @@ def _load_or_create_token():
             handle.write(token + "\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp_path, path)
+        try:
+            os.link(tmp_path, path)  # create-if-absent: under a first-time
+            created = True           # creation race the winner's complete
+        except OSError as exc:       # file is always the one on disk
+            if exc.errno == errno.EEXIST:
+                created = False
+            else:
+                os.replace(tmp_path, path)  # links unsupported: best effort
+                created = True
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
         _harden_perms(path, file_mode=0o600)
+        # Adopt the on-disk token so all racers converge on one secret.
+        try:
+            with open(path, "r") as handle:
+                disk = handle.read().strip()
+            if len(disk) >= 32 and all(c in "0123456789abcdefABCDEF" for c in disk):
+                return disk.lower()
+        except OSError:
+            pass
+        if not created:
+            raise OSError("lost token creation race and winner's file unreadable")
     except OSError as exc:
         if _opted_out_of_auth():
             sys.stderr.write(
@@ -151,18 +173,23 @@ _NONCE_MARK_MAX = 4096
 
 
 def _consume_nonce(nonce, ttl_seconds):
-    """Mark *nonce* as used; return False when it was already spent."""
+    """Mark *nonce* as used.  Returns "ok", "replay", or "full".
+
+    Fail-closed at capacity: when the cache is full even after expiring old
+    entries, NEW requests are rejected ("full") -- live entries are never
+    dropped, so no replay window can be opened by memory pressure.
+    """
     now = time.time()
+    expiry = _NONCE_MARK.get(nonce)
+    if expiry is not None and expiry > now:
+        return "replay"
     if len(_NONCE_MARK) >= _NONCE_MARK_MAX:
         for key in [k for k, v in _NONCE_MARK.items() if v <= now]:
             del _NONCE_MARK[key]
         if len(_NONCE_MARK) >= _NONCE_MARK_MAX:
-            _NONCE_MARK.clear()  # bounded-memory degradation
-    expiry = _NONCE_MARK.get(nonce)
-    if expiry is not None and expiry > now:
-        return False
+            return "full"
     _NONCE_MARK[nonce] = now + max(900.0, 2.0 * float(ttl_seconds or 0) + 60.0)
-    return True
+    return "ok"
 
 
 def _auth_error(request_data, kind):
@@ -209,10 +236,16 @@ def _auth_error(request_data, kind):
             "belongs to a different user (or the token was rotated); run "
             "`virtuoso-bridge restart` after RBStop()"
         )
-    if not _consume_nonce(nonce, ttl):
+    verdict = _consume_nonce(nonce, ttl)
+    if verdict == "replay":
         return (
             "AuthError: replayed request nonce - rejected by server-side "
             "replay protection"
+        )
+    if verdict == "full":
+        return (
+            "AuthError: nonce cache at capacity - request rejected "
+            "(fail-closed; retry shortly)"
         )
     if proto != _PROTO:
         return "AuthError: protocol version mismatch (daemon speaks v1)"

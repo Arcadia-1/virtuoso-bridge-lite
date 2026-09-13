@@ -1572,6 +1572,46 @@ let((result winName ciwNum)
             payload["mac"] = daemon_auth.hello_mac(self._daemon_token, nonce=nonce)
         return payload
 
+    @staticmethod
+    def _parse_caps(body: bytes) -> dict[str, Any]:
+        """Parse and strictly type-check a capability payload.
+
+        Malformed payloads (non-JSON, non-object, wrong field types) are
+        refused as authentication failures — never trusted, never crashed on.
+        """
+        try:
+            caps = json.loads(body.decode("utf-8", errors="ignore"))
+        except json.JSONDecodeError:
+            raise daemon_auth.DaemonAuthError(
+                "daemon sent an unparseable capability payload — it predates "
+                "bridge token auth; run `virtuoso-bridge restart` (or re-load "
+                "virtuoso_setup.il in the CIW) to upgrade it"
+            )
+        if not isinstance(caps, dict):
+            raise daemon_auth.DaemonAuthError(
+                "daemon sent a malformed capability payload (expected a JSON "
+                "object)"
+            )
+        proto = caps.get("proto")
+        if not isinstance(proto, int) or isinstance(proto, bool) \
+                or proto != daemon_auth.PROTOCOL_VERSION:
+            raise daemon_auth.DaemonAuthError(
+                f"bridge protocol version mismatch: daemon speaks "
+                f"v{proto!r}, client speaks v{daemon_auth.PROTOCOL_VERSION}"
+            )
+        if caps.get("auth") not in ("on", "off"):
+            raise daemon_auth.DaemonAuthError(
+                "daemon sent a malformed capability payload (bad auth flag)"
+            )
+        pid = caps.get("virtuoso_pid")
+        if pid is not None and (
+            not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0
+        ):
+            raise daemon_auth.DaemonAuthError(
+                "daemon sent a malformed capability payload (bad virtuoso_pid)"
+            )
+        return caps
+
     def _ensure_daemon_capabilities(self, deadline: float) -> dict[str, Any]:
         """Perform the side-effect-free capability handshake exactly once.
 
@@ -1611,16 +1651,17 @@ let((result winName ciwNum)
 
         body = raw[1:]
         if self._daemon_token and daemon_auth.looks_like_hex_mac(body):
-            caps_raw = daemon_auth.verify_response_bytes(raw, self._daemon_token, nonce)
+            # Signed capabilities from an auth-enabled daemon: verify, then
+            # strictly type-check.
+            caps = self._parse_caps(
+                daemon_auth.verify_response_bytes(raw, self._daemon_token, nonce)[1:]
+            )
         elif self._daemon_token:
             # Unsigned hello reply while we hold a token: either an
             # explicitly auth-disabled daemon (which cannot sign anything we
             # could verify) or a pre-token/stale daemon.
-            try:
-                caps = json.loads(body.decode("utf-8", errors="ignore"))
-            except json.JSONDecodeError:
-                caps = None
-            if not (isinstance(caps, dict) and caps.get("auth") == "off"):
+            caps = self._parse_caps(body)
+            if caps.get("auth") != "off":
                 raise daemon_auth.DaemonAuthError(
                     "daemon did not authenticate its handshake response — "
                     "run `virtuoso-bridge restart` (or re-load "
@@ -1633,50 +1674,31 @@ let((result winName ciwNum)
                     "daemon host); refusing an unverifiable channel — set "
                     f"{daemon_auth.UNAUTH_OPTIN_ENV}=1 to accept"
                 )
-            caps_raw = raw
         else:
-            # No token (explicit legacy opt-in): a signing daemon cannot be
-            # verified by us, and an authed daemon would reject our commands
-            # anyway — only an explicitly auth-disabled daemon is usable.
+            # No token: an authed daemon cannot be talked to at all, and an
+            # auth-disabled daemon is acceptable ONLY when this client was
+            # itself explicitly opted in — a bare constructor is not a
+            # license to run unauthenticated.
             if daemon_auth.looks_like_hex_mac(body):
                 raise daemon_auth.DaemonAuthError(
                     "daemon requires bridge token authentication but this "
                     "client has none"
                 )
-            try:
-                caps = json.loads(body.decode("utf-8", errors="ignore"))
-            except json.JSONDecodeError:
-                raise daemon_auth.DaemonAuthError(
-                    "daemon did not authenticate its handshake response — "
-                    "run `virtuoso-bridge restart` (or re-load "
-                    "virtuoso_setup.il in the CIW) to upgrade it"
-                )
-            if caps.get("auth") == "on":
+            caps = self._parse_caps(body)
+            if caps["auth"] == "on":
                 raise daemon_auth.DaemonAuthError(
                     "daemon requires bridge token authentication but this "
                     "client has none"
                 )
-            caps_raw = raw
-
-        caps = json.loads(caps_raw[1:].decode("utf-8", errors="ignore"))
-
-        daemon_proto = caps.get("proto")
-        if daemon_proto != daemon_auth.PROTOCOL_VERSION:
-            raise daemon_auth.DaemonAuthError(
-                f"bridge protocol version mismatch: daemon speaks "
-                f"v{daemon_proto}, client speaks "
-                f"v{daemon_auth.PROTOCOL_VERSION}"
-            )
-        if self._daemon_token and caps.get("auth") != "on":
-            # Auth-off daemon cannot sign anything we could verify.
             if not daemon_auth.allow_unauthenticated():
                 raise daemon_auth.DaemonAuthError(
-                    "daemon runs with token authentication DISABLED (explicit "
-                    f"{daemon_auth.DAEMON_UNAUTH_OPTIN_ENV}=1 opt-in on the "
-                    "daemon host); refusing an unverifiable channel — set "
-                    f"{daemon_auth.UNAUTH_OPTIN_ENV}=1 to accept"
+                    "daemon runs with token authentication DISABLED; refusing "
+                    "an unauthenticated channel — set "
+                    f"{daemon_auth.UNAUTH_OPTIN_ENV}=1 to explicitly accept "
+                    "insecure legacy mode"
                 )
-        # Free identity data from the signed handshake.
+
+        # Free identity data from the (signed, when auth is on) handshake.
         pid = caps.get("virtuoso_pid")
         if isinstance(pid, int) and pid > 0:
             self._remote_virtuoso_pid = pid

@@ -18,6 +18,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -46,9 +47,13 @@ class _AuthDaemon:
     the handshake's missing ``skill`` key exactly like the real old code.
     """
 
-    def __init__(self, token: str | None = TOKEN, legacy: bool = False):
+    def __init__(self, token: str | None = TOKEN, legacy: bool = False,
+                 caps_body: str | None = None):
         self.token = None if legacy else token
         self.legacy = legacy
+        # When set, the handshake answers with this raw payload instead of
+        # the canonical caps JSON (for malformed-payload regression tests).
+        self.caps_body = caps_body
         self.requests: list[dict] = []  # received (pre-auth)
         self.executed: list[str] = []  # post-auth SKILL executions
         self.virtuoso_pid = 4242
@@ -113,7 +118,7 @@ class _AuthDaemon:
 
             # Capability handshake: no "skill" field, nothing executes.
             if req.get("op") == "hello":
-                caps = json.dumps(
+                caps = self.caps_body if self.caps_body is not None else json.dumps(
                     {
                         "proto": 1,
                         "auth": "on" if self.token else "off",
@@ -396,6 +401,64 @@ def test_optin_client_talks_to_auth_off_daemon(token_home, authoff_daemon, monke
     assert authoff_daemon.executed == ["1+1"]
 
 
+def test_bare_client_requires_optin_for_auth_off_daemon(token_home, authoff_daemon) -> None:
+    """A directly constructed (token-less) client is NOT a license to run
+    unauthenticated: an auth-disabled daemon still requires the explicit
+    client-side opt-in."""
+    client = VirtuosoClient(host="127.0.0.1", port=authoff_daemon.port, daemon_token=None)
+    result = client.execute_skill("1+1", timeout=5)
+    assert result.status is ExecutionStatus.ERROR
+    assert "explicitly accept insecure legacy mode" in result.errors[0]
+    assert authoff_daemon.executed == []
+
+
+@pytest.mark.parametrize(
+    "caps_body",
+    [
+        "null",                       # valid JSON, wrong type
+        "[1, 2]",                     # valid JSON, wrong type
+        '{"proto": 1}',               # missing auth
+        '{"proto": 1, "auth": "maybe"}',  # bad auth flag
+        '{"proto": "1", "auth": "on"}',   # wrong proto type
+        '{"proto": 1, "auth": "on", "virtuoso_pid": "4242"}',  # bad pid type
+        '{"proto": 1, "auth": "on", "virtuoso_pid": -5}',      # bad pid value
+        "not json at all",
+    ],
+)
+def test_malformed_capability_payloads_are_refused(token_home, caps_body) -> None:
+    daemon = _AuthDaemon(token=TOKEN, caps_body=caps_body)
+    try:
+        client = VirtuosoClient(host="127.0.0.1", port=daemon.port, daemon_token=TOKEN)
+        result = client.execute_skill("1+1", timeout=5)
+        assert result.status is ExecutionStatus.ERROR
+        assert (
+            "malformed capability payload" in result.errors[0]
+            or "unparseable capability payload" in result.errors[0]
+            or "protocol version mismatch" in result.errors[0]
+        )
+        assert daemon.executed == []
+    finally:
+        daemon.close()
+
+
+def test_token_race_adopts_disk_token(token_home, monkeypatch) -> None:
+    """First-time creation race: the on-disk file (the racing winner's) is
+    authoritative — clients must converge on one secret, never diverge."""
+    winner_token = "ef" * 32
+
+    def lost_race(target, token):
+        from virtuoso_bridge.daemon_auth import _tighten_perms  # type: ignore[attr-defined]
+        target = Path(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(winner_token + "\n", encoding="utf-8")
+        _tighten_perms(target)
+        return winner_token
+
+    monkeypatch.setattr(daemon_auth, "create_token_exclusive", lost_race)
+    assert daemon_auth.read_or_create_local_token() == winner_token
+    assert daemon_auth.read_local_token() == winner_token
+
+
 def test_server_rejects_replayed_nonce(authed_daemon) -> None:
     """Even a validly signed request must not replay: nonce is single-use."""
     payload = {
@@ -488,6 +551,53 @@ def test_skill_exec_tool_rejected_without_token(authed_daemon) -> None:
 
     caps, error = tool.handshake("127.0.0.1", authed_daemon.port, 5, None)
     assert caps is None and "AuthError" in error
+
+
+def test_skill_exec_handshake_parses_unsigned_caps(authoff_daemon) -> None:
+    """--no-token handshake against an auth-disabled daemon must parse the
+    unsigned capability payload (marker stripped before json.loads)."""
+    spec = importlib.util.spec_from_file_location(
+        "skill_exec", Path(__file__).resolve().parents[1] / "tools" / "skill_exec.py"
+    )
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+
+    caps, error = tool.handshake("127.0.0.1", authoff_daemon.port, 5, None)
+    assert error is None
+    assert caps["proto"] == 1 and caps["auth"] == "off"
+
+
+def test_skill_exec_execute_handshakes_itself(legacy_daemon) -> None:
+    """execute() must never skip the handshake: an old daemon is detected
+    (and executes nothing) even when callers pass no caps payload."""
+    spec = importlib.util.spec_from_file_location(
+        "skill_exec", Path(__file__).resolve().parents[1] / "tools" / "skill_exec.py"
+    )
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+
+    result, error = tool.execute(
+        "1+1", host="127.0.0.1", port=legacy_daemon.port, timeout=5, token=TOKEN
+    )
+    assert result is None and "capability handshake" in error
+    assert legacy_daemon.executed == []
+
+
+def test_skill_exec_execute_optin_against_auth_off_daemon(
+    token_home, authoff_daemon, monkeypatch
+) -> None:
+    monkeypatch.setenv(daemon_auth.UNAUTH_OPTIN_ENV, "1")
+    spec = importlib.util.spec_from_file_location(
+        "skill_exec", Path(__file__).resolve().parents[1] / "tools" / "skill_exec.py"
+    )
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+
+    result, error = tool.execute(
+        "1+1", host="127.0.0.1", port=authoff_daemon.port, timeout=5, token=None
+    )
+    assert error is None and result == '"2"'
+    assert authoff_daemon.executed == ["1+1"]
 
 
 # ---------------------------------------------------------------------------
@@ -692,6 +802,17 @@ def test_py27_daemon_source_is_pure_ascii() -> None:
     data.decode("ascii")
 
 
+def test_py27_daemon_has_constant_time_compare_fallback() -> None:
+    """hmac.compare_digest only exists from python2.7.7; the py2 daemon must
+    ship a constant-time fallback for older 2.7 patch releases."""
+    src = (_resources_dir() / "ramic_bridge_daemon_27.py").read_text(encoding="ascii")
+    assert "_compare_digest = _hmac.compare_digest" in src
+    assert "except AttributeError" in src
+    assert "_compare_digest(expected" in src  # the verification path uses it
+    assert "_hmac.compare_digest(expected" not in src  # no unguarded call
+
+
+
 # ---------------------------------------------------------------------------
 # Real daemon module (imported directly; fcntl stubbed for Windows)
 # ---------------------------------------------------------------------------
@@ -785,6 +906,38 @@ def test_real_daemon_module_skill_field_authenticates_body(tmp_path, monkeypatch
         ),
     }
     assert module._auth_error(request, "req") is None
+
+
+def test_real_daemon_nonce_cache_fails_closed_at_capacity(
+    tmp_path, monkeypatch
+) -> None:
+    """At capacity the cache must NEVER drop live entries: new requests are
+    rejected outright (fail-closed) and existing nonces still replay-fail."""
+    module = _import_py3_daemon(monkeypatch, tmp_path)
+    token = daemon_auth.read_local_token(module._token_file_path())
+    live = {"nonce": "12" * 16, "skill": "1+1", "timeout": 5, "proto": 1}
+    live["mac"] = daemon_auth.request_mac(
+        token, nonce=live["nonce"], skill=live["skill"], timeout=5.0
+    )
+    # Consume the live nonce once so it is a protected cache entry.
+    assert module._auth_error(dict(live), "req") is None
+    # Stuff the cache to capacity with far-future entries.
+    future = time.time() + 10_000
+    module._NONCE_MARK.update(
+        {f"filler{i:04x}": future for i in range(module._NONCE_MARK_MAX - 1)}
+    )
+    assert len(module._NONCE_MARK) == module._NONCE_MARK_MAX
+
+    fresh = {"nonce": "ab" * 16, "skill": "1+1", "timeout": 5, "proto": 1}
+    fresh["mac"] = daemon_auth.request_mac(
+        token, nonce=fresh["nonce"], skill=fresh["skill"], timeout=5.0
+    )
+    error = module._auth_error(fresh, "req")
+    assert error and "capacity" in error  # fail-closed: new request rejected
+    # Live entries were not wiped: the earlier nonce still replays.
+    replay = module._auth_error(dict(live), "req")
+    assert replay and "replayed" in replay
+    assert len(module._NONCE_MARK) == module._NONCE_MARK_MAX  # nothing cleared
 
 
 # ---------------------------------------------------------------------------

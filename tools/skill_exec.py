@@ -147,30 +147,46 @@ def handshake(host, port, timeout, token):
     if error:
         return None, error
     if data[:1] == NAK:
-        return None, data[1:].decode("utf-8", errors="replace").strip()
+        message = data[1:].decode("utf-8", errors="replace").strip()
+        if message.startswith("AuthError"):
+            return None, message
+        return None, (
+            "daemon did not answer the bridge capability handshake — it "
+            "predates bridge token auth; re-load virtuoso_setup.il in the CIW"
+        )
     if data[:1] != STX:
         return None, "no bridge capability handshake answer from %s:%d" % (host, port)
-    body = data
     if token:
         marker, body = _verify_response(data, token, nonce)
         if marker is None:
             return None, body
+    else:
+        body = data[1:]  # unsigned reply: strip the marker before parsing
     try:
-        return json.loads(body.decode("utf-8", errors="replace")), None
+        caps = json.loads(body.decode("utf-8", errors="replace"))
     except ValueError:
         return None, (
             "daemon handshake payload was not valid JSON — it predates "
             "bridge token auth; re-load virtuoso_setup.il in the CIW"
         )
+    if not isinstance(caps, dict):
+        return None, "daemon handshake payload is malformed (expected a JSON object)"
+    return caps, None
 
 
 def execute(skill, host="127.0.0.1", port=65432, timeout=60, token=None,
             caps=None):
     """Send a SKILL expression to the bridge daemon and return the result string.
 
-    When *caps* (from :func:`handshake`) is given it is trusted as already
-    validated; callers that skip the handshake bypass the pre-flight check.
+    The capability handshake runs automatically unless a validated *caps*
+    payload is supplied (as :func:`main` does after its own pre-flight) —
+    ``execute()`` can never send SKILL to a daemon whose protocol/auth state
+    was not checked first.
     """
+    if caps is None:
+        caps, error = handshake(host, port, min(timeout, 10), token)
+        if error:
+            return None, error
     request = {"proto": PROTO, "skill": skill, "timeout": timeout}
     nonce = None
     if token:

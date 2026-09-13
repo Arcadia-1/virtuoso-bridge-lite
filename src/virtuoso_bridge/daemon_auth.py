@@ -41,6 +41,7 @@ Scheme (wire protocol v1)
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import hmac
 import os
@@ -121,10 +122,17 @@ def _chmod_dir_0700(directory: Path) -> None:
         pass  # Windows: mode is advisory
 
 
-def write_token_atomic(target: str | Path, token: str) -> None:
-    """Persist *token* so readers never observe a partial or world-readable
-    file: write to a 0600 temp file in the same directory, fsync, then
-    ``os.replace`` (atomic on POSIX and Windows)."""
+def create_token_exclusive(target: str | Path, token: str) -> str:
+    """Create the token file if absent (0600 under a 0700 dir); return the
+    on-disk token.
+
+    The file is fully written to a temp file and hard-linked into place
+    (create-if-absent), so under a first-time creation race the winner's
+    complete file is always the one on disk and every racer **adopts** it —
+    concurrent creators converge on one secret instead of holding different
+    tokens.  Falls back to ``os.replace`` (last-writer-wins, mitigated by the
+    read-back) where hard links are unsupported.  Raises OSError on failure.
+    """
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     _chmod_dir_0700(target.parent)
@@ -132,22 +140,35 @@ def write_token_atomic(target: str | Path, token: str) -> None:
         dir=str(target.parent), prefix=".bridge_token.", suffix=".tmp"
     )
     try:
-        os.fchmod(fd, 0o600)
-    except (OSError, AttributeError):
-        pass  # Windows / old Pythons: mode is advisory; directory ACL applies
-    try:
+        try:
+            os.fchmod(fd, 0o600)
+        except (OSError, AttributeError):
+            pass  # Windows / old Pythons: mode is advisory; directory ACL applies
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(token + "\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp_name, str(target))
+        try:
+            os.link(tmp_name, str(target))
+        except OSError as exc:
+            if exc.errno != errno.EEXIST:
+                os.replace(tmp_name, str(target))
+        _tighten_perms(target)
+        disk = read_local_token(target)
+        if disk is None:
+            raise OSError(f"token file {target} unreadable after creation")
+        return disk
     except OSError:
         try:
             os.unlink(tmp_name)
         except OSError:
             pass
         raise
-    _tighten_perms(target)
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
 
 
 def read_local_token(path: str | Path | None = None) -> str | None:
@@ -177,10 +198,9 @@ def read_or_create_local_token(path: str | Path | None = None) -> str | None:
         pass
     token = generate_token()
     try:
-        write_token_atomic(target, token)
+        return create_token_exclusive(target, token)
     except OSError:
         return None
-    return token
 
 
 def local_token_or_raise(path: str | Path | None = None) -> str | None:
