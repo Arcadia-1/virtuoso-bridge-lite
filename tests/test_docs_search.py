@@ -498,7 +498,10 @@ def _run_remote_script(
 ) -> subprocess.CompletedProcess:
     """Run a generated remote script through local bash."""
     script_path = tmp_path / "vb_remote_script.sh"
-    script_path.write_text(script, encoding="utf-8", newline="\n")
+    # Path.write_text gained the newline= argument in Python 3.10.  Writing
+    # encoded bytes preserves the generated script's LF endings on every
+    # supported Python version, including the 3.9 CI job.
+    script_path.write_bytes(script.encode("utf-8"))
     return subprocess.run(
         ["bash", str(script_path)],
         capture_output=True,
