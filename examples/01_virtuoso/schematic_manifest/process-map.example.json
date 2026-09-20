@@ -1,0 +1,22 @@
+{
+  "schema": "virtuoso-bridge-process-map-v1",
+  "gridUnit": 0.0625,
+  "sourceScaleInGridUnits": 1,
+  "originInGridUnits": [16, 16],
+  "localLabelStubInGridUnits": 4,
+  "processes": {
+    "demo180": {
+      "outputLibrary": "REPLACE_WITH_WRITABLE_LIBRARY",
+      "devices": {
+        "nmos": {
+          "library": "REPLACE_WITH_PDK_LIBRARY",
+          "cell": "REPLACE_WITH_NMOS_CELL",
+          "view": "symbol",
+          "pinMap": {"D": "D", "G": "G", "S": "S", "B": "B"},
+          "pinOffsets": {"D": [4, 3], "G": [0, 0], "S": [4, -3], "B": [4, -1]},
+          "parameterMap": {"l": "l", "w": "w", "m": "m"}
+        }
+      }
+    }
+  }
+}

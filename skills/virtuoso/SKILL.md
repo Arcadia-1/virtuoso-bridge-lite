@@ -129,7 +129,7 @@ Before instantiating a cell or setting parameters on it:
 
 | Domain | What it does | Python package | API docs |
 |--------|-------------|----------------|----------|
-| **Schematic** | Create/edit schematics, wire instances, add pins | `client.schematic.*` | `references/schematic-python-api.md`, `references/schematic-skill-api.md` |
+| **Schematic** | Create/edit schematics, wire instances, add pins | `client.schematic.*` | `references/schematic-python-api.md`, `references/schematic-skill-api.md`, `references/schematic-manifest-import.md` |
 | **Symbol** | Generate, edit, and read symbol views | `client.symbol.*` | `references/symbol-python-api.md` |
 | **Layout** | Create/edit layout, add shapes/vias/instances | `client.layout.*` | `references/layout-python-api.md`, `references/layout-skill-api.md` |
 | **Maestro** | Read/write ADE Assembler config, run simulations | `client.maestro.*` | `references/maestro-python-api.md`, `references/maestro-skill-api.md` |

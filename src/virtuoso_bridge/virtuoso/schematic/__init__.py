@@ -53,6 +53,27 @@ from virtuoso_bridge.virtuoso.schematic.planner import (
     SchematicReadbackReport,
     infer_device_kind,
 )
+from virtuoso_bridge.virtuoso.schematic.exact_geometry import (
+    ExactGeometryConfig,
+    orient_offset,
+    pin_orientation,
+    solve_exact_geometry,
+    source_orientation,
+)
+from virtuoso_bridge.virtuoso.schematic.manifest import (
+    apply_terminal_escape_detours,
+    capture_import_result,
+    capture_schematic_cell,
+    import_manifest_circuit,
+    import_schematic_manifest,
+    load_process_map,
+    load_schematic_manifest,
+    plan_manifest_circuit,
+    prepare_schematic_for_process,
+    reconcile_split_net_components,
+    validate_process_master_offsets,
+    verify_manifest_circuit,
+)
 
 if TYPE_CHECKING:
     from virtuoso_bridge import VirtuosoClient
@@ -161,6 +182,46 @@ class SchematicOps:
         """Create a cellview from a plan and run the editor's check/save path."""
         with self.create(lib, cell, view=view, timeout=timeout) as editor:
             plan.apply(editor)
+
+    def import_manifest(
+        self,
+        manifest: str | Path | dict[str, Any],
+        process_map: str | Path | dict[str, Any],
+        *,
+        processes: list[str] | tuple[str, ...] | None = None,
+        cells: list[str] | tuple[str, ...] | None = None,
+        verify: bool = True,
+        validate_masters: bool = True,
+        timeout: int = 180,
+    ) -> dict[str, Any]:
+        """Import exact-coordinate schematic manifests through mapped PDKs."""
+
+        return import_schematic_manifest(
+            self._owner,
+            manifest,
+            process_map,
+            processes=processes,
+            cells=cells,
+            verify=verify,
+            validate_masters=validate_masters,
+            timeout=timeout,
+        )
+
+    def capture_import_result(
+        self,
+        result: dict[str, Any],
+        output_dir: str | Path,
+        *,
+        margin: float = 0.75,
+    ) -> list[Path]:
+        """Capture all generated schematics named in an import result."""
+
+        return capture_import_result(
+            self._owner,
+            result,
+            output_dir,
+            margin=margin,
+        )
 
     def export_netlist(
         self,
@@ -272,4 +333,21 @@ __all__ = [
     "SchematicPlanningError",
     "SchematicReadbackReport",
     "infer_device_kind",
+    "ExactGeometryConfig",
+    "source_orientation",
+    "orient_offset",
+    "pin_orientation",
+    "solve_exact_geometry",
+    "load_schematic_manifest",
+    "load_process_map",
+    "prepare_schematic_for_process",
+    "plan_manifest_circuit",
+    "validate_process_master_offsets",
+    "apply_terminal_escape_detours",
+    "reconcile_split_net_components",
+    "import_manifest_circuit",
+    "verify_manifest_circuit",
+    "import_schematic_manifest",
+    "capture_schematic_cell",
+    "capture_import_result",
 ]

@@ -29,6 +29,7 @@ A new infrastructure for **Agentic Analog and Mixed-Signal Design**. LLM Agents 
 - **Flexible programming**: execute inline SKILL, load `.il` files, or use Python APIs
 - **Four design domains**: schematic editing, layout generation, simulation setup (Maestro), and standalone Spectre with PSF parsing
 - **Deterministic schematic planning**: explicit connectivity plus hard/soft grid, polarity-row, differential-pair, pin-column, and output-stage constraints
+- **Exact schematic recreation**: import routed source geometry through explicit PDK maps, live symbol-pin audits, readback verification, and batch GUI screenshots
 
 **2. Scalable Architecture** — Multi-server, multi-session, built for distributed design clusters.
 - Multi-profile SSH: connect to N design servers, each with independent tunnel
@@ -197,6 +198,21 @@ from virtuoso_bridge import VirtuosoClient
 client = VirtuosoClient.from_env()
 client.execute_skill("1+2")  # VirtuosoResult(status=SUCCESS, output='3')
 ```
+
+To recreate existing drawings across several PDKs, use the exact-coordinate
+manifest workflow.  It never guesses target devices or placement:
+
+```python
+result = client.schematic.import_manifest(
+    "source.json",
+    "process-map.json",
+    processes=["pdk180", "pdk28"],
+)
+client.schematic.capture_import_result(result, "output/evidence")
+```
+
+See [`examples/01_virtuoso/schematic_manifest/`](examples/01_virtuoso/schematic_manifest/)
+for the portable JSON contracts and a complete runner.
 
 For fail-fast access to standalone Spectre PSF ASCII artifacts, use the strict
 helpers instead of guessing filenames, keys, or value shapes:

@@ -165,7 +165,7 @@ def _remote_port_occupancy_cmd(port: int) -> str:
         f"if (ss -tln 2>/dev/null || netstat -tln 2>/dev/null) "
         f"| awk '{{print $4}}' | grep -E ':{port}$' >/dev/null 2>&1; then "
         f"if pgrep -u \"$(id -un 2>/dev/null)\" -f "
-        f"'ramic_bridge_daemon_[23].py.* {port}$' >/dev/null 2>&1; then "
+        f"'ramic_bridge_daemon_(3|27)\\.py.* {port}$' >/dev/null 2>&1; then "
         f"echo OWN; else echo FOREIGN; fi; else echo FREE; fi"
     )
 
