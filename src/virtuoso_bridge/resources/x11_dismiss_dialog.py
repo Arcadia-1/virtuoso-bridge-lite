@@ -127,6 +127,40 @@ def _is_virtuoso_class(classes):
     return False
 
 
+def _read_xprop_metadata(win_id):
+    """Read title/class without xwininfo's locale-dependent conversion."""
+    try:
+        output = subprocess.check_output(
+            ["xprop", "-id", win_id, "_NET_WM_NAME", "WM_NAME", "WM_CLASS"],
+            stderr=subprocess.PIPE
+        ).decode("utf-8", "replace")
+    except (subprocess.CalledProcessError, OSError):
+        return {"title": "", "class": []}
+    titles = {}
+    classes = []
+    for line in output.splitlines():
+        values = re.findall(r'"((?:\\.|[^"\\])*)"', line)
+        if line.startswith("WM_NAME(") and values:
+            titles["wm"] = values[0]
+        elif line.startswith("_NET_WM_NAME(") and values:
+            titles["net"] = values[0]
+        elif line.startswith("WM_CLASS(") and values:
+            classes = values
+    return {"title": titles.get("wm") or titles.get("net") or "", "class": classes}
+
+
+def _repair_locale_damaged_metadata(window):
+    title = window.get("title") or ""
+    if "failure in conversion" not in title.lower():
+        return window
+    metadata = _read_xprop_metadata(window["id"])
+    if metadata.get("title"):
+        window["title"] = metadata["title"]
+    if metadata.get("class"):
+        window["class"] = metadata["class"]
+    return window
+
+
 def _read_window_info(win_id):
     try:
         info = subprocess.check_output(
@@ -175,6 +209,7 @@ def _root_frames():
         frame = _parse_window_line(line)
         if not frame:
             continue
+        frame = _repair_locale_damaged_metadata(frame)
         info = _read_window_info(frame["id"])
         frame["geometry"] = info.get("geometry") or frame.get("geometry") or {}
         frame["mapped"] = info.get("mapped", False)
@@ -195,7 +230,7 @@ def _frame_children(frame_id, recursive=True):
     for line in subtree.splitlines():
         child = _parse_window_line(line)
         if child:
-            children.append(child)
+            children.append(_repair_locale_damaged_metadata(child))
     return children
 
 
@@ -223,7 +258,11 @@ def _known_action(title):
 
 def _looks_like_ciw(title):
     title_l = (title or "").lower()
-    return "command interpreter" in title_l or bool(re.search(r"\bciw\b", title_l))
+    return (
+        "command interpreter" in title_l
+        or bool(re.search(r"\bciw\b", title_l))
+        or (title_l.startswith("virtuoso") and " - log:" in title_l)
+    )
 
 
 def classify_windows(windows):

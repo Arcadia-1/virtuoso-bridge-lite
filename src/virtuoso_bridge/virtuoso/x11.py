@@ -184,7 +184,22 @@ def bootstrap_ciw(
     if resolved:
         cmd += f" {resolved}"
     result = _run(runner, cmd, timeout=20)
-    return _parse_result(result)
+    parsed = _parse_result(result)
+    selected = [
+        item for item in parsed
+        if window_id in (
+            item.get("requested_window_id"),
+            item.get("window_id"),
+            item.get("bootstrapped"),
+        )
+    ]
+    # Auto-detection may probe stale or inaccessible DISPLAY values before it
+    # reaches the selected CIW.  Keep those diagnostics, but never let them
+    # mask the result for the window the caller explicitly requested.
+    selected_success = [item for item in selected if "error" not in item]
+    selected_error = [item for item in selected if "error" in item]
+    remainder = [item for item in parsed if item not in selected]
+    return selected_success + selected_error + remainder
 
 
 def dismiss_dialogs(

@@ -129,6 +129,38 @@ def test_top_level_discovery_returns_one_verified_ciw_per_frame(monkeypatch) -> 
     assert windows[0]["kind"] == "ciw"
 
 
+def test_top_level_discovery_repairs_locale_damaged_ciw_title(monkeypatch) -> None:
+    helper = _load_helper_module()
+    root = r'''
+     1 child:
+     0xf00 " (failure in conversion from UTF8_STRING to ANSI_X3.4-1968)": ("virtuoso" "virtuoso") 795x193+0+0 +0+0
+'''
+    xprop = r'''
+_NET_WM_NAME(UTF8_STRING) = "Virtuoso\302\256 6.1.8-64b - Log: /tmp/virtuoso.log"
+WM_NAME(STRING) = "Virtuoso 6.1.8-64b - Log: /tmp/virtuoso.log"
+WM_CLASS(STRING) = "virtuoso", "virtuoso"
+'''
+
+    def fake_check_output(cmd, stderr=None):
+        if cmd == ["xwininfo", "-root", "-children"]:
+            return root.encode()
+        if cmd == ["xprop", "-id", "0xf00", "_NET_WM_NAME", "WM_NAME", "WM_CLASS"]:
+            return xprop.encode()
+        if cmd == ["xwininfo", "-id", "0xf00"]:
+            return _xwininfo_window(w=795, h=193).encode()
+        if cmd == ["xwininfo", "-id", "0xf00", "-children"]:
+            return b"0 children:\n"
+        raise AssertionError(f"unexpected command: {cmd!r}")
+
+    monkeypatch.setattr(helper.subprocess, "check_output", fake_check_output)
+
+    windows = helper.discover_windows(":7020", top_level=True)
+
+    assert len(windows) == 1
+    assert windows[0]["kind"] == "ciw"
+    assert windows[0]["title"] == "Virtuoso 6.1.8-64b - Log: /tmp/virtuoso.log"
+
+
 def test_bootstrap_refuses_non_ciw_and_injects_only_generated_load(monkeypatch) -> None:
     helper = _load_helper_module()
     typed = []
@@ -226,6 +258,85 @@ def test_x11_wrapper_requests_top_level_mode(monkeypatch) -> None:
 
     assert windows == [{"kind": "ciw"}]
     assert any("--list-windows --json --top-level" in cmd for cmd in runner.commands)
+
+
+def test_x11_wrapper_prioritizes_selected_bootstrap_result(monkeypatch) -> None:
+    monkeypatch.setattr(x11, "load_vb_env", lambda: None)
+    runner = _Runner({
+        "--bootstrap-window": (
+            '{"error":"xwininfo failed on stale display"}\n'
+            '{"bootstrapped":"0xciw","requested_window_id":"0xframe","display":":7020"}\n'
+        ),
+    })
+
+    results = x11.bootstrap_ciw(
+        runner,
+        "designer",
+        "0xframe",
+        "/shared/virtuoso_setup.il",
+    )
+
+    assert results[0]["bootstrapped"] == "0xciw"
+    assert results[1]["error"] == "xwininfo failed on stale display"
+
+
+def test_cli_bootstrap_uses_daemon_token_for_health_check(monkeypatch, capsys) -> None:
+    token = "a" * 64
+    seen: dict[str, object] = {}
+
+    class _FakeBridge:
+        port = 65061
+        daemon_host = "thu-wei"
+
+        def ensure_daemon_token(self):
+            return token
+
+        def close(self):
+            seen["closed"] = True
+
+    class _FakeSSHClient:
+        @staticmethod
+        def read_state(profile=None):
+            assert profile == "tsmc"
+            return {"setup_path": "/shared/virtuoso_setup.il", "port": 65061}
+
+        @classmethod
+        def from_env(cls, **_kwargs):
+            return _FakeBridge()
+
+    class _FakeVirtuosoClient:
+        def __init__(self, *, host, port, timeout, daemon_token):
+            seen.update(host=host, port=port, timeout=timeout, daemon_token=daemon_token)
+
+        def test_connection(self, timeout=1):
+            seen["probe_timeout"] = timeout
+            return True
+
+    monkeypatch.setattr(cli, "_load_cli_env", lambda: None)
+    monkeypatch.setattr(cli, "_CLI_PROFILE", ["tsmc"])
+    monkeypatch.setattr(cli, "_make_ssh_runner", lambda: (object(), "designer"))
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHClient", _FakeSSHClient)
+    monkeypatch.setattr(
+        "virtuoso_bridge.virtuoso.x11.bootstrap_ciw",
+        lambda *_args, **_kwargs: [{
+            "bootstrapped": "0xciw",
+            "requested_window_id": "0xframe",
+            "command": 'load("/shared/virtuoso_setup.il")',
+        }],
+    )
+    monkeypatch.setattr(
+        "virtuoso_bridge.virtuoso.basic.bridge.VirtuosoClient",
+        _FakeVirtuosoClient,
+    )
+
+    rc = cli.cli_bootstrap(window_id="0xframe", timeout=8)
+
+    assert rc == 0
+    assert seen["daemon_token"] == token
+    assert seen["timeout"] == 5
+    assert seen["probe_timeout"] == 5
+    assert seen["closed"] is True
+    assert "[daemon] OK" in capsys.readouterr().out
 
 
 def test_assembler_1749_uses_the_ok_mnemonic() -> None:
