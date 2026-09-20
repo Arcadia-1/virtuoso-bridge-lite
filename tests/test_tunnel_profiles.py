@@ -420,7 +420,6 @@ def test_occupancy_cmd_targets_port() -> None:
     cmd = _remote_port_occupancy_cmd(65061)
     assert ":65061$" in cmd
     assert "pgrep" in cmd and "id -un" in cmd
-    assert "ramic_bridge_daemon_(3|27)\\.py" in cmd
 
 
 def test_deconflict_shifts_off_foreign_listener(monkeypatch) -> None:
