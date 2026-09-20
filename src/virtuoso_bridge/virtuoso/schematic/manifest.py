@@ -19,7 +19,7 @@ import math
 from pathlib import Path
 import re
 import time
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence, Union
 
 from virtuoso_bridge.virtuoso.editor import ensure_operation_response
 from virtuoso_bridge.virtuoso.ops import (
@@ -40,7 +40,7 @@ from virtuoso_bridge.virtuoso.schematic.ops import (
 )
 
 
-JsonSource = str | Path | Mapping[str, Any]
+JsonSource = Union[str, Path, Mapping[str, Any]]
 PointLike = tuple[float, float]
 
 
