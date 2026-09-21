@@ -113,6 +113,29 @@ See `examples/01_virtuoso/schematic/12_plan_differential_pair.py` and
 `docs/adr/0002-deterministic-schematic-planner.md` for the complete acceptance
 example, conflict model, and explicit non-goals.
 
+### Exact-coordinate manifest import
+
+When a source editor already provides instance origins, transforms, endpoint
+coordinates, bends, junctions, and repeated ports, preserve that drawing with
+an explicit PDK process map:
+
+```python
+result = client.schematic.import_manifest(
+    "source.json",
+    "process-map.json",
+    processes=["pdk180", "pdk28"],
+    cells=["ota", "strongarm"],
+)
+pngs = client.schematic.capture_import_result(result, "output/evidence")
+```
+
+This path probes live master-pin centers before import, adapts source geometry
+to target-symbol pin offsets with exact axis constraints, creates both named
+connectivity and visible wires, runs `schCheck`, and verifies the result by
+reading it back.  It does not infer topology, placement, or PDK names.  See
+`references/schematic-manifest-import.md` and
+`examples/01_virtuoso/schematic_manifest/` for the JSON contracts.
+
 ### SKILL builder functions (ops)
 
 Use these with `sch.add(...)`:
