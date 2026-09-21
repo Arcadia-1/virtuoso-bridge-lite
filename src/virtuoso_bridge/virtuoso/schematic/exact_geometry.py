@@ -64,8 +64,15 @@ class ExactGeometryConfig:
 def source_orientation(transform: Mapping[str, Any]) -> str:
     """Translate a source rotation/mirror pair to a Cadence orientation."""
 
+    raw_rotation = transform.get("rotation", 0)
+    try:
+        rotation = float(raw_rotation)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"unsupported source rotation {raw_rotation!r}") from exc
+    if not math.isfinite(rotation) or not rotation.is_integer():
+        raise ValueError(f"unsupported source rotation {raw_rotation!r}")
     key = (
-        int(transform.get("rotation", 0)) % 360,
+        int(rotation) % 360,
         str(transform.get("mirror", "none")),
     )
     try:
@@ -218,7 +225,11 @@ def solve_exact_geometry(
         preferred[variable] = convert(item["sourcePosition"])
         junction_variables[junction_id] = variable
 
-    def endpoint_expression(endpoint: Mapping[str, Any]) -> Expression:
+    def endpoint_expression(
+        endpoint: Mapping[str, Any],
+        *,
+        net_name: str,
+    ) -> Expression:
         if endpoint["kind"] == "junction":
             return junction_variables[str(endpoint["junctionId"])], (0.0, 0.0)
         instance_id = str(endpoint["instanceId"])
@@ -230,12 +241,18 @@ def solve_exact_geometry(
                 f'{source["cellName"]} cannot resolve source endpoint '
                 f'{instance_id}.{endpoint["pinName"]}'
             )
-        if len(rows) > 1:
-            net_name = endpoint.get("netName")
-            matching = [row for row in rows if row["netName"] == net_name]
-            if len(matching) == 1:
-                return matching[0]["expression"]
-        return rows[0]["expression"]
+        matching = [row for row in rows if row["netName"] == net_name]
+        if len(matching) == 1:
+            return matching[0]["expression"]
+        candidates = [
+            f'{row["reference"]}.{row["pinName"]}:{row["netName"]}'
+            for row in rows
+        ]
+        raise ValueError(
+            f'{source["cellName"]} has ambiguous source endpoint '
+            f'{instance_id}.{endpoint["pinName"]} on net {net_name!r}: '
+            f"{candidates}"
+        )
 
     equations: dict[int, list[tuple[Expression, Expression, dict[str, str]]]] = {
         0: [],
@@ -278,8 +295,9 @@ def solve_exact_geometry(
 
     route_rows: list[tuple[Mapping[str, Any], list[Expression]]] = []
     for route in geometry.get("routes", []):
+        route_net = str(route["netName"])
         source_points = [route["start"]["sourcePoint"]]
-        expressions = [endpoint_expression(route["start"])]
+        expressions = [endpoint_expression(route["start"], net_name=route_net)]
         for index, step in enumerate(route.get("steps", [])):
             if step["kind"] == "bend":
                 variable = f'bend:{route["id"]}:{index}'
@@ -288,7 +306,7 @@ def solve_exact_geometry(
                 expressions.append((variable, (0.0, 0.0)))
             else:
                 source_points.append(step["sourcePoint"])
-                expressions.append(endpoint_expression(step))
+                expressions.append(endpoint_expression(step, net_name=route_net))
         for index, (source_a, source_b, expression_a, expression_b) in enumerate(
             zip(source_points, source_points[1:], expressions, expressions[1:])
         ):
@@ -304,7 +322,11 @@ def solve_exact_geometry(
 
     contact_rows: list[tuple[Mapping[str, Any], list[Expression]]] = []
     for contact in geometry.get("contacts", []):
-        expressions = [endpoint_expression(item) for item in contact["endpoints"]]
+        contact_net = str(contact["netName"])
+        expressions = [
+            endpoint_expression(item, net_name=contact_net)
+            for item in contact["endpoints"]
+        ]
         source_points = [item["sourcePoint"] for item in contact["endpoints"]]
         for index in range(1, len(expressions)):
             add_exact_edge(

@@ -15,6 +15,7 @@ result = client.schematic.import_manifest(
     cells=["ota", "comparator"],    # omitted means all
     verify=True,
     validate_masters=True,
+    overwrite=False,                 # refuse existing targets by default
 )
 
 pngs = client.schematic.capture_import_result(
@@ -55,6 +56,12 @@ down.  The converter flips y for Virtuoso.  Source rotations are multiples of
 See `examples/01_virtuoso/schematic_manifest/source.example.json` for the
 complete JSON shape.
 
+Preflight is strict: schemas must be the supported v1 identifiers; circuit,
+instance, route, contact, port-occurrence, and junction identifiers must be
+unique; coordinates must be finite; rotations must be exact multiples of 90°;
+and every net, pin, and endpoint reference must resolve unambiguously. Multiple
+selections may not resolve to the same output library/cell.
+
 ## Process-map contract
 
 Required global fields:
@@ -70,6 +77,11 @@ target `library`, `cell`, optional `view`, `pinMap`, `pinOffsets`, and optional
 `parameterMap` / `parameterOverrides`.  `pinOffsets` are target symbol terminal
 centers measured in grid units from the symbol origin.  Import probes the live
 master and fails before editing if the coordinates differ.
+
+No generic MOS dimensions are supplied. Parameters absent from both
+`sourceParameters` and `parameterOverrides` remain at the target-master
+default. CDF callbacks run under cleanup protection; callback failures abort
+staging, and readback rejects values rewritten by the PDK.
 
 Never guess a PDK cell name, terminal, offset, or CDF parameter.  Inspect the
 live symbol/CDF and keep the resulting map private when the PDK license forbids
@@ -88,12 +100,21 @@ origins therefore move as needed while the source endpoint relations remain
 exact.  A deterministic dogleg is added only when that PDK adaptation makes a
 wire cross a foreign terminal.
 
-Electrical connectivity does not depend on wire touching.  The workflow first
-creates named nets and binds every instance terminal directly, then adds the
-visible drawing.  Repeated top-level port names are supported and created as
-`inputOutput`, which permits fly-wires and local labels.
+The workflow creates named nets, binds instance terminals, and draws every
+declared route. `schCheck` is authoritative: if Cadence splits disconnected
+geometry or reports an error, import fails instead of forcing an OA net merge.
+Repeated top-level port names are supported and created as `inputOutput`, which
+permits explicit fly-wires and local labels.
 
-After `schCheck` and save, readback verifies instance masters, terminal-to-net
-partitions, top-level pins, and mapped CDF parameters.  PNG capture uses the
-numeric window returned by `open_window`, so concurrent Virtuoso windows do not
-silently produce evidence from the wrong cell.
+The target is never edited in place. Import builds a uniquely named staging
+cell, checks/saves/reads it twice, and requires stable topology across both
+passes. Readback verifies instance masters, placement, orientation,
+terminal-to-net partitions, port-to-net mapping, repeated port counts, and
+mapped CDF parameters. Only then is the staging view copied into place. With
+`overwrite=True`, the prior target remains in a private backup until the
+installed copy passes its final check and readback; any failure restores it.
+The former `dbMergeNet`-after-check workaround is intentionally absent because
+a subsequent `schCheck` can undo such a merge.
+
+PNG capture uses the numeric window returned by `open_window`, so concurrent
+Virtuoso windows do not silently produce evidence from the wrong cell.
