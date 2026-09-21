@@ -244,13 +244,16 @@ def _start_one_profile(profile: str | None) -> int:
                     print(f"  Load in Virtuoso CIW: load(\"{setup_path}\")")
             return 0
 
-        time.sleep(1.0)
-        if not SSHClient.is_running(profile):
+        if not _wait_for_tunnel_running(profile):
             print("[warning] Tunnel process exited shortly after start.")
-            print("Try starting the tunnel manually:")
+            print("For foreground SSH diagnosis (stop it before retrying `start`):")
             ssh_env = remote_ssh_env_from_os(profile)
-            port = ssh.port
-            manual_cmd = f"ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -N -L {port}:127.0.0.1:{port}"
+            local_port = ssh.port
+            remote_port = ssh.remote_port
+            manual_cmd = (
+                "ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -N "
+                f"-L {local_port}:127.0.0.1:{remote_port}"
+            )
             if ssh_env.jump_host:
                 jump = f"{ssh_env.jump_user or ssh_env.remote_user}@{ssh_env.jump_host}" if (ssh_env.jump_user or ssh_env.remote_user) else ssh_env.jump_host
                 manual_cmd += f" -J {jump}"
@@ -262,6 +265,19 @@ def _start_one_profile(profile: str | None) -> int:
         return 0
     finally:
         ssh.close()
+
+
+def _wait_for_tunnel_running(profile: str | None, timeout: float = 5.0) -> bool:
+    """Allow a freshly detached SSH listener time to become observable."""
+    from virtuoso_bridge.transport.tunnel import SSHClient
+
+    deadline = time.monotonic() + max(timeout, 0.0)
+    while True:
+        if SSHClient.is_running(profile):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.25)
 
 
 def _start_one() -> int:
@@ -1170,12 +1186,19 @@ def cli_bootstrap(*, window_id: str, timeout: int = 12) -> int:
     bridge = SSHClient.from_env(keep_remote_files=True, profile=profile)
     try:
         port = int((state or {}).get("port") or bridge.port)
+        daemon_token = bridge.ensure_daemon_token()
         deadline = time.monotonic() + max(timeout, 0)
+        probe_timeout = max(1, min(5, timeout or 1))
         identity: dict[str, str] = {}
         while True:
             try:
-                client = VirtuosoClient(host="127.0.0.1", port=port, timeout=1)
-                if client.test_connection(timeout=1):
+                client = VirtuosoClient(
+                    host="127.0.0.1",
+                    port=port,
+                    timeout=probe_timeout,
+                    daemon_token=daemon_token,
+                )
+                if client.test_connection(timeout=probe_timeout):
                     print("[daemon] OK - bootstrap completed and the CIW is reachable.")
                     return 0
             except Exception:

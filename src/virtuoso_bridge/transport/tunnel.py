@@ -40,6 +40,22 @@ from virtuoso_bridge.transport.ssh import (
 logger = logging.getLogger(__name__)
 
 _TUNNEL_STARTUP_SETTLE_SECONDS = 1.0
+
+
+def _pid_is_alive(pid: Any) -> bool:
+    """Return whether *pid* names a live process visible to this user."""
+    try:
+        parsed = int(pid)
+        if parsed <= 0:
+            return False
+        os.kill(parsed, 0)
+        return True
+    except PermissionError:
+        return True
+    except (TypeError, ValueError, OSError):
+        return False
+
+
 def _is_localhost(host: str | None) -> bool:
     """Return True if *host* refers to the local machine."""
     if not host:
@@ -165,7 +181,7 @@ def _remote_port_occupancy_cmd(port: int) -> str:
         f"if (ss -tln 2>/dev/null || netstat -tln 2>/dev/null) "
         f"| awk '{{print $4}}' | grep -E ':{port}$' >/dev/null 2>&1; then "
         f"if pgrep -u \"$(id -un 2>/dev/null)\" -f "
-        f"'ramic_bridge_daemon_[23].py.* {port}$' >/dev/null 2>&1; then "
+        f"'ramic_bridge_daemon_(3|27)\\.py.* {port}$' >/dev/null 2>&1; then "
         f"echo OWN; else echo FOREIGN; fi; else echo FREE; fi"
     )
 
@@ -364,6 +380,11 @@ class SSHClient:
         if _is_localhost(self._remote_host):
             return self._port
         return self._local_port
+
+    @property
+    def remote_port(self) -> int:
+        """Port used by the bridge daemon on the remote endpoint."""
+        return self._port
 
     @property
     def remote_host(self) -> str:
@@ -774,6 +795,43 @@ class SSHClient:
 
     # -- SSH tunnel (delegated to SSHRunner) ----------------------------------
 
+    def _adopt_saved_tunnel(self, local_port: int) -> bool:
+        """Adopt only a live tunnel whose saved endpoints exactly match."""
+        state = self.read_state(self._profile) or {}
+        saved_host = str(state.get("daemon_host") or state.get("remote_host") or "")
+        expected_host = self._daemon_host.strip().rstrip(".").lower()
+        # State files written before ``remote_port`` was introduced still
+        # describe a bridge-owned tunnel.  The configured remote port is the
+        # only value the old format omitted, so use it once while adopting;
+        # the subsequent ``save_state`` call upgrades the file in place.
+        saved_remote_port = state.get("remote_port")
+        if saved_remote_port in (None, ""):
+            saved_remote_port = self._port
+        try:
+            endpoints_match = (
+                state.get("mode") == "remote"
+                and int(state.get("port")) == local_port
+                and int(saved_remote_port) == self._port
+                and saved_host.strip().rstrip(".").lower() == expected_host
+            )
+        except (TypeError, ValueError):
+            endpoints_match = False
+        pid = state.get("tunnel_pid")
+        if not endpoints_match or not _pid_is_alive(pid):
+            return False
+        if not SSHRunner.can_reach_port(local_port):
+            return False
+        self._require_runner().tunnel_pid = int(pid)
+        return True
+
+    def _select_local_port(self, local_port: int) -> None:
+        if local_port == self._local_port:
+            return
+        logger.info("Local port %d was busy, using port %d", self._local_port, local_port)
+        print(f"[port] {self._local_port} busy, auto-switched to {local_port}", flush=True)
+        self._local_port = local_port
+        _update_env_file(_profiled_env_key("VB_LOCAL_PORT", self._profile), str(local_port))
+
     def ensure_tunnel(self) -> None:
         """Ensure SSH tunnel is running, auto-retry on port conflict."""
         if _is_localhost(self._remote_host):
@@ -781,31 +839,31 @@ class SSHClient:
         runner = self._require_runner()
         if runner.is_tunnel_alive:
             return
-        if SSHRunner.can_reach_port(self._local_port):
-            # Port reachable (external tunnel) — load PID from state if available
-            state = self.read_state(self._profile)
-            if state and state.get("tunnel_pid"):
-                runner.tunnel_pid = state["tunnel_pid"]
-            return
 
         max_attempts = 10
         local_port = self._local_port
         for attempt in range(max_attempts):
+            if SSHRunner.can_reach_port(local_port):
+                if self._adopt_saved_tunnel(local_port):
+                    self._select_local_port(local_port)
+                    return
+                logger.info("Local port %d is held by an unknown listener", local_port)
+                local_port += 1
+                continue
             settle = _TUNNEL_STARTUP_SETTLE_SECONDS
             if self._jump_host:
                 settle = max(settle, 3.0)
             proc = runner.start_port_forward(local_port, settle=settle, remote_port=self._port)
             if proc is None:
-                # Reusing existing tunnel
-                self._local_port = local_port
-                return
+                if self._adopt_saved_tunnel(local_port):
+                    self._select_local_port(local_port)
+                    return
+                logger.info("Local port %d became occupied by an unknown listener", local_port)
+                local_port += 1
+                continue
             if proc.poll() is None:
                 # Tunnel running
-                if local_port != self._local_port:
-                    logger.info("Local port %d was busy, using port %d", self._local_port, local_port)
-                    print(f"[port] {self._local_port} busy, auto-switched to {local_port}", flush=True)
-                    self._local_port = local_port
-                    _update_env_file(_profiled_env_key("VB_LOCAL_PORT", self._profile), str(local_port))
+                self._select_local_port(local_port)
                 logger.info(
                     "SSH tunnel established (PID %d): localhost:%d -> %s:localhost:%d",
                     proc.pid, local_port, self._remote_host, self._port,
@@ -949,6 +1007,7 @@ class SSHClient:
         state = {
             "mode": "local" if is_local else "remote",
             "port": self._port if is_local else self._local_port,
+            "remote_port": self._port,
             "tunnel_pid": tunnel_pid,
             "remote_host": self._remote_host,
             "daemon_host": self._daemon_host,
@@ -980,7 +1039,7 @@ class SSHClient:
 
     @classmethod
     def is_running(cls, profile: str | None = None) -> bool:
-        """Check if a tunnel is running (port reachable or process alive).
+        """Check if a saved, managed tunnel is alive and reachable.
 
         For local mode, the state file existing is sufficient — the daemon
         may not be loaded in CIW yet, so we skip port checks.
@@ -990,24 +1049,24 @@ class SSHClient:
             return False
         if state.get("mode") == "local":
             return True
+        if state.get("mode") != "remote":
+            return False
         port = state.get("port")
+        remote_port = state.get("remote_port")
         pid = state.get("tunnel_pid")
-        # Primary check: is the port reachable? (works on all platforms)
-        if port:
+        try:
+            local_port = int(port)
+        except (TypeError, ValueError):
+            return False
+        if remote_port not in (None, ""):
             try:
-                s = socket.create_connection(("127.0.0.1", port), timeout=1)
-                s.close()
-                return True
-            except (ConnectionRefusedError, OSError):
-                pass
-        # Fallback: is the process alive? (os.kill(pid, 0) on Unix)
-        if pid:
-            try:
-                os.kill(pid, 0)
-                return True
-            except (OSError, PermissionError):
-                pass
-        return False
+                if int(remote_port) <= 0:
+                    return False
+            except (TypeError, ValueError):
+                return False
+        if local_port <= 0 or not _pid_is_alive(pid):
+            return False
+        return SSHRunner.can_reach_port(local_port)
 
     # -- file transfer (delegated to SSHRunner) -----------------------------
 
