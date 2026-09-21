@@ -102,10 +102,12 @@ let((cv result)
     result = strcat(result "\n"))
   result = strcat(result "PINS\n")
   foreach(term cv~>terminals
-    result = strcat(result sprintf(nil "PIN|%s|%s|%d\n"
+    result = strcat(result sprintf(nil "PIN|%s|%s|%d|%s|%d\n"
       term~>name
       if(term~>direction term~>direction "inputOutput")
-      if(term~>numBits term~>numBits 1))))
+      if(term~>numBits term~>numBits 1)
+      if(term~>net term~>net~>name "")
+      length(term~>pins))))
   {notes_section}
   result = strcat(result "END\n")
   result)
@@ -333,10 +335,17 @@ def _parse_schematic(
                 pin_name = parts[1]
                 direction = parts[2]
                 num_bits = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 1
-                result["pins"][pin_name] = {
+                pin_data: dict[str, Any] = {
                     "direction": direction,
                     "numBits": num_bits,
                 }
+                if len(parts) > 4:
+                    pin_data["net"] = parts[4] or None
+                if len(parts) > 5:
+                    pin_data["occurrences"] = (
+                        int(parts[5]) if parts[5].isdigit() else 1
+                    )
+                result["pins"][pin_name] = pin_data
 
         elif section == "notes":
             if line.startswith("NOTE|"):

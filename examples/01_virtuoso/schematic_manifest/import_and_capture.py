@@ -31,6 +31,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--profile", default=None)
     parser.add_argument("--output-dir", type=Path, default=HERE / "output")
     parser.add_argument("--no-capture", action="store_true")
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="replace an existing target only after staging and verification",
+    )
     return parser.parse_args()
 
 
@@ -42,6 +47,7 @@ def main() -> int:
         args.process_map,
         processes=args.process or None,
         cells=args.cell or None,
+        overwrite=args.overwrite,
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     result_path = args.output_dir / "import-result.json"

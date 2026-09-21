@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Iterable
 
 def escape_skill_string(value: str) -> str:
@@ -30,13 +31,28 @@ def default_view_type_for(view: str) -> str:
         return "maestro"
     return view
 
+def _skill_number(value: float) -> str:
+    """Render one finite SKILL real without silently losing grid precision."""
+
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("SKILL coordinates must be finite")
+    if number == 0:
+        return "0.000"
+    if math.isclose(number, round(number, 3), rel_tol=0.0, abs_tol=1e-15):
+        return f"{number:.3f}"
+    return format(number, ".15g")
+
+
 def skill_point(x: float, y: float) -> str:
     """Render a SKILL point literal."""
-    return f"'({x:.3f} {y:.3f})"
+    return f"'({_skill_number(x)} {_skill_number(y)})"
 
 def skill_point_list(points: Iterable[tuple[float, float]]) -> str:
     """Render a SKILL list of point literals."""
-    rendered = " ".join(f"({x:.3f} {y:.3f})" for x, y in points)
+    rendered = " ".join(
+        f"({_skill_number(x)} {_skill_number(y)})" for x, y in points
+    )
     return f"'({rendered})"
 
 def open_cell_view(

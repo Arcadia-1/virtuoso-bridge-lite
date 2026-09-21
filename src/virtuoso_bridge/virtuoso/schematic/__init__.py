@@ -78,7 +78,6 @@ from virtuoso_bridge.virtuoso.schematic.manifest import (
     load_schematic_manifest,
     plan_manifest_circuit,
     prepare_schematic_for_process,
-    reconcile_split_net_components,
     validate_process_master_offsets,
     verify_manifest_circuit,
 )
@@ -222,6 +221,7 @@ class SchematicOps:
         cells: list[str] | tuple[str, ...] | None = None,
         verify: bool = True,
         validate_masters: bool = True,
+        overwrite: bool = False,
         timeout: int = 180,
     ) -> dict[str, Any]:
         """Import exact-coordinate schematic manifests through mapped PDKs."""
@@ -234,6 +234,7 @@ class SchematicOps:
             cells=cells,
             verify=verify,
             validate_masters=validate_masters,
+            overwrite=overwrite,
             timeout=timeout,
         )
 
@@ -380,7 +381,6 @@ __all__ = [
     "plan_manifest_circuit",
     "validate_process_master_offsets",
     "apply_terminal_escape_detours",
-    "reconcile_split_net_components",
     "import_manifest_circuit",
     "verify_manifest_circuit",
     "import_schematic_manifest",
