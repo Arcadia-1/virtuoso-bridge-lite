@@ -91,6 +91,14 @@ virtuoso-bridge bootstrap --window 0x3000012
 
 `bootstrap` 不接受任意 SKILL 文本，并会拒绝未识别为 CIW 的窗口。
 
+### 可选 IPC 日志
+
+守护进程 IPC 日志默认关闭。需要启用时，请在启动 Virtuoso 的进程环境中设置
+`RB_LOG_ENABLED=1`。`RB_LOG_PATH` 可指定日志文件；未设置或为空时，日志写入
+Virtuoso 工作目录下的 `ramic-bridge.log`。这两个变量属于 CIW 进程环境，不是
+bridge 的 `.env` 配置，修改它们不会影响已经运行的 Virtuoso。监控窗口中的日志
+开关会沿用该路径，并且只重启 bridge 守护进程。
+
 ### 分离 GUI、部署、守护进程和 Spectre 主机
 
 普通单机环境继续只需设置 `VB_REMOTE_HOST`。如果 CIW、生成文件、RAMIC

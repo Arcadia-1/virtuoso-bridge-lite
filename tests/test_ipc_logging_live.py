@@ -43,7 +43,7 @@ def _wait(predicate, timeout=40):
     (None, None),
     ("0", "disabled log.log"),
     ("1", "custom log.log"),
-    pytest.param("1", "literal '$RB_PORT' \"$HOME\" $(printf substituted) `printf substituted` \\ log.log",
+    pytest.param("1", "literal 'quote' '$RB_PORT' \"$HOME\" $(printf substituted) `printf substituted` \\ log.log",
                  id="literal-shell-characters"),
     ("1", None),
     ("1", ""),
