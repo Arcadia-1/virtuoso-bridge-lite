@@ -27,7 +27,12 @@ RBIdentityPath = if(getShellEnvVar("RB_IDENTITY_PATH") then
             )
 RBLocal = nil                                                                      ; Local-only connections (127.0.0.1 vs 0.0.0.0)
 RBEcho = nil                                                                     ; Echo bridging messages for debugging
-RBDLog = nil                                                                     ; Enable daemon logging to /tmp/RB.log
+; Read IPC logging settings from the Virtuoso process environment at load time.
+; Only "1" enables logging; a configured path alone does not enable it.
+RBDLog = getShellEnvVar("RB_LOG_ENABLED") == "1"
+RBLogPath = getShellEnvVar("RB_LOG_PATH")
+unless(RBLogPath && strlen(RBLogPath) > 0
+    RBLogPath = strcat(getWorkingDir() "/ramic-bridge.log"))
 
 ; IPC process handle. Do not reset on reload: a live daemon keeps the port;
 ; clearing RBIpc would make RBStart spawn a second daemon -> bind failure (exit 1).
@@ -148,7 +153,7 @@ procedure(RBIpcErrHandler(ipcId data)
                     ipcId
                     sprintf(nil "%s (%s)" RBLastIP RBLastHost)
                     RBLastPid RBLastBind
-                    if(RBDLog "/tmp/RB.log" "off")))
+                    if(RBDLog RBLogPath "off")))
             ; Banner is the canonical "daemon just identified itself"
             ; event -- repaint the monitor so users don't have to hit
             ; Refresh after a fresh start.
@@ -169,6 +174,16 @@ procedure(RBIpcFinishHandler(ipcId data)
     ; the user having to click Refresh.
     when(boundp('RBMonInstalled) errset(RBMRefresh()))
   )
+)
+
+procedure(RBQuoteShellArg(value)
+    ; Keep shell metacharacters literal, including embedded single quotes.
+    let((quoted character)
+        quoted = "'"
+        for(index 1 strlen(value)
+            character = substring(value index 1)
+            quoted = strcat(quoted if(character == "'" "'\\''" character)))
+        strcat(quoted "'"))
 )
 
 procedure(RBStart()
@@ -222,7 +237,10 @@ procedure(RBStart()
             )
             ; Set log path if logging is enabled
             if(RBDLog then
-                logpath = "/tmp/RB.log"
+                ; IPC embeds this argument in the cdsServIpc command line.
+                ; Single-quote it there; SKILL %L uses double quotes, which
+                ; still allow shell expansion. Keep the UI/banner path raw.
+                logpath = RBQuoteShellArg(RBLogPath)
             else
                 logpath = ""
             )
@@ -389,7 +407,7 @@ RBMBolEcho = hiCreateBooleanButton(
 
 RBMBolLog = hiCreateBooleanButton(
     ?name 'RBMBolLog
-    ?buttonText "Daemon log (/tmp/RB.log)"
+    ?buttonText sprintf(nil "Daemon log (%s)" RBLogPath)
     ?value RBDLog
     ?defValue RBDLog
     ?callback nil)

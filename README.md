@@ -104,6 +104,16 @@ virtuoso-bridge bootstrap --window 0x3000012
 `bootstrap` refuses windows that are not identified as a CIW and does not
 accept arbitrary SKILL text.
 
+### Optional IPC logging
+
+Daemon IPC logging is disabled by default. To enable it, set
+`RB_LOG_ENABLED=1` in the environment that launches the Virtuoso process.
+`RB_LOG_PATH` optionally selects the file; when it is unset or empty, the log
+is written as `ramic-bridge.log` in Virtuoso's working directory. These are
+CIW-process variables, not bridge `.env` settings, and changing them does not
+alter an already running Virtuoso process. The monitor's logging toggle uses
+the configured path and restarts only the bridge daemon.
+
 ### Split GUI and daemon hosts
 
 `VB_REMOTE_HOST` remains the simple one-host setting. In installations where

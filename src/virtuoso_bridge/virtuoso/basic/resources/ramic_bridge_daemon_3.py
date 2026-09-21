@@ -386,51 +386,29 @@ def watchdog_callback():
             pass
 
 def read_until_delimiter(start_ok=0x02, start_err=0x15, end=0x1e):
-    """Read data from Virtuoso's stdout until specific delimiters are found."""
+    """Read one framed response, distinguishing would-block, EOF and timeout."""
     result = bytearray()
-
-    # Wait for start marker
-    while True:
+    while not timeout_flag:
         try:
             ch = sys.stdin.buffer.read(1)
-            if not ch:
-                # EOF: Virtuoso (or its pipe) is gone -- no result can ever
-                # arrive, so fail fast instead of waiting for the watchdog
-                # (whose SIGINT target may be poorly resolved without /proc).
-                return b"\x15TimeoutError"
+        except IOError as e:
+            if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
+                raise
+            ch = None
+        if ch is None:
+            # Buffered nonblocking streams may return None rather than EAGAIN.
+            time.sleep(0.001)
+            continue
+        if ch == b"":
+            return b"\x15EOFError: Virtuoso response pipe closed"
+        if not result:
             if ch[0] in (start_ok, start_err):
                 result.extend(ch)
-                break
-        except IOError as e:
-            if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
-                if timeout_flag:
-                    return b"\x15TimeoutError"
-                time.sleep(0.001)
-                continue
-            raise
-        if timeout_flag:
-            return b"\x15TimeoutError"
-
-    # Read content until end marker
-    while True:
-        try:
-            ch = sys.stdin.buffer.read(1)
-            if not ch:
-                return b"\x15TimeoutError"  # EOF mid-response: Virtuoso died
-            if ch[0] == end:
-                break
+        elif ch[0] == end:
+            return result
+        else:
             result.extend(ch)
-        except IOError as e:
-            if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
-                if timeout_flag:
-                    return b"\x15TimeoutError"
-                time.sleep(0.001)
-                continue
-            raise
-        if timeout_flag:
-            return b"\x15TimeoutError"
-
-    return result
+    return b"\x15TimeoutError"
 
 def handle_external_connection(conn, addr):
     global watchdog_timer, timeout_flag

@@ -1184,3 +1184,51 @@ def test_sshclient_ensure_daemon_token_local_mode_uses_filesystem(token_home) ->
     token = client.ensure_daemon_token()
     assert daemon_auth.is_valid_token(token)
     assert token == daemon_auth.read_local_token()
+
+
+@pytest.mark.parametrize("pause", [None, BlockingIOError(errno.EAGAIN, "not ready")])
+@pytest.mark.parametrize("prefix", [b"", b"\x02par"])
+def test_real_daemon_waits_for_nonblocking_response(tmp_path, monkeypatch, pause, prefix):
+    module = _import_py3_daemon(monkeypatch, tmp_path)
+    remaining = b"tial\x1e" if prefix else b"\x02partial\x1e"
+    chunks = iter([*(bytes([c]) for c in prefix), pause,
+                   *(bytes([c]) for c in remaining)])
+
+    def read(_):
+        item = next(chunks)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    monkeypatch.setattr(sys.stdin.buffer, "read", read)
+    assert module.read_until_delimiter() == b"\x02partial"
+
+
+@pytest.mark.parametrize("prefix", [b"", b"\x02partial"])
+def test_real_daemon_reports_eof_without_timeout(tmp_path, monkeypatch, prefix):
+    module = _import_py3_daemon(monkeypatch, tmp_path)
+    chunks = iter([*(bytes([c]) for c in prefix), b""])
+    monkeypatch.setattr(sys.stdin.buffer, "read", lambda _: next(chunks))
+    response = module.read_until_delimiter()
+    assert response.startswith(b"\x15")
+    assert b"EOF" in response
+    assert b"TimeoutError" not in response
+
+
+@pytest.mark.parametrize("prefix", [b"", b"\x02partial"])
+@pytest.mark.parametrize("pause", [None, BlockingIOError(errno.EAGAIN, "not ready")])
+def test_real_daemon_nonblocking_wait_obeys_timeout(tmp_path, monkeypatch, prefix, pause):
+    module = _import_py3_daemon(monkeypatch, tmp_path)
+    chunks = iter(bytes([c]) for c in prefix)
+
+    def read(_):
+        try:
+            return next(chunks)
+        except StopIteration:
+            module.timeout_flag = True
+            if isinstance(pause, Exception):
+                raise pause
+            return pause
+
+    monkeypatch.setattr(sys.stdin.buffer, "read", read)
+    assert module.read_until_delimiter() == b"\x15TimeoutError"
