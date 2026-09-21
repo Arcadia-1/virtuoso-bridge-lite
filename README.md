@@ -214,6 +214,18 @@ client.schematic.capture_import_result(result, "output/evidence")
 See [`examples/01_virtuoso/schematic_manifest/`](examples/01_virtuoso/schematic_manifest/)
 for the portable JSON contracts and a complete runner.
 
+For operation-scoped schematic diagnostics, use:
+
+```python
+report = client.schematic.check_and_save("myLib", "myCell")
+print(report.status, report.check_error_count, report.check_warning_count)
+for diagnostic in report.diagnostics:
+    print(diagnostic.severity, diagnostic.code, diagnostic.message)
+```
+
+This captures only messages emitted by the current `schCheck`/`dbSave`, and
+reports a blocking modal separately instead of mixing in stale CIW history.
+
 For fail-fast access to standalone Spectre PSF ASCII artifacts, use the strict
 helpers instead of guessing filenames, keys, or value shapes:
 
