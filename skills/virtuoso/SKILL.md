@@ -448,6 +448,19 @@ with client.schematic.create(LIB, CELL) as sch:
     # schCheck + dbSave happen automatically on context exit
 ```
 
+When the caller must classify the errors/warnings from one check instead of
+only knowing whether the batch executed, use the explicit diagnostic API:
+
+```python
+report = client.schematic.check_and_save(LIB, CELL)
+for diagnostic in report.diagnostics:
+    print(diagnostic.severity, diagnostic.code, diagnostic.message)
+```
+
+It brackets the current `schCheck` / `dbSave` log output, so old CIW messages
+are not returned. A blocked modal is reported through out-of-band X11 metadata
+and is never dismissed automatically.
+
 **Key rules:**
 - **Use `add_net_label_to_transistor`** for MOS D/G/S/B — it auto-detects stub direction. Never manually `add_wire` between terminals.
 - **Pins go at the circuit edge**, not on instance terminals. They connect via matching net names.
