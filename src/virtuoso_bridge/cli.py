@@ -246,7 +246,7 @@ def _start_one_profile(profile: str | None) -> int:
 
         if not _wait_for_tunnel_running(profile):
             print("[warning] Tunnel process exited shortly after start.")
-            print("Try starting the tunnel manually:")
+            print("For foreground SSH diagnosis (stop it before retrying `start`):")
             ssh_env = remote_ssh_env_from_os(profile)
             local_port = ssh.port
             remote_port = ssh.remote_port

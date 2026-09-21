@@ -800,11 +800,18 @@ class SSHClient:
         state = self.read_state(self._profile) or {}
         saved_host = str(state.get("daemon_host") or state.get("remote_host") or "")
         expected_host = self._daemon_host.strip().rstrip(".").lower()
+        # State files written before ``remote_port`` was introduced still
+        # describe a bridge-owned tunnel.  The configured remote port is the
+        # only value the old format omitted, so use it once while adopting;
+        # the subsequent ``save_state`` call upgrades the file in place.
+        saved_remote_port = state.get("remote_port")
+        if saved_remote_port in (None, ""):
+            saved_remote_port = self._port
         try:
             endpoints_match = (
                 state.get("mode") == "remote"
                 and int(state.get("port")) == local_port
-                and int(state.get("remote_port")) == self._port
+                and int(saved_remote_port) == self._port
                 and saved_host.strip().rstrip(".").lower() == expected_host
             )
         except (TypeError, ValueError):
@@ -1042,15 +1049,22 @@ class SSHClient:
             return False
         if state.get("mode") == "local":
             return True
+        if state.get("mode") != "remote":
+            return False
         port = state.get("port")
         remote_port = state.get("remote_port")
         pid = state.get("tunnel_pid")
         try:
             local_port = int(port)
-            parsed_remote_port = int(remote_port)
         except (TypeError, ValueError):
             return False
-        if local_port <= 0 or parsed_remote_port <= 0 or not _pid_is_alive(pid):
+        if remote_port not in (None, ""):
+            try:
+                if int(remote_port) <= 0:
+                    return False
+            except (TypeError, ValueError):
+                return False
+        if local_port <= 0 or not _pid_is_alive(pid):
             return False
         return SSHRunner.can_reach_port(local_port)
 
