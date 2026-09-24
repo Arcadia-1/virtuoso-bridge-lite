@@ -172,7 +172,20 @@ BRIDGE_TOKEN = _load_or_create_token()
 # Server-side replay protection: nonce -> expiry.  Requests are served
 # serially (single accept loop), so a plain dict is safe.
 _NONCE_MARK = {}
-_NONCE_MARK_MAX = 4096
+
+
+def _nonce_cache_max():
+    raw = os.environ.get("RB_NONCE_CACHE_MAX", "4096")
+    try:
+        limit = int(raw)
+    except ValueError:
+        limit = 0
+    if limit <= 0:
+        raise ValueError("RB_NONCE_CACHE_MAX must be a positive integer")
+    return limit
+
+
+_NONCE_MARK_MAX = _nonce_cache_max()
 
 
 def _consume_nonce(nonce, ttl_seconds):
