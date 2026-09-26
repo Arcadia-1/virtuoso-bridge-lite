@@ -372,8 +372,8 @@ def layout_read_summary(
         'buf = strcat(buf sprintf(nil "  (%.3f %.3f)-(%.3f %.3f)" xCoord(car(bb)) yCoord(car(bb)) xCoord(cadr(bb)) yCoord(cadr(bb))))) '
         'buf = strcat(buf "\\n")) '
         'foreach(inst cv~>instances '
-        'buf = strcat(buf sprintf(nil "  inst: %s  [%s/%s]  @ (%.3f %.3f)\\n" inst~>name inst~>libName inst~>cellName xCoord(inst~>xy) yCoord(inst~>xy))) '
-        "return(buf)))"
+        'buf = strcat(buf sprintf(nil "  inst: %s  [%s/%s]  @ (%.3f %.3f)\\n" inst~>name inst~>libName inst~>cellName xCoord(inst~>xy) yCoord(inst~>xy)))) '
+        "return(buf))"
     )
 
 def layout_read_geometry(

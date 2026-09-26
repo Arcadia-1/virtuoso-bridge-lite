@@ -5,6 +5,7 @@ from virtuoso_bridge.virtuoso.ops import (
     open_cell_view,
     open_window,
 )
+from virtuoso_bridge.virtuoso.layout.ops import layout_read_summary
 
 
 def test_default_view_type_for_common_cellviews() -> None:
@@ -46,3 +47,11 @@ def test_open_cell_view_uses_maestro_view_type_by_default() -> None:
     skill = open_cell_view("demoLib", "nand2", view="maestro", mode="r")
 
     assert skill == 'cv = dbOpenCellViewByType("demoLib" "nand2" "maestro" "maestro" "r")'
+
+
+def test_layout_read_summary_returns_after_instance_loop() -> None:
+    skill = layout_read_summary("demoLib", "nand2")
+
+    # Return the accumulated text even with zero instances, and only after
+    # every instance has been appended.
+    assert skill.endswith("yCoord(inst~>xy)))) return(buf))")
