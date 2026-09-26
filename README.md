@@ -114,6 +114,15 @@ CIW-process variables, not bridge `.env` settings, and changing them does not
 alter an already running Virtuoso process. The monitor's logging toggle uses
 the configured path and restarts only the bridge daemon.
 
+### Optional nonce replay cache size
+
+The daemon remembers signed request nonces to reject replays. Its default
+capacity is 4096; once full, it rejects new requests rather than discarding
+live replay marks. For sustained high request rates, set a positive integer
+such as `RB_NONCE_CACHE_MAX=8192` in the environment that launches Virtuoso,
+then restart Virtuoso and the bridge daemon. This is a daemon-side setting,
+not a client bridge `.env` setting. A larger value uses more memory.
+
 ### Split GUI and daemon hosts
 
 `VB_REMOTE_HOST` remains the simple one-host setting. In installations where
