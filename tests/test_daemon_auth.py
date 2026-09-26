@@ -15,6 +15,7 @@ import hmac
 import importlib.util
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -849,6 +850,59 @@ class TestRealDaemon:
             except subprocess.TimeoutExpired:
                 proc.kill()
 
+    @pytest.mark.parametrize(
+        ("daemon_name", "interpreter"),
+        [
+            ("ramic_bridge_daemon_3.py", sys.executable),
+            ("ramic_bridge_daemon_27.py", shutil.which("python2.7")),
+        ],
+    )
+    def test_configured_nonce_cache_over_tcp(
+        self, tmp_path, daemon_name, interpreter
+    ) -> None:
+        if interpreter is None:
+            pytest.skip("Python 2.7 is unavailable")
+        daemon_src = _resources_dir() / daemon_name
+        token_path = tmp_path / "bridge_token"
+        port = _free_port()
+        env = dict(
+            os.environ,
+            RB_TOKEN_PATH=str(token_path),
+            RB_NONCE_CACHE_MAX="3",
+        )
+        proc = subprocess.Popen(
+            [interpreter, str(daemon_src), "127.0.0.1", str(port)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE, env=env,
+        )
+        try:
+            _wait_for_listener(proc, port)
+            token = daemon_auth.read_local_token(token_path)
+            assert token
+
+            def hello(index: int) -> tuple[str, dict]:
+                nonce = f"{index:032x}"
+                return nonce, {
+                    "proto": 1,
+                    "nonce": nonce,
+                    "op": "hello",
+                    "mac": daemon_auth.hello_mac(token, nonce=nonce),
+                }
+
+            for index in range(3):
+                nonce, payload = hello(index)
+                reply = _raw_exchange(port, payload)
+                assert reply.startswith(STX)
+                daemon_auth.verify_response(reply, token, nonce)
+            assert "replayed" in _raw_exchange(port, hello(0)[1])
+            assert "capacity" in _raw_exchange(port, hello(3)[1])
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
     def test_missing_token_is_fatal_unless_explicitly_opted_in(self, tmp_path) -> None:
         daemon_src = _resources_dir() / "ramic_bridge_daemon_3.py"
         blocker = tmp_path / "blocker"
@@ -927,7 +981,7 @@ def test_py27_daemon_has_constant_time_compare_fallback() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _import_py3_daemon(monkeypatch, tmp_path):
+def _import_py3_daemon(monkeypatch, tmp_path, nonce_cache_max=None):
     """Import the actual ramic_bridge_daemon_3.py with fcntl/stdin stubbed."""
     import types
 
@@ -944,6 +998,10 @@ def _import_py3_daemon(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "stdin", stdin_stub)
     token_file = tmp_path / "bridge_token"
     monkeypatch.setenv("RB_TOKEN_PATH", str(token_file))
+    if nonce_cache_max is None:
+        monkeypatch.delenv("RB_NONCE_CACHE_MAX", raising=False)
+    else:
+        monkeypatch.setenv("RB_NONCE_CACHE_MAX", nonce_cache_max)
     monkeypatch.setattr(sys, "argv", ["daemon", "127.0.0.1", "1"])
     spec = importlib.util.spec_from_file_location(
         "vb_real_daemon_under_test", str(_resources_dir() / "ramic_bridge_daemon_3.py")
@@ -1023,6 +1081,7 @@ def test_real_daemon_nonce_cache_fails_closed_at_capacity(
     """At capacity the cache must NEVER drop live entries: new requests are
     rejected outright (fail-closed) and existing nonces still replay-fail."""
     module = _import_py3_daemon(monkeypatch, tmp_path)
+    assert module._NONCE_MARK_MAX == 4096
     token = daemon_auth.read_local_token(module._token_file_path())
     live = {"nonce": "12" * 16, "skill": "1+1", "timeout": 5, "proto": 1}
     live["mac"] = daemon_auth.request_mac(
@@ -1047,6 +1106,48 @@ def test_real_daemon_nonce_cache_fails_closed_at_capacity(
     replay = module._auth_error(dict(live), "req")
     assert replay and "replayed" in replay
     assert len(module._NONCE_MARK) == module._NONCE_MARK_MAX  # nothing cleared
+
+
+def test_real_daemon_nonce_cache_handles_more_than_old_limit(
+    tmp_path, monkeypatch
+) -> None:
+    """A larger configured cache accepts signed traffic past 4096 without
+    dropping live replay marks, then rejects the first request beyond its cap.
+    """
+    limit = 8192
+    module = _import_py3_daemon(monkeypatch, tmp_path, str(limit))
+    token = daemon_auth.read_local_token(module._token_file_path())
+    assert module._NONCE_MARK_MAX == limit
+
+    def hello(index: int) -> dict:
+        nonce = f"{index:032x}"
+        return {
+            "proto": 1,
+            "nonce": nonce,
+            "op": "hello",
+            "mac": daemon_auth.hello_mac(token, nonce=nonce),
+        }
+
+    for index in range(limit):
+        error = module._auth_error(hello(index), "hello")
+        assert error is None, (index, error)
+    assert len(module._NONCE_MARK) == limit
+    assert "replayed" in module._auth_error(hello(0), "hello")
+    assert "capacity" in module._auth_error(hello(limit), "hello")
+    assert len(module._NONCE_MARK) == limit
+
+    # Expiration frees space while still-live marks continue to reject replays.
+    module._NONCE_MARK[hello(0)["nonce"]] = time.time() - 1
+    assert module._auth_error(hello(limit), "hello") is None
+    assert "replayed" in module._auth_error(hello(1), "hello")
+
+
+@pytest.mark.parametrize("value", ["", "0", "-1", "1.5", "many"])
+def test_real_daemon_rejects_invalid_nonce_cache_limit(
+    tmp_path, monkeypatch, value
+) -> None:
+    with pytest.raises(ValueError, match="RB_NONCE_CACHE_MAX"):
+        _import_py3_daemon(monkeypatch, tmp_path, value)
 
 
 # ---------------------------------------------------------------------------
