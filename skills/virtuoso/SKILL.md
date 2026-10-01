@@ -141,6 +141,12 @@ Before instantiating a cell or setting parameters on it:
 
 ## Before you start
 
+For explicitly authorized informational popup closure, use the two-step
+`client.dialogs.prepare_close(...)` / `client.dialogs.close(...)` API described
+in `references/shared-ciw-dialogs.md`. Review visible content and Close semantics;
+do not approve from a title alone. Defaults never close windows, and unknown
+action outcomes must be reconciled without repeating the action.
+
 ### Environment setup
 
 > **`virtuoso-bridge` is a Python CLI.** Use `uv` + virtual environment — never install into the global Python.

@@ -97,6 +97,59 @@ the user resolves the dialog, inspect/read that history rather than invoking
 
 ## Explicit Recovery And Compatibility
 
+### Reviewed Informational Close (Opt-in)
+
+For an informational dialog whose Close behavior has been independently verified,
+the API provides a two-step, single-use close. This is not generic popup approval:
+save/discard/overwrite, SOS, simulation start/cancel and unknown workflows remain
+outside this feature. Do not decide safety from the title or pixel hash alone.
+
+```python
+# Existing authenticated client; avoid factory SKILL probes while blocked.
+client.dialogs.enable_guard(pid=verified_pid)
+ticket = client.dialogs.prepare_close(
+    inspected_window_id, expected_title="Exact reviewed informational title",
+)
+# Review ticket.preview_png_b64 and the documented Close behavior, or match an
+# independently reviewed exact visual whitelist. Do NOT blindly approve every
+# hash returned by the API. Preview images can contain confidential text.
+result = client.dialogs.close(
+    ticket, authorized=True, expected_content_sha256=approved_content_hash,
+)
+```
+
+`prepare_close` only reads the target and preview. `close` defaults to unauthorized
+and consumes a ticket before transport. Tickets are client-local, expire after
+120 seconds, cannot be modified/replayed, and are limited to 16 outstanding
+previews. Rebinding to a different endpoint or CIW invalidates approval. The
+signed hello must match the selected PID; the native helper binds its process
+start time to reject PID reuse. Older authenticated daemons need no protocol
+upgrade for this API. When advertised, daemon-instance changes also invalidate
+approval; an older daemon's restart within the same CIW is not separately detected.
+
+The remote helper rechecks the one target-owned modal, exact window/title,
+process start identity, geometry, WM metadata and visible pixels. It requires
+WM_DELETE_WINDOW support and sends that message to the selected window once.
+There is no Enter/escape/global keyboard input, focus stealing, window destruction,
+process kill, or fallback when a window does not support the protocol. A changed,
+unmapped, ambiguous or unrecognized target is refused. No SKILL is used.
+
+A short X-server grab protects the final native comparison and message submission;
+no subprocess runs while grabbed. A helper-local hard deadline prevents a hung
+native call from holding the grab indefinitely. This briefly pauses the display;
+it is not a desktop reservation or protection against every client-side race.
+
+Results distinguish `not_started` (`action_sent=false`), `requested`, `closed`,
+and `unknown`. A requested message is NOT proof that the window closed. A closed
+window is NOT proof that a design/save/run operation succeeded. Query the original
+request receipt separately when using the recoverable-request feature. Unknown
+transport outcomes never trigger automatic repeat; inspect and reconcile instead.
+
+First release is an explicit reviewed-close API, not a built-in catalog of Cadence
+dialogs, a persistent automatic click policy, or a CLI that transports approval
+tickets between processes. Rendering differences, obscured windows, animation and
+button highlighting can invalidate a visual match; refusal is intentional.
+
 Let the user complete their dialog whenever its provenance is unknown.
 An explicitly authorized window/action can use `dismiss-window --display DISPLAY`;
 the exact `target.display` from inspection is required for this workflow, since

@@ -7,6 +7,7 @@ and dismiss those dialogs without touching the SKILL channel.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -201,6 +202,64 @@ def inspect_dialogs(
             "diagnostics": ["X11 helper failed or returned an invalid inspection: " + str(items)],
         }
     return reports[0]
+
+
+def dialog_close_exchange(
+    runner: SSHRunner | None, user: str, payload: dict[str, Any], *,
+    profile: str | None = None, timeout: float = 30,
+) -> dict[str, Any]:
+    """Use a version-scoped native helper; no shell/key fallback or retry."""
+    import math
+
+    if isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("timeout must be positive and finite")
+    deadline = time.monotonic() + timeout
+
+    def remaining():
+        value = deadline - time.monotonic()
+        if value <= 0:
+            raise TimeoutError("Dialog action budget exhausted")
+        return value
+
+    helper = _HELPER_SCRIPT.with_name("x11_dialog_close.py")
+    if runner is None:
+        script = str(helper)
+        py = _detect_remote_python(None, timeout=remaining())
+    else:
+        digest = hashlib.sha256(_HELPER_SCRIPT.read_bytes() + helper.read_bytes()).hexdigest()[:16]
+        key = (user, profile, digest)
+        cached = getattr(runner, "_vb_dialog_close_helper", None)
+        if cached is not None and cached[0] == key:
+            script, py = cached[1:]
+        else:
+            root = default_virtuoso_bridge_dir(user, "x11", resolve_client_id(profile))
+            directory = f"{root}/close_{digest}"
+            made = runner.run_command(f"mkdir -p {shlex.quote(directory)}", timeout=remaining())
+            if made.returncode:
+                raise RuntimeError(made.stderr or "Cannot prepare dialog action helper")
+            for local in (_HELPER_SCRIPT, helper):
+                uploaded = runner.upload(local, f"{directory}/{local.name}", timeout=remaining())
+                if uploaded.returncode:
+                    raise RuntimeError(uploaded.stderr or "Cannot upload dialog action helper")
+            script = f"{directory}/{helper.name}"
+            py = _detect_remote_python(runner, timeout=remaining())
+            runner._vb_dialog_close_helper = (key, script, py)
+    request = dict(payload, timeout=remaining())
+    encoded = base64.b64encode(json.dumps(request, ensure_ascii=True).encode("ascii")).decode("ascii")
+    if len(encoded) > 16000:
+        raise ValueError("Dialog action request exceeds bounded shell payload")
+    command = (f"printf %s {shlex.quote(encoded)} | base64 -d | "
+               f"{shlex.quote(py)} {shlex.quote(script)}")
+    result = _run(runner, command, timeout=remaining())
+    if len(result.stdout or "") > 8 * 1024 * 1024:
+        raise RuntimeError(result.stderr or "Dialog action helper failed")
+    answer = json.loads(result.stdout)
+    if not isinstance(answer, dict):
+        raise ValueError("Invalid dialog action reply")
+    refused = answer.get("status") == "not_started" and answer.get("action_sent") is False
+    if result.returncode and not (result.returncode == 2 and refused):
+        raise RuntimeError(result.stderr or "Dialog action helper failed")
+    return answer
 
 
 def dismiss_window(

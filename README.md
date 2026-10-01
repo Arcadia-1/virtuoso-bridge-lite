@@ -41,6 +41,9 @@ A new infrastructure for **Agentic Analog and Mixed-Signal Design**. LLM Agents 
 - CLI-first lifecycle and diagnostics: `virtuoso-bridge start/status/restart`
 - Ships with pre-defined agent skill files (`skills/`) — the agent knows how to use the bridge immediately
 - Optimized for high-frequency agent interactions with resilient, role-aware SSH routing
+- Reviewed informational popup closure: opt-in, single-use visual approval with
+  exact CIW/window binding; no automatic key injection or forced closure. See
+  [shared CIW dialogs](skills/virtuoso/references/shared-ciw-dialogs.md).
 
 > **If you are an AI agent**, read [`AGENTS.md`](AGENTS.md) first and follow its setup checklist.
 

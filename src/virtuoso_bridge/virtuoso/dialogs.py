@@ -101,6 +101,23 @@ class DialogOps:
         self._owner = owner
         self._target: DialogTarget | None = None
         self._endpoint: tuple[str, int] | None = None
+        self._actions = None
+
+    def prepare_close(self, window_id: str, *, expected_title: str, timeout: float = 30):
+        """Read an informational window preview, without authorizing any action."""
+        if self._actions is None:
+            from virtuoso_bridge.virtuoso.dialog_actions import DialogActionOps
+            self._actions = DialogActionOps(self)
+        return self._actions.prepare(window_id, expected_title=expected_title, timeout=timeout)
+
+    def close(self, ticket, *, authorized: bool = False, expected_content_sha256: str,
+              timeout: float = 30):
+        """One-shot close of an explicitly approved, unchanged visual snapshot."""
+        if self._actions is None:
+            from virtuoso_bridge.virtuoso.dialog_actions import DialogActionOps
+            self._actions = DialogActionOps(self)
+        return self._actions.close(ticket, authorized=authorized,
+                                   expected_content_sha256=expected_content_sha256, timeout=timeout)
 
     @property
     def enabled(self) -> bool:
