@@ -104,6 +104,21 @@ def _find_ramic_bridge_daemon(python_major: int) -> Path:
     raise FileNotFoundError(f"Cannot locate {filename} in virtuoso_bridge.virtuoso.basic.resources.")
 
 
+def _find_ramic_request_recovery() -> Path:
+    filename = "ramic_request_recovery.py"
+    try:
+        resources = importlib.resources.files("virtuoso_bridge.virtuoso.basic.resources")
+        helper_ref = resources / filename
+        with importlib.resources.as_file(helper_ref) as helper_path:
+            if helper_path.is_file():
+                return helper_path
+    except (ModuleNotFoundError, FileNotFoundError, TypeError):
+        pass
+    raise FileNotFoundError(
+        f"Cannot locate {filename} in virtuoso_bridge.virtuoso.basic.resources."
+    )
+
+
 
 def _generate_virtuoso_setup_il(
     daemon_path: str,
@@ -672,6 +687,7 @@ class SSHClient:
         daemon_local = _find_ramic_bridge_daemon(
             3 if python_major >= 3 else 2
         )
+        recovery_local = _find_ramic_request_recovery()
         il_local = _find_ramic_bridge_il()
         daemon_filename = daemon_local.name
 
@@ -686,6 +702,7 @@ class SSHClient:
         )
 
         remote_daemon = f"{self._remote_work_dir}/{daemon_filename}"
+        remote_recovery = f"{self._remote_work_dir}/{recovery_local.name}"
         remote_il = f"{self._remote_work_dir}/ramic_bridge.il"
         remote_setup = f"{self._remote_work_dir}/virtuoso_setup.il"
         remote_identity = f"{self._remote_work_dir}/daemon_identity.txt"
@@ -704,6 +721,12 @@ class SSHClient:
         up = runner.upload_text(daemon_content, remote_daemon)
         if up.returncode != 0:
             raise RuntimeError(f"Failed to upload daemon: {up.stderr.strip()}")
+
+        logger.info("Uploading recovery helper to %s", remote_recovery)
+        recovery_content = recovery_local.read_text(encoding="ascii")
+        up = runner.upload_text(recovery_content, remote_recovery)
+        if up.returncode != 0:
+            raise RuntimeError(f"Failed to upload recovery helper: {up.stderr.strip()}")
 
         logger.info("Uploading IL script to %s", remote_il)
         il_content = il_local.read_text(encoding="utf-8")
@@ -727,6 +750,7 @@ class SSHClient:
         # from both the CIW and the host where ipcBeginProcess launches Python.
         visibility_checks = [
             ("daemon", daemon_runner, remote_daemon),
+            ("daemon recovery helper", daemon_runner, remote_recovery),
             ("GUI", self.gui_runner, remote_setup),
         ]
         for label, check_runner, path in visibility_checks:
@@ -754,6 +778,7 @@ class SSHClient:
         python_major = sys.version_info[0]
 
         daemon_local = _find_ramic_bridge_daemon(python_major)
+        recovery_local = _find_ramic_request_recovery()
         il_local = _find_ramic_bridge_il()
 
         # Determine local work directory
@@ -765,11 +790,13 @@ class SSHClient:
 
         # Copy daemon and IL files into the work directory
         local_daemon = work_dir / daemon_local.name
+        local_recovery = work_dir / recovery_local.name
         local_il = work_dir / "ramic_bridge.il"
         local_setup = work_dir / "virtuoso_setup.il"
         local_identity = work_dir / "daemon_identity.txt"
 
         shutil.copy2(daemon_local, local_daemon)
+        shutil.copy2(recovery_local, local_recovery)
 
         il_content = il_local.read_text(encoding="utf-8")
         local_il.write_text(il_content, encoding="utf-8")

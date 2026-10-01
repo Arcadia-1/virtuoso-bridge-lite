@@ -300,6 +300,14 @@ If `spectre` is already on PATH in the remote user's default shell (e.g., via `~
 
 ## Common gotchas
 
+- **Shared CIW requests can create their own modal popup.** Preflight-only
+  inspection is insufficient. With an upgraded daemon, explicitly enable
+  `client.dialogs.enable_guard(protect_inflight=True)`. On an uncertain result,
+  preserve `metadata.request_handle` and query `client.requests.receipt(handle)`;
+  do not repeat the operation, close user dialogs or restart a pending daemon.
+  The opted-in mode has no process-level SIGINT watchdog. Legacy clients retain
+  theirs. See `skills/virtuoso/references/shared-ciw-dialogs.md` for limits.
+
 - **`csh()` returns `t`/`nil`**, not command output. Use `client.download_file()` (SSH/SCP) for remote file operations.
 - **`procedurep()` returns `nil` for compiled/built-in functions.** Don't use it to check if `mae*` functions exist.
 - **Remote files stay remote.** Functions like `maeCreateNetlistForCorner` write to the remote filesystem. Use `client.download_file()` to retrieve them.

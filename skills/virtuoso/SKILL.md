@@ -622,7 +622,12 @@ Apply these rules whenever you read or export **any** maestro output (scalar or 
     - After `maeOpenResults(?history ...)`, verify the resolved `resultsDir` contains `/<history>/`.
     - If mismatch is detected, stop and raise an error instead of exporting the wrong waveform.
 
-**In optimization loops:** add `maeSaveSetup` and dialog-recovery in every iteration. GUI dialogs ("Specify history name", "No analyses enabled") block the entire SKILL channel — all subsequent `execute_skill` calls will timeout until the dialog is dismissed.
+**In optimization loops:** save setup explicitly and use the shared-CIW guard.
+For requests that can open a popup, opt into
+`client.dialogs.enable_guard(protect_inflight=True)` with an upgraded daemon.
+Preserve uncertain request handles and query `client.requests.receipt(handle)`;
+never automatically dismiss a user's dialog or repeat a simulation request.
+See `references/shared-ciw-dialogs.md` for compatibility and recovery limits.
 
 **Debug with screenshots:** if simulation appears stuck or results are
 unexpected, use the X11/CLI path so capture does not depend on a responsive

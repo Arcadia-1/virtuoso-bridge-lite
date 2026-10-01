@@ -276,6 +276,17 @@ def hello_mac(token: str, *, nonce: str, proto: int = PROTOCOL_VERSION) -> str:
     return _mac_hex(token, _HELLO_DOMAIN, str(int(proto)), nonce)
 
 
+def recoverable_mac(
+    token: str, *, nonce: str, op: str, request_id: str,
+    daemon_instance: str, skill: str = "", proto: int = PROTOCOL_VERSION,
+) -> str:
+    """Authenticate submit/receipt without weakening legacy request framing."""
+    return _mac_hex(
+        token, "vb1-recoverable", str(int(proto)), nonce, op,
+        request_id, daemon_instance, skill,
+    )
+
+
 def response_mac(
     token: str,
     *,

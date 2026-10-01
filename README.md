@@ -291,6 +291,14 @@ virtuoso-bridge load my_script.il
 
 For detailed setup (jump hosts, multi-profile, local mode), see [`AGENTS.md`](AGENTS.md).
 
+For a human-shared CIW, opt into
+`client.dialogs.enable_guard(protect_inflight=True)` with an upgraded daemon.
+Requests that encounter a popup return a recovery handle instead of interrupting
+Virtuoso or automatically retrying. Query the original result with
+`client.requests.receipt(handle)` after the user resolves the popup; see
+[Shared CIW Dialog Protection](skills/virtuoso/references/shared-ciw-dialogs.md)
+for deployment requirements and limits. This mode is not enabled by default.
+
 ## CLI reference
 
 All commands take `-p PROFILE` / `--env PATH` to pick a non-default config; run `virtuoso-bridge <cmd> --help` for full flags.

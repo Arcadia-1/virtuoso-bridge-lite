@@ -68,7 +68,13 @@ If the run directory already exists, the dialog "Run Directory exists but has no
 **Workaround:** use a fresh (unique) directory name each time, or avoid `simInitEnvWithArgs` in automated flows.
 
 ### Maestro dialogs block the SKILL channel
-GUI dialogs ("Specify history name", "No analyses enabled", etc.) block the entire CIW event loop. All `execute_skill` calls will timeout until the dialog is dismissed.
+GUI dialogs ("Specify history name", "No analyses enabled", etc.) block the CIW
+execution channel. Legacy requests can time out and trigger a process-level
+interrupt. With an upgraded daemon and explicit
+`client.dialogs.enable_guard(protect_inflight=True)`, a request-triggered popup
+instead stops the client wait, preserves the original request handle, and does
+not interrupt Virtuoso. Read the original result using
+`client.requests.receipt(handle)` after human resolution, without resubmitting.
 
 **Detection:** `client.maestro.run_and_wait(...)` times out, or an ordinary
 `execute_skill()` call times out while a modal form is visible in Virtuoso.

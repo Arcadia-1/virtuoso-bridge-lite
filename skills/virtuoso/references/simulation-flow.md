@@ -183,7 +183,10 @@ for val in ["1p", "2p", "5p", "10p"]:
     # ... process results ...
 ```
 
-For shared CIWs, enable `client.dialogs.enable_guard()` before the loop. Preserve
+For shared CIWs, enable `client.dialogs.enable_guard(protect_inflight=True)` with
+an upgraded daemon before the loop (plain `enable_guard()` is preflight-only). Preserve
 user dialogs and inspect through SSH/X11 rather than dismissing current forms.
+On an uncertain start, query the original request receipt and completion marker;
+do not invoke `run_and_wait()` again to recover an already accepted run.
 See [Shared CIW Dialog Protection](shared-ciw-dialogs.md). Failed/uncertain runs
 must be reconciled before any explicit retry.

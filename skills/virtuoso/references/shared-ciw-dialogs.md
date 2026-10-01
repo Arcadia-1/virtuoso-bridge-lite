@@ -95,6 +95,91 @@ the user resolves the dialog, inspect/read that history rather than invoking
 `client.dialogs.inspect(pid=12345)` is also available without enabling a guard.
 `client.dialogs.disable_guard()` removes protection without closing any window.
 
+## Requests That Open A Popup
+
+Preflight alone cannot protect a request that opens a dialog itself. With an
+upgraded daemon, explicitly enable recoverable execution:
+
+```python
+client.dialogs.enable_guard(protect_inflight=True, timeout=15)
+result = client.execute_skill("1+2", timeout=30)
+
+handle = result.metadata.get("request_handle")
+if handle and result.metadata.get("outcome") == "unknown":
+    # Preserve this handle. Let the user resolve their dialog; do not resubmit.
+    print(result.metadata)
+    # Later, query only the original request. This works while CIW is blocked.
+    original = client.requests.receipt(handle, timeout=10)
+    print(original.model_dump())
+```
+
+This mode is opt-in and requires authenticated `recoverable_requests=1`
+capabilities. An older daemon is refused, with no legacy SKILL fallback. The
+default `protect_inflight=False` preserves preflight-only compatibility.
+Changing daemon files on disk does not upgrade a running daemon. Arrange a
+reload only in an explicitly selected idle CIW, never automatically in a
+shared/active simulation process.
+
+The daemon acknowledges a submission without waiting for CIW completion. One
+worker owns the IPC lane until the original framed response arrives. That
+worker has **no process-level SIGINT watchdog**. Other SKILL submissions,
+including legacy clients, are refused while the lane is occupied; hello and
+receipt queries remain available. Closing a client or ending its wait does
+not cancel or interrupt the original operation. There is no automatic queue.
+
+While a request remains pending, the client polls receipts and inspects the
+selected X11 process at a low frequency (five seconds between inspections,
+each inspection capped at five seconds and the remaining wait budget).
+`blocked` or `indeterminate` stops the client wait and retains the handle.
+`phase="awaiting_user"` and `waiting_for_user=True` mean an identified candidate
+popup needs human attention; indeterminate inspection is not proof of a popup.
+Its provenance is still unknown, even immediately after a Bridge submission.
+No Enter/Cancel/close action is performed.
+
+The handle contains only request ID, daemon-instance ID and Virtuoso PID,
+not the token or SKILL source. It can be serialized and queried by a client
+authenticated to the same daemon, including through a replacement SSH tunnel.
+Reuse the existing client when possible. Ordinary `from_env`/`from_tunnel`
+factories may run legacy SKILL-based identity checks; do not invoke them as
+popup recovery while CIW is blocked. If reconstructing a receipt-only client,
+use its existing authenticated TCP endpoint/credential without starting a
+daemon or sending a SKILL probe. Never log the credential.
+`request_state="completed"` preserves the original success/error response;
+it is not proof of higher-level design or simulation acceptance. `running` or
+`unknown` never grants permission to resubmit. A missing submission
+acknowledgement is unknown too, with `request_sent=None`, not not-started.
+Only an authenticated submission refusal reports `outcome="not_started"`.
+
+Maestro writer errors retain the handle in `RequestRecoveryError.handle` and
+the full `VirtuosoResult` in `.result`. `run_and_wait()` retains its session and
+completion marker when startup is uncertain. A recovered run-history response
+must be reconciled with that original marker/history, not used to start a
+second simulation. Querying a receipt does not resume a multi-step workflow.
+
+Receipts are in-memory and bounded, not a durable job database. A daemon
+restart, lost IPC pipe, malformed response, receipt expiry or unavailable
+endpoint can make the outcome unverifiable. Unknown results require manual
+state reconciliation; do not restart a pending daemon just to unblock an agent.
+Native X11 calls and invisible input grabs retain the inspection limits below.
+
+Finished receipts are retained for one hour with a maximum of 4096 entries,
+8 MiB per original response and 32 MiB total response data. The daemon reserves
+space for a worst-case response before accepting another execution and refuses
+at capacity, rather than evicting young receipts. A pending request never
+expires or releases the IPC lane merely because its client stops waiting.
+Malformed/partial responses, EOF or legacy timeout poison the lane: later
+execution is refused because a delayed frame could otherwise be misattributed.
+
+Request IDs contain a millisecond creation timestamp and random suffix. New
+submissions must be no more than five minutes old or thirty seconds in the
+future relative to the daemon's clock. This daemon advertises signed server
+time in its hello reply, which the client prefers when creating the ID; other
+implementations lacking that field require synchronized client/server clocks.
+The completed-receipt retention exceeds this acceptance window, so an expired
+ID cannot be used as a fresh submission. Receipt queries do not require a
+fresh timestamp. This is bounded in-memory replay prevention, not durable
+exactly-once execution across crashes or arbitrary clock changes.
+
 ## Explicit Recovery And Compatibility
 
 Let the user complete their dialog whenever its provenance is unknown.
@@ -126,9 +211,10 @@ dismissal while its shared guard is enabled. Existing explicitly selected
   each call, but an individual synchronous call can outlive the helper's budget.
   X server I/O loss can terminate the helper. Failed/malformed inspection is
   indeterminate, not clear; invisible input grabs are not detected.
-- The daemon watchdog still sends process-level SIGINT on timeout. This guard
-  only avoids sending requests into *already detected* blockers. Watchdog and
-  late-response recovery require a separate protocol change.
+- Legacy execution, including preflight-only mode, still uses the process-level
+  SIGINT watchdog. Only explicit recoverable execution avoids it. Human actions,
+  another daemon in the same Virtuoso process, or external tools may still
+  interrupt the operation; this is not a process-wide safety guarantee.
 - Existing client factory identity checks, and other clients using the same
   CIW, are not protected before this guard is enabled.
 - No background polling, automatic saving, notification scheduler, or generic

@@ -137,6 +137,9 @@ class VirtuosoClient(VirtuosoInterface):
         from virtuoso_bridge.virtuoso.dialogs import DialogOps
 
         self.dialogs = DialogOps(self)
+        from virtuoso_bridge.virtuoso.requests import RequestOps
+
+        self.requests = RequestOps(self)
         self._il_upload_cache: dict[str, tuple[str, str]] = {}
         # For connect retry when jump host adds latency
         self._has_jump_host = (
@@ -461,7 +464,8 @@ class VirtuosoClient(VirtuosoInterface):
         Enable protection with ``client.dialogs.enable_guard()``. A preexisting
         or unidentifiable dialog prevents transmission. Human actions can race
         the preflight; failed in-flight operations are never replayed by the
-        guard. The daemon watchdog is unchanged.
+        guard. ``enable_guard(protect_inflight=True)`` uses recoverable requests
+        with no daemon SIGINT timer; preflight-only/legacy mode is unchanged.
         """
         if not self.dialogs.enabled:
             return self._execute_skill_unguarded(skill_code, timeout, retry_connect=retry_connect)
@@ -479,6 +483,10 @@ class VirtuosoClient(VirtuosoInterface):
                                   errors=["Dialog preflight exhausted the request budget"],
                                   metadata={"request_sent": False, "outcome": "not_started"},
                                   execution_time=time.monotonic() - started)
+        if self.dialogs.protect_inflight:
+            result = self.requests._execute(skill_code, started + budget)
+            result.execution_time = time.monotonic() - started
+            return result
         # The legacy connect retry includes ECONNRESET after transmission.
         # Shared mode must not replay a possibly accepted write request.
         result = self._execute_skill_unguarded(skill_code, remaining, retry_connect=False)
@@ -1678,7 +1686,9 @@ let((result winName ciwNum)
             return remote_posix, True
         return _path_to_posix(p), False
 
-    def _exchange_payload(self, payload: dict[str, Any], deadline: float) -> bytes:
+    def _exchange_payload(
+        self, payload: dict[str, Any], deadline: float, *, max_response_bytes: int | None = None,
+    ) -> bytes:
         """Send one JSON request and collect the raw response bytes."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(self._remaining_timeout(deadline))
@@ -1690,11 +1700,15 @@ let((result winName ciwNum)
             s.sendall(json.dumps(payload).encode("utf-8"))
             s.shutdown(socket.SHUT_WR)
             chunks: list[bytes] = []
+            received = 0
             while True:
                 s.settimeout(self._remaining_timeout(deadline))
                 chunk = s.recv(_RECV_BUF_SIZE)
                 if not chunk:
                     break
+                received += len(chunk)
+                if max_response_bytes is not None and received > max_response_bytes:
+                    raise OSError("Daemon response exceeds the recoverable receipt size bound")
                 chunks.append(chunk)
             raw = b"".join(chunks)
             logger.debug("TCP received %d bytes", len(raw))

@@ -101,10 +101,15 @@ class DialogOps:
         self._owner = owner
         self._target: DialogTarget | None = None
         self._endpoint: tuple[str, int] | None = None
+        self._protect_inflight = False
 
     @property
     def enabled(self) -> bool:
         return self._target is not None
+
+    @property
+    def protect_inflight(self) -> bool:
+        return self.enabled and self._protect_inflight
 
     @property
     def target(self) -> DialogTarget | None:
@@ -151,15 +156,20 @@ class DialogOps:
     def enable_guard(
         self, *, pid: int | None = None, display: str | None = None,
         ciw_window: str | None = None, timeout: float = 15, local_gui: bool = False,
+        protect_inflight: bool = False,
     ) -> DialogInspection:
         """Bind to the authenticated daemon's CIW PID without executing SKILL.
 
         A blocked initial inspection still enables protection. Authentication,
         missing PID and split-host failures preserve any previous binding.
+        ``protect_inflight=True`` additionally requires recoverable-request
+        support, with no legacy watchdog fallback; it is off by default.
         """
         _timeout(timeout)
         if not isinstance(local_gui, bool):
             raise ValueError("local_gui must be an explicit boolean")
+        if not isinstance(protect_inflight, bool):
+            raise ValueError("protect_inflight must be an explicit boolean")
         if pid is not None:
             DialogTarget(pid=pid, display=display, ciw_window=ciw_window)
         tunnel = self._owner._tunnel
@@ -176,6 +186,8 @@ class DialogOps:
             raise ValueError("daemon has no verified Virtuoso PID")
         if pid is not None and pid != actual_pid:
             raise ValueError("selected PID does not match the connected daemon")
+        if protect_inflight:
+            self._owner.requests._check_capabilities(caps)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("dialog guard binding timed out")
@@ -184,12 +196,14 @@ class DialogOps:
         # Retain only resolved identity; a subsequent preflight must revalidate it.
         self._target = report.target
         self._endpoint = (self._owner.host, self._owner.port)
+        self._protect_inflight = protect_inflight
         return report
 
     def disable_guard(self) -> None:
         """Disable opt-in protection; does not dismiss or recover anything."""
         self._target = None
         self._endpoint = None
+        self._protect_inflight = False
 
     def preflight(self, timeout: float) -> VirtuosoResult | None:
         if not self.enabled:

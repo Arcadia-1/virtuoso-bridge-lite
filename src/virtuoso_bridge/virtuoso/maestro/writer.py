@@ -13,6 +13,7 @@ import uuid
 from virtuoso_bridge import VirtuosoClient
 from virtuoso_bridge.models import ExecutionStatus, VirtuosoResult
 from virtuoso_bridge.virtuoso.dialogs import DialogBlockedError
+from virtuoso_bridge.virtuoso.requests import RequestRecoveryError
 from virtuoso_bridge.virtuoso.ops import escape_skill_string
 
 
@@ -23,6 +24,8 @@ def _q(client: VirtuosoClient, expr: str, timeout: float | None = None) -> str:
     kwargs = {"timeout": timeout} if timeout is not None else {}
     r = client.execute_skill(expr, **kwargs)
     if r.errors:
+        if getattr(r, "metadata", {}).get("request_handle"):
+            raise RequestRecoveryError(r)
         if getattr(r, "metadata", {}).get("dialog_guard"):
             raise DialogBlockedError(r)
         raise RuntimeError(f"SKILL error: {r.errors[0]}")
@@ -482,21 +485,29 @@ def run_and_wait(client: VirtuosoClient, *, session: str = "",
     # Define callback that writes marker file when simulation finishes.
     # Use system("echo ... > file") instead of outfile/fprintf to avoid
     # SKILL I/O buffering issues in callback context.
-    _q(client, f'''
+    try:
+        _q(client, f'''
 procedure(_vb_sim_done_{nonce}(session runID)
   system(sprintf(nil "echo done > {marker}"))
   printf("[%s sim done] run %L\\n" nth(2 parseString(getCurrentTime())) runID))
 ''', timeout=remaining_timeout())
+    except RequestRecoveryError as exc:
+        exc.result.metadata.update(maestro_phase="callback_setup", session=session,
+                                   simulation_start_sent=False)
+        raise
 
-    # Start simulation with callback — atomic, no race condition.
-    # Without an acknowledged history, do not assume callback polling or a
-    # second run request is safe.
-    # Cold Maestro netlisting may take longer than the bridge default before
-    # maeRunSimulation returns the history name; use the remaining caller budget.
-    history = run_simulation(client, session=session,
-                             callback=f"_vb_sim_done_{nonce}",
-                             run_mode=run_mode,
-                             timeout=remaining_timeout())
+    try:
+        # Start once: missing acknowledgement must not trigger a second run.
+        history = run_simulation(client, session=session,
+                                 callback=f"_vb_sim_done_{nonce}",
+                                 run_mode=run_mode,
+                                 timeout=remaining_timeout())
+    except RequestRecoveryError as exc:
+        exc.result.metadata.update(completion_marker=marker, session=session,
+                                   maestro_phase="simulation_start",
+                                   simulation_start_sent=exc.result.metadata.get("request_sent"))
+        raise
+
     history_name = _strip_skill_atom(history)
     if not history_name or history_name == "nil":
         # Do not query the SKILL channel again: a user dialog may now block it.

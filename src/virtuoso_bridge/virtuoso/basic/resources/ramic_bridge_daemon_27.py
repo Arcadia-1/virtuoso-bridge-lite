@@ -15,6 +15,23 @@ import binascii
 import tempfile
 import traceback
 
+try:
+    from ramic_request_recovery import (
+        ExecutionUncertain,
+        RecoverableRequestManager,
+        RequestNotStarted,
+        read_response_frame,
+        valid_request_id,
+    )
+except ImportError:
+    from virtuoso_bridge.virtuoso.basic.resources.ramic_request_recovery import (
+        ExecutionUncertain,
+        RecoverableRequestManager,
+        RequestNotStarted,
+        read_response_frame,
+        valid_request_id,
+    )
+
 # ---------------------------------------------------------------------------
 # Bridge token authentication (wire protocol v1, see ramic_bridge_daemon_3.py
 # and virtuoso_bridge.daemon_auth).
@@ -36,8 +53,13 @@ _PROTO = 1
 _REQ_DOMAIN = "vb1-request"
 _RESP_DOMAIN = "vb1-response"
 _HELLO_DOMAIN = "vb1-hello"
+_RECOVERABLE_DOMAIN = "vb1-recoverable"
 _HEX_DIGITS = set("0123456789abcdefABCDEF")
 _TRUTHY = ("1", "true", "yes", "on")
+_MAX_REQUEST_BYTES = 8 * 1024 * 1024
+_CONNECTION_TIMEOUT = 5.0
+_RESPONSE_WRITE_TIMEOUT = 5.0
+_MAX_CONNECTIONS = 8
 
 
 def _frame(parts):
@@ -180,6 +202,7 @@ BRIDGE_TOKEN = _load_or_create_token()
 # Server-side replay protection: nonce -> expiry.  Requests are served
 # serially (single accept loop), so a plain dict is safe.
 _NONCE_MARK = {}
+_NONCE_LOCK = threading.Lock()
 
 
 def _nonce_cache_max():
@@ -224,6 +247,8 @@ def _auth_error(request_data, kind):
     kind, so no field can be tampered with in flight.
     """
     if not BRIDGE_TOKEN:
+        if kind == "recoverable":
+            return "AuthError: recoverable requests require bridge token authentication"
         return None
     nonce = request_data.get("nonce")
     mac = request_data.get("mac")
@@ -241,6 +266,33 @@ def _auth_error(request_data, kind):
         return "AuthError: invalid protocol field"
     if kind == "hello":
         expected = _mac_hex(_HELLO_DOMAIN, str(proto), nonce)
+        ttl = 300.0
+    elif kind == "recoverable":
+        op = request_data.get("op")
+        request_id = request_data.get("request_id")
+        daemon_instance = request_data.get("daemon_instance")
+        if op not in ("submit", "receipt"):
+            return "AuthError: invalid recoverable operation"
+        if not isinstance(request_id, basestring):
+            return "AuthError: invalid request_id field"
+        if not isinstance(daemon_instance, basestring):
+            return "AuthError: invalid daemon_instance field"
+        skill = request_data.get("skill", "")
+        if op == "receipt":
+            if skill not in (None, ""):
+                return "AuthError: receipt skill field must be empty"
+            skill = ""
+        elif not isinstance(skill, basestring):
+            return "AuthError: invalid skill field"
+        expected = _mac_hex(
+            _RECOVERABLE_DOMAIN,
+            str(proto),
+            nonce,
+            op,
+            request_id,
+            daemon_instance,
+            skill,
+        )
         ttl = 300.0
     else:
         try:
@@ -260,7 +312,8 @@ def _auth_error(request_data, kind):
             "belongs to a different user (or the token was rotated); run "
             "`virtuoso-bridge restart` after RBStop()"
         )
-    verdict = _consume_nonce(nonce, ttl)
+    with _NONCE_LOCK:
+        verdict = _consume_nonce(nonce, ttl)
     if verdict == "replay":
         return (
             "AuthError: replayed request nonce - rejected by server-side "
@@ -284,6 +337,9 @@ def _capabilities_body():
             "auth": "on" if BRIDGE_TOKEN else "off",
             "daemon": "ramic-bridge",
             "virtuoso_pid": virtuoso_pid,
+            "recoverable_requests": 1 if BRIDGE_TOKEN else 0,
+            "daemon_instance": _RECOVERY.instance_id,
+            "server_time_ms": int(time.time() * 1000),
         }
     )
 
@@ -393,12 +449,12 @@ stdout_fd = sys.stdout.fileno()
 stdout_fl = _fcntl_or_die(stdout_fd, _f_getfl)
 _fcntl_or_die(stdout_fd, _f_setfl, stdout_fl & ~_o_nonblock)  # Ensure blocking
 
-# Global watchdog timer reference
-watchdog_timer = None
+_RECOVERY = RecoverableRequestManager()
 
 
 def _safe_sendall(conn, data):
     try:
+        conn.settimeout(_RESPONSE_WRITE_TIMEOUT)
         conn.sendall(data)
     except socket.error:
         pass
@@ -414,15 +470,18 @@ def _safe_close_connection(conn):
     except socket.error:
         pass
 
-def watchdog_callback():
-    """Watchdog callback function that sends SIGINT signal to Virtuoso process when timeout occurs."""
-    global timeout_flag
-    if not timeout_flag:  # If not set yet, it means timeout occurred
-        timeout_flag = True
-        try:
-            os.kill(virtuoso_pid, signal.SIGINT)
-        except Exception:
-            pass
+def watchdog_callback(expired=None, finished=None):
+    """Send the legacy SIGINT without making the response reader reusable."""
+    if finished is not None and finished.is_set():
+        return
+    if expired is not None and expired.is_set():
+        return
+    if expired is not None:
+        expired.set()
+    try:
+        os.kill(virtuoso_pid, signal.SIGINT)
+    except Exception:
+        pass
 
 def read_until_delimiter(start_ok=b'\x02', start_err=b'\x15', end=b'\x1e'):
     """Read data from Virtuoso's stdout until specific delimiters are found."""
@@ -485,20 +544,145 @@ def read_until_delimiter(start_ok=b'\x02', start_err=b'\x15', end=b'\x1e'):
 
     return result
 
+
+def _recv_request(conn):
+    clock = getattr(time, "monotonic", time.time)
+    deadline = clock() + _CONNECTION_TIMEOUT
+    chunks = []
+    total = 0
+    while True:
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise socket.timeout("request read budget exhausted")
+        conn.settimeout(remaining)
+        chunk = conn.recv(65536)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > _MAX_REQUEST_BYTES:
+            raise ValueError("request exceeds the size limit")
+        chunks.append(chunk)
+    if not chunks:
+        raise ValueError("empty request")
+    return "".join(chunks)
+
+
+def _signed_response(request_nonce, raw):
+    if BRIDGE_TOKEN and request_nonce:
+        resp_mac = _mac_hex(
+            _RESP_DOMAIN, str(request_nonce), raw[:1], raw[1:]
+        )
+        return raw[:1] + resp_mac + raw[1:]
+    return raw
+
+
+def _send_recovery_reply(conn, request_nonce, payload):
+    body = json.dumps(payload, separators=(",", ":"))
+    if isinstance(body, unicode):
+        body = body.encode("utf-8")
+    _safe_sendall(conn, _signed_response(request_nonce, "\x02" + body))
+
+
+def _prepare_skill(skill_code):
+    if isinstance(skill_code, unicode):
+        skill_code = skill_code.encode("utf-8")
+    tmp_il_path = None
+    try:
+        if "\n" in skill_code:
+            fd, tmp_il_path = tempfile.mkstemp(suffix=".il", prefix="vb_eval_")
+            with os.fdopen(fd, "wb") as handle:
+                handle.write("_vb_eval_result = progn(\n" + skill_code + "\n)\n")
+            escaped_path = tmp_il_path.replace("\\", "/")
+            send_code = 'load("%s") hiFlush() _vb_eval_result\n' % escaped_path
+        else:
+            send_code = 'let(((__vb_r ' + skill_code + ')) hiFlush() __vb_r)\n'
+        return send_code, tmp_il_path
+    except Exception as exc:
+        if tmp_il_path:
+            try:
+                os.unlink(tmp_il_path)
+            except OSError:
+                pass
+        raise RequestNotStarted("could not prepare SKILL request: %s" % exc)
+
+
+def _transmit_and_read(skill_code, watchdog_seconds=None):
+    send_bytes, tmp_il_path = _prepare_skill(skill_code)
+    timer = None
+    expired = None
+    finished = None
+    try:
+        try:
+            written = sys.stdout.write(send_bytes)
+            if written is not None and written != len(send_bytes):
+                if written == 0:
+                    raise RequestNotStarted("SKILL request was not transmitted")
+                raise ExecutionUncertain("SKILL request was only partially transmitted")
+            sys.stdout.flush()
+        except RequestNotStarted:
+            raise
+        except ExecutionUncertain:
+            raise
+        except Exception as exc:
+            raise ExecutionUncertain("SKILL transmission failed: %s" % exc)
+
+        if watchdog_seconds is not None:
+            expired = threading.Event()
+            finished = threading.Event()
+            timer = threading.Timer(
+                float(watchdog_seconds), watchdog_callback, args=(expired, finished)
+            )
+            timer.daemon = True
+            timer.start()
+
+        def read_one():
+            if expired is not None and expired.is_set():
+                raise ExecutionUncertain(
+                    "legacy watchdog fired; IPC lane is poisoned"
+                )
+            return sys.stdin.read(1)
+
+        response = read_response_frame(read_one)
+        if expired is not None and expired.is_set():
+            raise ExecutionUncertain(
+                "legacy watchdog fired; late response attribution is unsafe"
+            )
+        if finished is not None:
+            finished.set()
+        return response
+    finally:
+        if finished is not None:
+            finished.set()
+        if timer is not None:
+            timer.cancel()
+        if tmp_il_path:
+            try:
+                os.unlink(tmp_il_path)
+            except OSError:
+                pass
+
+
+def _execute_recoverable(skill_code):
+    global _RB_CALLS, _RB_ERRORS
+    success = False
+    try:
+        raw = _transmit_and_read(skill_code)
+        try:
+            result = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ExecutionUncertain("Virtuoso response is not valid UTF-8: %s" % exc)
+        success = raw[:1] == "\x02"
+        return result
+    finally:
+        _RB_CALLS += 1
+        if not success:
+            _RB_ERRORS += 1
+        _emit_stat()
+
 def handle_external_connection(conn, addr):
     """Handle incoming TCP connections from Python clients."""
-    global watchdog_timer, timeout_flag
-
     try:
-        # Receive JSON formatted request data
-        chunks = []
-        while True:
-            chunk = conn.recv(65536)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        data = b"".join(chunks)
-        # Python 2.7 compatibility: data is already bytes/string
+        data = _recv_request(conn)
         request_data = json.loads(data)
         request_nonce = request_data.get("nonce")
 
@@ -523,6 +707,37 @@ def handle_external_connection(conn, addr):
                 _safe_sendall(conn, "\x02" + body)
             return
 
+        if request_data.get("op") in ("submit", "receipt"):
+            auth_error = _auth_error(request_data, "recoverable")
+            if auth_error:
+                if isinstance(auth_error, unicode):
+                    auth_error = auth_error.encode("utf-8")
+                _safe_sendall(conn, "\x15" + auth_error)
+                return
+            request_id = request_data.get("request_id")
+            if not valid_request_id(request_id):
+                reply = {
+                    "request_id": request_id if isinstance(request_id, basestring) else "",
+                    "daemon_instance": _RECOVERY.instance_id,
+                    "state": "rejected",
+                    "diagnostic": "request_id must be exactly 32 lowercase hex characters",
+                }
+            elif request_data.get("daemon_instance") != _RECOVERY.instance_id:
+                reply = {
+                    "request_id": request_id,
+                    "daemon_instance": _RECOVERY.instance_id,
+                    "state": "rejected",
+                    "diagnostic": "daemon_instance mismatch; request was not executed",
+                }
+            elif request_data["op"] == "receipt":
+                reply = _RECOVERY.receipt(request_id)
+            else:
+                reply = _RECOVERY.submit(
+                    request_id, request_data["skill"], _execute_recoverable
+                )
+            _send_recovery_reply(conn, request_nonce, reply)
+            return
+
         auth_error = _auth_error(request_data, "req")
         if auth_error:
             # Unauthenticated or foreign client: refuse without executing.
@@ -531,86 +746,36 @@ def handle_external_connection(conn, addr):
             _safe_sendall(conn, "\x15" + auth_error)
             return
 
-        skill_code = request_data["skill"]
-        timeout_seconds = request_data["timeout"]
+        acquired, diagnostic = _RECOVERY.try_begin_legacy()
+        if not acquired:
+            return_data = "\x15BusyError: " + diagnostic
+            _safe_sendall(conn, _signed_response(request_nonce, return_data))
+            return
 
-        # Reset timeout flag
-        timeout_flag = False
-
-        # Python 2.7: json.loads yields unicode; normalize SKILL to utf-8
-        # bytes once so every later use (temp file, stdout) is byte-exact.
-        if isinstance(skill_code, unicode):
-            skill_code = skill_code.encode("utf-8")
-
-        # Clear stdin buffer before writing (non-blocking read until empty)
-
-        while True:
-            try:
-                ch = sys.stdin.read(1)
-                if not ch:  # No more data
-                    break
-            except IOError as e:
-                if e.errno == errno.EAGAIN or e.errno == errno.EWOULDBLOCK:
-                    break  # No data available
-                else:
-                    break  # Other error, stop clearing
-
-        # Multi-line SKILL: write to temp file and load() it.
-        # This preserves comments (;) which would break single-line flattening.
-        # We wrap the code so the return value is captured in a global variable,
-        # because load() itself only returns t, not the last expression's value.
-        # The file is written in binary mode so arbitrary utf-8 SKILL cannot
-        # trip the implicit ascii codec of Python 2 text streams.
-        tmp_il_path = None
-        if b"\n" in skill_code:
-            fd, tmp_il_path = tempfile.mkstemp(suffix=".il", prefix="vb_eval_")
-            with os.fdopen(fd, "wb") as f:
-                f.write(b"_vb_eval_result = progn(\n" + skill_code + b"\n)\n")
-            escaped_path = tmp_il_path.replace("\\", "/")
-            send_code = 'load("%s") hiFlush() _vb_eval_result\n' % escaped_path
-        else:
-            send_code = b'let(((__vb_r ' + skill_code + b')) hiFlush() __vb_r)\n'
-
-        sys.stdout.write(send_code)
-        sys.stdout.flush()
-
-        # Start watchdog timer
-        watchdog_timer = threading.Timer(timeout_seconds, watchdog_callback)
-        watchdog_timer.daemon = True
-        watchdog_timer.start()
-
-        # Wait for Virtuoso response
-        returnData = read_until_delimiter()
-
-        # If normal return, set timeout flag to True to stop watchdog
-        if not timeout_flag:
-            timeout_flag = True
-
-        # Cancel watchdog timer
-        watchdog_timer.cancel()
-
-        # Python 2.7 compatibility: handle returnData properly
-        if isinstance(returnData, bytearray):
-            returnData = str(returnData)
-        elif hasattr(returnData, 'encode'):  # Check if it's unicode
-            returnData = returnData.encode('utf-8')
-
-        # Authenticate the response so the client can detect a squatted
-        # port: the MAC covers the status marker AND the full body.
-        if BRIDGE_TOKEN and request_nonce:
-            resp_mac = _mac_hex(
-                _RESP_DOMAIN, str(request_nonce), returnData[:1], returnData[1:]
+        poison = None
+        try:
+            return_data = _transmit_and_read(
+                request_data["skill"], request_data["timeout"]
             )
-            _safe_sendall(conn, returnData[:1] + resp_mac + returnData[1:])
-        else:
-            _safe_sendall(conn, returnData)
+        except RequestNotStarted as exc:
+            return_data = "\x15" + str(exc)
+        except ExecutionUncertain as exc:
+            poison = str(exc) or "legacy execution outcome is unknown"
+            return_data = "\x15" + poison
+        except Exception as exc:
+            poison = "unexpected legacy failure after possible transmission: %s" % exc
+            return_data = "\x15" + poison
+        finally:
+            _RECOVERY.finish_legacy(poison)
+
+        _safe_sendall(conn, _signed_response(request_nonce, return_data))
 
         # Stats: count this call and tag as error if SKILL sent NAK
         # (0x15) or the response is empty/malformed.  Throttled emit
         # below pushes the totals to SKILL via stderr.
         global _RB_CALLS, _RB_ERRORS
         _RB_CALLS += 1
-        _first = returnData[:1] if returnData else b""
+        _first = return_data[:1] if return_data else ""
         if isinstance(_first, str):
             _is_ok = (_first == "\x02")
         else:
@@ -619,19 +784,14 @@ def handle_external_connection(conn, addr):
             _RB_ERRORS += 1
         _emit_stat()
 
-        # Clean up temp file if we used one
-        if tmp_il_path:
-            try:
-                os.unlink(tmp_il_path)
-            except OSError:
-                pass
-
     except ValueError as e:
         # Python 2.7 compatibility: handle JSON decode errors
         error_msg = "\x15JSONDecodeError: {0}".format(str(e))
         if hasattr(error_msg, 'encode'):  # Check if it's unicode
             error_msg = error_msg.encode('utf-8')
         _safe_sendall(conn, error_msg)
+    except socket.timeout:
+        _safe_sendall(conn, "\x15TimeoutError: incomplete request")
     except Exception as e:
         # Python 2.7 compatibility: except Exception, e syntax
         traceback.print_exc()
@@ -640,11 +800,14 @@ def handle_external_connection(conn, addr):
             error_msg = error_msg.encode('utf-8')
         _safe_sendall(conn, error_msg)
     finally:
-        # Ensure watchdog timer is cleaned up
-        timeout_flag = True
-        if watchdog_timer:
-            watchdog_timer.cancel()
         _safe_close_connection(conn)
+
+
+def _connection_thread(conn, addr, slots):
+    try:
+        handle_external_connection(conn, addr)
+    finally:
+        slots.release()
 
 def start_server():
     """Start the TCP server to accept client connections."""
@@ -666,7 +829,7 @@ def start_server():
             else:
                 raise
 
-        s.listen(1)
+        s.listen(_MAX_CONNECTIONS)
         # Banner -- SKILL side parses this from stderr to populate
         # RBLastPid / RBLastBind / RBLastHost / RBLastIP for the monitor
         # display.  Format is frozen:
@@ -695,12 +858,24 @@ def start_server():
             )
         )
         sys.stderr.flush()
+        slots = threading.BoundedSemaphore(_MAX_CONNECTIONS)
         while True:
             conn, addr = s.accept()
+            conn.settimeout(_CONNECTION_TIMEOUT)
+            if not slots.acquire(False):
+                _safe_sendall(conn, "\x15BusyError: daemon connection limit reached")
+                _safe_close_connection(conn)
+                continue
+            worker = threading.Thread(
+                target=_connection_thread,
+                args=(conn, addr, slots),
+                name="ramic-connection",
+            )
+            worker.daemon = True
             try:
-                handle_external_connection(conn, addr)
+                worker.start()
             except Exception:
-                traceback.print_exc()
+                slots.release()
                 _safe_close_connection(conn)
     finally:
         s.close()
