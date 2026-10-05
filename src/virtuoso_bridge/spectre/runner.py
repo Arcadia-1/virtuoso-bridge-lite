@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from virtuoso_bridge.env import load_vb_env
+from virtuoso_bridge.cadence_env import CadenceEnvironment
 from virtuoso_bridge.profile import resolve_profile
 from virtuoso_bridge.runtime_paths import artifact_dir
 from virtuoso_bridge.models import ExecutionStatus, SimulationResult
@@ -139,6 +140,7 @@ def _run_spectre_local(
     work_dir: Path | None = None,
     output_format: str | None = "psfascii",
     cadence_cshrc: str | None = None,
+    cadence_env: CadenceEnvironment | None = None,
 ) -> _SpectreRunResult:
     """Run Spectre as a local subprocess."""
     params = params or {}
@@ -162,8 +164,9 @@ def _run_spectre_local(
     )
     spectre_command = " ".join(shlex.quote(part) for part in cmd)
     command = cmd
-    if cadence_cshrc:
-        command = ["csh", "-fc", f"source {shlex.quote(cadence_cshrc)}; exec {spectre_command}"]
+    environment = cadence_env or CadenceEnvironment(cadence_cshrc or "")
+    if environment.script:
+        command = ["sh", "-c", environment.wrap(spectre_command)]
     logger.debug("Running Spectre locally: %s (cwd=%s)", spectre_command, cwd)
 
     try:
@@ -225,6 +228,7 @@ def _run_spectre_remote(
     output_format: str | None = "psfascii",
     timeout: int = 600,
     keep_remote_files: bool = False,
+    cadence_env: CadenceEnvironment | None = None,
 ) -> _SpectreRunResult:
     """Run Spectre on a remote host: upload netlist, run, download results."""
     run_id = uuid.uuid4().hex[:8]
@@ -252,29 +256,19 @@ def _run_spectre_remote(
     print(f"[Command] {spectre_command}")
     print("[Exec] Remote simulation running...")
 
-    # Source Cadence/Mentor cshrc in csh, then exec spectre — one command, no wrapper file
-    _cadence_val = os.environ.get("VB_CADENCE_CSHRC", "").strip()
-    _mentor_val = os.environ.get("VB_MENTOR_CSHRC", "").strip()
-    source_lines: list[str] = []
-    for cshrc in (_cadence_val, _mentor_val):
-        if cshrc:
-            source_lines.append(f"source {shlex.quote(cshrc)}")
-    csh_body = "; ".join(source_lines) if source_lines else ":"
-    # Export HOSTNAME & LD_LIBRARY_PATH so csh inherits them (.cshrc may reference $HOSTNAME)
-    env_setup = (
-        'HOSTNAME=`hostname 2>/dev/null || echo localhost`; export HOSTNAME && '
-        'export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" && '
-    )
+    environment = cadence_env or CadenceEnvironment.from_env()
+    run_command = f"exec {spectre_command}"
+    mentor_script = os.environ.get("VB_MENTOR_CSHRC", "").strip()
+    if mentor_script:
+        run_command = CadenceEnvironment(mentor_script).wrap(run_command)
+    run_command = environment.wrap(run_command)
     pid_file = f"{remote_dir}/spectre.pid"
-    # Run spectre inside csh for Cadence env, then record PID from sh wrapper
-    # csh runs spectre; sh wrapper handles PID tracking (csh $! syntax differs)
-    csh_inner = f"{csh_body}; {spectre_command}"
-    exec_cmd = (
-        f"{env_setup}"
-        f"mkdir -p {shlex.quote(remote_raw_dir)} && "
-        f"csh -c {shlex.quote(csh_inner)} & "
-        f"SPID=$!; echo $SPID > {shlex.quote(pid_file)}; wait $SPID"
+    exec_body = (
+        f"mkdir -p {shlex.quote(remote_raw_dir)} || exit $?; "
+        f"{run_command} & "
+        f'SPID=$!; echo "$SPID" > {shlex.quote(pid_file)}; wait "$SPID"'
     )
+    exec_cmd = f"sh -c {shlex.quote(exec_body)}"
 
     logger.info("[remote] %s", exec_cmd)
     task = run_remote_task(
@@ -875,7 +869,9 @@ class SpectreSimulator:
 
         Returns a dict with keys: ok, spectre_path, version, licenses.
         """
-        if not self._remote_host or _is_localhost(self._remote_host):
+        is_local = not self._remote_host or _is_localhost(self._remote_host)
+        environment = CadenceEnvironment.from_env(self._profile)
+        if is_local and not environment.script:
             # Local mode: check spectre directly on this machine
             info: dict[str, Any] = {
                 "ok": False,
@@ -911,7 +907,7 @@ class SpectreSimulator:
                 info["error"] = f"Spectre command '{self._spectre_cmd}' not found locally"
             return info
 
-        runner = self._get_ssh_runner()
+        runner = None if is_local else self._get_ssh_runner()
 
         suffix = f"_{self._profile}" if self._profile else ""
         spectre_bin = (
@@ -921,32 +917,22 @@ class SpectreSimulator:
 
         if spectre_bin:
             quoted_bin = shlex.quote(spectre_bin)
-            env_setup = ""
-            path_expr = spectre_bin
+            path_command = f"printf 'SPECTRE_PATH=%s\\n' {quoted_bin}"
             ver_cmd = f"{quoted_bin} -V"
         else:
-            cadence_cshrc = shlex.quote(
-                os.environ.get(f"VB_CADENCE_CSHRC{suffix}", "")
-                or os.environ.get("VB_CADENCE_CSHRC", "")
-            )
-            env_setup = (
-                'HOSTNAME=`hostname 2>/dev/null || echo localhost`; export HOSTNAME && '
-                f'export VB_CADENCE_CSHRC={cadence_cshrc} && '
-                f'eval "$(csh -c \'source {cadence_cshrc}; env\' 2>/dev/null '
-                f'| grep -E \"^(PATH|LM_LICENSE_FILE|CDS)=\" '
-                f'| sed \'s/^/export /\')" 2>/dev/null; '
-            )
-            path_expr = "$(which spectre 2>/dev/null || echo NOTFOUND)"
+            path_command = 'printf "SPECTRE_PATH=%s\\n" "$(which spectre 2>/dev/null || echo NOTFOUND)"'
             ver_cmd = "spectre -V"
 
-        check_script = (
-            f'{env_setup}'
-            f'echo "SPECTRE_PATH={path_expr}"; '
+        check_script = environment.wrap(
+            f'{path_command}; '
             f'{ver_cmd} 2>&1 | head -1; '
             'lmstat -a 2>/dev/null | grep -E "Users of" | grep "licenses in use" | grep -v "0 licenses in use"'
         )
 
-        result = runner.run_command(check_script, timeout=30)
+        result = (
+            subprocess.run(["sh", "-c", check_script], capture_output=True, text=True, timeout=30)
+            if runner is None else runner.run_command(check_script, timeout=30)
+        )
         stdout = result.stdout.strip()
         stderr = result.stderr.strip()
 
@@ -984,11 +970,6 @@ class SpectreSimulator:
         *,
         work_dir: Path | None,
     ) -> SimulationResult:
-        suffix = f"_{self._profile}" if self._profile else ""
-        cadence_cshrc = (
-            os.environ.get(f"VB_CADENCE_CSHRC{suffix}", "").strip()
-            or os.environ.get("VB_CADENCE_CSHRC", "").strip()
-        )
         run_result = _run_spectre_local(
             netlist=netlist,
             params=params,
@@ -997,7 +978,7 @@ class SpectreSimulator:
             timeout=self._timeout,
             work_dir=work_dir,
             output_format=self._output_format,
-            cadence_cshrc=cadence_cshrc or None,
+            cadence_env=CadenceEnvironment.from_env(self._profile),
         )
         if not run_result.success:
             return SimulationResult(
@@ -1068,6 +1049,7 @@ class SpectreSimulator:
             output_format=self._output_format,
             timeout=self._timeout,
             keep_remote_files=self._keep_remote_files,
+            cadence_env=CadenceEnvironment.from_env(self._profile),
         )
         if not run_result.success:
             return SimulationResult(

@@ -2,6 +2,27 @@
 
 Control Cadence Virtuoso via Python — remotely over SSH or locally on the same machine.
 
+## Lite design boundary
+
+Keep Spectre execution and PDK/CDF callbacks central, with lightweight wrappers
+for common schematic/symbol and GDS operations; use SKILL for the long tail.
+Advanced multi-server/account/process configuration is opt-in. Before adding
+configuration or workflow abstractions, read `docs/adr/0003-lite-default-optional-advanced-config.md`.
+
+## Agent skills
+
+### Issue tracker
+
+When reading or publishing issues and PRs, use GitHub through `gh`; read `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+When triaging issues, use the category and state mapping in `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Before domain design or code review, read the single-context glossary and relevant ADRs as directed by `docs/agents/domain.md`.
+
 ## Two modes
 
 | Mode | When | Setup |

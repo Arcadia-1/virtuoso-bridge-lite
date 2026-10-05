@@ -23,6 +23,12 @@
 
 A new infrastructure for **Agentic Analog and Mixed-Signal Design**. LLM Agents drive Cadence Virtuoso instances — locally or remotely — turning tedious handcrafting into automated design flows.
 
+**Lite by default:** Spectre execution and PDK/CDF callbacks are the core for
+GUI-equivalent electrical results with matching netlists, models, and options.
+Common schematic/symbol and GDS operations get lightweight wrappers; uncommon
+tasks retain the SKILL escape hatch. Multi-server/account/process configuration
+is optional, never a prerequisite for the normal one-host workflow.
+
 ### Why is this a "New Infrastructure"?
 
 **1. Deep Virtuoso Integration** — Control across Schematic, Layout, Maestro, and Spectre.
@@ -32,7 +38,7 @@ A new infrastructure for **Agentic Analog and Mixed-Signal Design**. LLM Agents 
 - **Exact schematic recreation**: import routed source geometry through explicit PDK maps, live symbol-pin audits, readback verification, and batch GUI screenshots
 - **Optional SOS cellview control**: explicit status/checkout/cancel-checkout/checkin/initial registration with dry-run, post-state verification, and unknown-result safety
 
-**2. Scalable Architecture** — Multi-server, multi-session, built for distributed design clusters.
+**2. Optional Scale-out** — Multi-server and multi-session support for users who explicitly need it; the one-host setup stays sufficient.
 - Multi-profile SSH: connect to N design servers, each with independent tunnel
 - Run parallel simulations across servers and accounts
 - Verified across macOS, Windows, and Linux
@@ -57,6 +63,10 @@ A new infrastructure for **Agentic Analog and Mixed-Signal Design**. LLM Agents 
 Virtuoso SKILL execution and Spectre simulation are independent. You can run
 Spectre without the SKILL bridge, and you can use the SKILL bridge without
 Spectre.
+
+Advanced users can explicitly audit existing profiles with
+`virtuoso-bridge profile list --json` or select a POSIX sh site environment with
+`VB_CADENCE_ENV_SHELL=sh` (default: csh). See [optional profile audit](docs/profile-audit.md).
 
 ### Python environment selection
 

@@ -400,22 +400,16 @@ def _append_remote_root(paths: list[str], seen: set[str], raw_path: str) -> None
 
 
 def _remote_doc_env_script(profile: str | None) -> str:
-    suffix = f"_{profile}" if profile else ""
-    cadence_cshrc = os.environ.get(f"VB_CADENCE_CSHRC{suffix}", "") or os.environ.get("VB_CADENCE_CSHRC", "")
-    quoted_cshrc = shlex.quote(cadence_cshrc)
+    from virtuoso_bridge.cadence_env import CadenceEnvironment
+
     script = (
-        'HOSTNAME=`hostname 2>/dev/null || echo localhost`; '
-        'export HOSTNAME; '
-        f'eval "$(csh -c \'source {quoted_cshrc}; env\' 2>/dev/null '
-        '| grep -E "^(CADENCE_DOC_ROOT|CADENCE_DOC_ROOTS|CDS_INST_DIR|CDSHOME|CDS_HOME)=" '
-        '| sed \'s/^/export /\')" 2>/dev/null; '
         'printf "DOC\\t%s\\n" "${CADENCE_DOC_ROOT:-}"; '
         'printf "DOC\\t%s\\n" "${CADENCE_DOC_ROOTS:-}"; '
         'printf "INSTALL\\t%s\\n" "${CDS_INST_DIR:-}"; '
         'printf "INSTALL\\t%s\\n" "${CDSHOME:-}"; '
         'printf "INSTALL\\t%s\\n" "${CDS_HOME:-}"'
     )
-    return f"sh -lc {shlex.quote(script)}"
+    return CadenceEnvironment.from_env(profile).wrap(script)
 
 
 def _parse_remote_doc_env(stdout: str) -> Iterable[tuple[str, str]]:

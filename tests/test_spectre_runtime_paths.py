@@ -74,8 +74,9 @@ def test_local_spectre_sources_configured_cadence_environment(monkeypatch, tmp_p
         cadence_cshrc="/eda/cadence.cshrc",
     )
 
-    assert calls[0][0][:2] == ["csh", "-fc"]
-    assert "source /eda/cadence.cshrc" in calls[0][0][2]
+    assert calls[0][0][:2] == ["sh", "-c"]
+    assert "csh -f -c" in calls[0][0][2]
+    assert "/eda/cadence.cshrc" in calls[0][0][2]
 
 
 def _successful_run(output_dir: Path) -> runner._SpectreRunResult:

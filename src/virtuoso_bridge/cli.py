@@ -12,6 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from virtuoso_bridge.env import default_user_env_path, load_vb_env, set_runtime_env_file
+from virtuoso_bridge.cadence_env import CadenceEnvironment
 from virtuoso_bridge.transport.remote_roles import remote_host_roles_from_os
 from virtuoso_bridge.transport.ssh import (
     SSHRunner,
@@ -85,7 +86,7 @@ def _load_cli_env() -> Path | None:
     return env_path
 
 
-def cli_profile(*, action: str, profile: str | None = None) -> int:
+def cli_profile(*, action: str, profile: str | None = None, json_output: bool = False) -> int:
     """Inspect or edit profile bindings."""
     from virtuoso_bridge.profile import (
         bind_venv_profile,
@@ -93,6 +94,26 @@ def cli_profile(*, action: str, profile: str | None = None) -> int:
         read_venv_profile,
         resolve_profile_info,
     )
+
+    if action == "list":
+        import json
+        from virtuoso_bridge.profile_inventory import list_profiles
+
+        try:
+            rows = list_profiles()
+        except (OSError, ValueError) as exc:
+            print(json.dumps({"error": str(exc)}) if json_output else f"profile list failed: {exc}")
+            return 1
+        if json_output:
+            print(json.dumps(rows, ensure_ascii=False, indent=2))
+        else:
+            for row in rows:
+                print(f"{row['profile'] or '(default)'}: {row['host']}:{row['port']} "
+                      f"process={row['process']} version={row['process_version']} "
+                      f"variant={row['process_variant']} resolved={row['resolved']}")
+                for error in row["errors"]:
+                    print(f"  {error}")
+        return 0 if all(row["resolved"] for row in rows) else 1
 
     if action == "bind":
         if profile is None:
@@ -673,9 +694,7 @@ def _print_spectre_status(profile: str | None, suffix: str) -> None:
     For local mode: uses shutil.which and subprocess locally.
     For remote mode: SSH-based check via SSHClient.
 
-    Strategy (remote): try ``which spectre`` directly first (works when the
-    user's login shell already has Cadence on PATH).  If that fails and
-    VB_CADENCE_CSHRC is set, source it in a csh sub-shell and retry.
+    A configured environment selector is authoritative; otherwise use PATH.
     """
     import shutil
     import subprocess
@@ -684,16 +703,36 @@ def _print_spectre_status(profile: str | None, suffix: str) -> None:
 
     configured_host = remote_host_roles_from_os(profile, load=False).spectre_host or ""
     is_local = _is_localhost(configured_host) if configured_host else False
+    try:
+        environment = CadenceEnvironment.from_env(profile)
+    except ValueError as exc:
+        print(f"\n[spectre] configuration error: {exc}")
+        return
+    spectre_bin = (
+        os.getenv(f"VB_SPECTRE_BIN{suffix}", "").strip()
+        or os.getenv("VB_SPECTRE_BIN", "").strip()
+    )
+    probe = (
+        f"printf '%s\\n' {shlex.quote(spectre_bin)}; {shlex.quote(spectre_bin)} -V 2>&1 | head -1"
+        if spectre_bin else "which spectre 2>/dev/null && spectre -V 2>&1 | head -1"
+    )
 
     if is_local:
         try:
-            spectre_bin = (
-                os.getenv(f"VB_SPECTRE_BIN{suffix}", "").strip()
-                or os.getenv("VB_SPECTRE_BIN", "").strip()
-            )
             spectre_path = spectre_bin or shutil.which("spectre")
             version = None
-            if spectre_path:
+            if environment.script:
+                result = subprocess.run(
+                    ["sh", "-c", environment.wrap(probe)],
+                    capture_output=True, text=True, timeout=30,
+                )
+                lines = result.stdout.strip().splitlines()
+                spectre_path = lines[0] if result.returncode == 0 and lines else None
+                version = next((line for line in lines[1:] if line.startswith("@(#)$CDS:")), None)
+                if result.returncode != 0 and result.stderr.strip():
+                    print(f"\n[spectre] environment/probe error: {result.stderr.strip()}")
+                    return
+            elif spectre_path:
                 try:
                     result = subprocess.run(
                         [spectre_path, "-V"],
@@ -726,12 +765,7 @@ def _print_spectre_status(profile: str | None, suffix: str) -> None:
             return
         runner._verbose = False
 
-        spectre_bin = (
-            os.getenv(f"VB_SPECTRE_BIN{suffix}", "").strip()
-            or os.getenv("VB_SPECTRE_BIN", "").strip()
-        )
-
-        if spectre_bin:
+        if spectre_bin and not environment.script:
             # Explicit binary path — skip auto-detection.
             quoted = shlex.quote(spectre_bin)
             check_cmd = f"{quoted} -V 2>&1 | head -1"
@@ -749,51 +783,14 @@ def _print_spectre_status(profile: str | None, suffix: str) -> None:
                 print(f"  version : {version}")
             return
 
-        # Two detection strategies, fused into a single SSH handshake:
-        #
-        #   (A) fast path: spectre already on PATH (bash-shell login,
-        #       or ssh server configured with Cadence env baked in)
-        #   (B) slow path: source VB_CADENCE_CSHRC inside csh, re-check
-        #
-        # Older revisions issued these as two separate SSH calls. On
-        # congested jump hosts / Windows without ControlMaster, each
-        # SSH is a fresh TCP + sshd fork, doubling the risk of banner-
-        # exchange timeouts that manifested as spurious "NOT FOUND".
-        # Bash parses ``A || B | C`` as ``A || (B | C)`` so the
-        # ``head -5`` only applies to the csh fallback — same semantics
-        # as before, one round-trip instead of two.
-        cadence_cshrc = (
-            os.getenv(f"VB_CADENCE_CSHRC{suffix}", "").strip()
-            or os.getenv("VB_CADENCE_CSHRC", "").strip()
-        )
-        fast = "which spectre 2>/dev/null && spectre -V 2>&1 | head -1"
-        if cadence_cshrc:
-            # Keep csh script out of bash's view — ``!`` / backticks /
-            # ``$?VAR`` must reach csh verbatim.
-            #
-            # Seed HOSTNAME/LD_LIBRARY_PATH with non-empty placeholders:
-            # some site cshrc files do ``setenv LD_LIBRARY_PATH
-            # ${MMSIM_HOME}/tools/lib:$LD_LIBRARY_PATH`` and csh aborts
-            # partway through when ``$LD_LIBRARY_PATH`` is undefined —
-            # leaving PATH unpatched so ``which spectre`` returns
-            # nothing.  An empty string (``""``) was found insufficient
-            # in practice; ``blank`` is a harmless throwaway that the
-            # subsequent concat safely overwrites.
-            csh_script = (
-                'setenv HOSTNAME `hostname`; '
-                'setenv LD_LIBRARY_PATH blank; '
-                f'source {cadence_cshrc}; '
-                'which spectre; '
-                'spectre -V'
-            )
-            slow = f"csh -f -c {shlex.quote(csh_script)} 2>&1 | head -5"
-            combined = f"{{ {fast}; }} || {{ {slow}; }}"
-        else:
-            combined = fast
-        check_cmd = f"bash -l -c {shlex.quote(combined)}"
+        # One SSH handshake. Source the selected shell before any tool probe.
+        check_cmd = environment.wrap(probe)
         print("\n[spectre] probing...", flush=True)
         result = runner.run_command(check_cmd, timeout=60)
         stdout = result.stdout.strip()
+        if result.returncode != 0 and result.stderr.strip():
+            print(f"[spectre] environment/probe error: {result.stderr.strip()}")
+            return
 
         spectre_path = None
         version = None
@@ -1996,6 +1993,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp_profile = subparsers.add_parser("profile", help="Show or edit profile bindings")
     profile_sub = sp_profile.add_subparsers(dest="profile_action", required=True)
+    sp_profile_list = profile_sub.add_parser("list", help="List resolved configuration and sources (no connections)")
+    sp_profile_list.add_argument("--json", action="store_true", help="Machine-readable inventory")
+    sp_profile_list.add_argument("--env", default=None, help="Explicit .env file path (highest priority)")
     sp_profile_show = profile_sub.add_parser("show", help="Show resolved profile")
     sp_profile_show.add_argument("--env", default=None,
                                  help="Explicit .env file path (highest priority)")
@@ -2364,6 +2364,7 @@ def main(argv: list[str] | None = None) -> int:
         "profile": lambda: cli_profile(
             action=getattr(args, "profile_action"),
             profile=getattr(args, "profile", None),
+            json_output=getattr(args, "json", False),
         ),
         "start": cli_start,
         "stop": cli_stop,
