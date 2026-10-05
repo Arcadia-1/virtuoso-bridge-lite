@@ -62,7 +62,9 @@ origin, path, and global inheritance. It reports the direct definition, not a
 full chain of dotenv interpolation references. Role fallbacks use the same
 resolver as connection setup. Named hosts/users/ports do not inherit global
 connection settings. Missing ports use the existing per-user default, with the
-local port defaulting to the remote port. Live port deconfliction may later
+local port defaulting to the remote port. Legacy port derivation also consults
+the global remote username when a named username is absent; the inventory uses
+the selected snapshot for that computation. Live port deconfliction may later
 choose a different value; the inventory is not a live tunnel-state report.
 
 `resolved` describes configuration validation only. Missing hosts, invalid

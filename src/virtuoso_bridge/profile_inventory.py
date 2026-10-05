@@ -86,7 +86,7 @@ def list_profiles(*, env_file: str | Path | None = None) -> list[dict[str, Any]]
         from virtuoso_bridge.virtuoso.basic.bridge import _default_remote_port
         errors: list[str] = []
         for field, key, default in (
-            ("port", "VB_REMOTE_PORT", _default_remote_port(roles.remote_user)),
+            ("port", "VB_REMOTE_PORT", _default_remote_port(roles.remote_user, environ=values)),
             ("local_port", "VB_LOCAL_PORT", None),
         ):
             raw = get(field, key)

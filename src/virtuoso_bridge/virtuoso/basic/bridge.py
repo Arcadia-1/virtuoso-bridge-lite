@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import errno
 import json
 import logging
@@ -42,7 +44,9 @@ _TUNNEL_CONNECT_RETRY_DELAY = 0.2
 _TUNNEL_CONNECT_GRACE_SECONDS = 3.0
 
 
-def _default_remote_port(username: str | None = None) -> int:
+def _default_remote_port(
+    username: str | None = None, *, environ: Mapping[str, str] | None = None,
+) -> int:
     """Return a stable per-user default port in the range 65000-65499.
 
     SHA-1 based: the previous ``sum(ord(c)) % 500`` assigned identical ports
@@ -51,7 +55,8 @@ def _default_remote_port(username: str | None = None) -> int:
     (SSHClient.ensure_remote_setup) additionally shifts away ports already
     held by another user.
     """
-    user = username or os.getenv("VB_REMOTE_USER", "").strip()
+    values = os.environ if environ is None else environ
+    user = username or values.get("VB_REMOTE_USER", "").strip()
     if not user:
         return 65432
     digest = hashlib.sha1(user.encode("utf-8")).hexdigest()

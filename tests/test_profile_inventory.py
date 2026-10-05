@@ -106,3 +106,15 @@ def test_default_ports_and_global_settings_are_not_phantom_profiles(tmp_path):
     assert rows[0]["sources"]["port"]["kind"] == "default"
     assert rows[0]["process_version"] == "r2"
     assert "must-not-leak" not in json.dumps(rows)
+
+
+@pytest.mark.parametrize("global_user, expected_port", [("fixture-user", 65436), ("", 65432)])
+def test_derived_port_uses_selected_snapshot_not_ambient_user(tmp_path, monkeypatch, global_user, expected_port):
+    monkeypatch.setenv("VB_REMOTE_USER", "ambient-user")
+    config = tmp_path / "bridge.env"
+    config.write_text(
+        f"VB_REMOTE_HOST_alpha=fixture-host\nVB_REMOTE_USER={global_user}\n", encoding="utf-8"
+    )
+    alpha = next(row for row in list_profiles(env_file=config) if row["profile"] == "alpha")
+    assert alpha["port"] == expected_port
+    assert os.environ["VB_REMOTE_USER"] == "ambient-user"

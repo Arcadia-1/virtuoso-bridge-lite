@@ -295,12 +295,15 @@ They are fully independent — you can run Spectre without loading the SKILL bri
 
 ### How Spectre is located
 
-Each SSH command runs in a **fresh shell** with no prior state. To find `spectre`, the bridge:
+Each SSH command runs in a **fresh shell** with no prior state. Without a site
+selector, the bridge uses the existing PATH (or `VB_SPECTRE_BIN`). When
+`VB_CADENCE_CSHRC` is configured, it loads that environment before probing or
+running the tool, even when another installation is already on PATH.
 
-1. Tries `which spectre` directly — works if the user's login shell already has Cadence on PATH.
-2. If not found and `VB_CADENCE_CSHRC` is set, sources that cshrc in a csh sub-shell to set up `PATH`, `LM_LICENSE_FILE`, `LD_LIBRARY_PATH`, etc., then retries.
-
-This cshrc is sourced **every time** (status check, license check, every simulation run) because each SSH command is a new process with no memory of previous sessions.
+The default selector shell remains csh. A site with a POSIX sh script can
+explicitly set `VB_CADENCE_ENV_SHELL=sh`; normal one-host users need no extra
+configuration. See `docs/profile-audit.md` for optional profile audit and
+selector details. Environment initialization runs anew for each invocation.
 
 If `spectre` is already on PATH in the remote user's default shell (e.g., via `~/.bashrc` or `~/.cshrc`), `VB_CADENCE_CSHRC` is not needed.
 
