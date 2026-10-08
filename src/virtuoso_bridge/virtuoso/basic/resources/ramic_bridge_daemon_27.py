@@ -405,6 +405,12 @@ timeout_flag = False
 # psutil -> /proc -> getppid: degrade gracefully instead of dying at import
 # time on kernels without /proc.
 def _resolve_virtuoso_pid():
+    owner = os.environ.get("RB_VIRTUOSO_PID")
+    if owner is not None:
+        pid = int(owner)
+        if pid <= 1:
+            raise ValueError("RB_VIRTUOSO_PID must identify a Virtuoso process")
+        return pid, "explicit"
     if PSUTIL_AVAILABLE and psutil is not None:
         try:
             parent_process = psutil.Process().parent()
@@ -423,6 +429,64 @@ def _resolve_virtuoso_pid():
             return int(f2.read().split()[3]), "proc"
     except Exception:
         return os.getppid(), "getppid"
+
+
+def _owner_identity(pid):
+    """Return a live process identity; zombies are already dead owners."""
+    if os.path.isdir("/proc/self"):
+        try:
+            with open("/proc/{0}/stat".format(pid), "r") as handle:
+                # comm can contain spaces and parentheses: split after it.
+                fields = handle.read().rsplit(")", 1)[1].split()
+        except (IOError, OSError) as exc:
+            if exc.errno in (errno.ENOENT, errno.ESRCH):
+                return None
+            raise
+        return None if fields[0] in ("Z", "X") else fields[19]
+    # Preserve POSIX hosts without procfs. psutil, when installed, also
+    # supplies a creation time so a recycled PID cannot keep us alive.
+    try:
+        import psutil
+    except ImportError:
+        try:
+            os.kill(pid, 0)
+        except OSError as exc:
+            if exc.errno == errno.ESRCH:
+                return None
+            raise
+        return pid
+    try:
+        process = psutil.Process(pid)
+        return None if process.status() == "zombie" else process.create_time()
+    except psutil.NoSuchProcess:
+        return None
+
+
+def _start_owner_monitor():
+    """Exit even while accept/recv/SKILL I/O is blocked after Virtuoso dies."""
+    if _pid_source != "explicit":
+        return  # Older/standalone launchers retain their existing behaviour.
+    identity = _owner_identity(virtuoso_pid)
+    if identity is None:
+        sys.exit(0)  # Owner disappeared before the daemon could start.
+
+    def watch():
+        while True:
+            time.sleep(0.25)
+            try:
+                alive = _owner_identity(virtuoso_pid) == identity
+            except (IOError, OSError):
+                # We cannot safely serve or interrupt a session we cannot
+                # identify. Close our own sockets, never signal other PIDs.
+                alive = False
+            if not alive:
+                # The kernel closes all sockets and pipes. sys.exit() would
+                # only end this thread, leaving the blocked server orphaned.
+                os._exit(0)
+
+    monitor = threading.Thread(target=watch, name="virtuoso-owner")
+    monitor.daemon = True
+    monitor.start()
 
 
 virtuoso_pid, _pid_source = _resolve_virtuoso_pid()
@@ -886,4 +950,5 @@ def start_server():
 
 # Start the server
 if __name__ == "__main__":
+    _start_owner_monitor()
     start_server()
