@@ -66,6 +66,43 @@ def _mark_interpreter_shutdown() -> None:
 atexit.register(_mark_interpreter_shutdown)
 
 
+def _pid_is_alive(pid: Any) -> bool:
+    """Query process liveness without sending Windows console events."""
+    try:
+        parsed = int(pid)
+        if parsed <= 0:
+            return False
+        if os.name != "nt":
+            os.kill(parsed, 0)
+            return True
+        if parsed > 0xFFFFFFFF:
+            return False
+
+        # Windows os.kill(pid, 0) sends CTRL_C_EVENT; it is not a POSIX probe.
+        # SYNCHRONIZE permits waiting on a process without termination access.
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        handle = kernel32.OpenProcess(0x00100000, False, parsed)  # SYNCHRONIZE
+        if not handle:
+            return ctypes.get_last_error() == 5  # Access denied: do not assume dead.
+        try:
+            return kernel32.WaitForSingleObject(handle, 0) == 0x00000102  # WAIT_TIMEOUT
+        finally:
+            kernel32.CloseHandle(handle)
+    except PermissionError:
+        return True
+    except (TypeError, ValueError, OverflowError, OSError):
+        return False
+
+
 def _windows_no_window_kwargs(
     *,
     detached: bool = False,
@@ -599,11 +636,7 @@ class SSHRunner:
         if self._tunnel_proc is not None and self._tunnel_proc.poll() is None:
             return True
         if self._tunnel_using_external and self._tunnel_pid:
-            try:
-                os.kill(self._tunnel_pid, 0)
-                return True
-            except (OSError, PermissionError):
-                pass
+            return _pid_is_alive(self._tunnel_pid)
         return False
 
     @property

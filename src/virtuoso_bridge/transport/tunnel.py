@@ -33,6 +33,7 @@ from virtuoso_bridge.transport.remote_roles import remote_host_roles_from_os
 from virtuoso_bridge.transport.ssh import (
     CommandResult,
     SSHRunner,
+    _pid_is_alive,
     ssh_backend_env_from_os,
     ssh_proxy_url_from_os,
 )
@@ -40,20 +41,6 @@ from virtuoso_bridge.transport.ssh import (
 logger = logging.getLogger(__name__)
 
 _TUNNEL_STARTUP_SETTLE_SECONDS = 1.0
-
-
-def _pid_is_alive(pid: Any) -> bool:
-    """Return whether *pid* names a live process visible to this user."""
-    try:
-        parsed = int(pid)
-        if parsed <= 0:
-            return False
-        os.kill(parsed, 0)
-        return True
-    except PermissionError:
-        return True
-    except (TypeError, ValueError, OSError):
-        return False
 
 
 def _is_localhost(host: str | None) -> bool:

@@ -45,3 +45,5 @@ jobs:
           tests/test_paramiko_ssh_backend.py
           tests/test_ssh_control_master.py
           tests/test_transfer_plans.py
+          tests/test_tunnel_profiles.py
+          tests/test_process_liveness.py
