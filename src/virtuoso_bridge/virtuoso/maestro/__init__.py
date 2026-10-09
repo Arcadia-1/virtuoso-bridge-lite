@@ -19,6 +19,14 @@ from virtuoso_bridge.virtuoso.maestro.history import (
     set_history_lock,
     unlock_history,
 )
+from virtuoso_bridge.virtuoso.maestro.jobs import (
+    MaestroJob,
+    MaestroJobEndpoint,
+    MaestroJobManager,
+    MaestroJobStatus,
+    MaestroJobSubmissionError,
+    MaestroJobTransport,
+)
 from virtuoso_bridge.virtuoso.maestro.monte_carlo import (
     MC_RUN_MODE,
     MaestroMonteCarloError,
@@ -114,6 +122,13 @@ __all__ = [
     "set_history_lock",
     "lock_history",
     "unlock_history",
+    # persistent asynchronous jobs
+    "MaestroJob",
+    "MaestroJobEndpoint",
+    "MaestroJobManager",
+    "MaestroJobStatus",
+    "MaestroJobSubmissionError",
+    "MaestroJobTransport",
     # Monte Carlo
     "MC_RUN_MODE",
     "MaestroMonteCarloError",

@@ -47,3 +47,4 @@ jobs:
           tests/test_transfer_plans.py
           tests/test_tunnel_profiles.py
           tests/test_process_liveness.py
+          tests/test_maestro_jobs.py

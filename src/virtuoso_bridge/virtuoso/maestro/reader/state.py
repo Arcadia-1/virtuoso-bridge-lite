@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from virtuoso_bridge import VirtuosoClient
+from virtuoso_bridge.models import VirtuosoResult
 from virtuoso_bridge.virtuoso.skill_output import parse_sexpr
 
 
@@ -26,6 +27,10 @@ _MAE_TITLE_RE = re.compile(
 
 class MaestroStateProbeError(RuntimeError):
     """The CIW state probe failed or returned an ambiguous payload."""
+
+    def __init__(self, message: str, *, result: VirtuosoResult | None = None) -> None:
+        super().__init__(message)
+        self.result = result
 
 
 class MaestroSessionState(BaseModel):
@@ -177,13 +182,18 @@ def _probe_inventory(client: VirtuosoClient, *, timeout: float = 30) -> _Invento
     if not getattr(result, "ok", not getattr(result, "errors", [])):
         detail = "; ".join(getattr(result, "errors", []) or [])
         raise MaestroStateProbeError(
-            "Maestro state probe failed." + (f" {detail}" if detail else "")
+            "Maestro state probe failed." + (f" {detail}" if detail else ""),
+            result=result,
         )
     if getattr(result, "errors", []):
         raise MaestroStateProbeError(
-            "Maestro state probe reported errors: " + "; ".join(result.errors)
+            "Maestro state probe reported errors: " + "; ".join(result.errors),
+            result=result,
         )
-    return _parse_inventory((getattr(result, "output", "") or "").strip())
+    try:
+        return _parse_inventory((getattr(result, "output", "") or "").strip())
+    except MaestroStateProbeError as exc:
+        raise MaestroStateProbeError(str(exc), result=result) from exc
 
 
 def _state_from_window(window: _WindowObservation) -> MaestroSessionState | None:
