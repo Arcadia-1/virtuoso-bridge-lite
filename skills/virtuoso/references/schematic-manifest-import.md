@@ -100,6 +100,21 @@ origins therefore move as needed while the source endpoint relations remain
 exact.  A deterministic dogleg is added only when that PDK adaptation makes a
 wire cross a foreign terminal.
 
+Before native creation, the importer reads the target library's schematic
+database resolution. Origins, wires and ports are quantized together to that
+resolution; an unrepresentable master offset or collapsed segment is rejected.
+Strict placement readback uses these same representable coordinates.
+
+An explicitly marked `power-rail` route can contain a visual overhang beyond
+the last electrical connection. Only a straight, single-segment tail with one
+unreferenced `route-anchor` endpoint and a connected opposite end is eligible
+for display-only treatment. Pins, ports, labels, contacts, overlaps and ambiguous
+crossings prevent conversion. Eligible tails retain their original geometry on
+`annotate/drawing`, without a net binding. `displayOnlyRails` records them;
+native readback checks their identity, coordinates, layer and lack of an
+electrical connection. Signal wires and ambiguous tails remain electrical,
+and normal `schCheck` warnings are not suppressed.
+
 The workflow creates named nets, binds instance terminals, and draws every
 declared route. `schCheck` is authoritative: if Cadence splits disconnected
 geometry or reports an error, import fails instead of forcing an OA net merge.
@@ -110,7 +125,7 @@ The target is never edited in place. Import builds a uniquely named staging
 cell, checks/saves/reads it twice, and requires stable topology across both
 passes. Readback verifies instance masters, placement, orientation,
 terminal-to-net partitions, port-to-net mapping, repeated port counts, and
-mapped CDF parameters. Only then is the staging view copied into place. With
+mapped CDF parameters and any display-only rail figures. Only then is the staging view copied into place. With
 `overwrite=True`, the prior target remains in a private backup until the
 installed copy passes its final check and readback; any failure restores it.
 The former `dbMergeNet`-after-check workaround is intentionally absent because
