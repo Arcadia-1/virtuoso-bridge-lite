@@ -848,6 +848,84 @@ def _point_on_open_axis_segment(
     return False
 
 
+def _display_only_power_rails(
+    source: Mapping[str, Any], layout: Mapping[str, Any],
+) -> list[Mapping[str, Any]]:
+    """Recognize isolated straight rail tails, never general dangling wires."""
+    geometry = source["sourceGeometry"]
+    junctions = {row["id"]: row for row in geometry.get("junctions", [])}
+    references: Counter[str] = Counter()
+    for route in geometry["routes"]:
+        for endpoint in [route["start"], *route["steps"]]:
+            if endpoint["kind"] == "junction":
+                references[endpoint["junctionId"]] += 1
+    for contact in geometry.get("contacts", []):
+        for endpoint in contact["endpoints"]:
+            if endpoint["kind"] == "junction":
+                references[endpoint["junctionId"]] += 1
+    for annotation in geometry.get("annotationStubs", []):
+        references[annotation.get("anchorJunctionId", "")] += 1
+
+    def free_endpoint(endpoint: Mapping[str, Any]) -> bool:
+        name = endpoint.get("junctionId")
+        return (endpoint["kind"] == "junction"
+                and junctions.get(name, {}).get("role") == "route-anchor"
+                and references[name] == 1)
+
+    by_id = {row["id"]: row for row in layout["routes"]}
+    protected = [tuple(point) for pins in layout["anchors"].values() for point in pins.values()]
+    protected += [tuple(port["xy"]) for port in layout["ports"]]
+    paths = [(row, False) for row in layout["routes"]]
+    for key in ("contacts", "expandedLinks", "bulkStubs", "bulkShorts", "annotationStubs"):
+        paths.extend((row, True) for row in layout[key])
+    display = []
+    supporting_paths = {}
+    for route in geometry["routes"]:
+        if route.get("presentation") != "power-rail" or len(route["steps"]) != 1:
+            continue
+        first, last = free_endpoint(route["start"]), free_endpoint(route["steps"][0])
+        if first == last:
+            continue
+        row = by_id[route["id"]]
+        if len(row["points"]) != 2:
+            continue
+        a, b = map(tuple, row["points"])
+        if a == b or (a[0] != b[0] and a[1] != b[1]):
+            continue
+        leaf, join = (a, b) if first else (b, a)
+        if any(point == leaf or _point_on_open_axis_segment(point, a, b) for point in protected):
+            continue
+
+        # A bounding-box overlap is deliberately conservative for crossing and
+        # diagonal wires. The only allowed intersection is the connected end.
+        safe, connected = True, []
+        for other, orthogonal in paths:
+            if other is row:
+                continue
+            points = [tuple(point) for point in other["points"]]
+            segments = ([segment for point in points[1:]
+                         for segment in _orthogonal_segments(points[0], point)]
+                        if orthogonal else list(zip(points, points[1:])))
+            for c, d in segments:
+                low = tuple(max(min(a[i], b[i]), min(c[i], d[i])) for i in (0, 1))
+                high = tuple(min(max(a[i], b[i]), max(c[i], d[i])) for i in (0, 1))
+                if any(low[i] > high[i] for i in (0, 1)):
+                    continue
+                if low != join or high != join or other["netName"] != row["netName"]:
+                    safe = False
+                if other["netName"] == row["netName"] and (
+                    join in (c, d) or _point_on_open_axis_segment(join, c, d)
+                ):
+                    connected.append(other)
+        if safe and connected:
+            display.append(row)
+            supporting_paths[row["id"]] = connected
+    # Two removable tails must not make an otherwise floating island disappear.
+    removed = {id(row) for row in display}
+    return [row for row in display
+            if any(id(other) not in removed for other in supporting_paths[row["id"]])]
+
+
 def apply_terminal_escape_detours(
     source: Mapping[str, Any],
     layout: dict[str, Any],
@@ -953,6 +1031,75 @@ def apply_terminal_escape_detours(
 
 def _point_to_uu(point: Sequence[float], grid: float) -> PointLike:
     return round(float(point[0]) * grid, 9), round(float(point[1]) * grid, 9)
+
+
+def _snap_layout_to_database_grid(
+    layout: dict[str, Any], grid: float, dbu_per_uu: float,
+) -> None:
+    """Use representable coordinates for both native creation and readback."""
+    if not math.isfinite(dbu_per_uu) or dbu_per_uu <= 0:
+        raise ValueError("schematic database units must be positive and finite")
+    units = grid * dbu_per_uu
+    shifted = 0
+    largest_shift = 0.0
+
+    def snap(point: Sequence[float]) -> PointLike:
+        nonlocal shifted, largest_shift
+        # Half-up rounding commutes with integral pin offsets; ties-to-even does not.
+        result = tuple(math.floor(round(float(value) * units, 9) + 0.5) / units for value in point)
+        shift = max(abs(a - float(b)) * grid for a, b in zip(result, point))
+        shifted += int(shift > 1e-12)
+        largest_shift = max(largest_shift, shift)
+        return result
+
+    # Quantizing a master offset separately from its origin would detach wires.
+    for reference, anchors in layout["anchors"].items():
+        origin = layout["placements"][reference]
+        for anchor in anchors.values():
+            for value, base in zip(anchor, origin):
+                offset = (float(value) - float(base)) * units
+                if not math.isclose(offset, round(offset), rel_tol=0, abs_tol=1e-7):
+                    raise ValueError(f"{reference} master pin offset is off the target database grid")
+
+    placements = {name: snap(point) for name, point in layout["placements"].items()}
+    anchors = {
+        reference: {name: snap(point) for name, point in pins.items()}
+        for reference, pins in layout["anchors"].items()
+    }
+    paths = {}
+    for key in ("routes", "contacts", "expandedLinks", "bulkStubs", "bulkShorts", "annotationStubs"):
+        paths[key] = []
+        for row in layout[key]:
+            points = [snap(point) for point in row["points"]]
+            for old_a, old_b, new_a, new_b in zip(row["points"], row["points"][1:], points, points[1:]):
+                for axis in (0, 1):
+                    if old_a[axis] != old_b[axis] and new_a[axis] == new_b[axis]:
+                        raise ValueError(f"{key} segment collapses on the target database grid")
+            paths[key].append({**row, "points": points})
+    ports = [{**row, "xy": snap(row["xy"])} for row in layout["ports"]]
+    junctions = [{**row, "xy": snap(row["xy"])} for row in layout["junctions"]]
+    layout.update(placements=placements, anchors=anchors, ports=ports, junctions=junctions, **paths)
+    layout["geometryAudit"]["databaseGrid"] = {
+        "dbuPerUserUnit": dbu_per_uu,
+        "shiftedPointOccurrences": shifted,
+        "maxShiftInUserUnits": largest_shift,
+    }
+
+
+def _schematic_database_units(client: Any, library: str, *, timeout: int) -> float:
+    raw = _checked_skill_output(
+        client,
+        f'techGetDBUPerUU(techGetTechFile(ddGetObj({_q(library)})) "schematic")',
+        context=f"read schematic database units for {library}",
+        timeout=timeout,
+    )
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"cannot determine schematic database units for {library}: {raw!r}") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"invalid schematic database units for {library}: {raw!r}")
+    return value
 
 
 def _orthogonal_segments(start: PointLike, end: PointLike) -> list[list[PointLike]]:
@@ -1212,6 +1359,12 @@ def import_manifest_circuit(
         raise FileExistsError(
             f"target schematic {library}/{cell} exists; pass overwrite=True to replace it"
         )
+    _snap_layout_to_database_grid(
+        layout, grid,
+        _schematic_database_units(client, library, timeout=min(timeout, 30)),
+    )
+    display_rails = _display_only_power_rails(prepared, layout)
+    display_ids = {row["id"] for row in display_rails}
     staging_cell = f"__vb_stage_{uuid.uuid4().hex[:16]}"
 
     commands: list[str] = []
@@ -1238,8 +1391,18 @@ def import_manifest_circuit(
             )
 
     wire_commands = _add_path_commands(
-        commands, layout["routes"], grid, orthogonal=False
+        commands, [row for row in layout["routes"] if row["id"] not in display_ids],
+        grid, orthogonal=False,
     )
+    for row in display_rails:
+        points = [_point_to_uu(point, grid) for point in row["points"]]
+        commands.append(
+            'let((vbRail) vbRail = dbCreateLine(cv list("annotate" "drawing") '
+            f'{skill_point_list(points)}) '
+            'unless(vbRail error("display rail creation failed")) '
+            f'dbReplaceProp(vbRail "vbDisplayRailId" "string" {_q(row["id"])}) '
+            'vbRail)'
+        )
     for key in (
         "contacts",
         "expandedLinks",
@@ -1313,6 +1476,11 @@ def import_manifest_circuit(
         "portOccurrences": len(layout["ports"]),
         "nets": len(prepared["nets"]),
         "wireCommands": wire_commands,
+        "displayOnlyRails": [
+            {"id": row["id"], "sourceNet": row["netName"],
+             "points": [list(_point_to_uu(point, grid)) for point in row["points"]]}
+            for row in display_rails
+        ],
         "operationCount": operation_count,
         "geometryAudit": layout["geometryAudit"],
         "routingAdjustments": routing_adjustments,
@@ -1493,6 +1661,48 @@ def _parameter_values_match(expected: Any, actual: Any) -> bool:
     return str(expected) == str(actual)
 
 
+def _verify_display_rails(client: Any, result: Mapping[str, Any], *, timeout: int) -> list[str]:
+    from virtuoso_bridge.virtuoso.schematic.reader import _build_cellview_read_skill
+
+    expected = result.get("displayOnlyRails", [])
+    if not expected:
+        return []
+    template = '''let((cv rows)
+      {owned_read_start}
+      cv = {cv_expr}
+      unless(cv error("display rail readback open failed"))
+      rows = nil
+      foreach(shape cv~>shapes
+        when(shape~>vbDisplayRailId
+          rows = cons(list(shape~>vbDisplayRailId shape~>objType
+            shape~>layerName shape~>purpose shape~>net~>name shape~>points) rows)))
+      list("vbDisplayRails" rows)
+      {owned_read_cleanup})'''
+    raw = _checked_skill_output(
+        client, _build_cellview_read_skill(template, result["library"], result["cellName"]),
+        context="read display-only rail geometry", timeout=timeout,
+    )
+    data = parse_sexpr(raw)
+    if not isinstance(data, list) or len(data) != 2 or data[0] != "vbDisplayRails":
+        return ["invalid display rail readback"]
+    rows = data[1] or []
+    if not isinstance(rows, list) or any(not isinstance(row, list) or len(row) != 6 for row in rows):
+        return ["invalid display rail rows"]
+    if Counter(row[0] for row in rows) != Counter(row["id"] for row in expected):
+        return ["display rail count or identities changed"]
+    actual = {row[0]: row[1:] for row in rows}
+    errors = []
+    for row in expected:
+        got = actual[row["id"]]
+        try:
+            points = [[float(value) for value in point] for point in got[4]]
+        except (TypeError, ValueError):
+            points = None
+        if got[:4] != ["line", "annotate", "drawing", None] or points != row["points"]:
+            errors.append(f"display rail {row['id']} lost its geometry or became electrically connected")
+    return errors
+
+
 def verify_manifest_circuit(
     client: Any,
     prepared_source: Mapping[str, Any],
@@ -1627,6 +1837,7 @@ def verify_manifest_circuit(
         if bad_occurrences:
             errors.append(f"port occurrence mismatches {bad_occurrences}")
     errors.extend(parameter_errors)
+    errors.extend(_verify_display_rails(client, result, timeout=timeout))
     return {
         "passed": not errors,
         "errors": errors,
@@ -1641,6 +1852,7 @@ def verify_manifest_circuit(
         "readbackNets": len(data["nets"]),
         "readbackPins": len(data["pins"]),
         "placementsChecked": layout is not None,
+        "displayRailsChecked": len(result.get("displayOnlyRails", [])),
     }
 
 
