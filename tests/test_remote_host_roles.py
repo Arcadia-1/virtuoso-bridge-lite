@@ -142,6 +142,10 @@ def test_split_setup_uploads_on_deploy_host_and_checks_daemon_visibility(monkeyp
         if path.endswith("/virtuoso_setup.il")
     )
     assert 'setShellEnvVar("RB_IDENTITY_PATH" "/shared/bridge/' in setup
+    owner_path = next(path for path in runners["gui-a"].uploads
+                      if path.endswith("/ramic_owner.py"))
+    assert "class OwnerProcess" in runners["gui-a"].uploads[owner_path]
+    assert f"test -r {owner_path}" in runners["compute-b"].commands
 
 
 def test_spectre_role_runs_without_bridge_tunnel_state(monkeypatch) -> None:
