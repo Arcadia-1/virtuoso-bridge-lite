@@ -573,7 +573,11 @@ def test_legacy_lane_stays_owned_until_watchdog_decision_finishes(monkeypatch, t
             write=lambda data: len(data), flush=lambda: None,
         )),
     ))
-    monkeypatch.setattr(module.os, "kill", lambda *args: signals.append(args))
+    # Exercise the race with a verified owner. Unknown/legacy PID inference
+    # is diagnostic only and must not authorize a process-level signal.
+    monkeypatch.setattr(module, "_owner", types.SimpleNamespace(
+        interrupt=lambda: signals.append("verified-owner"),
+    ))
 
     def read_frame(read_one):
         response_read.set()

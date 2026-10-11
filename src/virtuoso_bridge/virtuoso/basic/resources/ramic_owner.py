@@ -14,6 +14,7 @@ import time
 
 
 BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
+_UNKNOWN = object()
 
 
 def _boot_id():
@@ -40,19 +41,27 @@ class OwnerProcess(object):
     def __init__(self, pid, boot_id):
         self.pid = pid
         self.local = bool(boot_id and boot_id == _boot_id())
-        self.identity = _identity(pid) if self.local else None
+        try:
+            self.identity = _identity(pid) if self.local else None
+        except (IOError, OSError, IndexError, ValueError):
+            # Missing permission/metadata is not evidence of owner death.
+            # Never adopt a potentially recycled PID after an unknown start.
+            self.identity = _UNKNOWN
 
     def alive(self):
-        if not self.local or self.identity is None:
+        """True/False for verified life/death; None for unavailable identity."""
+        if not self.local or self.identity is _UNKNOWN:
+            return None
+        if self.identity is None:
             return False
         try:
             return _identity(self.pid) == self.identity
-        except (IOError, OSError):
-            return False
+        except (IOError, OSError, IndexError, ValueError):
+            return None
 
     def interrupt(self):
         # Never signal a foreign, unknown, dead or recycled owner PID.
-        if self.alive():
+        if self.alive() is True:
             os.kill(self.pid, signal.SIGINT)
 
     def start_monitor(self):
@@ -63,13 +72,20 @@ class OwnerProcess(object):
             )
             sys.stderr.flush()
             return
-        if not self.alive():
+        if self.identity is _UNKNOWN:
+            sys.stderr.write(
+                "[RB-owner] owner metadata unavailable; local owner monitoring "
+                "and signals disabled; relying on IPC/exit hook cleanup\n"
+            )
+            sys.stderr.flush()
+            return
+        if self.alive() is False:
             sys.exit(0)
 
         def watch():
             while True:
                 time.sleep(0.25)
-                if not self.alive():
+                if self.alive() is False:
                     # sys.exit only stops this thread. The kernel must close
                     # sockets even while accept/recv/SKILL I/O is blocked.
                     os._exit(0)

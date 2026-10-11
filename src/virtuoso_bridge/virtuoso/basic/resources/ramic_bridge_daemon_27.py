@@ -5,7 +5,6 @@ import sys
 import socket
 import os
 import json
-import signal
 import threading
 import time
 import errno
@@ -407,8 +406,8 @@ PORT = int(sys.argv[2])
 timeout_flag = False
 
 # Get Virtuoso's PID - this is the process we need to send signals to.
-# psutil -> /proc -> getppid: degrade gracefully instead of dying at import
-# time on kernels without /proc.
+# psutil -> /proc -> getppid: diagnostic PID inference only. Signals require
+# verified ownership; kernels without /proc must still boot.
 def _resolve_virtuoso_pid():
     owner = os.environ.get("RB_VIRTUOSO_PID")
     if owner is not None:
@@ -441,8 +440,8 @@ _owner = (OwnerProcess(virtuoso_pid, os.environ.get("RB_VIRTUOSO_BOOT_ID"))
           if _pid_source == "explicit" else None)
 if _pid_source == "getppid":
     sys.stderr.write(
-        "[RB-pid] WARNING: no /proc and no psutil; watchdog falls back to "
-        "the direct parent PID {0} (timeout interrupts may be imprecise)\n".format(
+        "[RB-pid] WARNING: no /proc and no psutil; diagnostic PID falls back to "
+        "the direct parent PID {0}; unverified timeout signals are disabled\n".format(
             virtuoso_pid
         )
     )
@@ -493,8 +492,6 @@ def watchdog_callback(expired, finished, completion_lock):
         try:
             if _owner is not None:
                 _owner.interrupt()
-            else:
-                os.kill(virtuoso_pid, signal.SIGINT)
         except Exception:
             pass
 

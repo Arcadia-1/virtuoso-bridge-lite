@@ -91,7 +91,7 @@ def test_daemon_exits_when_owner_dies_with_ipc_pipes_still_open(tmp_path, versio
 @pytest.mark.parametrize("version,python", [
     ("3", sys.executable), ("27", shutil.which("python2.7")),
 ])
-@pytest.mark.parametrize("owner_kind", ["absent", "collision", "unknown_host"])
+@pytest.mark.parametrize("owner_kind", ["absent", "collision", "unknown_host", "missing_pid"])
 def test_foreign_owner_never_uses_local_pid(tmp_path, version, python, owner_kind):
     if python is None:
         pytest.skip("Python 2.7 is unavailable")
@@ -108,6 +108,8 @@ def test_foreign_owner_never_uses_local_pid(tmp_path, version, python, owner_kin
                RB_VIRTUOSO_BOOT_ID="foreign-boot")
     if owner_kind == "unknown_host":
         env.pop("RB_VIRTUOSO_BOOT_ID")
+    elif owner_kind == "missing_pid":
+        env.pop("RB_VIRTUOSO_PID")
     daemon = subprocess.Popen(
         [python, str(RESOURCES / ("ramic_bridge_daemon_%s.py" % version)), "127.0.0.1", str(port)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
