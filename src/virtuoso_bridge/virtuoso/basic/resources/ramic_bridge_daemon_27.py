@@ -5,7 +5,6 @@ import sys
 import socket
 import os
 import json
-import signal
 import threading
 import time
 import errno
@@ -14,6 +13,11 @@ import hmac as _hmac
 import binascii
 import tempfile
 import traceback
+
+try:
+    from ramic_owner import OwnerProcess
+except ImportError:
+    from virtuoso_bridge.virtuoso.basic.resources.ramic_owner import OwnerProcess
 
 try:
     from ramic_request_recovery import (
@@ -402,9 +406,15 @@ PORT = int(sys.argv[2])
 timeout_flag = False
 
 # Get Virtuoso's PID - this is the process we need to send signals to.
-# psutil -> /proc -> getppid: degrade gracefully instead of dying at import
-# time on kernels without /proc.
+# psutil -> /proc -> getppid: diagnostic PID inference only. Signals require
+# verified ownership; kernels without /proc must still boot.
 def _resolve_virtuoso_pid():
+    owner = os.environ.get("RB_VIRTUOSO_PID")
+    if owner is not None:
+        pid = int(owner)
+        if pid <= 1:
+            raise ValueError("RB_VIRTUOSO_PID must identify a Virtuoso process")
+        return pid, "explicit"
     if PSUTIL_AVAILABLE and psutil is not None:
         try:
             parent_process = psutil.Process().parent()
@@ -426,10 +436,12 @@ def _resolve_virtuoso_pid():
 
 
 virtuoso_pid, _pid_source = _resolve_virtuoso_pid()
+_owner = (OwnerProcess(virtuoso_pid, os.environ.get("RB_VIRTUOSO_BOOT_ID"))
+          if _pid_source == "explicit" else None)
 if _pid_source == "getppid":
     sys.stderr.write(
-        "[RB-pid] WARNING: no /proc and no psutil; watchdog falls back to "
-        "the direct parent PID {0} (timeout interrupts may be imprecise)\n".format(
+        "[RB-pid] WARNING: no /proc and no psutil; diagnostic PID falls back to "
+        "the direct parent PID {0}; unverified timeout signals are disabled\n".format(
             virtuoso_pid
         )
     )
@@ -478,7 +490,8 @@ def watchdog_callback(expired, finished, completion_lock):
             return
         expired.set()
         try:
-            os.kill(virtuoso_pid, signal.SIGINT)
+            if _owner is not None:
+                _owner.interrupt()
         except Exception:
             pass
 
@@ -886,4 +899,6 @@ def start_server():
 
 # Start the server
 if __name__ == "__main__":
+    if _owner is not None:
+        _owner.start_monitor()
     start_server()

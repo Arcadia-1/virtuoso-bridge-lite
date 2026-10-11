@@ -186,6 +186,17 @@ procedure(RBQuoteShellArg(value)
         strcat(quoted "'"))
 )
 
+procedure(RBOwnerBootId()
+    ; Read in Virtuoso, not in the shell spawned by ipcBeginProcess: that
+    ; shell can run on a different host. Unknown boots disable local checks.
+    let((port value)
+        port = infile("/proc/sys/kernel/random/boot_id")
+        when(port
+            gets(value port)
+            close(port))
+        if(value car(parseString(value)) ""))
+)
+
 procedure(RBStart()
     ; Start the RAMIC Bridge daemon process.  Launches the Python daemon
     ; as a child process of Virtuoso; the actual "ready" ack is printed
@@ -248,7 +259,8 @@ procedure(RBStart()
             ; Use "env -u" to strip Virtuoso's LD_LIBRARY_PATH / LD_PRELOAD
             ; so the system Python links against its own libs, not Virtuoso's
             ; bundled (and often incompatible) copies.
-            RBIpc = ipcBeginProcess(sprintf(nil "/usr/bin/env -u LD_LIBRARY_PATH -u LD_PRELOAD stdbuf -oL %s -u %L %L %L" RBPython RBDPath host RBPort) "" 'RBIpcDataHandler 'RBIpcErrHandler 'RBIpcFinishHandler logpath)
+            ; Bind the daemon to this Virtuoso, not the intermediate cdsServIpc.
+            RBIpc = ipcBeginProcess(sprintf(nil "/usr/bin/env -u LD_LIBRARY_PATH -u LD_PRELOAD RB_VIRTUOSO_PID=%d RB_VIRTUOSO_BOOT_ID=%s stdbuf -oL %s -u %L %L %L" ipcGetPid() RBQuoteShellArg(RBOwnerBootId()) RBPython RBDPath host RBPort) "" 'RBIpcDataHandler 'RBIpcErrHandler 'RBIpcFinishHandler logpath)
         )
         printf("[RAMIC Bridge ipc=%L] launching daemon (bind=%s:%d) at (%s)\n"
             RBIpc
@@ -651,6 +663,12 @@ procedure(RBPrintEmptyLines(@optional (n 10))
     ; Push old CIW lines off-screen for a clean visual workspace.
     ; Default 10; pass any positive integer.
     for(i 1 n printf("\n"))
+)
+
+; Stop only this session's daemon on a completed exit. Register once across
+; reloads; regExitAfter avoids stopping the bridge when an exit is cancelled.
+unless(boundp('RBExitHookInstalled) && RBExitHookInstalled
+    RBExitHookInstalled = regExitAfter('RBStop)
 )
 
 ; Auto-start the bridge when this file is loaded (no second daemon if already up)
