@@ -1,0 +1,66 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="1200"
+  height="630"
+  viewBox="0 0 1200 630"
+>
+  <defs>
+    <radialGradient id="glow">
+      <stop stop-color="#6e40c9" stop-opacity=".35" />
+      <stop offset="1" stop-color="#080a10" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="title">
+      <stop stop-color="#cbb4ff" />
+      <stop offset="1" stop-color="#72e7d3" />
+    </linearGradient>
+    <pattern id="grid" width="36" height="36" patternUnits="userSpaceOnUse">
+      <path d="M36 0H0V36" fill="none" stroke="#ffffff" stroke-opacity=".045" />
+    </pattern>
+  <symbol id="bridge-mark" viewBox="0 0 48 48"><rect x=".75" y=".75" width="46.5" height="46.5" rx="8" fill="#fff" stroke="#d9dde3"/>
+  <g stroke="#000" stroke-width="2.2" fill="none" stroke-linejoin="miter">
+    <path d="M5 24h7L24 9l12 15h7M12 24l12 15 12-15M24 4v5M24 39v5"/>
+  </g>
+  <g fill="#000">
+    <rect x="15.3" y="11.5" width="5.4" height="10" transform="rotate(38.66 18 16.5)"/>
+    <rect x="27.3" y="11.5" width="5.4" height="10" transform="rotate(-38.66 30 16.5)"/>
+    <rect x="15.3" y="26.5" width="5.4" height="10" transform="rotate(-38.66 18 31.5)"/>
+    <rect x="27.3" y="26.5" width="5.4" height="10" transform="rotate(38.66 30 31.5)"/>
+    <circle cx="12" cy="24" r="2"/><circle cx="36" cy="24" r="2"/>
+  </g></symbol></defs>
+  <rect width="1200" height="630" fill="#080a10" />
+  <rect x="600" width="600" height="630" fill="url(#grid)" />
+  <ellipse cx="920" cy="310" rx="410" ry="360" fill="url(#glow)" />
+  <use href="#bridge-mark" x="68" y="56" width="40" height="40"/>
+  <g font-family="Helvetica,Arial,sans-serif">
+    <text x="121" y="84" font-size="25" fill="#e8e5f1">Virtuoso Bridge</text>
+    <text x="68" y="225" font-size="15" letter-spacing="3" fill="#72e7d3">
+      AGENTIC ANALOG &amp; MIXED-SIGNAL DESIGN
+    </text>
+    <text x="63" y="325" font-size="80" font-weight="bold" fill="#f2f3ff">
+      Your agent.
+    </text>
+    <text x="63" y="416" font-size="80" font-weight="bold" fill="url(#title)">
+      Inside Virtuoso.
+    </text>
+    <text x="68" y="489" font-size="22" fill="#9a9fb5">
+      Connect AI agents to real Cadence tools.
+    </text>
+  </g>
+  <g fill="none" stroke="#9b7ccd" stroke-opacity=".3">
+    <circle cx="977" cy="304" r="153" />
+    <circle cx="977" cy="304" r="191" />
+    <path d="M825 304H867M1087 304H1160M977 114V194M977 414V495" />
+  </g>
+  <use href="#bridge-mark" x="887" y="214" width="180" height="180"/>
+  <path d="M68 548H1132" stroke="#ffffff" stroke-opacity=".12" />
+  <text
+    x="68"
+    y="583"
+    font-family="monospace"
+    font-size="13"
+    letter-spacing="2"
+    fill="#8d93aa"
+  >
+    OPEN SOURCE / PYTHON / SKILL / SPECTRE / MAESTRO
+  </text>
+</svg>

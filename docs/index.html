@@ -1,521 +1,1203 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <title>virtuoso-bridge-lite</title>
-  <style>
-    :root {
-      --bg: #0d1117;
-      --card: #161b22;
-      --border: #30363d;
-      --text: #e6edf3;
-      --muted: #8b949e;
-      --blue: #58a6ff;
-      --purple: #bc8cff;
-      --orange: #f78166;
-      --green: #3fb950;
-    }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      line-height: 1.6;
-    }
-    .container { max-width: 900px; margin: 0 auto; padding: 0 24px; }
-    .hero { text-align: center; padding: 80px 0 32px; }
-    .hero h1 { font-size: 2.8rem; font-weight: 800; letter-spacing: -1px; margin-bottom: 16px; }
-    .hero h1 .lite { color: var(--purple); font-weight: 400; }
-    .hero p { font-size: 1.15rem; color: var(--muted); max-width: 600px; margin: 0 auto 32px; }
-    .hero-buttons { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
-    .btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 24px; border-radius: 8px; font-size: 1rem; font-weight: 600; text-decoration: none; transition: opacity 0.2s; }
-    .btn:hover { opacity: 0.85; }
-    .btn-primary { background: var(--blue); color: #fff; }
-    .btn-secondary { background: var(--card); color: var(--text); border: 1px solid var(--border); }
+<!doctype html>
+<html lang="en" data-lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20261012" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#080a10" />
+    <title>Virtuoso Bridge — Your agent. Inside Virtuoso.</title>
+    <meta
+      name="description"
+      content="The open-source bridge between AI agents and Cadence. Control Virtuoso through Python and SKILL, run Spectre, and carry analog and mixed-signal design workflows into the agent era."
+    />
+    <meta
+      name="site-title-en"
+      content="Virtuoso Bridge — Your agent. Inside Virtuoso."
+    />
+    <meta
+      name="site-title-zh"
+      content="Virtuoso Bridge — 让智能体，走进 Virtuoso。"
+    />
+    <meta
+      property="og:title"
+      content="Virtuoso Bridge — Your agent. Inside Virtuoso."
+    />
+    <meta
+      property="og:description"
+      content="Open-source infrastructure for agentic analog and mixed-signal design. Python. SKILL. Spectre. Real Cadence workflows."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://virtuoso-bridge.tokenzhang.com/" />
+    <meta
+      property="og:image"
+      content="https://virtuoso-bridge.tokenzhang.com/assets/social-card.png"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="canonical" href="https://virtuoso-bridge.tokenzhang.com/" />
+    <link rel="icon" href="/favicon.svg?v=20261012" type="image/svg+xml" />
+    <script>
+      document.documentElement.classList.add("js");
+      try {
+        var l =
+          new URLSearchParams(location.search).get("lang") ||
+          localStorage.getItem("vb-language") ||
+          (navigator.language.startsWith("zh") ? "zh" : "en");
+        document.documentElement.dataset.lang = l === "zh" ? "zh" : "en";
+        document.documentElement.lang = l === "zh" ? "zh-CN" : "en";
+      } catch (e) {}
+    </script>
+    <link rel="stylesheet" href="/site.css?v=20261012" />
+    <script src="/site.js?v=20261012" defer></script>
+    <script type="module" src="/analytics/track.js?v=20261012"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main"
+      ><span class="en">Skip to content</span
+      ><span class="zh">跳转到正文</span></a
+    >
+    <header class="site-header">
+      <div class="wrap header-inner">
+        <a
+          class="brand"
+          href="/"
+          data-internal
+          aria-label="Virtuoso Bridge home"
+          ><img
+            src="/favicon.svg?v=20261012"
+            width="32"
+            height="32"
+            alt=""
+          /><span>Virtuoso <span>Bridge</span></span></a
+        >
+        <nav class="header-nav" aria-label="Main navigation">
+          <a class="desktop-nav" href="#workflows"
+            ><span class="en">Workflows</span><span class="zh">工作流</span></a
+          >
+          <a class="desktop-nav" href="#capabilities"
+            ><span class="en">Capabilities</span
+            ><span class="zh">核心能力</span></a
+          >
+          <a class="desktop-nav" href="/guide/" data-internal
+            ><span class="en">Documentation ↗</span
+            ><span class="zh">使用文档 ↗</span></a
+          >
+          <a
+            class="nav-source"
+            href="https://github.com/Arcadia-1/virtuoso-bridge-lite"
+            >GitHub ↗</a
+          >
+          <div
+            class="lang-switch js-only"
+            role="group"
+            aria-label="Language / 语言"
+          >
+            <button type="button" data-language="en" aria-pressed="true">
+              EN</button
+            ><button type="button" data-language="zh" aria-pressed="false">
+              中文
+            </button>
+          </div>
+        </nav>
+      </div>
+      <nav class="wrap related-nav" aria-label="Related sites">
+        <a href="https://www.tokenzhang.com/"
+          ><span class="en">Zhishuai Zhang</span
+          ><span class="zh">张智帅 · 个人主页</span
+          ><span aria-hidden="true">↗</span></a
+        >
+        <a href="https://analog-canvas.tokenzhang.com/"
+          ><img
+            src="/assets/analog-canvas.svg"
+            width="18"
+            height="18"
+            alt=""
+          />Analog Canvas <span aria-hidden="true">↗</span></a
+        >
+        <a href="https://chip-arena.com/"
+          ><img
+            src="/assets/chip-arena.svg"
+            width="18"
+            height="18"
+            alt=""
+          />Chip Arena <span aria-hidden="true">↗</span></a
+        >
+        <a href="https://circuits-and-systems.tokenzhang.com/"
+          ><img src="/assets/classroom.svg" width="18" height="18" alt="" />CAS
+          Classroom <span aria-hidden="true">↗</span></a
+        >
+      </nav>
+    </header>
+    <main id="main">
+      <section class="hero" id="overview">
+        <div class="wrap">
+          <div class="hero-content">
+            <div class="hero-copy">
+              <div class="eyebrow">
+                <span class="en">Infrastructure for agentic chip design</span
+                ><span class="zh">面向智能体的芯片设计基础设施</span>
+              </div>
+              <h1>
+                <span class="en"
+                  >Your agent.<span class="gradient-text"
+                    >Inside Virtuoso.</span
+                  ></span
+                ><span class="zh"
+                  >让智能体，<span class="gradient-text"
+                    >走进 Virtuoso。</span
+                  ></span
+                >
+              </h1>
+              <p class="hero-description">
+                <span class="en"
+                  >Connect AI agents to
+                  <strong>real Cadence tools.</strong> Build schematics, run
+                  simulations, and read the results — through Python, SKILL, and
+                  a bridge built for analog &amp; mixed-signal design.</span
+                ><span class="zh"
+                  >连接 AI 智能体与<strong>真实的 Cadence 设计环境</strong
+                  >。通过 Python 和 SKILL
+                  构建原理图、执行仿真、读取结果，让模拟与混合信号设计进入智能体时代。</span
+                >
+              </p>
+              <div class="actions">
+                <a class="button primary" href="#getting-started"
+                  ><span class="en">Build your first connection</span
+                  ><span class="zh">开始连接</span
+                  ><span class="arrow">↗</span></a
+                ><a
+                  class="button"
+                  href="https://github.com/Arcadia-1/virtuoso-bridge-lite"
+                  ><span class="en">Explore the source</span
+                  ><span class="zh">查看开源代码</span
+                  ><span class="arrow">↗</span></a
+                >
+              </div>
+              <p class="hero-note">
+                <span>OPEN SOURCE</span><span>MIT LICENSE</span
+                ><span>PYTHON ≥ 3.9</span>
+              </p>
+            </div>
+            <div class="hero-visual">
+              <svg
+                viewBox="0 0 620 490"
+                role="img"
+                aria-labelledby="bridge-title bridge-description"
+              >
+                <title id="bridge-title">
+                  AI agents connected to Virtuoso and Spectre through Virtuoso
+                  Bridge
+                </title>
+                <desc id="bridge-description">
+                  Architecture illustration. Python and SKILL connect to
+                  Virtuoso schematic, layout and Maestro; Spectre simulation can
+                  also run independently.
+                </desc>
+                <defs>
+                  <pattern
+                    id="hero-grid"
+                    width="26"
+                    height="26"
+                    patternUnits="userSpaceOnUse"
+                  >
+                    <path
+                      d="M26 0H0V26"
+                      fill="none"
+                      stroke="#a6a1d1"
+                      stroke-opacity=".075"
+                      stroke-width=".7"
+                    />
+                  </pattern>
+                  <radialGradient id="core-glow">
+                    <stop stop-color="#9867ff" stop-opacity=".23" />
+                    <stop offset="1" stop-color="#9867ff" stop-opacity="0" />
+                  </radialGradient>
+                  <linearGradient id="chip-face" x2=".8" y2="1">
+                    <stop stop-color="#35205a" />
+                    <stop offset="1" stop-color="#161b34" />
+                  </linearGradient>
+                  <linearGradient id="trace" x2="1" y2=".3">
+                    <stop stop-color="#9066e3" />
+                    <stop offset=".55" stop-color="#bca5ff" />
+                    <stop offset="1" stop-color="#72e7d3" />
+                  </linearGradient>
+                  <filter id="trace-glow">
+                    <feGaussianBlur stdDeviation="3" />
+                  </filter>
+                </defs>
+                <path d="M18 90H602V435H18Z" fill="url(#hero-grid)" />
+                <ellipse
+                  cx="313"
+                  cy="252"
+                  rx="213"
+                  ry="206"
+                  fill="url(#core-glow)"
+                />
+                <g fill="none" stroke="#a78ade" stroke-opacity=".09">
+                  <circle cx="310" cy="252" r="187" />
+                  <circle cx="310" cy="252" r="156" />
+                  <path d="M310 38V67M310 437V464M97 252H123M497 252H525" />
+                </g>
+                <g
+                  font-family="monospace"
+                  font-size="9"
+                  fill="#68738e"
+                  letter-spacing="1.5"
+                >
+                  <text x="32" y="57">01 / AGENT → EDA</text>
+                  <text x="410" y="451">LOCAL / REMOTE</text>
+                </g>
+                <g stroke="#675688" stroke-width="1.5" fill="none">
+                  <path d="M155 252H246" />
+                  <path d="M374 226H405L427 151H465" />
+                  <path d="M374 252H465" />
+                  <path d="M374 278H405L427 353H465" />
+                </g>
+                <g
+                  fill="none"
+                  stroke="url(#trace)"
+                  stroke-width="2"
+                  pathLength="100"
+                >
+                  <path class="circuit-flow" d="M155 252H246" />
+                  <path
+                    class="circuit-flow flow-two"
+                    d="M374 226H405L427 151H465"
+                  />
+                  <path class="circuit-flow" d="M374 252H465" />
+                  <path
+                    class="circuit-flow flow-three"
+                    d="M374 278H405L427 353H465"
+                  />
+                </g>
+                <g fill="#b99bee">
+                  <circle cx="182" cy="252" r="3" />
+                  <circle cx="405" cy="226" r="3" />
+                  <circle cx="405" cy="278" r="3" />
+                </g>
+                <g transform="translate(25 211)">
+                  <rect
+                    width="132"
+                    height="82"
+                    rx="11"
+                    fill="#121421"
+                    stroke="#61527b"
+                    stroke-opacity=".6"
+                  />
+                  <path
+                    d="M23 23L31 30L23 37M37 37H47"
+                    stroke="#c9b5ff"
+                    stroke-width="2"
+                    fill="none"
+                  />
+                  <text
+                    x="20"
+                    y="61"
+                    fill="#e1def0"
+                    font-size="12"
+                    font-family="monospace"
+                  >
+                    Your AI agent
+                  </text>
+                  <circle cx="112" cy="26" r="3" fill="#ac92dd" />
+                </g>
+                <rect
+                  class="core-halo"
+                  x="229"
+                  y="171"
+                  width="162"
+                  height="162"
+                  rx="31"
+                  fill="none"
+                  stroke="#9867ff"
+                  stroke-opacity=".18"
+                />
+                <rect
+                  x="243"
+                  y="185"
+                  width="134"
+                  height="134"
+                  rx="23"
+                  fill="#7653b5"
+                  fill-opacity=".14"
+                  stroke="#9066dc"
+                  stroke-opacity=".28"
+                />
+                <image
+                  href="/favicon.svg?v=20261012"
+                  x="251"
+                  y="193"
+                  width="118"
+                  height="118"
+                />
+                <g stroke="#8a6abb" stroke-opacity=".65">
+                  <path
+                    d="M280 184V174M300 184V174M320 184V174M340 184V174M280 320V330M300 320V330M320 320V330M340 320V330"
+                  />
+                </g>
+                <g font-family="monospace">
+                  <g transform="translate(465 117)">
+                    <rect
+                      width="139"
+                      height="69"
+                      rx="9"
+                      fill="#111a21"
+                      stroke="#72e7d3"
+                      stroke-opacity=".25"
+                    />
+                    <path
+                      d="M16 22H28M22 16V28"
+                      stroke="#72e7d3"
+                      stroke-width="1.5"
+                    />
+                    <text x="37" y="26" font-size="12" fill="#d2ede6">
+                      Virtuoso
+                    </text>
+                    <text x="16" y="49" font-size="8" fill="#79998f">
+                      SCHEMATIC · LAYOUT
+                    </text>
+                  </g>
+                  <g transform="translate(465 218)">
+                    <rect
+                      width="139"
+                      height="69"
+                      rx="9"
+                      fill="#171522"
+                      stroke="#ac8cdd"
+                      stroke-opacity=".32"
+                    />
+                    <path
+                      d="M16 25L22 18L29 25L22 32Z"
+                      stroke="#b69ae9"
+                      fill="none"
+                    />
+                    <text x="37" y="27" font-size="12" fill="#e2d7f2">
+                      Maestro
+                    </text>
+                    <text x="16" y="50" font-size="8" fill="#9586ab">
+                      SESSIONS · HISTORY
+                    </text>
+                  </g>
+                  <g transform="translate(465 319)">
+                    <rect
+                      width="139"
+                      height="69"
+                      rx="9"
+                      fill="#111a21"
+                      stroke="#72e7d3"
+                      stroke-opacity=".25"
+                    />
+                    <path
+                      d="M15 26L19 26L23 17L27 31L31 26"
+                      stroke="#72e7d3"
+                      fill="none"
+                      stroke-width="1.5"
+                    />
+                    <text x="39" y="27" font-size="12" fill="#d2ede6">
+                      Spectre
+                    </text>
+                    <text x="16" y="50" font-size="8" fill="#79998f">
+                      NETLIST → PSF
+                    </text>
+                  </g>
+                </g>
+                <g font-family="monospace" font-size="8" fill="#8d7ba9">
+                  <text x="187" y="237">PYTHON</text>
+                  <text x="273" y="352">SKILL / CLI</text>
+                </g>
+                <path
+                  d="M87 313V402H452"
+                  stroke="#56756e"
+                  stroke-opacity=".4"
+                  fill="none"
+                  stroke-dasharray="3 5"
+                />
+                <text
+                  x="112"
+                  y="421"
+                  font-family="monospace"
+                  font-size="8"
+                  fill="#697e79"
+                >
+                  STANDALONE SPECTRE · NO VIRTUOSO DAEMON
+                </text>
+              </svg>
+              <p class="diagram-label">
+                <span class="en"
+                  >ARCHITECTURE ILLUSTRATION / NOT A LIVE SESSION</span
+                ><span class="zh">架构示意 / 非实时会话</span>
+              </p>
+            </div>
+          </div>
+          <div class="hero-baseline">
+            <span>ONE BRIDGE. REAL DESIGN TOOLS.</span>
+            <div class="capabilities">
+              <span>SCHEMATIC</span><span>LAYOUT</span><span>SPECTRE</span
+              ><span>MAESTRO</span>
+            </div>
+          </div>
+        </div>
+      </section>
 
-    .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; padding: 32px 0; }
-    @media (max-width: 640px) { .features { grid-template-columns: 1fr; } }
-    .feature { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
-    .feature h3 { font-size: 1rem; margin-bottom: 8px; }
-    .feature p { font-size: 0.9rem; color: var(--muted); }
-
-    .section { padding: 48px 0; }
-    .section h2 { font-size: 1.6rem; font-weight: 700; margin-bottom: 24px; text-align: center; }
-    .section h3 { font-size: 1.1rem; margin-bottom: 12px; }
-    pre { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; overflow-x: auto; font-size: 0.9rem; line-height: 1.7; margin-bottom: 16px; }
-    code { font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace; }
-    .kw { color: var(--purple); }
-    .str { color: var(--green); }
-    .fn { color: var(--blue); }
-    .cmt { color: var(--muted); }
-    .cmd { color: var(--orange); }
-
-    table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
-    th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
-    th { color: var(--muted); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; }
-    td code { color: var(--blue); background: none; font-size: 0.85rem; }
-    .api-group { margin-bottom: 32px; }
-    .api-group h3 { font-size: 1.1rem; margin-bottom: 12px; color: var(--text); }
-
-    .comparison { overflow-x: auto; }
-    .comparison table td:first-child { font-weight: 600; white-space: nowrap; }
-
-    .footer { text-align: center; padding: 48px 0 32px; color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--border); }
-    .footer a { color: var(--blue); text-decoration: none; }
-    .footer a:hover { text-decoration: underline; }
-    .traffic-stats { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 18px; margin-top: 12px; color: var(--muted); }
-    .traffic-stats strong { color: var(--text); font-weight: 700; }
-
-    .note { background: var(--card); border-left: 3px solid var(--blue); border-radius: 4px; padding: 12px 16px; margin: 16px 0; font-size: 0.9rem; color: var(--muted); }
-    .note strong { color: var(--text); }
-
-    .citation { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; font-size: 0.85rem; font-family: monospace; white-space: pre; overflow-x: auto; margin-bottom: 16px; color: var(--muted); }
-  </style>
-</head>
-<body>
-<div class="container">
-
-  <div class="hero">
-    <p style="margin-bottom:24px"><img src="https://raw.githubusercontent.com/Arcadia-1/virtuoso-bridge-lite/main/assets/banner.svg" alt="virtuoso-bridge-lite" style="max-width:100%;border-radius:8px"/></p>
-    <p>A new infrastructure for Agentic Analog and Mixed-Signal Design. LLM Agents drive Cadence Virtuoso instances &mdash; locally or remotely &mdash; turning tedious handcrafting into automated design flows.</p>
-    <div class="hero-buttons">
-      <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite" class="btn btn-primary">GitHub</a>
-      <a href="#getting-started" class="btn btn-secondary">Getting Started</a>
-    </div>
-  </div>
-
-  <div class="features">
-    <div class="feature">
-      <h3>Deep Virtuoso Integration</h3>
-      <p>Control across Schematic, Layout, Maestro, and Spectre. Flexible programming: execute inline SKILL, load .il files, or use Python APIs.</p>
-    </div>
-    <div class="feature">
-      <h3>Scalable Architecture</h3>
-      <p>Multi-server, multi-session. Built for modern distributed design clusters with parallel simulations across servers and accounts.</p>
-    </div>
-    <div class="feature">
-      <h3>AI-Native Design</h3>
-      <p>CLI-first, ships with pre-defined agent skills, and uses resilient, profile-aware SSH routing for frequent agent interactions.</p>
-    </div>
-  </div>
-
-  <!-- Comparison -->
-  <div class="section">
-    <h2>Comparison with skillbridge</h2>
-    <div class="comparison">
-      <table>
-        <tr><th>Feature</th><th>virtuoso-bridge-lite</th><th><a href="https://github.com/unihd-cag/skillbridge" style="color:var(--blue);text-decoration:none">skillbridge</a></th></tr>
-        <tr><td>Core mechanism</td><td><code>ipcBeginProcess</code> + <code>evalstring</code></td><td><code>ipcBeginProcess</code> + <code>evalstring</code></td></tr>
-        <tr><td>Local mode</td><td>Yes</td><td>Yes</td></tr>
-        <tr><td>Remote execution</td><td>SSH tunnel, jump host, auto-reconnect</td><td>Not supported</td></tr>
-        <tr><td>Calling style</td><td>String-based: <code>execute_skill("...")</code></td><td>Pythonic: <code>ws.db.open_cell_view_by_type(...)</code></td></tr>
-        <tr><td>Load .il files</td><td><code>client.load_il()</code></td><td>Not supported</td></tr>
-        <tr><td>Layout / schematic API</td><td><code>client.layout.create()</code> / <code>modify()</code> context managers</td><td>Raw SKILL only</td></tr>
-        <tr><td>Spectre simulation</td><td>Built-in runner + PSF parser</td><td>Not supported</td></tr>
-        <tr><td>AI agent support</td><td>Skill files, CLI-first, command logging</td><td>Not designed for agents</td></tr>
-        <tr><td>Python &harr; SKILL types</td><td>String-based</td><td>Auto bidirectional mapping</td></tr>
-        <tr><td>IDE tab completion</td><td>No (not needed by agents)</td><td>Yes (Jupyter, PyCharm stubs)</td></tr>
-      </table>
-    </div>
-    <p style="color:var(--muted);font-size:0.9rem;text-align:center;margin-top:8px">Both projects use the same Cadence SKILL IPC facility. The divergence is in what's built on top: skillbridge stays thin &mdash; a Pythonic RPC client. virtuoso-bridge-lite adds SSH remote access, high-level APIs, Spectre simulation, and an AI-agent-ready harness.</p>
-  </div>
-
-  <!-- Architecture -->
-  <div class="section">
-    <h2>Architecture</h2>
-    <p style="text-align:center;margin-bottom:16px"><img src="https://raw.githubusercontent.com/Arcadia-1/virtuoso-bridge-lite/main/assets/arch.png" alt="Architecture" style="max-width:100%;border-radius:8px;border:1px solid var(--border)"/></p>
-    <table>
-      <tr><th>Component</th><th>Description</th></tr>
-      <tr><td><code>VirtuosoClient</code></td><td>Pure TCP SKILL client. Sends SKILL as JSON, gets results. No SSH awareness.</td></tr>
-      <tr><td><code>SpectreSimulator</code></td><td>Runs standalone Spectre simulations locally or through SSH, then parses PSF ASCII results into Python data.</td></tr>
-      <tr><td><code>SSHClient</code></td><td>Role-aware transport: OpenSSH or Paramiko for commands and files, plus a standalone OpenSSH <code>-L</code> daemon tunnel. Optional &mdash; bypassed in local mode.</td></tr>
-    </table>
-    <p style="color:var(--muted);font-size:0.9rem;text-align:center;margin-top:12px">Fully decoupled: VirtuosoClient works with any TCP endpoint &mdash; SSH tunnel, VPN, direct LAN, or local. The GUI, deployment, daemon, and Spectre roles may share one host or resolve to separate hosts; legacy <code>VB_REMOTE_HOST</code> profiles remain compatible. See <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/docs/adr/0001-explicit-remote-host-roles.md" style="color:var(--blue)">ADR 0001</a> for the host-role model.</p>
-  </div>
-
-  <!-- Getting Started -->
-  <div class="section" id="getting-started">
-    <h2>Getting Started</h2>
-
-    <h3>Prerequisites</h3>
-    <table>
-      <tr><td><strong>SSH</strong></td><td><code>ssh my-server</code> must work without a password prompt</td></tr>
-      <tr><td><strong>Virtuoso</strong></td><td>A running Virtuoso process on the remote (or local) machine</td></tr>
-      <tr><td><strong>Spectre</strong></td><td>(Simulation only) <code>spectre</code> on PATH, or set <code>VB_CADENCE_CSHRC</code></td></tr>
-    </table>
-    <div class="note"><strong>Note:</strong> Virtuoso and Spectre are independent &mdash; you can run Spectre without the SKILL bridge, and use the SKILL bridge without Spectre.</div>
-
-    <h3>Step-by-step setup</h3>
-    <pre><code><span class="cmt"># 1. Install</span>
-<span class="cmd">uv venv .venv</span>
-<span class="cmd">source .venv/bin/activate</span>
-<span class="cmd">uv pip install -e .</span>
-
-<span class="cmt"># 2. Generate config (fills host/user/jump + port in one shot)</span>
-<span class="cmd">virtuoso-bridge init user@host -J user@jump-host</span>
-<span class="cmt">#   or `virtuoso-bridge init` for an empty template to edit manually</span>
-
-<span class="cmt"># 3. (only if step 2 left anything blank) edit ~/.virtuoso-bridge/.env</span>
-<span class="cmt"># VB_REMOTE_HOST=my-server</span>
-<span class="cmt"># VB_REMOTE_USER=username</span>
-<span class="cmt"># VB_REMOTE_PORT=65081     # auto-assigned by hashing VB_REMOTE_USER</span>
-<span class="cmt"># VB_LOCAL_PORT=65082</span>
-<span class="cmt"># Split-host environments may also set:</span>
-<span class="cmt"># VB_GUI_HOST=gui-host             # Virtuoso CIW / X11</span>
-<span class="cmt"># VB_DEPLOY_HOST=gui-host          # setup and daemon files</span>
-<span class="cmt"># VB_DAEMON_HOST=compute-host      # RAMIC tunnel endpoint</span>
-<span class="cmt"># VB_SPECTRE_HOST=compute-host     # standalone simulations</span>
-<span class="cmt"># VB_REMOTE_SCRATCH_ROOT=/shared/home/user/.virtuoso-bridge</span>
-
-<span class="cmt"># 4. Start the bridge</span>
-<span class="cmd">virtuoso-bridge start</span>
-
-<span class="cmt"># 5. Load SKILL in Virtuoso CIW (path printed by `virtuoso-bridge start`)</span>
-<span class="cmt"># load("/tmp/virtuoso_bridge_&lt;remote_user&gt;/&lt;client_id&gt;/virtuoso_bridge/virtuoso_setup.il")</span>
-<span class="cmt"># Or bootstrap the first load safely by selecting an explicit CIW:</span>
-<span class="cmd">virtuoso-bridge list-windows --top-level --json</span>
-<span class="cmd">virtuoso-bridge bootstrap --window WINDOW_ID</span>
-
-<span class="cmt"># 6. Verify</span>
-<span class="cmd">virtuoso-bridge status</span></code></pre>
-
-    <pre><code><span class="cmt"># 7. Connect from Python</span>
-<span class="kw">from</span> virtuoso_bridge <span class="kw">import</span> VirtuosoClient
-
-client = VirtuosoClient.<span class="fn">from_env</span>()
-result = client.<span class="fn">execute_skill</span>(<span class="str">"1+2"</span>)
-<span class="fn">print</span>(result)  <span class="cmt"># VirtuosoResult(status=SUCCESS, output='3')</span></code></pre>
-
-    <pre><code><span class="cmt"># &mdash; or skip Python entirely: run SKILL straight from the shell &mdash;</span>
-
-<span class="cmt"># One-liner &mdash; full VirtuosoResult JSON on stdout</span>
-<span class="cmd">virtuoso-bridge eval</span> <span class="str">'getCurrentTime()'</span>
-
-<span class="cmt"># Multi-line SKILL via heredoc (auto-wrapped in progn; returns the last form)</span>
-<span class="cmd">virtuoso-bridge eval --stdin</span> &lt;&lt;<span class="str">'EOF'</span>
-<span class="kw">let</span>((libs)
-  libs = <span class="fn">mapcar</span>(<span class="kw">lambda</span>((l) l~&gt;name) <span class="fn">ddGetLibList</span>())
-  <span class="fn">printf</span>(<span class="str">"found %d libraries\n"</span> <span class="fn">length</span>(libs))
-  libs)
-<span class="str">EOF</span>
-
-<span class="cmt"># Whole .il file &mdash; uploaded automatically in SSH mode</span>
-<span class="cmd">virtuoso-bridge load</span> my_script.il</code></pre>
-
-    <h3>Jump host setup</h3>
-    <pre><code><span class="cmt"># In .env &mdash; VB_REMOTE_HOST is where Virtuoso runs, NOT the jump host</span>
-VB_REMOTE_HOST=compute-host
-VB_JUMP_HOST=jump-host</code></pre>
-    <p style="color:var(--muted);font-size:0.9rem">For command and file traffic, <code>VB_SSH_BACKEND=paramiko</code> reuses one authenticated SSH connection. Paramiko can also use an unauthenticated first-hop proxy such as <code>VB_SSH_PROXY=socks5://127.0.0.1:10800</code>. The daemon tunnel remains a standalone OpenSSH process so it can be monitored and restarted independently.</p>
-
-    <h3>Multi-profile setup</h3>
-    <pre><code><span class="cmt"># Default (no profile)</span>
-VB_REMOTE_HOST=server-a
-VB_REMOTE_USER=user1
-
-<span class="cmt"># Profile "worker1" &mdash; used with -p worker1</span>
-VB_REMOTE_HOST_worker1=server-b
-VB_REMOTE_USER_worker1=user2
-VB_SPECTRE_HOST_worker1=spectre-node-b</code></pre>
-    <pre><code><span class="cmd">virtuoso-bridge start -p worker1</span>
-<span class="cmd">virtuoso-bridge status -p worker1</span></code></pre>
-
-    <h3>Local mode (no SSH)</h3>
-    <pre><code><span class="kw">from</span> virtuoso_bridge <span class="kw">import</span> VirtuosoClient
-
-bridge = VirtuosoClient.<span class="fn">local</span>(port=65432)
-bridge.<span class="fn">execute_skill</span>(<span class="str">"1+2"</span>)</code></pre>
-    <p style="color:var(--muted);font-size:0.9rem">Set <code>VB_REMOTE_HOST=localhost</code> and run <code>virtuoso-bridge start</code> — it skips the SSH tunnel, deploys the bridge files locally, and prints the <code>load(...)</code> line for the CIW.</p>
-  </div>
-
-  <!-- API Reference -->
-  <div class="section">
-    <h2>API Reference</h2>
-
-    <div class="api-group">
-      <h3>VirtuosoClient &mdash; SKILL execution</h3>
-      <table>
-        <tr><th>Method</th><th>Description</th></tr>
-        <tr><td><code>execute_skill(code)</code></td><td>Run any SKILL expression, return result</td></tr>
-        <tr><td><code>load_il(path)</code></td><td>Upload &amp; load a .il file in Virtuoso</td></tr>
-        <tr><td><code>execute_operations(cmds)</code></td><td>Run a batch of SKILL commands</td></tr>
-        <tr><td><code>get_current_design()</code></td><td>Returns (lib, cell, view) of active cellview</td></tr>
-        <tr><td><code>open_window(lib, cell)</code></td><td>Open a cellview in Virtuoso GUI</td></tr>
-        <tr><td><code>save_current_cellview()</code></td><td>Save the active cellview</td></tr>
-        <tr><td><code>test_connection()</code></td><td>Ping the daemon to check connectivity</td></tr>
-      </table>
-    </div>
-
-    <div class="api-group">
-      <h3>Layout editing</h3>
-      <pre><code><span class="kw">from</span> virtuoso_bridge.virtuoso.layout <span class="kw">import</span> (
-    layout_create_rect <span class="kw">as</span> rect,
-    layout_create_path <span class="kw">as</span> path,
-    layout_create_param_inst <span class="kw">as</span> inst,
-    layout_create_via_by_name <span class="kw">as</span> via,
-)
-
-<span class="kw">with</span> client.layout.<span class="fn">create</span>(<span class="str">"myLib"</span>, <span class="str">"myCell"</span>) <span class="kw">as</span> lay:
-    lay.<span class="fn">add</span>(rect(<span class="str">"M1"</span>, <span class="str">"drawing"</span>, 0, 0, 1, 0.5))
-    lay.<span class="fn">add</span>(path(<span class="str">"M2"</span>, <span class="str">"drawing"</span>, [(0,0),(1,0)], 0.1))
-    lay.<span class="fn">add</span>(inst(<span class="str">"tsmcN28"</span>, <span class="str">"nch_ulvt_mac"</span>, <span class="str">"layout"</span>, <span class="str">"M0"</span>, 0, 0, <span class="str">"R0"</span>))
-    lay.<span class="fn">add</span>(via(<span class="str">"M1_M2"</span>, 0.5, 0.25))</code></pre>
-      <table>
-        <tr><th>Method</th><th>Description</th></tr>
-        <tr><td><code>lay.add(skill_cmd)</code></td><td>Queue a SKILL command (from ops functions)</td></tr>
-      </table>
-    </div>
-
-    <div class="api-group">
-      <h3>Schematic editing</h3>
-      <pre><code><span class="kw">from</span> virtuoso_bridge.virtuoso.schematic <span class="kw">import</span> (
+      <section class="section" id="workflows">
+        <div class="wrap">
+          <div class="section-heading">
+            <div>
+              <div class="eyebrow">
+                <span class="en">01 / From code to circuit</span
+                ><span class="zh">01 / 从代码到电路</span>
+              </div>
+              <h2>
+                <span class="en"
+                  >Not just a conversation.<br />A working connection.</span
+                ><span class="zh">不止于对话。<br />更能连接真实设计。</span>
+              </h2>
+            </div>
+            <p>
+              <span class="en"
+                >Give your agent a concrete interface to the tools you already
+                use. Explore three workflows from the current codebase.</span
+              ><span class="zh"
+                >让智能体调用你正在使用的工程工具。下面的三种工作流，均来自当前代码仓库。</span
+              >
+            </p>
+          </div>
+          <div class="workbench">
+            <div class="workbench-toolbar">
+              <span class="workbench-label">BRIDGE / WORKFLOW EXPLORER</span>
+              <div class="tabs" role="tablist" aria-label="Workflow examples">
+                <button
+                  class="tab"
+                  id="tab-schematic"
+                  role="tab"
+                  aria-selected="true"
+                  aria-controls="panel-schematic"
+                >
+                  01 Schematic</button
+                ><button
+                  class="tab"
+                  id="tab-spectre"
+                  role="tab"
+                  aria-selected="false"
+                  aria-controls="panel-spectre"
+                  tabindex="-1"
+                >
+                  02 Spectre</button
+                ><button
+                  class="tab"
+                  id="tab-maestro"
+                  role="tab"
+                  aria-selected="false"
+                  aria-controls="panel-maestro"
+                  tabindex="-1"
+                >
+                  03 Maestro
+                </button>
+              </div>
+            </div>
+            <div
+              id="panel-schematic"
+              role="tabpanel"
+              aria-labelledby="tab-schematic"
+            >
+              <div class="workflow">
+                <div class="code-panel">
+                  <div class="file-label">
+                    <span
+                      >create_rc.py
+                      <span aria-hidden="true">·</span> Python</span
+                    ><button
+                      class="copy-button js-only"
+                      data-copy="code-schematic"
+                    >
+                      <span class="en">Copy</span><span class="zh">复制</span> ⧉
+                    </button>
+                  </div>
+                  <pre><code id="code-schematic"><span class="kw">from</span> virtuoso_bridge <span class="kw">import</span> VirtuosoClient
+<span class="kw">from</span> virtuoso_bridge.virtuoso.schematic.ops <span class="kw">import</span> (
     schematic_create_inst_by_master_name <span class="kw">as</span> inst,
-    schematic_create_pin <span class="kw">as</span> pin,
-    schematic_label_instance_term <span class="kw">as</span> label,
+    schematic_create_wire_between_instance_terms <span class="kw">as</span> wire,
 )
 
-<span class="kw">with</span> client.schematic.<span class="fn">create</span>(<span class="str">"myLib"</span>, <span class="str">"myCell"</span>) <span class="kw">as</span> sch:
-    sch.<span class="fn">add</span>(inst(<span class="str">"analogLib"</span>, <span class="str">"vdc"</span>, <span class="str">"symbol"</span>, <span class="str">"V0"</span>, 0, 0, <span class="str">"R0"</span>))
-    sch.<span class="fn">add</span>(label(<span class="str">"V0"</span>, <span class="str">"PLUS"</span>, <span class="str">"VDD"</span>))
-    sch.<span class="fn">add</span>(pin(<span class="str">"VDD"</span>, 0, 1.0, <span class="str">"R0"</span>, direction=<span class="str">"inputOutput"</span>))
-    sch.<span class="fn">add_net_label_to_transistor</span>(<span class="str">"M0"</span>,
-        drain_net=<span class="str">"OUT"</span>, gate_net=<span class="str">"IN"</span>,
-        source_net=<span class="str">"VSS"</span>, body_net=<span class="str">"VSS"</span>)</code></pre>
-      <table>
-        <tr><th>Method</th><th>Description</th></tr>
-        <tr><td><code>sch.add(skill_cmd)</code></td><td>Queue a SKILL command (from ops functions)</td></tr>
-        <tr><td><code>sch.add_net_label_to_transistor(...)</code></td><td>Label MOS D/G/S/B terminals</td></tr>
-      </table>
-      <p style="color:var(--muted);font-size:0.9rem">Use <code>create()</code> for a clean cell and <code>modify()</code> for append/update work. The optional Python-side planner produces deterministic coordinates and constraint reports before mutation; see <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/docs/adr/0002-deterministic-schematic-planner.md" style="color:var(--blue)">ADR 0002</a>.</p>
-    </div>
-
-    <div class="api-group">
-      <h3>Spectre simulation</h3>
-      <pre><code><span class="kw">from</span> pathlib <span class="kw">import</span> Path
+client = VirtuosoClient.from_env()
+<span class="comment"># Choose an existing library and a new cell name.</span>
+<span class="kw">with</span> client.schematic.create(<span class="str">"my_lib"</span>, <span class="str">"rc_demo"</span>) <span class="kw">as</span> sch:
+    sch.add(inst(<span class="str">"analogLib"</span>, <span class="str">"res"</span>, <span class="str">"symbol"</span>,
+                 <span class="str">"R0"</span>, <span class="num">0.5</span>, <span class="num">0.0</span>, <span class="str">"R90"</span>))
+    sch.add(inst(<span class="str">"analogLib"</span>, <span class="str">"cap"</span>, <span class="str">"symbol"</span>,
+                 <span class="str">"C0"</span>, <span class="num">1.5</span>, <span class="num">-0.5</span>, <span class="str">"R0"</span>))
+    sch.add(wire(<span class="str">"R0"</span>, <span class="str">"MINUS"</span>, <span class="str">"C0"</span>, <span class="str">"PLUS"</span>))
+<span class="comment"># The context manager checks and saves the cellview.</span></code></pre>
+                </div>
+                <div class="result-panel">
+                  <div class="result-label">
+                    <span>TOPOLOGY / RC NETWORK</span
+                    ><span class="en">ILLUSTRATION</span
+                    ><span class="zh">示意图</span>
+                  </div>
+                  <svg
+                    viewBox="0 0 480 240"
+                    role="img"
+                    aria-label="Illustrative RC network with resistor R0 and capacitor C0"
+                  >
+                    <g fill="none" stroke="#72e7d3" stroke-width="2">
+                      <path
+                        d="M54 85H119L125 75L137 95L149 75L161 95L173 75L185 95L191 85H314V135M314 151V189"
+                      />
+                      <path d="M291 135H337M291 151H337" />
+                      <circle cx="54" cy="85" r="4" fill="#111820" />
+                      <circle cx="314" cy="189" r="4" fill="#111820" />
+                      <circle cx="314" cy="85" r="4" fill="#72e7d3" />
+                      <path d="M314 85H405" stroke-dasharray="4 5" />
+                      <circle cx="405" cy="85" r="4" fill="#111820" />
+                    </g>
+                    <g font-family="monospace" font-size="12">
+                      <text x="143" y="55" fill="#ccb8f4">R0</text>
+                      <text x="350" y="148" fill="#ccb8f4">C0</text>
+                      <text x="33" y="117" fill="#637d8b" font-size="9">
+                        R0.PLUS
+                      </text>
+                      <text x="337" y="64" fill="#819aab" font-size="9">
+                        R0.MINUS → C0.PLUS
+                      </text>
+                    </g>
+                    <g fill="#b195e5" font-family="monospace" font-size="9">
+                      <text x="65" y="229">PLACE</text>
+                      <text x="198" y="229">CONNECT</text>
+                      <text x="342" y="229">CHECK / SAVE</text>
+                    </g>
+                  </svg>
+                  <p class="result-caption">
+                    <span class="en"
+                      >Explicit instances. Terminal-aware connections. Native
+                      cellviews.</span
+                    ><span class="zh"
+                      >明确的器件实例，基于端口的连线，原生 cellview。</span
+                    >
+                  </p>
+                </div>
+              </div>
+              <div class="workflow-caption">
+                <p>
+                  <span class="en"
+                    >A minimal construction excerpt. The full example adds
+                    input/output pins and generates a symbol from the
+                    schematic.</span
+                  ><span class="zh"
+                    >这里展示最小构建片段。完整示例还包含输入输出引脚，并从原理图生成符号。</span
+                  >
+                </p>
+                <a
+                  class="text-link"
+                  href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/examples/01_virtuoso/symbol/01_rc_create_with_symbol.py"
+                  ><span class="en">Open full example</span
+                  ><span class="zh">查看完整示例</span> ↗</a
+                >
+              </div>
+            </div>
+            <div
+              id="panel-spectre"
+              role="tabpanel"
+              aria-labelledby="tab-spectre"
+              hidden
+            >
+              <div class="workflow">
+                <div class="code-panel">
+                  <div class="file-label">
+                    <span
+                      >simulate.py
+                      <span aria-hidden="true">·</span> Python</span
+                    ><button
+                      class="copy-button js-only"
+                      data-copy="code-spectre"
+                    >
+                      <span class="en">Copy</span><span class="zh">复制</span> ⧉
+                    </button>
+                  </div>
+                  <pre><code id="code-spectre"><span class="kw">from</span> pathlib <span class="kw">import</span> Path
 <span class="kw">from</span> virtuoso_bridge.spectre <span class="kw">import</span> SpectreSimulator
-<span class="kw">from</span> virtuoso_bridge.spectre.psf <span class="kw">import</span> frequency_hz, read_psf_ascii, result_file, vector
+<span class="kw">from</span> virtuoso_bridge.spectre.psf <span class="kw">import</span> (
+    frequency_hz, read_psf_ascii, result_file, vector,
+)
 
-sim = SpectreSimulator.<span class="fn">from_env</span>(work_dir=<span class="str">"./output"</span>)
-result = sim.<span class="fn">run_simulation</span>(<span class="str">"tb_inv.scs"</span>, {})
+sim = SpectreSimulator.from_env(work_dir=<span class="str">"output"</span>)
+result = sim.run_simulation(Path(<span class="str">"tb.scs"</span>))
 <span class="kw">if not</span> result.ok:
     <span class="kw">raise</span> RuntimeError(result.errors)
 
-<span class="fn">print</span>(result.status)          <span class="cmt"># ExecutionStatus.SUCCESS</span>
-<span class="fn">print</span>(result.data.keys())     <span class="cmt"># ['time', 'VOUT', 'VIN', ...]</span>
-<span class="fn">print</span>(result.data[<span class="str">"VOUT"</span>][:5]) <span class="cmt"># first 5 voltage samples</span>
+raw_psf = Path(result.metadata[<span class="str">"output_dir"</span>])
+ac = read_psf_ascii(result_file(raw_psf, <span class="str">"*.ac"</span>))
+frequency = frequency_hz(ac)
+vout = vector(ac, <span class="str">"VOUT"</span>)
+<span class="comment"># Use your own AC testbench and output signal.</span></code></pre>
+                </div>
+                <div class="result-panel">
+                  <div class="result-label">
+                    <span>NETLIST → SIMULATION → DATA</span
+                    ><span class="en">ILLUSTRATION</span
+                    ><span class="zh">示意图</span>
+                  </div>
+                  <svg
+                    viewBox="0 0 480 240"
+                    role="img"
+                    aria-label="Illustration of a Spectre simulation producing PSF data, not measured results"
+                  >
+                    <g stroke="#b1bce0" stroke-opacity=".13">
+                      <path
+                        d="M40 43V181H444M40 77H444M40 112H444M40 147H444M120 43V181M201 43V181M282 43V181M363 43V181"
+                      />
+                    </g>
+                    <path
+                      d="M40 73C120 73 157 73 196 76S245 97 276 128S340 171 444 177"
+                      stroke="#72e7d3"
+                      stroke-width="2.5"
+                      fill="none"
+                    />
+                    <path
+                      d="M40 160C120 160 154 153 201 143S276 77 310 67S375 53 444 53"
+                      stroke="#aa8cff"
+                      stroke-width="1.5"
+                      stroke-dasharray="4 5"
+                      fill="none"
+                    />
+                    <g font-family="monospace" font-size="10" fill="#8596b3">
+                      <text x="40" y="24">
+                        ILLUSTRATIVE RESPONSE · NO MEASURED VALUES
+                      </text>
+                      <text x="40" y="216" fill="#bcace0">tb.scs</text>
+                      <text x="180" y="216" fill="#72e7d3">
+                        Spectre / APS / X
+                      </text>
+                      <text x="392" y="216">PSF</text>
+                    </g>
+                  </svg>
+                  <p class="result-caption">
+                    <span class="en"
+                      >Run netlists independently of the Virtuoso SKILL
+                      daemon.</span
+                    ><span class="zh"
+                      >独立运行网表仿真，无需 Virtuoso SKILL 守护进程。</span
+                    >
+                  </p>
+                </div>
+              </div>
+              <div class="workflow-caption">
+                <p>
+                  <span class="en"
+                    >Use your licensed Spectre installation and process models.
+                    Retrieve PSF results for analysis in Python.</span
+                  ><span class="zh"
+                    >使用你已有的 Spectre 许可与工艺模型，读取 PSF 结果并在
+                    Python 中继续分析。</span
+                  >
+                </p>
+                <a
+                  class="text-link"
+                  href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/examples/02_spectre"
+                  ><span class="en">Explore simulations</span
+                  ><span class="zh">浏览仿真示例</span> ↗</a
+                >
+              </div>
+            </div>
+            <div
+              id="panel-maestro"
+              role="tabpanel"
+              aria-labelledby="tab-maestro"
+              hidden
+            >
+              <div class="workflow">
+                <div class="code-panel">
+                  <div class="file-label">
+                    <span
+                      >persistent_job.py
+                      <span aria-hidden="true">·</span> Python</span
+                    ><button
+                      class="copy-button js-only"
+                      data-copy="code-maestro"
+                    >
+                      <span class="en">Copy</span><span class="zh">复制</span> ⧉
+                    </button>
+                  </div>
+                  <pre><code id="code-maestro"><span class="kw">from</span> virtuoso_bridge <span class="kw">import</span> VirtuosoClient
+<span class="kw">from</span> virtuoso_bridge.virtuoso.maestro.jobs <span class="kw">import</span> (
+    MaestroJobManager,
+)
 
-<span class="cmt"># Strict accessors fail on ambiguous files, guessed keys, or malformed data.</span>
-raw = Path(result.metadata[<span class="str">"output_dir"</span>])
-ac = <span class="fn">read_psf_ascii</span>(<span class="fn">result_file</span>(raw, <span class="str">"ac.ac"</span>))
-freq = <span class="fn">frequency_hz</span>(ac)
-vout = <span class="fn">vector</span>(ac, <span class="str">"VOUT"</span>)</code></pre>
-    </div>
+client = VirtuosoClient.from_env()
+<span class="comment"># Open an existing, configured Maestro cellview.</span>
+session = client.maestro.open_gui_session(<span class="str">"my_lib"</span>, <span class="str">"my_tb"</span>)
+jobs = MaestroJobManager.from_client(client)
+job = jobs.submit(session=session)
 
-    <div class="api-group">
-      <h3>ADE Maestro (Assembler)</h3>
-      <pre><code><span class="cmt"># Snapshot the focused maestro window — no session arg needed.
-# Returns dict with raw_sections (list of (skill_probe, raw_output)
-# tuples — no Python parsing of SKILL alists).</span>
-d = client.maestro.<span class="fn">snapshot</span>()
-<span class="cmt"># Or also write the full disk dump (raw + filtered XMLs +
-# state_from_skill.txt + per-point run files via tar). Files
-# pulled are governed by snapshot_filter.yaml — edit to add/drop.</span>
-d = client.maestro.<span class="fn">snapshot</span>(output_root=<span class="str">"output/"</span>)
-<span class="cmt"># Pin a specific history instead of the auto-pick (mtime-first).</span>
-d = client.maestro.<span class="fn">snapshot</span>(output_root=<span class="str">"output/"</span>, history=<span class="str">"Interactive.160"</span>)
+<span class="comment"># Persist this ID for a later Python process.</span>
+run_id = job.run_id
+restored = jobs.load(run_id)
+status = jobs.status(restored)
+<span class="comment"># Observation does not resubmit the simulation.</span></code></pre>
+                </div>
+                <div class="result-panel">
+                  <div class="result-label">
+                    <span>DURABLE RUN / SAME IDENTITY</span
+                    ><span class="en">WORKFLOW MODEL</span
+                    ><span class="zh">流程示意</span>
+                  </div>
+                  <div class="job-flow">
+                    <div class="job-step">
+                      <span class="step-mark">01</span>
+                      <div>
+                        <strong
+                          ><span class="en">Submit to a specific session</span
+                          ><span class="zh">提交到明确的会话</span></strong
+                        >
+                        <p>session → job.run_id</p>
+                      </div>
+                    </div>
+                    <div class="job-step">
+                      <span class="step-mark">02</span>
+                      <div>
+                        <strong
+                          ><span class="en">Keep the durable run handle</span
+                          ><span class="zh">保留持久化任务标识</span></strong
+                        >
+                        <p>jobs.load(run_id)</p>
+                      </div>
+                    </div>
+                    <div class="job-step">
+                      <span class="step-mark">03</span>
+                      <div>
+                        <strong
+                          ><span class="en">Observe the original run</span
+                          ><span class="zh">继续观察原有任务</span></strong
+                        >
+                        <p>jobs.status(restored)</p>
+                      </div>
+                    </div>
+                  </div>
+                  <p class="result-caption">
+                    <span class="en"
+                      >An uncertain submission is reconciled, not blindly
+                      repeated.</span
+                    ><span class="zh"
+                      >提交状态不明时先核对原任务，不盲目重复提交。</span
+                    >
+                  </p>
+                </div>
+              </div>
+              <div class="workflow-caption">
+                <p>
+                  <span class="en"
+                    >Persistent handles bind observations to the original
+                    session and run. For a genuinely local GUI, explicitly use
+                    local_gui=True.</span
+                  ><span class="zh"
+                    >通过持久化标识绑定原始会话与运行记录。真正的本机 GUI
+                    场景需显式使用 local_gui=True。</span
+                  >
+                </p>
+                <a
+                  class="text-link"
+                  href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/src/virtuoso_bridge/virtuoso/maestro/jobs.py"
+                  ><span class="en">Inspect the job API</span
+                  ><span class="zh">查看任务 API</span> ↗</a
+                >
+              </div>
+            </div>
+          </div>
+          <p class="workflow-note">
+            <span class="en"
+              >Code excerpts use current public APIs. Visuals explain the
+              workflow; they are not live Cadence sessions or measured
+              simulation results.</span
+            ><span class="zh"
+              >代码片段基于当前公开 API。图形仅用于解释工作流，不代表实时
+              Cadence 会话或实测仿真结果。</span
+            >
+          </p>
+        </div>
+      </section>
 
-<span class="cmt"># Open / run / collect — GUI mode is required for run_and_wait</span>
-session = client.maestro.<span class="fn">open_gui_session</span>(<span class="str">"myLib"</span>, <span class="str">"myTB"</span>)
-history, status = client.maestro.<span class="fn">run_and_wait</span>(session=session, timeout=600)
-history = history.strip(<span class="str">'"'</span>)  <span class="cmt"># one budget covers run acceptance + completion</span>
-results = client.maestro.<span class="fn">read_results</span>(session, lib=<span class="str">"myLib"</span>, cell=<span class="str">"myTB"</span>, history=history)
-client.maestro.<span class="fn">export_waveform</span>(session, <span class="str">'dB20(mag(VF("/OUT")))'</span>, <span class="str">"gain.txt"</span>,
-    history=history, precision=12, width=20, number_notation=<span class="str">"none"</span>)
-client.maestro.<span class="fn">close_gui_session</span>(session, save=<span class="kw">False</span>)</code></pre>
-    </div>
+      <section class="section" id="capabilities">
+        <div class="wrap">
+          <div class="section-heading">
+            <div>
+              <div class="eyebrow">
+                <span class="en">02 / Engineering, not guesswork</span
+                ><span class="zh">02 / 立足真实工程</span>
+              </div>
+              <h2>
+                <span class="en"
+                  >Built around the details<br />that actually matter.</span
+                ><span class="zh">让关键的工程细节，<br />始终掌握在手。</span>
+              </h2>
+            </div>
+            <p>
+              <span class="en"
+                >Native design data, explicit process mappings, and traceable
+                runs. A lightweight interface with room to go deeper.</span
+              ><span class="zh"
+                >原生设计数据、明确的工艺映射、可追溯的仿真任务。轻量接口，也能深入真实设计流程。</span
+              >
+            </p>
+          </div>
+          <div class="precision-grid">
+            <article class="precision-card">
+              <div class="feature-icon">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  aria-hidden="true"
+                >
+                  <path d="M3 4h7v7H3zM14 13h7v7h-7zM6 11v6h8M10 7h8v6" />
+                  <circle cx="18" cy="7" r="2" fill="#10131e" />
+                </svg>
+              </div>
+              <p class="kicker">EXACT SCHEMATIC IMPORT</p>
+              <h3>
+                <span class="en">Preserve the circuit.</span
+                ><span class="zh">保留原始电路。</span>
+              </h3>
+              <p>
+                <span class="en"
+                  >Import routed geometry with explicit device and PDK maps.
+                  Audit live symbol pins, preserve native grids, and verify the
+                  cellview by readback.</span
+                ><span class="zh"
+                  >通过明确的器件与 PDK
+                  映射导入布线几何；核对真实符号引脚，保留原生网格，并通过回读验证
+                  cellview。</span
+                >
+              </p>
+              <a
+                class="text-link"
+                href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/examples/01_virtuoso/schematic_manifest"
+                ><span class="en">Manifest workflow</span
+                ><span class="zh">查看精确导入流程</span> ↗</a
+              >
+            </article>
+            <article class="precision-card">
+              <div class="feature-icon">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  aria-hidden="true"
+                >
+                  <path d="M5 3v18M12 3v18M19 3v18" />
+                  <rect x="3" y="6" width="4" height="4" fill="#10131e" />
+                  <rect x="10" y="14" width="4" height="4" fill="#10131e" />
+                  <rect x="17" y="8" width="4" height="4" fill="#10131e" />
+                </svg>
+              </div>
+              <p class="kicker">PDK / CDF CALLBACKS</p>
+              <h3>
+                <span class="en">Respect the process.</span
+                ><span class="zh">尊重工艺约束。</span>
+              </h3>
+              <p>
+                <span class="en"
+                  >Refresh applicable CDF callbacks when changing device
+                  parameters. Electrical consistency still depends on matching
+                  models, netlists, corners, and solver options.</span
+                ><span class="zh"
+                  >器件参数变更时刷新适用的 CDF
+                  回调。电气一致性仍需匹配工艺模型、网表、corner
+                  与求解器选项。</span
+                >
+              </p>
+              <a
+                class="text-link"
+                href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/src/virtuoso_bridge/virtuoso/schematic/params.py"
+                ><span class="en">Parameter handling</span
+                ><span class="zh">查看参数处理</span> ↗</a
+              >
+            </article>
+            <article class="precision-card">
+              <div class="feature-icon">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  aria-hidden="true"
+                >
+                  <path d="M5 6a8 8 0 1 1-1 10M3 3v5h5M12 7v5l4 2" />
+                </svg>
+              </div>
+              <p class="kicker">PERSISTENT MAESTRO JOBS</p>
+              <h3>
+                <span class="en">Keep the run identity.</span
+                ><span class="zh">延续每一次运行。</span>
+              </h3>
+              <p>
+                <span class="en"
+                  >Reconnect to simulation jobs across Python processes. Bind
+                  results to their original session and history; reconcile
+                  uncertain outcomes before retrying.</span
+                ><span class="zh"
+                  >跨 Python
+                  进程恢复仿真任务，将结果绑定到原会话与历史记录；遇到不确定结果，先核对再重试。</span
+                >
+              </p>
+              <a
+                class="text-link"
+                href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/examples/01_virtuoso/maestro"
+                ><span class="en">Maestro examples</span
+                ><span class="zh">查看 Maestro 示例</span> ↗</a
+              >
+            </article>
+          </div>
+          <div class="execution">
+            <div>
+              <div class="eyebrow">
+                <span class="en">Small by design</span
+                ><span class="zh">轻量，且专注</span>
+              </div>
+              <h3>
+                <span class="en"
+                  >One host is enough.<br />Go deeper when you need to.</span
+                ><span class="zh"
+                  >一台主机，即可开始。<br />复杂需求，按需扩展。</span
+                >
+              </h3>
+              <p>
+                <span class="en"
+                  >No mandatory orchestration layer. Use lightweight schematic,
+                  symbol, layout and GDS helpers — or drop down to raw SKILL.
+                  Multi-server profiles stay optional.</span
+                ><span class="zh"
+                  >无需额外编排层。使用轻量的原理图、符号、版图与 GDS
+                  操作，或直接执行 SKILL。多服务器配置始终是可选项。</span
+                >
+              </p>
+            </div>
+            <div class="execution-paths">
+              <div class="execution-path">
+                <strong>Python / CLI → SKILL → Virtuoso</strong>
+                <p>
+                  <span class="en"
+                    >Connect locally or through SSH. Work with native cellviews
+                    and existing Maestro sessions.</span
+                  ><span class="zh"
+                    >通过本机或 SSH 连接，操作原生 cellview 与现有 Maestro
+                    会话。</span
+                  >
+                </p>
+              </div>
+              <div class="execution-path">
+                <strong>Python → Spectre → PSF → analysis</strong>
+                <p>
+                  <span class="en"
+                    >Run a netlist and read results independently. No running
+                    Virtuoso SKILL daemon required.</span
+                  ><span class="zh"
+                    >独立运行网表、读取结果，不依赖已启动的 Virtuoso SKILL
+                    守护进程。</span
+                  >
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
 
-    <div class="api-group">
-      <h3>SSHClient &mdash; independent SSH layer</h3>
-      <pre><code><span class="kw">from</span> virtuoso_bridge <span class="kw">import</span> SSHClient, VirtuosoClient
+      <section class="section start-section" id="getting-started">
+        <div class="wrap">
+          <div class="start-grid">
+            <div class="start-copy">
+              <div class="eyebrow">
+                <span class="en">03 / Make the connection</span
+                ><span class="zh">03 / 建立连接</span>
+              </div>
+              <h2>
+                <span class="en">Your tools.<br />A new way in.</span
+                ><span class="zh">熟悉的工具。<br />全新的入口。</span>
+              </h2>
+              <p>
+                <span class="en"
+                  >Start with a single EDA host. Keep your existing Cadence
+                  installation, process models, and design environment.</span
+                ><span class="zh"
+                  >从一台 EDA 主机开始，沿用已有的 Cadence
+                  安装、工艺模型和设计环境。</span
+                >
+              </p>
+              <div class="requirements">
+                <span class="en"
+                  >You provide Python 3.9+, uv, access to Cadence and its
+                  licenses, and the relevant PDK. Remote mode also needs SSH
+                  access.</span
+                ><span class="zh"
+                  >需要 Python 3.9+、uv、可用的 Cadence 环境与许可，以及所需
+                  PDK。远程模式还需要 SSH 访问权限。</span
+                >
+              </div>
+              <div class="actions">
+                <a class="button" href="/guide/" data-internal
+                  ><span class="en">Read the setup guide</span
+                  ><span class="zh">阅读完整上手指南</span> ↗</a
+                >
+              </div>
+            </div>
+            <div>
+              <div class="install-terminal">
+                <div class="terminal-head">
+                  <span>QUICK START / macOS · Linux</span
+                  ><button class="copy-button js-only" data-copy="code-install">
+                    <span class="en">Copy</span><span class="zh">复制</span> ⧉
+                  </button>
+                </div>
+                <pre><code id="code-install"><span class="comment"># 1. Install from source</span>
+git clone https://github.com/Arcadia-1/virtuoso-bridge-lite.git
+cd virtuoso-bridge-lite
+uv venv .venv
+source .venv/bin/activate
+uv pip install -e .
 
-<span class="cmt"># Remote mode</span>
-tunnel = SSHClient.<span class="fn">from_env</span>()
-tunnel.<span class="fn">warm</span>()
-bridge = VirtuosoClient.<span class="fn">from_tunnel</span>(tunnel)
-
-<span class="cmt"># Local mode</span>
-bridge = VirtuosoClient.<span class="fn">local</span>(port=65432)</code></pre>
-    </div>
-
-    <div class="api-group">
-      <h3>File transfer and shell</h3>
-      <table>
-        <tr><th>Method</th><th>Description</th></tr>
-        <tr><td><code>upload_file(local, remote)</code></td><td>Upload a file to the remote machine</td></tr>
-        <tr><td><code>download_file(remote, local)</code></td><td>Download a file from the remote machine</td></tr>
-        <tr><td><code>run_shell_command(cmd)</code></td><td>Run a shell command on the remote host via SKILL csh()</td></tr>
-      </table>
-    </div>
-
-    <div class="api-group">
-      <h3>CLI commands</h3>
-      <table>
-        <tr><th>Command</th><th>Description</th></tr>
-        <tr><td><code>virtuoso-bridge init [user@host] [-J user@jump] [--force]</code></td><td>Write <code>~/.virtuoso-bridge/.env</code>; arguments fill host/user/jump, <code>--force</code> overwrites an existing file</td></tr>
-        <tr><td><code>virtuoso-bridge start [-p PROFILE] [--bind-venv]</code></td><td>Start SSH tunnel + deploy daemon.  With <code>-p PROFILE --bind-venv</code> also binds the active virtualenv to that profile, so subsequent naked <code>from_env()</code> calls in the same venv resolve to it.</td></tr>
-        <tr><td><code>virtuoso-bridge status</code></td><td>Check tunnel, daemon identity/hostname, and Spectre executable availability</td></tr>
-        <tr><td><code>virtuoso-bridge restart</code></td><td>Restart SSH tunnel and refresh the deployed daemon setup</td></tr>
-        <tr><td><code>virtuoso-bridge stop</code></td><td>Stop tunnel</td></tr>
-        <tr><td><code>virtuoso-bridge profile show</code> <span style="display:inline-block;padding:1px 6px;margin-left:4px;background:var(--blue);color:#fff;font-size:0.7rem;border-radius:3px;font-weight:600;letter-spacing:0.5px">NEW</span></td><td>Print the resolved profile (and where it came from: explicit / env / runtime <code>--env</code> file / venv binding / user <code>~/.virtuoso-bridge/.env</code> / default), plus the venv binding path.</td></tr>
-        <tr><td><code>virtuoso-bridge profile bind PROFILE --venv</code> <span style="display:inline-block;padding:1px 6px;margin-left:4px;background:var(--blue);color:#fff;font-size:0.7rem;border-radius:3px;font-weight:600;letter-spacing:0.5px">NEW</span></td><td>Pin the active virtualenv to <code>PROFILE</code> by writing <code>$VIRTUAL_ENV/.virtuoso-bridge-profile</code>.  Naked <code>VirtuosoClient.from_env()</code> / <code>SpectreSimulator.from_env()</code> calls in that venv then resolve to this profile.  Explicit <code>profile=</code> and CLI <code>-p</code> still take precedence.</td></tr>
-        <tr><td><code>virtuoso-bridge profile clear --venv</code> <span style="display:inline-block;padding:1px 6px;margin-left:4px;background:var(--blue);color:#fff;font-size:0.7rem;border-radius:3px;font-weight:600;letter-spacing:0.5px">NEW</span></td><td>Remove the active virtualenv's profile binding.</td></tr>
-        <tr><td><code>virtuoso-bridge windows</code></td><td>List Virtuoso windows + focused session</td></tr>
-        <tr><td><code>virtuoso-bridge snapshot</code></td><td>Dump focused maestro's SKILL probe sections to stdout</td></tr>
-        <tr><td><code>virtuoso-bridge snapshot -o ROOT [--history NAME]</code></td><td>Full disk dump of the focused session to <code>ROOT/&lt;ts&gt;__&lt;lib&gt;__&lt;cell&gt;/</code>: raw + filtered setup XMLs, <code>state_from_skill.txt</code>, latest-run per-point files. <code>--history</code> pins a specific maestro history (e.g. <code>Interactive.160</code>); otherwise auto-picks by mtime. File whitelist lives in <code>virtuoso/maestro/snapshot_filter.yaml</code> — edit to reshape the dump (no code change).</td></tr>
-        <tr><td><code>virtuoso-bridge screenshot [TARGET] [-o PATH]</code></td><td>Capture the CIW (default), current window, a view name, or an explicit window number; defaults to the user artifact screenshots directory.</td></tr>
-        <tr><td><code>virtuoso-bridge load FILE.il</code> <span style="display:inline-block;padding:1px 6px;margin-left:4px;background:var(--blue);color:#fff;font-size:0.7rem;border-radius:3px;font-weight:600;letter-spacing:0.5px">NEW</span></td><td>Run a <code>.il</code> file in the live Virtuoso session — uploads the file in SSH mode and emits the full <code>VirtuosoResult</code> as JSON on stdout. Errors keep the original file/line (no temp-wrapper noise), so it pairs cleanly with VS Code <code>tasks.json</code> for one-keystroke SKILL iteration.</td></tr>
-        <tr><td><code>virtuoso-bridge eval 'EXPR'</code> &nbsp;/&nbsp; <code>eval --stdin</code> <span style="display:inline-block;padding:1px 6px;margin-left:4px;background:var(--blue);color:#fff;font-size:0.7rem;border-radius:3px;font-weight:600;letter-spacing:0.5px">NEW</span></td><td>One-liner / heredoc companion to <code>load</code>. Multi-statement input is auto-wrapped in <code>progn(...)</code>; <code>--stdin</code> sidesteps shell quoting for snippets with embedded quotes/parens.</td></tr>
-        <tr><td><code>virtuoso-bridge dismiss-dialog</code></td><td>X11 rescue path — finds known blocking Virtuoso GUI dialogs and dismisses them <em>outside the SKILL channel</em>.</td></tr>
-        <tr><td><code>virtuoso-bridge list-windows --top-level --json</code></td><td>Deduplicated X11 top-level Virtuoso frames, suitable for explicit CIW selection. Omit <code>--top-level</code> for the full child-window diagnostic view.</td></tr>
-        <tr><td><code>virtuoso-bridge bootstrap --window WINDOW_ID</code></td><td>Safely type and submit the generated first-load command into an explicitly selected CIW; rejects non-CIW windows and verifies daemon identity afterward.</td></tr>
-        <tr><td><code>virtuoso-bridge dismiss-window WINDOW_ID --action enter</code></td><td>Explicit X11 recovery path for a window ID returned by <code>list-windows</code>.</td></tr>
-        <tr><td><code>virtuoso-bridge license</code></td><td>Check Spectre license availability on the remote.</td></tr>
-        <tr><td><code>virtuoso-bridge export-visio LIB CELL -o OUT.vsdx</code></td><td>Windows + pywin32 path: render a Virtuoso schematic into Microsoft Visio. Defaults skip the MOS body pin <code>B</code>; <code>--include-body-pins</code> keeps it, <code>--exclude-net</code>/<code>--exclude-pin</code> repeatable for finer filtering.</td></tr>
-        <tr><td><code>virtuoso-bridge skill-find &lt;query&gt;</code> <span style="display:inline-block;padding:1px 6px;margin-left:4px;background:var(--blue);color:#fff;font-size:0.7rem;border-radius:3px;font-weight:600;letter-spacing:0.5px">NEW</span></td><td>Search SKILL functions by name (fuzzy / prefix / suffix / exact / regex). Returns matching function names from the Virtuoso SKILL index.</td></tr>
-        <tr><td><code>virtuoso-bridge doc-search &lt;query&gt;</code></td><td>Search installed Cadence HTML/text documentation and topic maps. Use <code>--doc-root</code> for explicit local/offline roots, or omit it to search through the active bridge profile.</td></tr>
-        <tr><td><code>virtuoso-bridge skill-info &lt;fn&gt;</code> <span style="display:inline-block;padding:1px 6px;margin-left:4px;background:var(--blue);color:#fff;font-size:0.7rem;border-radius:3px;font-weight:600;letter-spacing:0.5px">NEW</span></td><td>Get detailed More Info documentation for a specific SKILL function — syntax, description, arguments, and return value.</td></tr>
-      </table>
-    </div>
-
-    <div class="api-group">
-      <h3>What <code>snapshot -o</code> pulls</h3>
-      <p>One command dumps the focused maestro session's setup <em>and</em> the latest run's per-point files to a timestamped folder:</p>
-      <pre><code><span class="cmt"># auto-pick newest history</span>
-<span class="cmd">virtuoso-bridge snapshot -o output</span>
-
-<span class="cmt"># or pin a specific history (e.g. side-by-side comparison of two runs)</span>
-<span class="cmd">virtuoso-bridge snapshot -o output --history Interactive.160</span></code></pre>
-      <p>Layout of the output directory:</p>
-      <pre><code>output/&lt;YYYYMMDD_HHMMSS&gt;__&lt;lib&gt;__&lt;cell&gt;/
-├── maestro.sdb, active.state                    <span class="cmt"># raw Cadence files</span>
-├── state_from_sdb.xml                           <span class="cmt"># sdb filtered (~10× smaller)</span>
-├── state_from_active_state.xml                  <span class="cmt"># active.state filtered</span>
-├── state_from_skill.txt                         <span class="cmt"># SKILL-probe setup summary</span>
-└── &lt;history&gt;/
-    ├── &lt;history&gt;.{log,rdb,msg.db}               <span class="cmt"># run-level (rdb/msg.db are SQLite)</span>
-    └── &lt;pt&gt;/&lt;tb&gt;/
-        ├── netlist/  → netlist, input.scs, qpInformation.ils, exprOutputs.json, paramInfo.ils
-        └── psf/      → spectre.out, logFile, dcOp.dc, *.ac, *.tran, *.noise, ...</code></pre>
-      <p>Per-point <code>netlist/</code> keeps the 5 files that describe the runnable testbench and outputs (main SPICE netlist, testbench top-level, SKILL and JSON output-expression definitions, corner label). <code>psf/</code> keeps stdout + logs + non-binary analysis results.</p>
-      <p>File selection is governed by <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/src/virtuoso_bridge/virtuoso/maestro/snapshot_filter.yaml"><code>virtuoso/maestro/snapshot_filter.yaml</code></a> — every entry carries a per-file tag (<code>[KEEP]</code>, <code>[REDUNDANT]</code>, <code>[SCAFFOLDING]</code>, <code>[METADATA]</code>, <code>[DEBUG-ONLY]</code>, <code>[GUI-CONFIG]</code>, <code>[RARELY]</code>, <code>[NEVER]</code>). Uncomment a line to add a file, comment it to skip. No package reinstall needed; the YAML is reread on every snapshot call.</p>
-      <p>Deliberately not pulled, regardless of YAML: <code>*.raw</code> binary waveforms, <code>wavedb/</code>, and PDK info dumps (<code>modelParameter.info</code>, <code>primitives.info.*</code>). Read scalar output tables with <code>client.maestro.read_results()</code> and export waveform text with <code>client.maestro.export_waveform()</code> instead of copying the binaries.</p>
-    </div>
-  </div>
-
-  <!-- Examples -->
-  <div class="section">
-    <h2>Examples</h2>
-    <table>
-      <tr><th>Category</th><th>Example</th><th>Description</th></tr>
-      <tr><td rowspan="10">Basic</td><td><code>00_ciw_output_vs_return.py</code></td><td>Compare CIW print vs SKILL return value</td></tr>
-      <tr><td><code>01_execute_skill.py</code></td><td>Run SKILL expressions (Hello World)</td></tr>
-      <tr><td><code>02_ciw_print.py</code></td><td>Print to Virtuoso CIW</td></tr>
-      <tr><td><code>03_load_il.py</code></td><td>Load .il file into Virtuoso</td></tr>
-      <tr><td><code>04_list_library_cells.py</code></td><td>Enumerate libraries and cells</td></tr>
-      <tr><td><code>05_harvest_library.py</code></td><td>Harvest library metadata into structured output</td></tr>
-      <tr><td><code>05_multiline_skill.py</code></td><td>Execute multi-line SKILL code</td></tr>
-      <tr><td><code>06_screenshot.py</code></td><td>Capture window screenshot and download</td></tr>
-      <tr><td><code>07_sanitize_on_download.py</code></td><td>Download remote file with path sanitization</td></tr>
-      <tr><td><code>08_library_management.py</code></td><td>Create and inspect libraries, categories, and cells</td></tr>
-      <tr><td rowspan="15">Layout</td><td><code>01_create_layout.py</code></td><td>Create layout with NMOS/PMOS/CFMOM instances</td></tr>
-      <tr><td><code>02_add_polygon.py</code></td><td>Add polygon shapes</td></tr>
-      <tr><td><code>03_add_via.py</code></td><td>Place vias</td></tr>
-      <tr><td><code>04_multilayer_routing.py</code></td><td>M2-M7 multi-layer routing</td></tr>
-      <tr><td><code>05_bus_routing.py</code></td><td>8-bit bus wiring</td></tr>
-      <tr><td><code>06_read_layout.py</code></td><td>Read back layout geometry</td></tr>
-      <tr><td><code>07_delete_shapes_on_layer.py</code></td><td>Delete shapes on a specific layer</td></tr>
-      <tr><td><code>08_clear_routing.py</code></td><td>Clear routing from a layout</td></tr>
-      <tr><td><code>09_clear_current_layout.py</code></td><td>Clear the current layout entirely</td></tr>
-      <tr><td><code>10_delete_cell.py</code></td><td>Delete a layout cell</td></tr>
-      <tr><td><code>11_read_summary.py</code></td><td>Read layout summary</td></tr>
-      <tr><td><code>12_layer_visibility.py</code></td><td>Toggle layer visibility</td></tr>
-      <tr><td><code>13_select_and_delete.py</code></td><td>Select shapes and delete</td></tr>
-      <tr><td><code>14_mosaic_and_nets.py</code></td><td>Mosaic instances and net assignment</td></tr>
-      <tr><td><code>15_export_gds.py</code></td><td>Export a layout to GDS with fast-failure log polling</td></tr>
-      <tr><td rowspan="13">Schematic</td><td><code>01a_create_rc_stepwise.py</code></td><td>Create RC circuit step by step</td></tr>
-      <tr><td><code>01b_create_rc_load_skill.py</code></td><td>Create RC via .il script injection</td></tr>
-      <tr><td><code>02_read_connectivity.py</code></td><td>Read nets, pins, instances</td></tr>
-      <tr><td><code>03_read_instance_params.py</code></td><td>Read instance parameters</td></tr>
-      <tr><td><code>04_test_set_instance_params_analoglib.py</code></td><td>Set instance parameters (analogLib)</td></tr>
-      <tr><td><code>05_rename_instance.py</code></td><td>Rename an instance</td></tr>
-      <tr><td><code>06_delete_instance.py</code></td><td>Delete an instance</td></tr>
-      <tr><td><code>07_delete_cell.py</code></td><td>Delete a schematic cell</td></tr>
-      <tr><td><code>08_import_cdl_cap_array.py</code></td><td>Import CDL netlist via spiceIn</td></tr>
-      <tr><td><code>09_create_pins.py</code></td><td>Create schematic pins</td></tr>
-      <tr><td><code>10_create_wire.py</code></td><td>Create wires between pins</td></tr>
-      <tr><td><code>11_read_schematic_unified.py</code></td><td>Unified schematic read (instances + nets + pins)</td></tr>
-      <tr><td><code>12_plan_differential_pair.py</code></td><td>Plan a deterministic differential-pair schematic without mutating Virtuoso</td></tr>
-      <tr><td rowspan="3">Symbol</td><td><code>01_rc_create_with_symbol.py</code></td><td>Create RC circuit with auto-generated symbol</td></tr>
-      <tr><td><code>02_bus10_create_with_symbol.py</code></td><td>Create 10-bit bus with symbol</td></tr>
-      <tr><td><code>03_manual_symbol_semantics.py</code></td><td>Create a manual symbol with explicit semantic pin mapping</td></tr>
-      <tr><td rowspan="10">Maestro</td><td><code>01_read_focused_maestro.py</code></td><td>snapshot() of focused maestro (in-memory, JSON to stdout)</td></tr>
-      <tr><td><code>02_snapshot_with_metrics.py</code></td><td>Full disk dump (snapshot -o ROOT) of focused maestro</td></tr>
-      <tr><td><code>03_bg_open_read_close_maestro.py</code></td><td>Background open/close + read (no GUI window)</td></tr>
-      <tr><td><code>04_gui_open_snapshot_close.py</code></td><td>GUI open → snapshot → close (owns lifecycle)</td></tr>
-      <tr><td><code>05_gui_session_lifecycle.py</code></td><td>open_gui_session / close_gui_session lifecycle test</td></tr>
-      <tr><td><code>06a_rc_create.py</code></td><td>Create Maestro test for RC filter (auto-timestamped cell)</td></tr>
-      <tr><td><code>06b_rc_simulate_and_read.py</code></td><td>Run simulation in GUI mode, read the exact history, export waveforms</td></tr>
-      <tr><td><code>07_ensure_maestro_view.py</code></td><td>Ensure a maestro view exists before operating</td></tr>
-      <tr><td><code>08_set_simulator_mode.py</code></td><td>Set simulator mode (APS/AXS/spectre)</td></tr>
-      <tr><td><code>09_export_sweep_subpoints.py</code></td><td>Export parametric sweep sub-point results</td></tr>
-      <tr><td rowspan="6">Spectre</td><td><code>01_inverter_tran.py</code></td><td>CMOS inverter transient simulation</td></tr>
-      <tr><td><code>01_veriloga_adc_dac.py</code></td><td>4-bit ADC/DAC with Verilog-A</td></tr>
-      <tr><td><code>02_cap_dc_ac.py</code></td><td>RC filter DC+AC frequency response</td></tr>
-      <tr><td><code>03_check_license.py</code></td><td>Check Spectre license availability</td></tr>
-      <tr><td><code>04_strongarm_pss_pnoise.py</code></td><td>StrongArm comparator PSS+Pnoise</td></tr>
-      <tr><td><code>05_parallel_sweep.py</code></td><td>Parallel parameter sweep across servers</td></tr>
-    </table>
-  </div>
-
-  <!-- Citation -->
-  <div class="section">
-    <h2>Citation</h2>
-    <div class="citation">@article{zhang2025virtuosobridge,
-  title   = {Virtuoso-Bridge: An Agent-Native Bridge for Remote
-             Analog and Mixed-Signal Design Automation},
-  author  = {Zhang, Zhishuai and Li, Xintian
-             and Sun, Nan and Jie, Lu},
-  year    = {2025}
-}</div>
-  </div>
-
-  <div class="footer">
-    <p>
-      <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite">GitHub</a> &middot;
-      MIT License &middot;
-      Tsinghua University
-    </p>
-    <div class="traffic-stats" aria-label="Traffic statistics">
-      <span>Total site views <strong id="busuanzi_site_pv">...</strong></span>
-      <span>Unique visitors <strong id="busuanzi_site_uv">...</strong></span>
-      <span>Current page views <strong id="busuanzi_page_pv">...</strong></span>
-    </div>
-  </div>
-
-</div>
-<script>
-  (function () {
-    var host = window.location.hostname;
-    if (!host || host === "localhost" || host === "127.0.0.1" || host === "::1") {
-      return;
-    }
-    var script = document.createElement("script");
-    script.src = "https://api.busuanzi.cc/static/3.6.9/busuanzi.min.js";
-    script.defer = true;
-    document.body.appendChild(script);
-  }());
-</script>
-</body>
+<span class="comment"># 2. Connect to your EDA host</span>
+virtuoso-bridge init user@host
+virtuoso-bridge start</code></pre>
+                <p class="install-note">
+                  <span class="en"
+                    >Next: paste the exact <code>load(...)</code> line printed
+                    by <code>start</code> into your chosen Virtuoso CIW. Then
+                    run <code>virtuoso-bridge status</code> and
+                    <code>virtuoso-bridge eval '1+2'</code>.</span
+                  ><span class="zh"
+                    >接下来：将 <code>start</code> 输出的完整
+                    <code>load(...)</code> 命令粘贴到选定的 Virtuoso
+                    CIW，然后运行 <code>virtuoso-bridge status</code> 与
+                    <code>virtuoso-bridge eval '1+2'</code>。</span
+                  >
+                </p>
+              </div>
+              <p class="start-footnote">
+                <span class="en"
+                  >Windows, local mode, and standalone Spectre each have a
+                  dedicated path in the guide.</span
+                ><span class="zh"
+                  >Windows、本机模式与独立 Spectre
+                  的配置方式，均已整理在指南中。</span
+                >
+              </p>
+            </div>
+          </div>
+          <div class="ecosystem">
+            <div>
+              <strong
+                ><span class="en">Bring your coding agent.</span
+                ><span class="zh">让你的编程智能体上手。</span></strong
+              >
+              <p>
+                <span class="en"
+                  >The repository ships skills for tool use, simulation,
+                  netlists, and optimization. Link them into your agent's
+                  supported skill directory.</span
+                ><span class="zh"
+                  >仓库提供工具操作、仿真、网表处理和优化技能，可链接到智能体支持的技能目录。</span
+                >
+              </p>
+              <div class="skill-chips">
+                <a
+                  href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/skills/virtuoso"
+                  >virtuoso ↗</a
+                ><a
+                  href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/skills/spectre"
+                  >spectre ↗</a
+                ><a
+                  href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/skills/netlist"
+                  >netlist ↗</a
+                ><a
+                  href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/skills/optimizer"
+                  >optimizer ↗</a
+                >
+              </div>
+            </div>
+            <div>
+              <strong
+                ><span class="en">Built in the open. Extend it with us.</span
+                ><span class="zh">开放构建，一起拓展。</span></strong
+              >
+              <p>
+                <span class="en"
+                  >Read the examples, inspect the implementation, or contribute
+                  a focused improvement. MIT licensed, with no separate Bridge
+                  service to subscribe to.</span
+                ><span class="zh"
+                  >阅读示例、检查实现，或贡献一个具体改进。采用 MIT
+                  许可，无需订阅额外的 Bridge 服务。</span
+                >
+              </p>
+              <a
+                class="text-link"
+                style="margin-top: 16px"
+                href="https://github.com/Arcadia-1/virtuoso-bridge-lite/issues"
+                ><span class="en">Join the project</span
+                ><span class="zh">参与项目</span> ↗</a
+              >
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+    <footer class="footer">
+      <div class="wrap">
+        <div class="footer-top">
+          <div class="footer-brand">
+            <a class="brand" href="/" data-internal
+              ><img
+                src="/favicon.svg?v=20261012"
+                width="32"
+                height="32"
+                alt=""
+              /><span>Virtuoso <span>Bridge</span></span></a
+            >
+            <p>
+              <span class="en"
+                >An open bridge to the next era of circuit design.</span
+              ><span class="zh">连接电路设计的下一个时代。</span>
+            </p>
+          </div>
+          <nav class="footer-links" aria-label="Footer">
+            <a href="/guide/" data-internal
+              ><span class="en">Documentation</span
+              ><span class="zh">文档</span></a
+            ><a href="https://github.com/Arcadia-1/virtuoso-bridge-lite"
+              >GitHub ↗</a
+            ><a href="/guide/#citation" data-internal
+              ><span class="en">Cite this project</span
+              ><span class="zh">引用项目</span></a
+            ><a href="https://www.tokenzhang.com/"
+              ><span class="en">Zhishuai Zhang ↗</span
+              ><span class="zh">张智帅 · 个人主页 ↗</span></a
+            >
+          </nav>
+        </div>
+        <div class="site-stats">
+          <a href="/analytics/"
+            ><span class="en">Visitors</span><span class="zh">访客</span>
+            <strong data-visitors>—</strong
+            ><span class="stats-separator">/</span><span class="en">Views</span
+            ><span class="zh">浏览</span> <strong data-views>—</strong> ↗</a
+          >
+          <a href="/privacy/" data-internal
+            ><span class="en">Privacy &amp; counting preferences</span
+            ><span class="zh">隐私与统计偏好</span></a
+          >
+        </div>
+        <div class="footer-bottom">
+          <span>MIT © Virtuoso Bridge contributors</span
+          ><span class="en"
+            >Independent open-source project. Cadence, Virtuoso and Spectre are
+            trademarks of Cadence Design Systems.</span
+          ><span class="zh"
+            >独立开源项目。Cadence、Virtuoso 和 Spectre 为 Cadence Design
+            Systems 的商标。</span
+          >
+        </div>
+      </div>
+    </footer>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  </body>
 </html>

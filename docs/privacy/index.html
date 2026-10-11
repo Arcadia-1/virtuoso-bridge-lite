@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en" data-lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20261012" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#080a10" />
+    <title>Privacy — Virtuoso Bridge</title>
+    <meta
+      name="description"
+      content="How Virtuoso Bridge counts visits, protects visitor privacy, and lets you opt out of audience measurement."
+    />
+    <meta name="site-title-en" content="Privacy — Virtuoso Bridge" />
+    <meta name="site-title-zh" content="隐私与统计偏好 — Virtuoso Bridge" />
+    <link rel="icon" href="/favicon.svg?v=20261012" type="image/svg+xml" />
+    <link
+      rel="canonical"
+      href="https://virtuoso-bridge.tokenzhang.com/privacy/"
+    />
+    <script>
+      document.documentElement.classList.add("js");
+      try {
+        var l =
+          new URLSearchParams(location.search).get("lang") ||
+          localStorage.getItem("vb-language") ||
+          (navigator.language.startsWith("zh") ? "zh" : "en");
+        document.documentElement.dataset.lang = l === "zh" ? "zh" : "en";
+        document.documentElement.lang = l === "zh" ? "zh-CN" : "en";
+      } catch (e) {}
+    </script>
+    <link rel="stylesheet" href="/site.css?v=20261012" />
+    <script src="/site.js?v=20261012" defer></script>
+    <script src="/privacy/privacy.js?v=20261012" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main"
+      ><span class="en">Skip to content</span
+      ><span class="zh">跳转到正文</span></a
+    >
+    <header class="site-header">
+      <div class="wrap header-inner">
+        <a class="brand" href="/" data-internal
+          ><img
+            src="/favicon.svg?v=20261012"
+            width="32"
+            height="32"
+            alt=""
+          /><span>Virtuoso <span>Bridge</span></span></a
+        >
+        <nav class="header-nav" aria-label="Main navigation">
+          <a class="desktop-nav" href="/analytics/">Analytics ↗</a>
+          <div
+            class="lang-switch js-only"
+            role="group"
+            aria-label="Language / 语言"
+          >
+            <button data-language="en" aria-pressed="true">EN</button
+            ><button data-language="zh" aria-pressed="false">中文</button>
+          </div>
+        </nav>
+      </div>
+    </header>
+    <main id="main">
+      <div class="guide-hero">
+        <div class="wrap">
+          <div class="eyebrow">
+            <span class="en">Privacy / First-party analytics</span
+            ><span class="zh">隐私 / 第一方访问统计</span>
+          </div>
+          <h1>
+            <span class="en">Count visits.<br />Respect visitors.</span
+            ><span class="zh">了解访问。<br />尊重访客。</span>
+          </h1>
+          <p>
+            <span class="en"
+              >Virtuoso Bridge uses the same first-party analytics
+              implementation as Analog Canvas, in its own independent database.
+              We do not embed a third-party analytics tracker.</span
+            ><span class="zh"
+              >Virtuoso Bridge 复用 Analog Canvas
+              的第一方统计实现，使用自己的独立数据库，不嵌入第三方访问追踪器。</span
+            >
+          </p>
+        </div>
+      </div>
+      <div class="wrap guide-layout">
+        <nav class="guide-nav" aria-label="Privacy sections">
+          <a href="#counting"
+            ><span class="en">What we count</span
+            ><span class="zh">统计哪些信息</span></a
+          ><a href="#storage"
+            ><span class="en">Storage &amp; retention</span
+            ><span class="zh">存储与保留期限</span></a
+          ><a href="#choice"
+            ><span class="en">Your choice</span
+            ><span class="zh">你的选择</span></a
+          ><a href="/" data-internal
+            ><span class="en">← Project home</span
+            ><span class="zh">← 项目首页</span></a
+          >
+        </nav>
+        <div class="guide-content">
+          <section class="guide-section" id="counting">
+            <h2>
+              <span class="en">What is counted?</span
+              ><span class="zh">统计哪些信息？</span>
+            </h2>
+            <ul>
+              <li>
+                <span class="en"
+                  >Page views and returning visitors, all-time and per UTC
+                  day.</span
+                ><span class="zh"
+                  >累计与按 UTC 日汇总的浏览量和去重访客数。</span
+                >
+              </li>
+              <li>
+                <span class="en"
+                  >Page paths without queries or fragments; acquisition source
+                  categories or referrer hostnames, never full referrer URLs or
+                  search terms.</span
+                ><span class="zh"
+                  >不含查询参数和片段的页面路径；来源类别或来源网站域名，不存储完整来源网址或搜索词。</span
+                >
+              </li>
+              <li>
+                <span class="en"
+                  >Country and approximate location from Cloudflare, rounded to
+                  1° map buckets. Raw IP addresses are not written to the
+                  analytics database.</span
+                ><span class="zh"
+                  >Cloudflare 提供的国家与粗略地域，地图位置取整到 1° 网格。原始
+                  IP 地址不写入统计数据库。</span
+                >
+              </li>
+              <li>
+                <span class="en"
+                  >Page-load timing histograms by country: document first byte
+                  and page shown. These reports have no visitor
+                  identifier.</span
+                ><span class="zh"
+                  >按国家聚合的加载时间直方图，包括首字节和页面呈现耗时；此类报告不包含访客标识。</span
+                >
+              </li>
+            </ul>
+            <p>
+              <span class="en"
+                >Only aggregate statistics are shown on the
+                <a href="/analytics/">dashboard</a>. This site's data is not
+                combined with Analog Canvas or the personal homepage.</span
+              ><span class="zh"
+                ><a href="/analytics/">统计页面</a>只显示汇总数据，不与 Analog
+                Canvas 或个人主页合并统计。</span
+              >
+            </p>
+          </section>
+          <section class="guide-section" id="storage">
+            <h2>
+              <span class="en">How long is it retained?</span
+              ><span class="zh">保存多久？</span>
+            </h2>
+            <ul>
+              <li>
+                <span class="en"
+                  >The host-only, HttpOnly <code>vb_vid</code> cookie contains a
+                  random visitor ID. It lasts one year from the first counted
+                  visit and is never renewed.</span
+                ><span class="zh"
+                  >仅限本域、HttpOnly 的 <code>vb_vid</code> Cookie 保存随机访客
+                  ID，从首次计数起保留一年，访问时不会续期。</span
+                >
+              </li>
+              <li>
+                <span class="en"
+                  >The database keeps a SHA-256 hash of the ID and its last-seen
+                  day, not the raw ID. Hashes not seen for 366 days are deleted;
+                  all-time aggregate counts are retained.</span
+                ><span class="zh"
+                  >数据库保存 ID 的 SHA-256 哈希及最后访问日期，而非原始 ID。366
+                  天未出现的哈希会删除，累计汇总计数保留。</span
+                >
+              </li>
+              <li>
+                <span class="en"
+                  >Finished days keep visitor counts, not their visitor hashes.
+                  The dashboard shows a 400-day traffic window and 30-day
+                  load-time summaries.</span
+                ><span class="zh"
+                  >已结束的日期只保留访客计数，不保留该日访客哈希。面板显示约
+                  400 天流量及最近 30 天加载耗时汇总。</span
+                >
+              </li>
+            </ul>
+          </section>
+          <section class="guide-section" id="choice">
+            <h2>
+              <span class="en">Choose not to be counted.</span
+              ><span class="zh">你可以选择不被计数。</span>
+            </h2>
+            <p>
+              <span class="en"
+                >We honor Do Not Track and Global Privacy Control. You can also
+                opt out here. This removes your visitor cookie and sets
+                <code>vb_optout</code> for 13 months; past anonymous aggregate
+                counts are unchanged.</span
+              ><span class="zh"
+                >我们尊重 Do Not Track 和 Global Privacy
+                Control。你也可以在这里退出统计：删除访客 Cookie，并用
+                <code>vb_optout</code> 保存偏好 13
+                个月；过去的匿名汇总计数不会改变。</span
+              >
+            </p>
+            <p id="privacy-status" role="status" aria-live="polite">
+              <span class="en">Loading your preference…</span
+              ><span class="zh">正在读取你的偏好……</span>
+            </p>
+            <button
+              class="button primary js-only"
+              id="privacy-toggle"
+              type="button"
+              disabled
+            >
+              <span class="en">Stop counting me</span
+              ><span class="zh">停止统计我的访问</span></button
+            ><noscript
+              ><p>
+                Enable Do Not Track or Global Privacy Control in your browser to
+                opt out without JavaScript.
+              </p></noscript
+            >
+          </section>
+        </div>
+      </div>
+    </main>
+    <footer class="footer">
+      <div class="wrap">
+        <nav class="footer-links" aria-label="Footer">
+          <a href="/" data-internal>Virtuoso Bridge</a
+          ><a href="/analytics/">Analytics</a
+          ><a href="https://www.tokenzhang.com/"
+            ><span class="en">Zhishuai Zhang ↗</span
+            ><span class="zh">张智帅 · 个人主页 ↗</span></a
+          >
+        </nav>
+      </div>
+    </footer>
+    <div id="toast" class="toast" role="status" hidden></div>
+  </body>
+</html>
