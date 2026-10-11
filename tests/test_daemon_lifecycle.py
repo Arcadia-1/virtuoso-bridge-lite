@@ -39,7 +39,8 @@ def test_daemon_exits_when_owner_dies_with_ipc_pipes_still_open(tmp_path, versio
     daemon = subprocess.Popen(
         [python, str(RESOURCES / ("ramic_bridge_daemon_%s.py" % version)), "127.0.0.1", str(port)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        env=dict(os.environ, RB_TOKEN_PATH=str(token_path), RB_VIRTUOSO_PID=str(owner.pid)),
+        env=dict(os.environ, RB_TOKEN_PATH=str(token_path), RB_VIRTUOSO_PID=str(owner.pid),
+                 RB_VIRTUOSO_BOOT_ID=Path("/proc/sys/kernel/random/boot_id").read_text().strip()),
     )
     conn = None
     try:
@@ -79,6 +80,73 @@ def test_daemon_exits_when_owner_dies_with_ipc_pipes_still_open(tmp_path, versio
         if conn:
             conn.close()
         for process in (daemon, owner):
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=3)
+        for stream in (daemon.stdin, daemon.stdout, daemon.stderr):
+            stream.close()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux owner process lifecycle")
+@pytest.mark.parametrize("version,python", [
+    ("3", sys.executable), ("27", shutil.which("python2.7")),
+])
+@pytest.mark.parametrize("owner_kind", ["absent", "collision", "unknown_host"])
+def test_foreign_owner_never_uses_local_pid(tmp_path, version, python, owner_kind):
+    if python is None:
+        pytest.skip("Python 2.7 is unavailable")
+    token_path = tmp_path / "token"
+    token_path.write_text(TOKEN)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    # A foreign PID can be missing locally or collide with an unrelated process.
+    bystander = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    pid = (int(Path("/proc/sys/kernel/pid_max").read_text()) + 1
+           if owner_kind == "absent" else bystander.pid)
+    env = dict(os.environ, RB_TOKEN_PATH=str(token_path), RB_VIRTUOSO_PID=str(pid),
+               RB_VIRTUOSO_BOOT_ID="foreign-boot")
+    if owner_kind == "unknown_host":
+        env.pop("RB_VIRTUOSO_BOOT_ID")
+    daemon = subprocess.Popen(
+        [python, str(RESOURCES / ("ramic_bridge_daemon_%s.py" % version)), "127.0.0.1", str(port)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while True:
+            assert daemon.poll() is None, "foreign owner prevented daemon startup"
+            try:
+                conn = socket.create_connection(("127.0.0.1", port), timeout=0.1)
+                break
+            except OSError:
+                assert time.monotonic() < deadline, "daemon did not listen"
+                time.sleep(0.02)
+        with conn:
+            conn.settimeout(3)
+            nonce = "ef" * 16
+            request = dict(proto=1, nonce=nonce, skill="1+1", timeout=0.1)
+            request["mac"] = daemon_auth.request_mac(
+                TOKEN, nonce=nonce, skill="1+1", timeout=0.1,
+            )
+            conn.sendall(json.dumps(request).encode())
+            conn.shutdown(socket.SHUT_WR)
+            response = b""
+            while True:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                response += chunk
+            assert b"watchdog fired" in response
+        time.sleep(0.1)
+        assert bystander.poll() is None, "watchdog signalled an unrelated local process"
+        bystander.kill()
+        bystander.wait(timeout=3)
+        # A local PID's death must not end a remote owner's daemon either.
+        time.sleep(0.6)
+        assert daemon.poll() is None
+    finally:
+        for process in (daemon, bystander):
             if process.poll() is None:
                 process.kill()
             process.wait(timeout=3)

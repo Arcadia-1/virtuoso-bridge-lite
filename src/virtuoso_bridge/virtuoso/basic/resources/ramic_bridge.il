@@ -186,6 +186,17 @@ procedure(RBQuoteShellArg(value)
         strcat(quoted "'"))
 )
 
+procedure(RBOwnerBootId()
+    ; Read in Virtuoso, not in the shell spawned by ipcBeginProcess: that
+    ; shell can run on a different host. Unknown boots disable local checks.
+    let((port value)
+        port = infile("/proc/sys/kernel/random/boot_id")
+        when(port
+            gets(value port)
+            close(port))
+        if(value car(parseString(value)) ""))
+)
+
 procedure(RBStart()
     ; Start the RAMIC Bridge daemon process.  Launches the Python daemon
     ; as a child process of Virtuoso; the actual "ready" ack is printed
@@ -249,7 +260,7 @@ procedure(RBStart()
             ; so the system Python links against its own libs, not Virtuoso's
             ; bundled (and often incompatible) copies.
             ; Bind the daemon to this Virtuoso, not the intermediate cdsServIpc.
-            RBIpc = ipcBeginProcess(sprintf(nil "/usr/bin/env -u LD_LIBRARY_PATH -u LD_PRELOAD RB_VIRTUOSO_PID=%d stdbuf -oL %s -u %L %L %L" ipcGetPid() RBPython RBDPath host RBPort) "" 'RBIpcDataHandler 'RBIpcErrHandler 'RBIpcFinishHandler logpath)
+            RBIpc = ipcBeginProcess(sprintf(nil "/usr/bin/env -u LD_LIBRARY_PATH -u LD_PRELOAD RB_VIRTUOSO_PID=%d RB_VIRTUOSO_BOOT_ID=%s stdbuf -oL %s -u %L %L %L" ipcGetPid() RBQuoteShellArg(RBOwnerBootId()) RBPython RBDPath host RBPort) "" 'RBIpcDataHandler 'RBIpcErrHandler 'RBIpcFinishHandler logpath)
         )
         printf("[RAMIC Bridge ipc=%L] launching daemon (bind=%s:%d) at (%s)\n"
             RBIpc
