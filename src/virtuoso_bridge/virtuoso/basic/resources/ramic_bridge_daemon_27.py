@@ -626,7 +626,7 @@ def _prepare_skill(skill_code):
                 % (escaped_path, _MULTILINE_RESULT)
             )
         else:
-            send_code = 'let(((__vb_r ' + skill_code + ')) hiFlush() __vb_r)\n'
+            send_code = 'let(((__vb_r progn(' + skill_code + '))) hiFlush() __vb_r)\n'
         return send_code, tmp_il_path
     except Exception as exc:
         if tmp_il_path:

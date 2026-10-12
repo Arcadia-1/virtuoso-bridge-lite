@@ -132,8 +132,8 @@ def test_eval_passes_timeout(monkeypatch):
 
 
 def test_eval_wraps_in_progn_for_multi_statement(monkeypatch):
-    """User shouldn't need to know the daemon wraps single-line input in
-    ``let(((__vb_r ...)))`` — multi-statement should Just Work.  We do
+    """Multi-statement input should Just Work, also against daemons from
+    older releases whose single-line path takes only one form.  We do
     this by always sending ``progn(\\n<user>\\n)``."""
     fake_result = VirtuosoResult(status=ExecutionStatus.SUCCESS, output='"ret"')
     fake = _patch_client(monkeypatch, fake_result)

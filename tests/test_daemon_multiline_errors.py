@@ -1,4 +1,6 @@
-"""Multi-line SKILL requests must surface the real SKILL error.
+"""How the daemon wraps SKILL requests before sending them to the CIW.
+
+Multi-line SKILL requests must surface the real SKILL error.
 
 The daemon loads multi-line code from a temp file. An error inside a loaded
 file reaches the caller only as load's "error while loading file ... at line
@@ -80,6 +82,16 @@ def test_single_line_requests_do_not_use_the_temp_file(monkeypatch, tmp_path):
 
     assert path is None
     assert "load(" not in send.decode("utf-8")
+
+
+def test_single_line_request_may_hold_several_forms(monkeypatch, tmp_path):
+    daemon = _import_daemon(monkeypatch, tmp_path)
+
+    send, _path = daemon._prepare_skill("x = 1 x + 41")
+
+    assert send == b"let(((__vb_r progn(x = 1 x + 41))) hiFlush() __vb_r)\n"
+    py27 = (_resources() / "ramic_bridge_daemon_27.py").read_text(encoding="utf-8")
+    assert "'let(((__vb_r progn(' + skill_code + '))) hiFlush() __vb_r)\\n'" in py27
 
 
 def test_python27_daemon_uses_identical_multiline_wrapping():
