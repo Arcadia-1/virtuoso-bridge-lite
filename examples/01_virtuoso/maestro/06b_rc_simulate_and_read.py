@@ -26,16 +26,36 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "src"))
 from virtuoso_bridge import VirtuosoClient
 
 
-def parse_wave_file(path: str) -> list[tuple[float, float]]:
-    pairs = []
+def parse_wave_file(path: str) -> dict[str, list[tuple[float, float]]]:
+    """Parse an ocnPrint table into {sweep point label: [(x, y), ...]}.
+
+    With a parametric sweep ocnPrint writes one value column per sweep point
+    and a row naming them (e.g. ``c_val  1e-13  1e-12``).
+    """
+    labels: list[str] = []
+    columns: dict[str, list[tuple[float, float]]] = {}
     for line in Path(path).read_text().splitlines():
         parts = line.strip().split()
-        if len(parts) >= 2:
-            try:
-                pairs.append((float(parts[0]), float(parts[1])))
-            except ValueError:
-                continue
-    return pairs
+        if len(parts) < 2:
+            continue
+        try:
+            values = [float(part) for part in parts]
+        except ValueError:
+            if not labels and all(_is_number(part) for part in parts[1:]):
+                labels = [f"{parts[0]}={part}" for part in parts[1:]]
+            continue
+        names = labels or [f"column {i}" for i in range(1, len(values))]
+        for name, value in zip(names, values[1:]):
+            columns.setdefault(name, []).append((values[0], value))
+    return columns
+
+
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
 
 
 def main() -> int:
@@ -118,9 +138,8 @@ def main() -> int:
                             phase_file, analysis="ac", history=history_name)
             print(f"AC phase: {phase_file}")
 
-            data = parse_wave_file(mag_file)
-            if data:
-                print(f"\n=== {len(data)} frequency points ===")
+            for point, data in parse_wave_file(mag_file).items():
+                print(f"\n=== {point}: {len(data)} frequency points ===")
                 for target in [1e6, 1e8, 1e9, 1e10]:
                     closest = min(data, key=lambda p: abs(p[0] - target))
                     print(f"  {target:.0e} Hz: {closest[1]:.2f} dB")
