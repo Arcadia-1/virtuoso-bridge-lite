@@ -95,6 +95,21 @@ def _acquire_daemon_token(ssh: Any) -> str | None:
     return daemon_auth.local_token_or_raise()
 
 
+def _same_verified_daemon(verified: Any, caps: dict[str, Any]) -> bool:
+    """Whether signed capabilities name the daemon instance verified before.
+
+    ``daemon_instance`` is random per daemon start, so a restarted or
+    different daemon never matches and is checked again.
+    """
+    return (
+        isinstance(verified, dict)
+        and bool(caps.get("daemon_instance"))
+        and verified.get("daemon_instance") == caps.get("daemon_instance")
+        and verified.get("virtuoso_pid") == caps.get("virtuoso_pid")
+        and bool(verified.get("daemon_user"))
+    )
+
+
 def _escape_skill_string(s: str) -> str:
     return escape_skill_string(s)
 
@@ -470,7 +485,26 @@ class VirtuosoClient(VirtuosoInterface):
         """
         from virtuoso_bridge.daemon_guard import OVERRIDE_ENV, check_daemon_user
 
+        remote_cache_path = getattr(self._tunnel, "remote_cache_path", None)
+        cache = remote_cache_path() if callable(remote_cache_path) else None
+        caps = self._signed_handshake(timeout)
+        if cache is not None and caps is not None and _same_verified_daemon(
+            daemon_auth.read_remote_cache(cache).get("verified"), caps,
+        ):
+            # This exact daemon instance, signed with our token, was verified
+            # before: skip the SSH owner lookup.
+            return
+
         check = check_daemon_user(self, profile=profile, timeout=timeout)
+        if (
+            check.ok and not check.skipped and cache is not None and caps is not None
+            and check.daemon_user and check.daemon_user == check.expected_user
+        ):
+            daemon_auth.update_remote_cache(cache, verified={
+                "daemon_instance": caps.get("daemon_instance"),
+                "virtuoso_pid": caps.get("virtuoso_pid"),
+                "daemon_user": check.daemon_user,
+            })
         if not check.ok and check.busy:
             raise RuntimeError(
                 f"Virtuoso daemon is busy: {check.error}. Retry once the CIW is "
@@ -483,6 +517,30 @@ class VirtuosoClient(VirtuosoInterface):
                 f"set {OVERRIDE_ENV}=1 only if this cross-user connection is "
                 f"intentional."
             )
+
+    def _signed_handshake(self, timeout: float) -> dict[str, Any] | None:
+        """The daemon's signed capabilities, or None.
+
+        A token from the local cache that the daemon rejects, or that could
+        not be checked because the daemon did not answer, is replaced by one
+        fetched over SSH.
+        """
+        from_cache = getattr(self._tunnel, "daemon_token_from_cache", False)
+        try:
+            caps = self._ensure_daemon_capabilities(time.monotonic() + timeout)
+        except daemon_auth.DaemonAuthError:
+            if not from_cache:
+                return None
+            self.daemon_token = self._tunnel.refresh_daemon_token()
+            try:
+                caps = self._ensure_daemon_capabilities(time.monotonic() + timeout)
+            except (daemon_auth.DaemonAuthError, OSError):
+                return None
+        except OSError:
+            if from_cache:
+                self.daemon_token = self._tunnel.refresh_daemon_token()
+            return None
+        return caps if caps.get("auth") == "on" else None
 
     def handshake_virtuoso_pid(self, timeout: float = 5) -> int | None:
         """Virtuoso PID from the daemon's signed capability handshake.

@@ -57,6 +57,13 @@ Verify SKILL with a harmless expression on the confirmed endpoint:
 virtuoso-bridge eval '1+2'
 ```
 
+Each client authenticates to the daemon with the token stored on the daemon
+host. To spare an SSH round trip per command, the client keeps a copy and the
+last verified daemon identity in `~/.virtuoso-bridge/remote_daemons/`
+(owner-only files). A cached token the daemon rejects is fetched again over
+SSH, and a restarted daemon is verified again; deleting that directory only
+costs the next command those round trips.
+
 Local use sets `VB_REMOTE_HOST=localhost`; `start` skips SSH and prints the
 local setup path. Spectre-only work needs the simulator and its environment,
 not a Virtuoso process or a loaded SKILL daemon. Validate only the service
