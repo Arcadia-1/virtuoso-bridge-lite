@@ -2334,6 +2334,34 @@ def main(argv: list[str] | None = None) -> int:
     _make_stdio_safe()
     parser = build_parser()
     args = parser.parse_args(argv)
+    try:
+        return _run_command(parser, args)
+    except KeyboardInterrupt:
+        print("ERROR: interrupted", file=sys.stderr)
+        return 130
+    except Exception as exc:  # noqa: BLE001 - one line for the user, traceback in the log
+        return _report_command_error(exc)
+
+
+def _report_command_error(exc: Exception) -> int:
+    """Print a failed command's error as one line; log its traceback."""
+    import logging
+    import traceback
+
+    from virtuoso_bridge.runtime_paths import command_log_file
+    from virtuoso_bridge.transport.ssh import _setup_command_log
+
+    message = str(exc).strip() or type(exc).__name__
+    where = ""
+    _setup_command_log()
+    if any(getattr(h, "_vb_cmd_log", False) for h in logging.getLogger("virtuoso_bridge").handlers):
+        logging.getLogger(__name__).debug("command failed\n%s", traceback.format_exc())
+        where = f" (traceback in {command_log_file()})"
+    print(f"ERROR: {message}{where}", file=sys.stderr)
+    return 1
+
+
+def _run_command(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     _CLI_PROFILE[0] = None
     if args.command == "sos" and getattr(args, "json", False):
         import sys

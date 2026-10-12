@@ -204,8 +204,8 @@ def test_cli_session_restart_requires_confirmation_and_routes_force(monkeypatch,
         lambda **kw: SimpleNamespace(sos=SimpleNamespace(restart_session_cellview=invoke)),
     )
     monkeypatch.setattr(cli, "set_runtime_env_file", lambda value: None)
-    with pytest.raises(ValueError, match="requires --dry-run or --yes"):
-        cli.main(["sos", "session-restart", "lib", "cell", "schematic"])
+    assert cli.main(["sos", "session-restart", "lib", "cell", "schematic"]) == 1
+    assert "ERROR: SOS session-restart requires --dry-run or --yes" in capsys.readouterr().err
     assert not calls
 
     assert cli.main([
