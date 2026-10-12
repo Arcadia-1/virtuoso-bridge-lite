@@ -1,15 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <!-- One wire between two pins, hopping the gap: agent on one side, Virtuoso on the other. -->
   <rect
     x=".75"
     y=".75"
     width="46.5"
     height="46.5"
-    rx="8"
+    rx="10"
     fill="#fff"
     stroke="#d9dde3"
+    stroke-width="1.5"
   />
-  <path d="M10 14h28v20h-6v-5a8 8 0 0 0-16 0v5h-6Z" fill="#000" />
-  <path d="M5 19h5m28 0h5" fill="none" stroke="#000" stroke-width="2.2" />
-  <circle cx="5" cy="19" r="2.2" fill="#000" />
-  <circle cx="43" cy="19" r="2.2" fill="#000" />
+  <path
+    d="M9 29H14A10 10 0 0 1 34 29H39"
+    fill="none"
+    stroke="#000"
+    stroke-width="4.2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="9" cy="29" r="4" fill="#000" />
+  <circle cx="39" cy="29" r="4" fill="#000" />
 </svg>
