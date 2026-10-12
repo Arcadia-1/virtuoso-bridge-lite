@@ -241,7 +241,7 @@ Use these with `lay.add(...)`:
 
 | Function | SKILL | Description |
 |----------|-------|-------------|
-| `layout_read_summary(lib, cell)` | Instance/shape count | Quick overview |
+| `layout_read_summary(lib, cell)` | Shape/via/instance count | Quick overview |
 | `layout_read_geometry(lib, cell)` | Full geometry dump | Tab-separated output |
 | `layout_list_shapes()` | Shape types and LPPs | Edited cellview inside an editor, else current window |
 
