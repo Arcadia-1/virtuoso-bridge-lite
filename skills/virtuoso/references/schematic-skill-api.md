@@ -21,6 +21,9 @@ with client.schematic.create(lib, cell) as sch:
 ```
 
 `sch.add(skill_cmd)` queues SKILL commands; `schCheck` + `dbSave` run on context exit.
+The editor then closes the cellview it opened, releasing the edit lock; a
+window showing the same cellview keeps it, and a cellview that failed to save
+stays open. Pass `keep_open=True` to `create()`/`modify()` to keep it open.
 
 ## CDF Parameter Setting
 

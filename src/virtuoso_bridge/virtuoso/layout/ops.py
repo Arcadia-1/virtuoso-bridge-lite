@@ -51,26 +51,38 @@ def layout_bind_current_or_open_cell_view(
     view: str = "layout",
     view_type: str | None = None,
     mode: str = "a",
+    opened_flag: str | None = None,
 ) -> str:
-    """Bind ``cv`` to the active edit layout when it matches, else open it."""
+    """Bind ``cv`` to the active edit layout when it matches, else open it.
+
+    With *opened_flag*, that SKILL variable is set to ``t`` only when the
+    cellview had to be opened, and to ``nil`` when the window's is reused.
+    """
     resolved_view_type = view_type or default_view_type_for(view)
     escaped_lib = escape_skill_string(lib)
     escaped_cell = escape_skill_string(cell)
     escaped_view = escape_skill_string(view)
     escaped_view_type = escape_skill_string(resolved_view_type)
     escaped_mode = escape_skill_string(mode)
+    open_expr = (
+        f"dbOpenCellViewByType(\"{escaped_lib}\" "
+        f"\"{escaped_cell}\" "
+        f"\"{escaped_view}\" "
+        f"\"{escaped_view_type}\" "
+        f"\"{escaped_mode}\")"
+    )
+    flag_reset = f"{opened_flag} = nil " if opened_flag else ""
+    if opened_flag:
+        open_expr = f"progn({opened_flag} = t {open_expr})"
     return (
         "cv = let((rbEditCv) "
         "rbEditCv = geGetEditCellView() "
+        f"{flag_reset}"
         f"if(rbEditCv && rbEditCv~>libName == \"{escaped_lib}\" "
         f"&& rbEditCv~>cellName == \"{escaped_cell}\" "
         f"&& rbEditCv~>viewName == \"{escaped_view}\" "
         "then rbEditCv "
-        f"else dbOpenCellViewByType(\"{escaped_lib}\" "
-        f"\"{escaped_cell}\" "
-        f"\"{escaped_view}\" "
-        f"\"{escaped_view_type}\" "
-        f"\"{escaped_mode}\")))"
+        f"else {open_expr}))"
     )
 
 def layout_create_param_inst(

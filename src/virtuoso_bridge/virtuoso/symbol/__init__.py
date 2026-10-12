@@ -50,6 +50,7 @@ class SymbolOps:
         view: str = "symbol",
         view_type: str = "schematicSymbol",
         timeout: int = 60,
+        keep_open: bool = False,
     ) -> SymbolEditor:
         """Create a symbol editor, replacing an existing view if present."""
         return SymbolEditor(
@@ -60,6 +61,7 @@ class SymbolOps:
             view_type=view_type,
             mode="w",
             timeout=timeout,
+            keep_open=keep_open,
         )
 
     def modify(
@@ -69,6 +71,7 @@ class SymbolOps:
         view: str = "symbol",
         view_type: str = "schematicSymbol",
         timeout: int = 60,
+        keep_open: bool = False,
     ) -> SymbolEditor:
         """Open a symbol editor in append mode without clearing its view."""
         return SymbolEditor(
@@ -79,6 +82,7 @@ class SymbolOps:
             view_type=view_type,
             mode="a",
             timeout=timeout,
+            keep_open=keep_open,
         )
 
     def edit(
@@ -89,6 +93,7 @@ class SymbolOps:
         view_type: str = "schematicSymbol",
         mode: str = "a",
         timeout: int = 60,
+        keep_open: bool = False,
     ) -> SymbolEditor:
         """Deprecated compatibility wrapper for :meth:`create` / :meth:`modify`."""
         warnings.warn(
@@ -104,6 +109,7 @@ class SymbolOps:
             view_type=view_type,
             mode=mode,
             timeout=timeout,
+            keep_open=keep_open,
         )
 
     def generate_from_schematic(

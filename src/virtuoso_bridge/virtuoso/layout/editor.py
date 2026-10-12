@@ -14,7 +14,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from virtuoso_bridge.virtuoso.editor import ensure_operation_response
+from virtuoso_bridge.virtuoso.editor import (
+    EDITOR_OPENED,
+    close_editor_cellview,
+    ensure_operation_response,
+    remember_editor_cellview,
+)
 from virtuoso_bridge.virtuoso.ops import (
     close_current_cellview,
     open_cell_view,
@@ -41,8 +46,10 @@ class LayoutEditor:
         view: str = "layout",
         mode: str = "a",
         timeout: int = 60,
+        keep_open: bool = False,
     ) -> None:
         self.client = client
+        self.keep_open = keep_open
         self.lib = lib
         self.cell = cell
         self.view = view
@@ -54,12 +61,17 @@ class LayoutEditor:
         if self.mode == "w":
             # Creation must not silently reuse an open existing cellview.
             self.commands.append(open_cell_view(self.lib, self.cell, view=self.view, mode="w"))
+            self.commands.append(remember_editor_cellview(opened=True))
         else:
+            # A layout the current window already shows is reused, not opened,
+            # and must then not be closed on exit.
             self.commands.append(
                 layout_bind_current_or_open_cell_view(
                     self.lib, self.cell, view=self.view, mode=self.mode,
+                    opened_flag=EDITOR_OPENED,
                 )
             )
+            self.commands.append(remember_editor_cellview(opened=False))
         # Lets content operations such as layout_delete_shapes_on_layer() target
         # this cellview instead of the current window; cleared on exit below.
         self.commands.append(f"{LAYOUT_EDIT_CV_MARKER} = cv")
@@ -76,6 +88,8 @@ class LayoutEditor:
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         if exc_type is None:
             self.commands.append(save_current_cellview())
+            if not self.keep_open:
+                self.commands.append(close_editor_cellview())
             batch = compose_skill_script(self.commands)
             script = f"unwindProtect({batch} {LAYOUT_EDIT_CV_MARKER} = nil)"
             response = self.client.execute_operations(
