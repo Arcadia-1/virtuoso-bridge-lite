@@ -174,6 +174,7 @@ def test_recorded_schcheck_warnings_become_diagnostics():
 PDK180_NMOS_CDF = {
     "w": ("width per finger", "t"),
     "wf": ("total width", "t"),
+    "l": ("length", "t"),
     "fingers": ("number of fingers", "t"),
     "nf": ("finger count (derived)", "nil"),
     "m": ("multiplier (derived)", "nil"),
@@ -183,7 +184,7 @@ PDK180_NMOS_CDF = {
 
 
 class _Pdk180Client:
-    """Answers set_instance_params' resolution queries for that NMOS."""
+    """Answers set_instance_params' queries for that NMOS."""
 
     def __init__(self):
         self.skill: list[str] = []
@@ -194,30 +195,30 @@ class _Pdk180Client:
             return VirtuosoResult(status=ExecutionStatus.SUCCESS, output='"scratch|nmos_test"')
         if "inst~>libName inst~>cellName" in code:
             return VirtuosoResult(status=ExecutionStatus.SUCCESS, output='"pdk180|nmos_core"')
-        unknown = [n for n in re.findall(r'setarray\(paramVals "([^"]+)"', code)
-                   if n not in PDK180_NMOS_CDF]
-        if unknown:
-            # What the real update SKILL does for a name missing from the cell CDF.
-            return VirtuosoResult(status=ExecutionStatus.ERROR,
-                                  errors=[f"unknown CDF param: {unknown[0]}"])
+        if "cdfGetInstCDF(inst)" in code and "p~>prompt" in code:
+            rows = " ".join(f'("{n}" "{prompt}" "{editable}")'
+                            for n, (prompt, editable) in PDK180_NMOS_CDF.items())
+            return VirtuosoResult(status=ExecutionStatus.SUCCESS, output=f"({rows})")
         return VirtuosoResult(status=ExecutionStatus.SUCCESS, output="t")
 
+    def updates(self) -> list[str]:
+        return [code for code in self.skill if "setarray(paramVals" in code]
 
-def test_finger_count_targets_editable_fingers_param():
+
+def test_finger_count_and_multiplier_target_the_editable_params():
     client = _Pdk180Client()
-    applied = set_instance_params(client, "M0", l="360n", nf="2", param_filters=None)
-    assert applied == {"l": "360n", "fingers": "2"}
-    assert 'setarray(paramVals "fingers" "2")' in client.skill[-1]
+    applied = set_instance_params(client, "M0", l="360n", nf="2", m="3", param_filters=None)
+    assert applied == {"l": "360n", "fingers": "2", "simM": "3"}
+    assert 'setarray(paramVals "fingers" "2")' in client.updates()[-1]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "open bug: _PARAM_MAP hardcodes TSMC28 'wf'->'Wfg'; this PDK has no Wfg and its "
-    "'wf' is the total width, so the documented wf= shorthand cannot be applied"))
-def test_width_shorthand_only_targets_existing_cdf_params():
+def test_finger_width_shorthand_is_refused_without_wfg():
+    # "wf" exists here but is the *total* width; mapping the finger-width
+    # shorthand onto it would silently size the device wrong.
     client = _Pdk180Client()
-    set_instance_params(client, "M0", wf="8u", param_filters=None)
-    sent = re.findall(r'setarray\(paramVals "([^"]+)"', client.skill[-1])
-    assert sent and set(sent) <= set(PDK180_NMOS_CDF)
+    with pytest.raises(ValueError, match=r"wf=.*Wfg.*width parameters: w \('width per finger'\), wf \('total width'\)"):
+        set_instance_params(client, "M0", wf="8u", param_filters=None)
+    assert client.updates() == []
 
 
 # ---------------------------------------------------------------------------

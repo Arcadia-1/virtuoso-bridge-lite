@@ -35,6 +35,13 @@ from virtuoso_bridge.virtuoso.schematic.params import set_instance_params
 set_instance_params(client, "MP0", w="500n", l="30n", nf="4", m="2")
 ```
 
+It reads the instance's CDF first and refuses unknown names before changing
+anything. Shorthands map to the first candidate that exists and is editable:
+`nf` → `nf` or `fingers`, `m` → `m` or `simM`, `wf` (finger width) → `Wfg`
+only. `w` is the kit's own `w`: total width on some PDKs, width per finger on
+others, so check its CDF prompt and read back derived values such as the total
+width before netlisting.
+
 When using raw SKILL, refresh the applicable changed-parameter callbacks in
 their documented order, then read back derived values and check/save before
 netlisting. A stored property update alone can leave derived parameters stale.
