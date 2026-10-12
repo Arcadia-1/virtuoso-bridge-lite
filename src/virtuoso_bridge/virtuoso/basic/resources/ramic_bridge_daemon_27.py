@@ -638,12 +638,32 @@ def _prepare_skill(skill_code):
         raise RequestNotStarted("could not prepare SKILL request: %s" % exc)
 
 
+# Temp files of requests whose reply was never read. Virtuoso may still
+# load() them once the CIW is unblocked, so they are deleted only after the
+# lane has resynchronized (the probe is answered after that load).
+_DEFERRED_TMP_FILES = []
+_DEFERRED_TMP_LOCK = threading.Lock()
+
+
+def _delete_deferred_tmp_files():
+    with _DEFERRED_TMP_LOCK:
+        paths = list(_DEFERRED_TMP_FILES)
+        del _DEFERRED_TMP_FILES[:]
+    for path in paths:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 def _transmit_and_read(skill_code, watchdog_seconds=None):
     send_bytes, tmp_il_path = _prepare_skill(skill_code)
     timer = None
     expired = None
     finished = None
     completion_lock = None
+    transmitted = False
+    answered = False
     try:
         try:
             written = sys.stdout.write(send_bytes)
@@ -658,6 +678,7 @@ def _transmit_and_read(skill_code, watchdog_seconds=None):
             raise
         except Exception as exc:
             raise ExecutionUncertain("SKILL transmission failed: %s" % exc)
+        transmitted = True
 
         if watchdog_seconds is not None:
             expired = threading.Event()
@@ -678,6 +699,7 @@ def _transmit_and_read(skill_code, watchdog_seconds=None):
             return sys.stdin.read(1)
 
         response = read_response_frame(read_one)
+        answered = True
         if completion_lock is not None:
             with completion_lock:
                 finished.set()
@@ -692,7 +714,10 @@ def _transmit_and_read(skill_code, watchdog_seconds=None):
                 finished.set()
         if timer is not None:
             timer.cancel()
-        if tmp_il_path:
+        if tmp_il_path and transmitted and not answered:
+            with _DEFERRED_TMP_LOCK:
+                _DEFERRED_TMP_FILES.append(tmp_il_path)
+        elif tmp_il_path:
             try:
                 os.unlink(tmp_il_path)
             except OSError:
@@ -706,7 +731,10 @@ def _send_resync_probe(probe):
 
 
 def _resync_lane():
-    return resynchronize(_send_resync_probe, lambda: sys.stdin.read(1))
+    try:
+        return resynchronize(_send_resync_probe, lambda: sys.stdin.read(1))
+    finally:
+        _delete_deferred_tmp_files()
 
 
 _RECOVERY.set_resync(_resync_lane)

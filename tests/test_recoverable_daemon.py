@@ -5,6 +5,8 @@ import hashlib
 import hmac
 import importlib.util
 import json
+import os
+import re
 import shutil
 import socket
 import subprocess
@@ -730,3 +732,86 @@ def test_both_daemons_resync_instead_of_signalling(daemon_name) -> None:
     registrations = [node for node in tree.body if isinstance(node, ast.Expr)
                      and "set_resync" in ast.dump(node) and "_resync_lane" in ast.dump(node)]
     assert len(registrations) == 1
+
+
+def test_timed_out_multiline_request_keeps_its_file_until_the_lane_resyncs(
+    monkeypatch, tmp_path
+) -> None:
+    """Virtuoso load()s the file once the CIW is unblocked; deleting it at the
+    timeout made the queued request fail instead of running."""
+    module = _import_daemon(monkeypatch, tmp_path)
+    written = []
+    reply_allowed = threading.Event()
+    pending = []
+
+    def read(n=1):
+        if pending:
+            return pending.pop(0)
+        probe = next((w for w in written if b"vb-resync-" in w), None)
+        if probe is None or not reply_allowed.is_set():
+            return None
+        start = probe.index(b'"vb-resync-')
+        frame = b"\x02" + probe[start:probe.index(b'"', start + 1) + 1] + b"\x1e"
+        pending.extend(bytes([c]) for c in frame)
+        written.clear()
+        return pending.pop(0)
+
+    class _Timer:
+        daemon = True
+
+        def __init__(self, _seconds, callback, args=()):
+            self.callback = callback
+            self.args = args
+
+        def start(self):
+            self.callback(*self.args)
+
+        def cancel(self):
+            pass
+
+    monkeypatch.setattr(module, "threading", types.SimpleNamespace(
+        Event=threading.Event, Timer=_Timer, Lock=threading.Lock
+    ))
+    monkeypatch.setattr(module.sys, "stdout", types.SimpleNamespace(buffer=types.SimpleNamespace(
+        write=lambda data: written.append(bytes(data)) or len(data), flush=lambda: None,
+    )))
+    monkeypatch.setattr(module.sys, "stdin", types.SimpleNamespace(buffer=types.SimpleNamespace(read=read)))
+    assert module._RECOVERY.try_begin_legacy()[0]
+
+    with pytest.raises(ExecutionUncertain, match="did not answer") as caught:
+        module._transmit_and_read("let((x)\n  x = 1\n)", 0.01)
+    loaded = re.search(r'load\("([^"]+)"\)', written[0].decode()).group(1)
+    assert os.path.exists(loaded), "the queued load() would find no file"
+    module._RECOVERY.finish_legacy(str(caught.value))
+    assert os.path.exists(loaded)
+
+    reply_allowed.set()
+    deadline = time.monotonic() + 2
+    while module._RECOVERY.poisoned and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert module._RECOVERY.poisoned is None
+    assert not os.path.exists(loaded)
+
+
+@pytest.mark.parametrize("answered", [True, False])
+def test_multiline_file_is_deleted_at_once_when_answered_or_never_sent(
+    monkeypatch, tmp_path, answered
+) -> None:
+    module = _import_daemon(monkeypatch, tmp_path)
+    written = []
+
+    def write(data):
+        written.append(bytes(data))
+        return len(data) if answered else 0
+
+    monkeypatch.setattr(module.sys, "stdout", types.SimpleNamespace(
+        buffer=types.SimpleNamespace(write=write, flush=lambda: None)))
+    monkeypatch.setattr(module, "read_response_frame", lambda read_one: b"\x02t")
+    if answered:
+        assert module._transmit_and_read("progn(\n  t\n)") == b"\x02t"
+    else:
+        with pytest.raises(RequestNotStarted):
+            module._transmit_and_read("progn(\n  t\n)")
+    loaded = re.search(r'load\("([^"]+)"\)', written[0].decode()).group(1)
+    assert not os.path.exists(loaded)
+    assert module._DEFERRED_TMP_FILES == []
