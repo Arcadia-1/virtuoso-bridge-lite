@@ -105,13 +105,16 @@ class SchematicOps:
         cell: str,
         view: str = "schematic",
         timeout: int = 60,
+        keep_open: bool = False,
     ) -> SchematicEditor:
         """Create a schematic editor, replacing an existing view if present.
 
         This is intentionally destructive: Cadence mode ``"w"`` recreates
         the target cellview. Use :meth:`modify` for an existing schematic.
         """
-        return SchematicEditor(self._owner, lib, cell, view=view, mode="w", timeout=timeout)
+        return SchematicEditor(
+            self._owner, lib, cell, view=view, mode="w", timeout=timeout, keep_open=keep_open,
+        )
 
     def modify(
         self,
@@ -119,9 +122,12 @@ class SchematicOps:
         cell: str,
         view: str = "schematic",
         timeout: int = 60,
+        keep_open: bool = False,
     ) -> SchematicEditor:
         """Open a schematic editor in append mode without clearing its view."""
-        return SchematicEditor(self._owner, lib, cell, view=view, mode="a", timeout=timeout)
+        return SchematicEditor(
+            self._owner, lib, cell, view=view, mode="a", timeout=timeout, keep_open=keep_open,
+        )
 
     def edit(
         self,
@@ -130,6 +136,7 @@ class SchematicOps:
         view: str = "schematic",
         mode: Literal["a", "w"] = "a",
         timeout: int = 60,
+        keep_open: bool = False,
     ) -> SchematicEditor:
         """Deprecated compatibility wrapper for :meth:`create` / :meth:`modify`.
 
@@ -141,7 +148,9 @@ class SchematicOps:
             DeprecationWarning,
             stacklevel=2,
         )
-        return SchematicEditor(self._owner, lib, cell, view=view, mode=mode, timeout=timeout)
+        return SchematicEditor(
+            self._owner, lib, cell, view=view, mode=mode, timeout=timeout, keep_open=keep_open,
+        )
 
     def read(
         self,

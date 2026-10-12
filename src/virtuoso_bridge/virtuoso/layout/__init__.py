@@ -66,9 +66,12 @@ class LayoutOps:
         cell: str,
         view: str = "layout",
         timeout: int = 60,
+        keep_open: bool = False,
     ) -> LayoutEditor:
         """Create a layout editor, replacing an existing view if present."""
-        return LayoutEditor(self._owner, lib, cell, view=view, mode="w", timeout=timeout)
+        return LayoutEditor(
+            self._owner, lib, cell, view=view, mode="w", timeout=timeout, keep_open=keep_open,
+        )
 
     def modify(
         self,
@@ -76,9 +79,12 @@ class LayoutOps:
         cell: str,
         view: str = "layout",
         timeout: int = 60,
+        keep_open: bool = False,
     ) -> LayoutEditor:
         """Open a layout editor in append mode without clearing its view."""
-        return LayoutEditor(self._owner, lib, cell, view=view, mode="a", timeout=timeout)
+        return LayoutEditor(
+            self._owner, lib, cell, view=view, mode="a", timeout=timeout, keep_open=keep_open,
+        )
 
     def edit(
         self,
@@ -87,6 +93,7 @@ class LayoutOps:
         view: str = "layout",
         mode: Literal["a", "w"] = "a",
         timeout: int = 60,
+        keep_open: bool = False,
     ) -> LayoutEditor:
         """Deprecated compatibility wrapper for :meth:`create` / :meth:`modify`."""
         warnings.warn(
@@ -94,7 +101,9 @@ class LayoutOps:
             DeprecationWarning,
             stacklevel=2,
         )
-        return LayoutEditor(self._owner, lib, cell, view=view, mode=mode, timeout=timeout)
+        return LayoutEditor(
+            self._owner, lib, cell, view=view, mode=mode, timeout=timeout, keep_open=keep_open,
+        )
 
     def export_gds(
         self,

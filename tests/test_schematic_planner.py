@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from virtuoso_bridge.virtuoso.editor import close_editor_cellview
 from virtuoso_bridge.virtuoso.schematic import SchematicOps
 from virtuoso_bridge.virtuoso.schematic.planner import (
     ConstraintLevel,
@@ -299,8 +300,9 @@ def test_schematic_ops_create_from_plan_executes_schcheck_and_save() -> None:
     SchematicOps(client).create_from_plan("LIB", "CELL", plan)
 
     assert client.operations is not None
-    assert client.operations[-2] == "schCheck(cv)"
-    assert "dbSave(rbCv)" in client.operations[-1]
+    assert client.operations[-3] == "schCheck(cv)"
+    assert "dbSave(rbCv)" in client.operations[-2]
+    assert client.operations[-1] == close_editor_cellview()
 
 
 def test_readback_report_is_structured_and_can_be_required() -> None:

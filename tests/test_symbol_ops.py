@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import pytest
 
+
 from virtuoso_bridge.models import ExecutionStatus, VirtuosoResult
 from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
+from virtuoso_bridge.virtuoso.editor import close_editor_cellview, remember_editor_cellview
 from virtuoso_bridge.virtuoso.symbol import SymbolOps
 from virtuoso_bridge.virtuoso.symbol.editor import SymbolEditor
 from virtuoso_bridge.virtuoso.symbol.ops import (
@@ -186,8 +188,11 @@ def test_symbol_editor_appends_then_checks_before_save(kwargs, open_command: str
 
     assert client.timeout == 7
     assert client.commands is not None
-    assert client.commands[:3] == [open_command, shape, symbol_check()]
-    assert "dbSave(rbCv)" in client.commands[3]
+    assert client.commands[:4] == [
+        open_command, remember_editor_cellview(opened=True), shape, symbol_check(),
+    ]
+    assert "dbSave(rbCv)" in client.commands[4]
+    assert client.commands[5] == close_editor_cellview()
 
 
 @pytest.mark.parametrize(

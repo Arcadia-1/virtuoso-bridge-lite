@@ -256,6 +256,8 @@ Use these with `lay.add(...)`:
 | `layout_delete_shapes_on_layer(layer, purpose)` | Iterate + delete | Edited cellview inside an editor, else current window |
 | `layout_delete_cell(lib, cell)` | Close + `ddDeleteObj` | Delete cell |
 
+On exit, `create()`/`modify()` (and the symbol editor) save and then close the cellview they opened, releasing the edit lock; a layout the current window already shows is reused and stays open. Pass `keep_open=True` to keep the editor's cellview open.
+
 Inside `client.layout.create()`/`modify()`, `layout_list_shapes`, `layout_delete_shapes_on_layer` and `layout_clear_routing` act on the edited cellview; called standalone they act on the current layout window and raise when none is open. Pass `cv_expr=` to choose explicitly. Selection helpers (`layout_select_box`, `layout_delete_selected`) always use the current window.
 
 **Layer visibility:**
