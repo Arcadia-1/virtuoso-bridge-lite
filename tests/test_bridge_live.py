@@ -149,9 +149,6 @@ def test_skill_values_round_trip(client):
     assert _ok(client.execute_skill("let((x)\n  x = 40 ; comment ) with paren\n  x + 2\n)")) == "42"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "open bug: multi-line requests are loaded from a temp file and only "
-    "'load: error while loading file ... at line N' is returned"))
 def test_multiline_skill_error_reports_the_real_message(client):
     result = client.execute_skill("progn(\n  vbLiveNoSuchFunction()\n)")
     assert result.status == ExecutionStatus.ERROR

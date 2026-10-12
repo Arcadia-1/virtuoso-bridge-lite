@@ -532,15 +532,34 @@ def _send_recovery_reply(conn, request_nonce, payload):
     _safe_sendall(conn, _signed_response(request_nonce, b"\x02" + body))
 
 
+# Multi-line code is loaded from a temp file because the IPC channel is
+# line-buffered. An error raised inside a loaded file reaches the caller only
+# as load's own "error while loading file ... at line N"; the real message is
+# printed to the CIW alone. So the file runs the code under errset, and the
+# command re-raises the captured error after load() returns, outside the file.
+_MULTILINE_PREFIX = "_vb_eval_ok = errset(progn(\n"
+_MULTILINE_SUFFIX = "\n) t)\n_vb_eval_err = unless(_vb_eval_ok errset.errset)\n"
+_MULTILINE_RESULT = (
+    'if(_vb_eval_err then let((m) m = nth(4 _vb_eval_err) '
+    'error("%s" if(and(m stringp(car(m))) '
+    'strcat(if(substring(car(m) 1 8) == "*Error* " substring(car(m) 9) car(m)) '
+    'if(cdr(m) strcat(" - " buildString(mapcar(lambda((x) sprintf(nil "%L" x)) cdr(m)) " ")) "")) '
+    'sprintf(nil "%L" _vb_eval_err)))) else car(_vb_eval_ok))'
+)
+
+
 def _prepare_skill(skill_code):
     tmp_il_path = None
     try:
         if "\n" in skill_code:
             fd, tmp_il_path = tempfile.mkstemp(suffix=".il", prefix="vb_eval_")
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(f"_vb_eval_result = progn(\n{skill_code}\n)\n")
+                handle.write(_MULTILINE_PREFIX + skill_code + _MULTILINE_SUFFIX)
             escaped_path = tmp_il_path.replace("\\", "/")
-            send_code = f'load("{escaped_path}") hiFlush() _vb_eval_result\n'
+            send_code = (
+                f'_vb_eval_ok = _vb_eval_err = nil load("{escaped_path}") hiFlush() '
+                f"{_MULTILINE_RESULT}\n"
+            )
         else:
             send_code = f'let(((__vb_r {skill_code})) hiFlush() __vb_r)\n'
         return send_code.encode("utf-8"), tmp_il_path
