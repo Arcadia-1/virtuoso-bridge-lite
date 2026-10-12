@@ -342,12 +342,36 @@ def set_job_policy(client: VirtuosoClient, policy, *,
     return _q(client, parts)
 
 
+def _without_history_name_form(call: str) -> str:
+    """SKILL running *call* with the "Specify History Name" form switched off.
+
+    A site or user can set ``adexl.historyNamePrefix showNameHistoryForm`` to
+    ask for a history name in a modal form before every run. Nothing answers
+    that form for a programmatic run, so the CIW would stay blocked. The
+    setting is turned off for this call only and restored afterwards, also
+    when the call fails; Virtuoso versions without the variable are left
+    untouched.
+    """
+    tool, var = '"adexl.historyNamePrefix"', '"showNameHistoryForm"'
+    return (
+        "let((vbFormOn vbRun) "
+        f"vbFormOn = isCallable('envIsVal) && envIsVal({tool} {var} t) && envGetVal({tool} {var}) "
+        f"when(vbFormOn envSetVal({tool} {var} 'boolean nil)) "
+        f"vbRun = errset({call} t) "
+        f"when(vbFormOn envSetVal({tool} {var} 'boolean t)) "
+        'unless(vbRun error("%s failed: %L" "maeRunSimulation" errset.errset)) '
+        "car(vbRun))"
+    )
+
+
 def run_simulation(client: VirtuosoClient, *, session: str = "",
                    callback: str = "", run_mode: str = "",
                    timeout: float | None = None) -> str:
     """maeRunSimulation — run simulation (async, returns immediately).
 
-    Returns the history name (e.g. "Interactive.1").
+    Returns the history name (e.g. "Interactive.1"). A "Specify History
+    Name" form enabled by the site's ADE settings is not shown for this run
+    (see :func:`_without_history_name_form`); the default name is used.
 
     Args:
         session: session name (default: current session)
@@ -363,7 +387,7 @@ def run_simulation(client: VirtuosoClient, *, session: str = "",
     if run_mode:
         parts += f'?runMode "{escape_skill_string(run_mode)}" '
     parts = parts.rstrip() + ")"
-    return _q(client, parts, timeout=timeout)
+    return _q(client, _without_history_name_form(parts), timeout=timeout)
 
 
 def _remove_marker(runner, marker: str) -> None:
