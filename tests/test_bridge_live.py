@@ -100,7 +100,9 @@ def client(lib):
     c.execute_skill(
         f'let((cells) '
         f'foreach(w hiGetWindowList() let((cv) cv = car(errset(geGetWindowCellView(w))) '
-        f'when(cv && cv~>libName == "{lib}" && index(cv~>cellName "{RUN}") hiCloseWindow(w)))) '
+        # Save first: closing a window with unsaved edits raises "Save Changes".
+        f'when(cv && cv~>libName == "{lib}" && index(cv~>cellName "{RUN}") '
+        f'when(cv~>modifiedButNotSaved dbSave(cv)) hiCloseWindow(w)))) '
         f'foreach(cv dbGetOpenCellViews() when(cv~>libName == "{lib}" && index(cv~>cellName "{RUN}") '
         f'dbPurge(cv))) '
         f'cells = setof(x ddGetObj("{lib}")~>cells rexMatchp("^{PREFIX}" x~>name) && index(x~>name "{RUN}")) '
@@ -401,9 +403,6 @@ def test_layout_create_and_modify(client, lib, layers):
     assert _layout_shapes(client, lib, cell).startswith("(3 0")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "open bug: layout_delete_shapes_on_layer resolves the current edit window, "
-    "not the LayoutEditor cellview, and reports success when nothing was deleted"))
 def test_layout_delete_on_layer_targets_the_edited_cell(client, lib, layers):
     from virtuoso_bridge.virtuoso.layout import layout_create_rect as rect
     from virtuoso_bridge.virtuoso.layout.ops import layout_delete_shapes_on_layer
