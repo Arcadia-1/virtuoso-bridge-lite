@@ -88,6 +88,10 @@ def test_status_infers_profile_scoped_setup_path(monkeypatch, capsys) -> None:
         def is_running(profile=None):
             return False
 
+        @staticmethod
+        def running_targets():
+            return []
+
     monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHClient", _FakeSSHClient)
 
     rc = cli._print_status()
@@ -550,7 +554,7 @@ def test_ensure_tunnel_skips_unknown_local_listener(monkeypatch) -> None:
     )
     runner = _TunnelRunner()
     client._ssh_runner = runner
-    monkeypatch.setattr(client, "read_state", lambda profile=None: None)
+    monkeypatch.setattr(client, "read_state", lambda profile=None, **_: None)
     monkeypatch.setattr(
         "virtuoso_bridge.transport.tunnel.SSHRunner.can_reach_port",
         lambda port: port == 65061,
@@ -582,7 +586,7 @@ def test_ensure_tunnel_reuses_only_matching_managed_listener(monkeypatch) -> Non
     monkeypatch.setattr(
         client,
         "read_state",
-        lambda profile=None: {
+        lambda profile=None, **_: {
             "mode": "remote",
             "port": 65061,
             "remote_port": 65062,
@@ -618,7 +622,7 @@ def test_ensure_tunnel_adopts_legacy_state_without_remote_port(monkeypatch) -> N
     monkeypatch.setattr(
         client,
         "read_state",
-        lambda profile=None: {
+        lambda profile=None, **_: {
             "mode": "remote",
             "port": 65061,
             "daemon_host": "thu-wei",
@@ -644,7 +648,7 @@ def test_remote_running_state_requires_pid_endpoint_and_reachable_port(monkeypat
         "remote_port": 65062,
         "tunnel_pid": 9876,
     }
-    monkeypatch.setattr(SSHClient, "read_state", staticmethod(lambda profile=None: state))
+    monkeypatch.setattr(SSHClient, "read_state", staticmethod(lambda profile=None, **_: state))
     monkeypatch.setattr("virtuoso_bridge.transport.tunnel._pid_is_alive", lambda pid: pid == 9876)
     monkeypatch.setattr(
         "virtuoso_bridge.transport.tunnel.SSHRunner.can_reach_port",

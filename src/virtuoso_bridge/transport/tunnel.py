@@ -54,15 +54,82 @@ def _is_localhost(host: str | None) -> bool:
     return host.strip().lower() in ("localhost", "127.0.0.1", "::1")
 
 
-def _state_file(profile: str | None = None) -> Path:
-    name = f"state_{profile}.json" if profile else "state.json"
-    return state_dir() / name
+def _tunnel_target(user: str | None, host: str | None, remote_port: Any) -> str | None:
+    """``user@host:port`` naming the daemon a tunnel leads to, or None."""
+    host = (host or "").strip().rstrip(".").lower()
+    if not host:
+        return None
+    user = (user or "").strip()
+    try:
+        port = f":{int(remote_port)}" if remote_port not in (None, "") else ""
+    except (TypeError, ValueError):
+        port = ""
+    return f"{user + '@' if user else ''}{host}{port}"
 
 
-def _state_file_candidates(profile: str | None = None) -> list[Path]:
+def _configured_target(profile: str | None = None) -> str | None:
+    """The tunnel target of the configuration already loaded into os.environ.
+
+    Resolved like :meth:`SSHClient.from_env`, so two ``.env`` files for
+    different hosts, users or daemon ports name different tunnels.
+    """
+    roles = remote_host_roles_from_os(profile, load=False)
+    host = roles.daemon_host or roles.legacy_host
+    if not host:
+        return None
+    from virtuoso_bridge.virtuoso.basic.bridge import _default_remote_port
+
+    suffix = f"_{profile}" if profile else ""
+    try:
+        port = int(os.getenv(f"VB_REMOTE_PORT{suffix}", "").strip() or _default_remote_port(roles.remote_user))
+    except (TypeError, ValueError):
+        port = _default_remote_port(roles.remote_user)
+    return _tunnel_target(roles.remote_user, host, port)
+
+
+def _state_target_matches(state: dict[str, Any], target: str) -> bool:
+    """Whether a saved state describes *target*.
+
+    States written before targets were recorded have no ``remote_user``;
+    their host and daemon port must still match. A state that records no
+    host at all cannot be told apart and is accepted, as before.
+    """
+    if state.get("target"):
+        return state["target"] == target
+    saved = _tunnel_target(
+        state.get("remote_user"),
+        str(state.get("daemon_host") or state.get("remote_host") or ""),
+        state.get("remote_port"),
+    )
+    if saved is None:
+        return True
+    if "@" not in saved and "@" in target:
+        target = target.split("@", 1)[1]
+    if ":" not in saved and ":" in target:
+        target = target.rsplit(":", 1)[0]
+    return saved == target
+
+
+def _state_file(profile: str | None = None, target: str | None = None) -> Path:
+    """State of the tunnel for *profile* and *target*.
+
+    Each target keeps its own file, so ``.env`` files for different hosts
+    can run tunnels side by side without a profile. The file without a
+    target is the format earlier versions wrote.
+    """
+    name = f"state_{profile}" if profile else "state"
+    if target:
+        name += "-" + re.sub(r"[^A-Za-z0-9@._-]", "_", target)
+    return state_dir() / f"{name}.json"
+
+
+def _legacy_state_files(profile: str | None = None) -> list[Path]:
     primary = _state_file(profile)
     legacy = legacy_cache_state_file(profile)
     return [primary] if primary == legacy else [primary, legacy]
+
+
+_CONFIGURED: Any = object()
 
 # ---------------------------------------------------------------------------
 # Resource helpers (moved from bridge.py)
@@ -909,7 +976,7 @@ class SSHClient:
 
     def _adopt_saved_tunnel(self, local_port: int) -> bool:
         """Adopt only a live tunnel whose saved endpoints exactly match."""
-        state = self.read_state(self._profile) or {}
+        state = self.read_state(self._profile, target=self.target) or {}
         saved_host = str(state.get("daemon_host") or state.get("remote_host") or "")
         expected_host = self._daemon_host.strip().rstrip(".").lower()
         # State files written before ``remote_port`` was introduced still
@@ -1023,15 +1090,13 @@ class SSHClient:
         """Kill the tunnel and clean up."""
         if _is_localhost(self._remote_host):
             # Local mode: no tunnel or SSH to tear down — just clear state
-            sf = _state_file(self._profile)
-            if sf.exists():
-                sf.unlink(missing_ok=True)
+            self._clear_state()
             return
 
         runner = self._require_runner()
         # Try state file PID first (may be from a previous session)
         if not runner.is_tunnel_alive:
-            state = self.read_state(self._profile)
+            state = self.read_state(self._profile, target=self.target)
             if state:
                 pid = state.get("tunnel_pid")
                 if pid:
@@ -1047,11 +1112,7 @@ class SSHClient:
                 logger.warning("Failed to clean up remote files at %s", self._remote_work_dir)
 
         self.close()
-
-        # Clear state
-        sf = _state_file(self._profile)
-        if sf.exists():
-            sf.unlink(missing_ok=True)
+        self._clear_state()
 
     def close(self) -> None:
         """Close SSH runner without killing the tunnel (it survives for other scripts)."""
@@ -1083,7 +1144,7 @@ class SSHClient:
         """
         identity_path = self._remote_identity_path
         if not identity_path:
-            state = self.read_state(self._profile) or {}
+            state = self.read_state(self._profile, target=self.target) or {}
             identity_path = str(state.get("identity_path") or "")
         if not identity_path:
             return {}
@@ -1109,6 +1170,22 @@ class SSHClient:
 
     # -- state file ---------------------------------------------------------
 
+    @property
+    def target(self) -> str | None:
+        """``user@host:port`` of the daemon this client's tunnel leads to."""
+        return _tunnel_target(self._remote_user, self._daemon_host, self._port)
+
+    def _clear_state(self) -> None:
+        """Remove this target's state, and an old-format file describing it."""
+        _state_file(self._profile, self.target).unlink(missing_ok=True)
+        for legacy in _legacy_state_files(self._profile):
+            try:
+                state = json.loads(legacy.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if self.target and isinstance(state, dict) and _state_target_matches(state, self.target):
+                legacy.unlink(missing_ok=True)
+
     def save_state(self) -> None:
         """Save tunnel state so other processes can find the port."""
         state_dir().mkdir(parents=True, exist_ok=True)
@@ -1121,6 +1198,8 @@ class SSHClient:
             "port": self._port if is_local else self._local_port,
             "remote_port": self._port,
             "tunnel_pid": tunnel_pid,
+            "target": self.target,
+            "remote_user": self._remote_user,
             "remote_host": self._remote_host,
             "daemon_host": self._daemon_host,
             "deploy_host": self._deploy_host,
@@ -1135,19 +1214,54 @@ class SSHClient:
         # NOTE: the bridge token is deliberately NOT stored here — the state
         # file is normally readable; the token lives only in its atomic 0600
         # file under a 0700 directory (daemon_auth.token_path()).
-        _state_file(self._profile).write_text(json.dumps(state, indent=2), encoding="utf-8")
+        # An old-format file for this target is superseded by the new one.
+        self._clear_state()
+        _state_file(self._profile, self.target).write_text(json.dumps(state, indent=2), encoding="utf-8")
 
     @staticmethod
-    def read_state(profile: str | None = None) -> dict[str, Any] | None:
-        """Read saved tunnel state."""
-        for sf in _state_file_candidates(profile):
+    def read_state(profile: str | None = None, *, target: Any = _CONFIGURED) -> dict[str, Any] | None:
+        """Read the saved state of the tunnel to *target*.
+
+        *target* defaults to the configuration loaded into the environment,
+        so a tunnel another ``.env`` started for a different host is not
+        mistaken for this one. ``None`` accepts any old-format state.
+        """
+        if target is _CONFIGURED:
+            target = _configured_target(profile)
+        if target:
+            candidates = [_state_file(profile, target)]
+        else:
+            # Without a configured target, a single saved tunnel is unambiguous.
+            prefix = _state_file(profile).stem + "-"
+            saved = [sf for sf in state_dir().glob(f"{prefix}*.json")]
+            candidates = saved if len(saved) == 1 else []
+        candidates += _legacy_state_files(profile)
+        for sf in candidates:
             if not sf.is_file():
                 continue
             try:
-                return json.loads(sf.read_text(encoding="utf-8"))
+                state = json.loads(sf.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
+            if not isinstance(state, dict):
+                continue
+            if target and sf in _legacy_state_files(profile) and not _state_target_matches(state, target):
+                continue
+            return state
         return None
+
+    @classmethod
+    def running_targets(cls) -> list[tuple[str | None, str]]:
+        """(profile, target) of every live tunnel whose state names a target."""
+        found = []
+        for sf in sorted(state_dir().glob("state*.json")):
+            try:
+                state = json.loads(sf.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(state, dict) and state.get("target") and cls._state_is_live(state):
+                found.append((state.get("profile"), str(state["target"])))
+        return found
 
     @classmethod
     def is_running(cls, profile: str | None = None) -> bool:
@@ -1156,7 +1270,10 @@ class SSHClient:
         For local mode, the state file existing is sufficient — the daemon
         may not be loaded in CIW yet, so we skip port checks.
         """
-        state = cls.read_state(profile)
+        return cls._state_is_live(cls.read_state(profile))
+
+    @staticmethod
+    def _state_is_live(state: dict[str, Any] | None) -> bool:
         if not state:
             return False
         if state.get("mode") == "local":

@@ -311,7 +311,8 @@ def test_save_state_omits_daemon_token(tmp_path, monkeypatch) -> None:
     client = SSHClient(remote_host="localhost", port=65432)
     client._daemon_token = TOKEN
     client.save_state()
-    raw = (tmp_path / "state" / "state.json").read_text(encoding="utf-8")
+    (state_file,) = (tmp_path / "state").glob("state*.json")
+    raw = state_file.read_text(encoding="utf-8")
     assert "daemon_token" not in json.loads(raw)
     assert TOKEN not in raw
 

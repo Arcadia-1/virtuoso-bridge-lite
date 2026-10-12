@@ -156,7 +156,7 @@ def test_windows_background_process_survives_all_liveness_paths(monkeypatch, win
             "mode": "remote", "port": 65433, "remote_port": 65432,
             "daemon_host": "eda.example", "tunnel_pid": proc.pid,
         }
-        monkeypatch.setattr(tunnel.SSHClient, "read_state", staticmethod(lambda profile=None: state))
+        monkeypatch.setattr(tunnel.SSHClient, "read_state", staticmethod(lambda profile=None, **_: state))
         # No network is opened: this test concerns the process check only.
         monkeypatch.setattr(ssh.SSHRunner, "can_reach_port", staticmethod(lambda port: port == 65433))
         if path == "is_running":
@@ -164,8 +164,8 @@ def test_windows_background_process_survives_all_liveness_paths(monkeypatch, win
         else:
             runner = SimpleNamespace(tunnel_pid=None)
             client = SimpleNamespace(
-                _profile=None, _daemon_host="eda.example", _port=65432,
-                read_state=lambda profile=None: state, _require_runner=lambda: runner,
+                _profile=None, _daemon_host="eda.example", _port=65432, target="eda.example:65432",
+                read_state=lambda profile=None, **_: state, _require_runner=lambda: runner,
             )
             alive = tunnel.SSHClient._adopt_saved_tunnel(client, 65433)
             assert runner.tunnel_pid == proc.pid
