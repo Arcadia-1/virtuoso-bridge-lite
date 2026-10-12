@@ -69,6 +69,32 @@ local setup path. Spectre-only work needs the simulator and its environment,
 not a Virtuoso process or a loaded SKILL daemon. Validate only the service
 the task needs; an unrelated degraded service is not a blocker.
 
+## Cadence environment on the remote host
+
+Spectre runs, `license`, `skill-find` and `doc-search` start tools through a
+plain SSH shell, which skips the lab's interactive startup. `virtuoso-bridge
+status` shows whether Spectre is found. Pick what matches how the site starts
+Cadence; existing settings keep working:
+
+- `spectre` already on the login `PATH`: nothing to set.
+- A setup script the lab sources: `VB_CADENCE_CSHRC=/path/to/cadence.cshrc`
+  (csh, the default).
+- A POSIX sh script, for example one that runs `module load <cadence>`:
+  `VB_CADENCE_CSHRC=/path/to/cadence.sh` and `VB_CADENCE_ENV_SHELL=sh`.
+- Tools started only through a site wrapper command (`<ic-wrapper> spectre`):
+  `VB_SPECTRE_BIN=<ic-wrapper> spectre` serves Spectre only. To also serve
+  `license` and the documentation commands, take the wrapper's environment
+  in an sh script and select it as above:
+
+  ```sh
+  # cadence-env.sh (VB_CADENCE_CSHRC=/path/to/cadence-env.sh, VB_CADENCE_ENV_SHELL=sh)
+  eval "$(<ic-wrapper> sh -c 'export -p')"
+  ```
+
+Use the setup or wrapper of the IC version the CIW runs, and update it when
+that version changes. Hosts or versions with different setups use profile
+suffixes such as `VB_CADENCE_CSHRC_worker`.
+
 ## Optional advanced installations
 
 Only configure extra roles when the user actually has a split installation.

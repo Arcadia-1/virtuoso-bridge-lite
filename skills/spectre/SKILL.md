@@ -12,7 +12,7 @@ Run a `.scs` netlist locally or on a remote machine through SSH, then parse PSF 
 1. **`virtuoso-bridge` is a Python CLI** — install it in a virtual environment with `uv pip install -e virtuoso-bridge-lite`.
 2. `virtuoso-bridge status` — check connection, Spectre path, license
 3. Check `examples/02_spectre/` — use existing examples as a basis
-4. `spectre` must be on `PATH`, or set `VB_CADENCE_CSHRC` (project or user `.env`) so the runner can source the Cadence environment. This applies to local and SSH execution.
+4. `spectre` must be on `PATH`, or set `VB_CADENCE_CSHRC` (project or user `.env`) so the runner can source the Cadence environment, or `VB_SPECTRE_BIN` (a site wrapper with arguments works). This applies to local and SSH execution; see [connection.md](../virtuoso/references/connection.md#cadence-environment-on-the-remote-host).
 
 ## Core pattern
 
