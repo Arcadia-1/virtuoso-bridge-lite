@@ -461,6 +461,11 @@ class VirtuosoClient(VirtuosoInterface):
         from virtuoso_bridge.daemon_guard import OVERRIDE_ENV, check_daemon_user
 
         check = check_daemon_user(self, profile=profile, timeout=timeout)
+        if not check.ok and check.busy:
+            raise RuntimeError(
+                f"Virtuoso daemon is busy: {check.error}. Retry once the CIW is "
+                "idle or its dialog is closed; `virtuoso-bridge status` shows the lane."
+            )
         if not check.ok:
             raise RuntimeError(
                 f"Virtuoso daemon identity check failed: {check.error}. "
@@ -468,6 +473,20 @@ class VirtuosoClient(VirtuosoInterface):
                 f"set {OVERRIDE_ENV}=1 only if this cross-user connection is "
                 f"intentional."
             )
+
+    def handshake_virtuoso_pid(self, timeout: float = 5) -> int | None:
+        """Virtuoso PID from the daemon's signed capability handshake.
+
+        The handshake is answered by the daemon itself, not through the CIW,
+        so it works while a request runs or a dialog blocks the CIW. Returns
+        None when the handshake is not signed (auth off) or carries no PID.
+        Authentication failures propagate.
+        """
+        caps = self._ensure_daemon_capabilities(time.monotonic() + timeout)
+        pid = caps.get("virtuoso_pid")
+        if caps.get("auth") != "on" or not isinstance(pid, int):
+            return None
+        return pid
 
     @property
     def remote_virtuoso_pid(self) -> int | None:

@@ -376,7 +376,52 @@ def test_client_rejects_cross_user_before_any_skill_execution(
         ("Socket error: [WinError 10061] refused", "not_loaded"),
         ("Socket timeout after 5s", "indeterminate"),
         ("Socket error: boom", "indeterminate"),
+        ("BusyError: IPC lane is busy", "busy"),
+        ("BusyError: IPC lane is poisoned: legacy watchdog fired", "busy"),
     ],
 )
 def test_classify_daemon_query_failure(error: str, expected: str) -> None:
     assert classify_daemon_query_failure(error) == expected
+
+
+
+# ---------------------------------------------------------------------------
+# Identity without the CIW, and busy lanes
+# ---------------------------------------------------------------------------
+
+
+def test_query_trusts_the_signed_handshake_pid_without_using_the_ciw() -> None:
+    class _SignedClient(FakeClient):
+        def handshake_virtuoso_pid(self, timeout=None):
+            return 4242
+
+    client = _SignedClient(error="BusyError: IPC lane is busy")
+    runner = FakeRunner(owner="user1")
+
+    assert query_daemon_user(client, runner=runner) == "user1"
+    assert client.executed == []
+    assert any("/proc/4242" in command for command in runner.commands)
+
+
+def test_unsigned_handshake_pid_is_not_trusted(monkeypatch, foreign_daemon) -> None:
+    monkeypatch.setenv("VB_ALLOW_UNAUTHENTICATED_DAEMON", "1")
+    client = VirtuosoClient(host="127.0.0.1", port=foreign_daemon.port, timeout=5)
+
+    assert client.handshake_virtuoso_pid(timeout=5) is None
+
+
+def test_busy_lane_is_reported_without_suggesting_the_override(monkeypatch) -> None:
+    monkeypatch.delenv(OVERRIDE_ENV, raising=False)
+    monkeypatch.setenv("VB_REMOTE_USER", "user1")
+    check = check_daemon_user(
+        FakeClient(error="BusyError: IPC lane is poisoned: legacy watchdog fired"), profile=None,
+    )
+    assert not check.ok and check.busy
+    monkeypatch.setattr("virtuoso_bridge.daemon_guard.check_daemon_user", lambda *_a, **_k: check)
+    client = VirtuosoClient(host="127.0.0.1", port=9, timeout=1)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        client._reject_cross_user_daemon_if_reachable(profile=None)
+
+    assert "busy" in str(exc_info.value)
+    assert OVERRIDE_ENV not in str(exc_info.value)

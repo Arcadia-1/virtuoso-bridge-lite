@@ -361,8 +361,11 @@ def cli_stop() -> int:
 
 # -- restart ----------------------------------------------------------------
 
-def _restart_daemon_one(profile: str | None) -> None:
-    """Ask the CIW-side RAMIC loader to restart the daemon for this profile."""
+def _restart_daemon_one(profile: str | None) -> bool:
+    """Ask the CIW-side RAMIC loader to restart the daemon for this profile.
+
+    Returns False when the restart could not be requested.
+    """
     from virtuoso_bridge.daemon_guard import check_daemon_user
     from virtuoso_bridge.models import ExecutionStatus
     from virtuoso_bridge.transport.tunnel import SSHClient
@@ -371,7 +374,7 @@ def _restart_daemon_one(profile: str | None) -> None:
 
     state = SSHClient.read_state(profile)
     if not state or not state.get("port"):
-        return
+        return True
 
     label = f" [{profile}]" if profile else ""
     setup_path = str(state.get("setup_path") or "")
@@ -392,15 +395,15 @@ def _restart_daemon_one(profile: str | None) -> None:
         user_check = check_daemon_user(client, profile=profile, timeout=5)
     except Exception as exc:
         print(f"[warning] Could not check daemon before restart{label}: {exc}")
-        return
+        return False
     if not user_check.ok:
         print(f"[warning] Refusing to restart daemon{label}: {user_check.error}")
-        return
+        return False
 
     result = client.execute_skill(skill, timeout=5)
     if result.status == ExecutionStatus.SUCCESS:
         print(f"Daemon restart requested{label}.")
-        return
+        return True
 
     details = "; ".join(result.errors) or result.output or "unknown error"
     expected_disconnect = (
@@ -413,9 +416,10 @@ def _restart_daemon_one(profile: str | None) -> None:
             f"Daemon restart requested{label} "
             "(old daemon closed the connection while restarting)."
         )
-        return
+        return True
 
     print(f"[warning] Could not restart daemon{label}: {details}")
+    return False
 
 
 def _restart_one() -> int:
@@ -431,8 +435,8 @@ def _restart_one() -> int:
         time.sleep(0.5)
 
     rc = _start_one()
-    if rc == 0:
-        _restart_daemon_one(profile)
+    if rc == 0 and not _restart_daemon_one(profile):
+        return 1
     return rc
 
 
