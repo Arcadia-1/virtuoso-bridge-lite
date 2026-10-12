@@ -1350,7 +1350,8 @@ def _docs_client():
 
     ``VirtuosoClient.from_env()`` also asks a running daemon to prove its
     owner through the CIW, so documentation lookups failed whenever the CIW
-    was busy or blocked by a dialog.
+    was busy or blocked by a dialog. A running daemon is consulted only as a
+    fallback, when SSH discovery finds no documentation at all.
     """
     from virtuoso_bridge import VirtuosoClient
     from virtuoso_bridge.profile import resolve_profile
@@ -1358,7 +1359,80 @@ def _docs_client():
 
     profile = resolve_profile(_get_cli_profile())
     ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
-    return VirtuosoClient(host="127.0.0.1", port=ssh.port, tunnel=ssh)
+    client = VirtuosoClient(host="127.0.0.1", port=ssh.port, tunnel=ssh)
+    # Consulted only when SSH discovery finds no documentation.
+    client._install_root_probe = lambda: _running_daemon_install_root(profile)
+    return client
+
+
+def _running_daemon_install_root(profile: str | None) -> str | None:
+    """Install root reported by an already running bridge daemon, or None.
+
+    Documentation fallback for sites whose non-interactive shells cannot find
+    Virtuoso (tools only behind site wrapper commands). Only an existing
+    tunnel is reused, through the normal authenticated and identity-checked
+    client; nothing is started, restarted or deployed. Any failure (no
+    tunnel, busy or blocked CIW, failed checks) means "no fallback".
+    """
+    from virtuoso_bridge import VirtuosoClient
+    from virtuoso_bridge.transport.tunnel import SSHClient
+    from virtuoso_bridge.virtuoso.basic.bridge import _INSTALL_ROOT_QUERY_TIMEOUT
+
+    client = None
+    try:
+        if not SSHClient.is_running(profile):
+            return None
+        client = VirtuosoClient.from_env(
+            profile=profile,
+            timeout=int(_INSTALL_ROOT_QUERY_TIMEOUT),
+            log_to_ciw=False,
+        )
+        return client._query_install_root()
+    except Exception:  # noqa: BLE001 - a fallback must not fail the lookup
+        return None
+    finally:
+        if client is not None:
+            client.close()
+
+
+def _docs_host_label(client) -> str:
+    """Name of the host whose Cadence documentation a docs client reads."""
+    try:
+        host = client._skill_finder_cache_host()
+    except Exception:  # noqa: BLE001 - only used in a message
+        return "the documentation host"
+    return "this machine" if host == "local" else str(host)
+
+
+def _print_docs_not_found(message: str, *, doc_root_option: bool = False) -> None:
+    """Explain that no Cadence documentation was located, and how to fix it."""
+    try:
+        from virtuoso_bridge.profile import resolve_profile
+
+        profile = resolve_profile(_get_cli_profile())
+    except Exception:  # noqa: BLE001
+        profile = None
+    suffix = f"_{profile}" if profile else ""
+    searched = (
+        "`virtuoso` on PATH and CADENCE_DOC_ROOT/CDS_INST_DIR/CDSHOME"
+        if doc_root_option
+        else "`virtuoso` on PATH"
+    )
+    lines = [
+        f"Error: {message}",
+        f"  Looked for {searched} in a non-interactive shell on the documentation "
+        "host, then asked an already running bridge daemon (if any) for "
+        "cdsGetInstPath().",
+        f"  Fix: set VB_CADENCE_CSHRC{suffix} to a script that exports the Cadence "
+        f"environment (with VB_CADENCE_ENV_SHELL{suffix}=sh for a POSIX sh script), "
+        "or start the bridge and load it in Virtuoso.",
+    ]
+    if doc_root_option:
+        lines.append(
+            "  --doc-root takes directories on this machine (a local install or "
+            "synced copy), not paths on the remote host."
+        )
+    print("\n".join(lines), file=sys.stderr)
 
 
 def cli_find(*, query: str | None, mode: str, limit: int, include_desc: bool, json_output: bool) -> int:
@@ -1371,18 +1445,19 @@ def cli_find(*, query: str | None, mode: str, limit: int, include_desc: bool, js
     import sys
 
     _load_cli_env()
-    from virtuoso_bridge.virtuoso.skill_finder import SKILLFinder
-
-    client = _docs_client()
+    from virtuoso_bridge.virtuoso.skill_finder import SKILLFinder, SKILLFinderNotFoundError
 
     if not query:
         print("Error: query argument required for 'skill-find'", file=sys.stderr)
         return 1
 
-    results = client.find_skill(query or "", mode=mode, limit=limit, include_desc=include_desc)
-
-    if not query:
-        print("Error: query argument required for 'skill-find'", file=sys.stderr)
+    client = _docs_client()
+    try:
+        results = client.find_skill(
+            query, mode=mode, limit=limit, include_desc=include_desc, missing_ok=False,
+        )
+    except SKILLFinderNotFoundError as exc:
+        _print_docs_not_found(f"{exc}; cannot search for {query!r}.")
         return 1
 
     if json_output:
@@ -1400,9 +1475,15 @@ def cli_skill_info(*, func_name: str, json_output: bool) -> int:
     """Get More Info documentation for a specific SKILL function."""
     import json as _json
 
+    from virtuoso_bridge.virtuoso.skill_finder import SKILLFinderNotFoundError
+
     _load_cli_env()
     client = _docs_client()
-    result = client.get_skill_more_info(func_name)
+    try:
+        result = client.get_skill_more_info(func_name, missing_ok=False)
+    except SKILLFinderNotFoundError as exc:
+        _print_docs_not_found(f"{exc}; cannot look up {func_name!r}.")
+        return 1
 
     if json_output:
         print(_json.dumps(result, indent=2, ensure_ascii=False))
@@ -1416,6 +1497,18 @@ def cli_skill_info(*, func_name: str, json_output: bool) -> int:
         print()
         print(result["plain_text"])
     return 0
+
+
+_DOC_ROOT_HELP = (
+    "Cadence doc directory on this machine (a local install or synced copy); "
+    "may be repeated. Remote paths are not accepted: omit it to discover the "
+    "docs on the remote host"
+)
+_MISSING_LOCAL_DOC_ROOTS = (
+    "Error: no --doc-root directory exists on this machine. --doc-root takes "
+    "local directories (a local install or synced copy); omit it to discover "
+    "the docs on the remote host through the active profile."
+)
 
 
 def cli_doc_search(
@@ -1445,7 +1538,7 @@ def cli_doc_search(
                 print("Error: query argument required for 'doc-search'", file=sys.stderr)
                 return 1
             if not roots:
-                print("Error: no existing Cadence doc roots found for --doc-root.", file=sys.stderr)
+                print(_MISSING_LOCAL_DOC_ROOTS, file=sys.stderr)
                 return 1
             local_cache_root = (
                 Path(cache_dir).expanduser() if cache_dir else runtime_cache_dir("docs_search") / "local"
@@ -1491,15 +1584,11 @@ def cli_doc_search(
 
     if not payload.get("doc_roots") and not list_roots:
         if doc_roots:
-            print(
-                "Error: no existing Cadence doc roots found for --doc-root.",
-                file=sys.stderr,
-            )
+            print(_MISSING_LOCAL_DOC_ROOTS, file=sys.stderr)
         else:
-            print(
-                "Error: no Cadence doc roots found. Pass --doc-root or configure "
-                "a Virtuoso Bridge profile with access to the Cadence installation.",
-                file=sys.stderr,
+            _print_docs_not_found(
+                f"no Cadence documentation found on {_docs_host_label(client)}.",
+                doc_root_option=True,
             )
         return 1
 
@@ -1544,20 +1633,16 @@ def cli_doc_info(
             "doc_roots": doc_root_info_local(roots),
         }
         if not payload["doc_roots"]:
-            print(
-                "Error: no existing Cadence doc roots found for --doc-root.",
-                file=sys.stderr,
-            )
+            print(_MISSING_LOCAL_DOC_ROOTS, file=sys.stderr)
             return 1
     else:
         _load_cli_env()
         client = _docs_client()
         payload = client.doc_info()
         if not payload.get("doc_roots"):
-            print(
-                "Error: no Cadence doc roots found. Pass --doc-root or configure "
-                "a Virtuoso Bridge profile with access to the Cadence installation.",
-                file=sys.stderr,
+            _print_docs_not_found(
+                f"no Cadence documentation found on {_docs_host_label(client)}.",
+                doc_root_option=True,
             )
             return 1
 
@@ -2272,7 +2357,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         action="append",
         default=[],
-        help="Cadence doc root; may be repeated",
+        help=_DOC_ROOT_HELP,
     )
     sp_doc_search.add_argument("--list-roots", action="store_true", help="Print resolved doc roots and exit")
     sp_doc_search.add_argument("-n", "--limit", type=int, default=10, help="Maximum results to return")
@@ -2300,7 +2385,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         action="append",
         default=[],
-        help="Cadence doc root; may be repeated",
+        help=_DOC_ROOT_HELP,
     )
     sp_doc_info.add_argument("--json", action="store_true", help="Output results as JSON")
     sp_doc_info.add_argument("-p", "--profile", default=None, help="Connection profile")

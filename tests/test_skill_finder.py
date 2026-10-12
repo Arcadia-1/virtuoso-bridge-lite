@@ -13,9 +13,19 @@ from virtuoso_bridge.virtuoso.skill_finder import SKILLFinder
 class _FakeSkillClient:
     def __init__(self) -> None:
         self.find_calls: list[tuple[str, str, int, bool]] = []
+        self.missing_ok: list[bool] = []
 
-    def find_skill(self, query: str, *, mode: str = "fuzzy", limit: int = 50, include_desc: bool = False):
+    def find_skill(
+        self,
+        query: str,
+        *,
+        mode: str = "fuzzy",
+        limit: int = 50,
+        include_desc: bool = False,
+        missing_ok: bool = True,
+    ):
         self.find_calls.append((query, mode, limit, include_desc))
+        self.missing_ok.append(missing_ok)
         return [
             {
                 "name": "dbOpenCellViewByType",
@@ -25,7 +35,8 @@ class _FakeSkillClient:
             }
         ]
 
-    def get_skill_more_info(self, func_name: str):
+    def get_skill_more_info(self, func_name: str, *, missing_ok: bool = True):
+        self.missing_ok.append(missing_ok)
         return {
             "func_name": func_name,
             "file_path": "$database/db.html",
@@ -62,6 +73,8 @@ def test_skill_find_json_flag_emits_json(capsys, monkeypatch):
 
     assert rc == 0
     assert fake.find_calls == [("dbOpen", "prefix", 3, False)]
+    # The CLI asks for an error, not [], when no Finder data exists.
+    assert fake.missing_ok == [False]
     assert seen_profiles == [None]
     parsed = json.loads(capsys.readouterr().out)
     assert parsed[0]["name"] == "dbOpenCellViewByType"
