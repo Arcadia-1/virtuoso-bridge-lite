@@ -1,0 +1,240 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 490" width="620" height="490">
+  <!-- Architecture illustration for the landing hero. The VB mark is inlined:
+       an SVG shown through <img> cannot load other files. -->
+  <style>
+    .circuit-flow { stroke-dasharray: 10 90; animation: signal 8s linear infinite; }
+    .flow-two { animation-delay: -3s; }
+    .flow-three { animation-delay: -5s; }
+    @keyframes signal { to { stroke-dashoffset: -400; } }
+    .core-halo { animation: halo 5s ease-in-out infinite; transform-origin: 310px 252px; }
+    @keyframes halo { 50% { opacity: 0.45; transform: scale(1.05); } }
+    @media (prefers-reduced-motion: reduce) {
+      .circuit-flow, .core-halo { animation: none; }
+    }
+  </style>
+  <defs>
+    <pattern
+      id="hero-grid"
+      width="26"
+      height="26"
+      patternUnits="userSpaceOnUse"
+    >
+      <path
+        d="M26 0H0V26"
+        fill="none"
+        stroke="#8b96ad"
+        stroke-opacity=".075"
+        stroke-width=".7"
+      />
+    </pattern>
+    <radialGradient id="core-glow">
+      <stop stop-color="#7561af" stop-opacity=".23" />
+      <stop offset="1" stop-color="#7561af" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="chip-face" x2=".8" y2="1">
+      <stop stop-color="#f7f4fc" />
+      <stop offset="1" stop-color="#f0f4f9" />
+    </linearGradient>
+    <linearGradient id="trace" x2="1" y2=".3">
+      <stop stop-color="#8067b1" />
+      <stop offset=".55" stop-color="#8369b2" />
+      <stop offset="1" stop-color="#237d79" />
+    </linearGradient>
+    <filter id="trace-glow">
+      <feGaussianBlur stdDeviation="3" />
+    </filter>
+  </defs>
+  <path d="M18 90H602V435H18Z" fill="url(#hero-grid)" />
+  <ellipse
+    cx="313"
+    cy="252"
+    rx="213"
+    ry="206"
+    fill="url(#core-glow)"
+  />
+  <g fill="none" stroke="#9b8bc2" stroke-opacity=".09">
+    <circle cx="310" cy="252" r="187" />
+    <circle cx="310" cy="252" r="156" />
+    <path d="M310 38V67M310 437V464M97 252H123M497 252H525" />
+  </g>
+  <g
+    font-family="monospace"
+    font-size="9"
+    fill="#5d6f87"
+    letter-spacing="1.5"
+  >
+    <text x="32" y="57">01 / AGENT → EDA</text>
+    <text x="410" y="451">LOCAL / REMOTE</text>
+  </g>
+  <g stroke="#ad9cc8" stroke-width="1.5" fill="none">
+    <path d="M155 252H246" />
+    <path d="M374 226H405L427 151H465" />
+    <path d="M374 252H465" />
+    <path d="M374 278H405L427 353H465" />
+  </g>
+  <g
+    fill="none"
+    stroke="url(#trace)"
+    stroke-width="2"
+    pathLength="100"
+  >
+    <path class="circuit-flow" d="M155 252H246" />
+    <path
+      class="circuit-flow flow-two"
+      d="M374 226H405L427 151H465"
+    />
+    <path class="circuit-flow" d="M374 252H465" />
+    <path
+      class="circuit-flow flow-three"
+      d="M374 278H405L427 353H465"
+    />
+  </g>
+  <g fill="#8166b1">
+    <circle cx="182" cy="252" r="3" />
+    <circle cx="405" cy="226" r="3" />
+    <circle cx="405" cy="278" r="3" />
+  </g>
+  <g transform="translate(25 211)">
+    <rect
+      width="132"
+      height="82"
+      rx="11"
+      fill="#ffffff"
+      stroke="#b8aecf"
+      stroke-opacity=".6"
+    />
+    <path
+      d="M23 23L31 30L23 37M37 37H47"
+      stroke="#7561af"
+      stroke-width="2"
+      fill="none"
+    />
+    <text
+      x="20"
+      y="61"
+      fill="#35435b"
+      font-size="12"
+      font-family="monospace"
+    >
+      Your AI agent
+    </text>
+    <circle cx="112" cy="26" r="3" fill="#7561af" />
+  </g>
+  <rect
+    class="core-halo"
+    x="229"
+    y="171"
+    width="162"
+    height="162"
+    rx="31"
+    fill="none"
+    stroke="#7561af"
+    stroke-opacity=".18"
+  />
+  <rect
+    x="243"
+    y="185"
+    width="134"
+    height="134"
+    rx="23"
+    fill="#e1d9ef"
+    fill-opacity=".14"
+    stroke="#b8a4d5"
+    stroke-opacity=".28"
+  />
+  <rect x="251" y="193" width="118" height="118" rx="26" fill="#ffffff" stroke="#d9dde3" stroke-width="1.2" />
+  <svg x="273" y="215" width="74" height="74" viewBox="0 0 48 48">
+    <path fill="#000" d="M1 5.39L7.57 5.39L14.68 42.61L8.11 42.61ZM20.02 5.39L26.59 5.39L14.68 42.61L8.11 42.61ZM29.33 5.39L35.9 5.39L23.99 42.61L17.42 42.61ZM29.33 5.39L38.36 5.39C44.71 5.39 48.36 10.05 46.52 15.79C44.69 21.53 38.05 26.19 31.7 26.19L22.67 26.19ZM24.6 20.17L36.91 20.17C43.72 20.17 47.62 25.19 45.64 31.39C43.66 37.59 36.53 42.61 29.73 42.61L17.42 42.61ZM33.97 11.41L31.17 20.17L33.63 20.17C36.35 20.17 39.18 18.21 39.96 15.79C40.73 13.37 39.15 11.41 36.43 11.41ZM29.24 26.19L25.91 36.59L31.66 36.59C34.83 36.59 38.15 34.26 39.07 31.39C39.99 28.52 38.16 26.19 34.99 26.19Z" />
+  </svg>
+  <g stroke="#a995c5" stroke-opacity=".65">
+    <path
+      d="M280 184V174M300 184V174M320 184V174M340 184V174M280 320V330M300 320V330M320 320V330M340 320V330"
+    />
+  </g>
+  <g font-family="monospace">
+    <g transform="translate(465 117)">
+      <rect
+        width="139"
+        height="69"
+        rx="9"
+        fill="#f1f8f5"
+        stroke="#237d79"
+        stroke-opacity=".25"
+      />
+      <path
+        d="M16 22H28M22 16V28"
+        stroke="#237d79"
+        stroke-width="1.5"
+      />
+      <text x="37" y="26" font-size="12" fill="#276c60">
+        Virtuoso
+      </text>
+      <text x="16" y="49" font-size="8" fill="#50736b">
+        SCHEMATIC · LAYOUT
+      </text>
+    </g>
+    <g transform="translate(465 218)">
+      <rect
+        width="139"
+        height="69"
+        rx="9"
+        fill="#f6f2fa"
+        stroke="#9a81bb"
+        stroke-opacity=".32"
+      />
+      <path
+        d="M16 25L22 18L29 25L22 32Z"
+        stroke="#8362ad"
+        fill="none"
+      />
+      <text x="37" y="27" font-size="12" fill="#665084">
+        Maestro
+      </text>
+      <text x="16" y="50" font-size="8" fill="#76618e">
+        SESSIONS · HISTORY
+      </text>
+    </g>
+    <g transform="translate(465 319)">
+      <rect
+        width="139"
+        height="69"
+        rx="9"
+        fill="#f1f8f5"
+        stroke="#237d79"
+        stroke-opacity=".25"
+      />
+      <path
+        d="M15 26L19 26L23 17L27 31L31 26"
+        stroke="#237d79"
+        fill="none"
+        stroke-width="1.5"
+      />
+      <text x="39" y="27" font-size="12" fill="#276c60">
+        Spectre
+      </text>
+      <text x="16" y="50" font-size="8" fill="#50736b">
+        NETLIST → PSF
+      </text>
+    </g>
+  </g>
+  <g font-family="monospace" font-size="8" fill="#6e5a88">
+    <text x="187" y="237">PYTHON</text>
+    <text x="273" y="352">SKILL / CLI</text>
+  </g>
+  <path
+    d="M87 313V402H452"
+    stroke="#88a39a"
+    stroke-opacity=".4"
+    fill="none"
+    stroke-dasharray="3 5"
+  />
+  <text
+    x="112"
+    y="421"
+    font-family="monospace"
+    font-size="8"
+    fill="#577168"
+  >
+    STANDALONE SPECTRE · NO VIRTUOSO DAEMON
+  </text>
+</svg>

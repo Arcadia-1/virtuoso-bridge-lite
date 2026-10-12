@@ -1,8 +1,9 @@
 # Virtuoso Bridge website
 
-The landing page, privacy page and SVG identity live in `../docs/`. The landing
-page is a short front door: setup and reference material stay in the repository
-README, and `/guide/` only redirects there so old links keep working.
+The landing page, guide, privacy page and SVG identity live in `../docs/`. The
+landing page is the front door; `/guide/` holds the full documentation that used
+to be in the README, which now only links here. `docs/guide/index.html` is plain
+HTML: edit it directly.
 `npm ci && npm run check && npm test && npm run build` builds this isolated
 website package. `npm run preview` serves the full site with local Cloudflare
 Durable Object storage. It does not connect to Cadence.

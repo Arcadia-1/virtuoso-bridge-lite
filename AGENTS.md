@@ -60,7 +60,8 @@ Keep authentication and daemon identity checks enabled on shared hosts.
   [profile audit](docs/profile-audit.md); these are not default setup steps.
 - Requested traffic maintenance: [traffic guide](docs/agents/traffic.md).
 - Windows skill links cloned as text: inspect `scripts/fix-symlinks.sh` before
-  running it for the affected checkout. General user setup is in [README](README.md).
+  running it for the affected checkout. General user setup is in the
+  [guide](https://virtuoso-bridge.tokenzhang.com/guide/).
 
 ## Verification
 

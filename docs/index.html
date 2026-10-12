@@ -31,8 +31,8 @@
         document.documentElement.lang = l === "zh" ? "zh-CN" : "en";
       } catch (e) {}
     </script>
-    <link rel="stylesheet" href="/site.css?v=20261012-compare" />
-    <script src="/site.js?v=20261012-compare" defer></script>
+    <link rel="stylesheet" href="/site.css?v=20261012-hero" />
+    <script src="/site.js?v=20261012-hero" defer></script>
     <script type="module" src="/analytics/track.js?v=20261012-light"></script>
   </head>
   <body>
@@ -136,7 +136,7 @@
           </details>
         </div>
         <nav class="header-nav" aria-label="Main navigation">
-          <a class="nav-guide" href="https://github.com/Arcadia-1/virtuoso-bridge-lite#readme"
+          <a class="nav-guide" href="/guide/" data-internal
             ><svg
               width="16"
               height="16"
@@ -201,19 +201,44 @@
         </div>
       </div>
     </header>
-    <main id="main" class="page">
+    <main id="main">
       <section class="hero" id="top">
-        <h1>Virtuoso Bridge</h1>
-        <p class="lead">
-          <span class="en">Let AI agents drive Cadence Virtuoso and Spectre — from Python, SKILL or the command line.</span><span class="zh">让 AI 智能体通过 Python、SKILL 或命令行，直接操作 Cadence Virtuoso 与 Spectre。</span>
-        </p>
-        <div class="actions">
-          <a class="button primary" href="https://github.com/Arcadia-1/virtuoso-bridge-lite"><span class="en">View on GitHub</span><span class="zh">在 GitHub 查看</span> ↗</a>
-          <a class="button" href="#start"><span class="en">Quick start</span><span class="zh">快速开始</span></a>
+        <div class="wrap">
+          <div class="hero-content">
+            <div class="hero-copy">
+              <div class="eyebrow">
+                <span class="en">Infrastructure for agentic chip design</span><span class="zh">面向智能体的芯片设计基础设施</span>
+              </div>
+              <h1>
+                <span class="en">Your agent.<span class="gradient-text">Inside Virtuoso.</span></span><span class="zh">让智能体，<span class="gradient-text">走进 Virtuoso。</span></span>
+              </h1>
+              <p class="hero-description">
+                <span class="en">Connect AI agents to <strong>real Cadence tools.</strong> Build schematics, run simulations, and read the results — through Python, SKILL, and a bridge built for analog &amp; mixed-signal design.</span><span class="zh">连接 AI 智能体与<strong>真实的 Cadence 设计环境</strong>。通过 Python 和 SKILL 构建原理图、执行仿真、读取结果，让模拟与混合信号设计进入智能体时代。</span>
+              </p>
+              <div class="actions">
+                <a class="button primary" href="#start"><span class="en">Build your first connection</span><span class="zh">开始连接</span><span class="arrow">↗</span></a>
+                <a class="button" href="https://github.com/Arcadia-1/virtuoso-bridge-lite"><span class="en">Explore the source</span><span class="zh">查看开源代码</span><span class="arrow">↗</span></a>
+              </div>
+              <p class="hero-note"><span>OPEN SOURCE</span><span>MIT LICENSE</span><span>PYTHON ≥ 3.9</span></p>
+            </div>
+            <div class="hero-visual">
+              <img
+                src="/assets/architecture.svg?v=20261012-hero"
+                width="620"
+                height="490"
+                alt="Architecture: your AI agent talks to Virtuoso Bridge through Python, SKILL or the CLI; the bridge reaches Virtuoso schematic and layout, Maestro, and Spectre, which can also run without a Virtuoso daemon."
+              />
+              <p class="diagram-label"><span class="en">ARCHITECTURE ILLUSTRATION / NOT A LIVE SESSION</span><span class="zh">架构示意 / 非实时会话</span></p>
+            </div>
+          </div>
+          <div class="hero-baseline">
+            <span>ONE BRIDGE. REAL DESIGN TOOLS.</span>
+            <div class="capabilities"><span>SCHEMATIC</span><span>LAYOUT</span><span>SPECTRE</span><span>MAESTRO</span></div>
+          </div>
         </div>
-        <p class="meta">Open source · MIT · Python ≥ 3.9</p>
       </section>
 
+      <div class="page">
       <section class="block" id="skillbridge">
         <h2><span class="en">How it differs from skillbridge</span><span class="zh">与 skillbridge 的区别</span></h2>
         <p><span class="en">Both run SKILL through the same Virtuoso IPC core (<code>ipcBeginProcess</code> + <code>evalstring</code>). The difference is what sits on top.</span><span class="zh">两者底层相同，都通过 Virtuoso 的 IPC 机制（<code>ipcBeginProcess</code> + <code>evalstring</code>）执行 SKILL，区别在上层。</span></p>
@@ -277,20 +302,21 @@ virtuoso-bridge status           <span class="comment"># prints the load("...") 
 virtuoso-bridge eval '1+2'       <span class="comment"># after loading it: 3</span></code></pre>
         </div>
         <p class="note">
-          <span class="en">Paste the <code>load("...")</code> line into the Virtuoso CIW you want to drive. Windows, local mode and standalone Spectre: see the <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite#quick-start">README</a>.</span><span class="zh">把 <code>load("...")</code> 这行粘贴到要控制的 Virtuoso CIW。Windows、本机模式、独立 Spectre 见 <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite#quick-start">README</a>。</span>
+          <span class="en">Paste the <code>load("...")</code> line into the Virtuoso CIW you want to drive. Windows, local mode and standalone Spectre: see the <a href="/guide/#install" data-internal>guide</a>.</span><span class="zh">把 <code>load("...")</code> 这行粘贴到要控制的 Virtuoso CIW。Windows、本机模式、独立 Spectre 见<a href="/guide/#install" data-internal>使用文档</a>。</span>
         </p>
       </section>
 
       <section class="block" id="docs">
-        <h2><span class="en">More in the repo</span><span class="zh">更多内容在仓库里</span></h2>
+        <h2><span class="en">Read more</span><span class="zh">延伸阅读</span></h2>
         <ul class="links">
-          <li><a href="https://github.com/Arcadia-1/virtuoso-bridge-lite#readme">README</a><span><span class="en">setup, CLI, architecture</span><span class="zh">安装、命令行、架构</span></span></li>
+          <li><a href="/guide/" data-internal><span class="en">Guide</span><span class="zh">使用文档</span></a><span><span class="en">setup, configuration, CLI, architecture</span><span class="zh">安装、配置、命令行、架构</span></span></li>
           <li><a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/examples">examples/</a><span><span class="en">runnable workflows</span><span class="zh">可运行的工作流</span></span></li>
           <li><a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/AGENTS.md">AGENTS.md</a><span><span class="en">start here for coding agents, then link <code>skills/</code></span><span class="zh">编程智能体从这里读起，再链接 <code>skills/</code></span></span></li>
           <li><a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/issues"><span class="en">Issues</span><span class="zh">问题反馈</span></a><span><span class="en">bugs and requests</span><span class="zh">缺陷与需求</span></span></li>
-          <li><a href="https://github.com/Arcadia-1/virtuoso-bridge-lite#citation"><span class="en">Citation</span><span class="zh">引用</span></a><span>BibTeX</span></li>
+          <li><a href="/guide/#cite" data-internal><span class="en">Citation</span><span class="zh">引用</span></a><span>BibTeX</span></li>
         </ul>
       </section>
+      </div>
     </main>
     <footer class="site-footer">
       <div class="wrap">
@@ -299,7 +325,7 @@ virtuoso-bridge eval '1+2'       <span class="comment"># after loading it: 3</sp
             © 2026 Virtuoso Bridge <span aria-hidden="true">·</span> MIT
           </p>
           <nav class="footer-links" aria-label="Footer">
-            <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite#citation"
+            <a href="/guide/#cite" data-internal
               ><span class="en">Cite</span><span class="zh">引用</span></a
             >
             <a href="https://www.tokenzhang.com/"
