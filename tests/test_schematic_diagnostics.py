@@ -79,6 +79,27 @@ def test_check_save_returns_codes_counts_and_current_operation_lines() -> None:
     ]
 
 
+def test_check_save_classifies_cds_log_stream_tags() -> None:
+    # As SKILL prints the CDS.log lines: the stream tag's backslash is escaped.
+    lines = (
+        r'"\\o Warning: Floating net \"A\".\n"',
+        r'"\\w ignored setting\n"',
+        r'"\\e cannot open cellview\n"',
+        r'"\\o ordinary chatter\n"',
+        r'"\\i schCheck(cv)\n"',
+    )
+    client = _Client(_success(f'("vbCheckSave" 1 2 t t ({" ".join(lines)}) nil)'))
+
+    result = check_and_save_schematic(client, "LIB", "AMP")
+
+    assert [(item.severity, item.message) for item in result.diagnostics] == [
+        ("warning", 'Warning: Floating net "A".'),
+        ("warning", "ignored setting"),
+        ("error", "cannot open cellview"),
+    ]
+    assert result.check_log_lines[0] == '\\o Warning: Floating net "A".'
+
+
 def test_check_save_keeps_authoritative_count_when_log_text_is_missing() -> None:
     client = _Client(_success('("vbCheckSave" 2 0 t nil nil nil)'))
 
