@@ -63,6 +63,8 @@ def test_remote_setup_path_and_port_are_profile_scoped(monkeypatch) -> None:
     setup_path = "/tmp/virtuoso_bridge_designer/90590/virtuoso_bridge_t28_digital/virtuoso_setup.il"
     setup = fake.uploads[setup_path]
     assert 'setShellEnvVar("RB_PORT" "65263")' in setup
+    assert 'setShellEnvVar("RB_LISTEN_ALL" "0")' in setup
+    assert setup.index("RB_LISTEN_ALL") < setup.index("\nload(")
     assert 'setShellEnvVar("RB_IDENTITY_PATH"' in setup
     assert '/tmp/virtuoso_bridge_designer/90590/virtuoso_bridge_t28_digital/ramic_bridge.il' in setup
 
@@ -776,3 +778,22 @@ def test_wait_for_tunnel_running_retries_during_startup(monkeypatch) -> None:
     monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
 
     assert cli._wait_for_tunnel_running("t28", timeout=5)
+
+
+def test_daemon_listens_on_loopback_unless_listen_all_is_set(monkeypatch) -> None:
+    from virtuoso_bridge.transport.tunnel import _find_ramic_bridge_il, _generate_virtuoso_setup_il
+
+    il = _find_ramic_bridge_il().read_text(encoding="utf-8")
+    assert 'RBLocal = getShellEnvVar("RB_LISTEN_ALL") != "1"' in il
+    assert 'setShellEnvVar("RB_LISTEN_ALL" "0")' in _generate_virtuoso_setup_il("d.py", "b.il")
+    assert 'setShellEnvVar("RB_LISTEN_ALL" "1")' in _generate_virtuoso_setup_il(
+        "d.py", "b.il", listen_all=True
+    )
+
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.load_vb_env", lambda: None)
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHRunner", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setenv("VB_REMOTE_HOST_t28", "eda-host")
+    monkeypatch.delenv("VB_DAEMON_LISTEN_ALL_t28", raising=False)
+    assert SSHClient.from_env(profile="t28")._listen_all is False
+    monkeypatch.setenv("VB_DAEMON_LISTEN_ALL_t28", "1")
+    assert SSHClient.from_env(profile="t28")._listen_all is True
