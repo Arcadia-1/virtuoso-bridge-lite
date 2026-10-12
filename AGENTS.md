@@ -78,4 +78,5 @@ Documentation-only changes need valid references and skill frontmatter checks.
 
 State separately what was tested offline and what was verified on real
 Cadence/PDK hardware. A green fixture suite does not establish GUI-equivalent
-electrical results.
+electrical results. Test layers, live-test variables and the rule against
+committing lab or PDK data are in [tests/README.md](tests/README.md).
