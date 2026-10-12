@@ -1,12 +1,11 @@
-"""Live GDS export check, kept apart because it can leave the CIW blocked.
+"""Live GDS export check.
 
 Runs after ``test_bridge_live.py`` with the same environment variables (see
-that module) plus ``VB_TEST_LAYER`` and ``VB_TEST_STREAM_MAP``. On IC6.1.8
-XStream Out shows a modal "Stream out translation complete" box after every
-run: the box follows the ``xstShowCompletionMsgBox`` SKILL variable, while the
-bridge only clears the ``showCompletionMsgBox`` form field. Until that is
-fixed the box stays open, so this module never sends SKILL after a blocked
-inspection and leaves its cell in place for manual cleanup.
+tests/README.md) plus ``VB_TEST_LAYER`` and ``VB_TEST_STREAM_MAP``. XStream
+Out raises a modal "translation complete" box unless the bridge turns off the
+``xstShowCompletionMsgBox`` environment variable for the launch; a regression
+would block the CIW, so this module never sends SKILL after a blocked
+inspection and then leaves its cell in place for manual cleanup.
 """
 
 from __future__ import annotations
@@ -32,9 +31,6 @@ from virtuoso_bridge import VirtuosoClient  # noqa: E402
 from virtuoso_bridge.virtuoso.layout import layout_create_rect as rect  # noqa: E402
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "open bug: XStream's completion message box is controlled by xstShowCompletionMsgBox "
-    "on IC6.1.8, so every export leaves a modal box that blocks the next request"))
 def test_gds_export_succeeds_and_leaves_ciw_unblocked(tmp_path):
     lib = os.getenv("VB_TEST_LIB")
     layer = os.getenv("VB_TEST_LAYER")
