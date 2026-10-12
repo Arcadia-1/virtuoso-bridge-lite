@@ -260,3 +260,42 @@ def test_legacy_submit_pool_does_not_leak_into_batches(monkeypatch, tmp_path) ->
     simulator.shutdown()
     with pytest.deprecated_call():
         simulator.set_max_workers(1)
+
+
+def test_failed_remote_run_logs_spectre_output_instead_of_printing(
+    monkeypatch, tmp_path, capsys, caplog
+) -> None:
+    from virtuoso_bridge.transport.ssh import CommandResult, RemoteTaskResult
+
+    spectre_error = 'ERROR (SFE-868): "fixture.scs" 2: Cannot open the input file "missing.scs".'
+    monkeypatch.setattr(
+        runner,
+        "run_remote_task",
+        lambda *_args, **_kwargs: RemoteTaskResult(
+            success=True, returncode=1, stdout=spectre_error, stderr="",
+            remote_dir=None, error=None, timings={},
+        ),
+    )
+
+    class _Runner:
+        host = "eda-host"
+
+        def download(self, _remote, local, recursive=False, **_kwargs):
+            Path(local).mkdir(parents=True, exist_ok=True)
+            return CommandResult(returncode=0, stdout="", stderr="")
+
+    netlist = tmp_path / "fixture.scs"
+    netlist.write_text("simulator lang=spectre\n", encoding="utf-8")
+    caplog.set_level("INFO", logger="virtuoso_bridge.spectre.runner")
+
+    run_result = runner._run_spectre_remote(
+        netlist=netlist, params={}, runner=_Runner(), remote_work_dir="/remote/work",
+        base_output_dir=tmp_path / "out", keep_remote_files=True,
+        cadence_env=runner.CadenceEnvironment(""),
+    )
+    result = runner._build_simulation_result(run_result, "psfascii")
+
+    assert capsys.readouterr().out == ""
+    assert spectre_error in caplog.text
+    assert "spectre" in caplog.text and "+log" in caplog.text
+    assert any("SFE-868" in error or "file not found" in error for error in result.errors)

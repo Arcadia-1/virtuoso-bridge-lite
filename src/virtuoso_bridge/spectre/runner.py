@@ -253,8 +253,6 @@ def _run_spectre_remote(
     )
     spectre_command = " ".join(shlex.quote(arg) for arg in spectre_argv)
     logger.info("[remote] %s", spectre_command)
-    print(f"[Command] {spectre_command}")
-    print("[Exec] Remote simulation running...")
 
     environment = cadence_env or CadenceEnvironment.from_env()
     run_command = f"exec {spectre_command}"
@@ -296,12 +294,10 @@ def _run_spectre_remote(
         stdout = (task.stdout or "").strip()
         stderr = (task.stderr or "").strip()
         if stdout or stderr:
-            print("[Simulation output]")
-            if stdout:
-                print(stdout)
-            if stderr:
-                print("[stderr]")
-                print(stderr)
+            logger.warning(
+                "Spectre exited with %s\n[stdout]\n%s\n[stderr]\n%s",
+                task.returncode, stdout, stderr,
+            )
 
     def _cleanup_remote_run_dir() -> None:
         if not keep_remote_files and task.remote_dir:
@@ -861,7 +857,7 @@ class SpectreSimulator:
                     errors=[f"Task {i} failed: {exc}"],
                 ))
         passed = sum(1 for r in results if r.status == ExecutionStatus.SUCCESS)
-        print(f"[parallel] Done: {passed}/{len(results)} succeeded")
+        logger.info("[parallel] Done: %d/%d succeeded", passed, len(results))
         return results
 
     def check_license(self) -> dict[str, Any]:
