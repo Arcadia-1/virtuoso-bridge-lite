@@ -49,7 +49,8 @@ client.download_file("/tmp/si_run/netlist", "output/si_netlist.scs")
 - For HSPICE/auCdl/Verilog: use `-command netlist`
 - `-cdslib` can be omitted if `cds.lib` exists in home directory
 - `cds.lib` path can be found via: `client.execute_skill('simplifyFilename("./cds.lib")')`
-- `run_shell_command` uses csh -- returns `t`/`nil`, not stdout. Don't rely on output.
+- `run_shell_command` runs csh in the Virtuoso process's environment; `.output` is the
+  command's stdout+stderr, and a non-zero exit status is an error result.
 
 Output file: `<runDir>/netlist` (a single file, not a directory).
 

@@ -1040,19 +1040,64 @@ let((result winName ciwNum)
         return rows[0] if rows else {}
 
     def run_shell_command(self, cmd: str, timeout: int | None = None) -> VirtuosoResult:
+        """Run a csh command in the Virtuoso process's environment.
+
+        ``output`` is the command's stdout and stderr; a non-zero exit status
+        is an ERROR result. The command is written verbatim to a temp script
+        that a csh subshell sources, so quoting reaches csh unchanged, and its
+        output goes through a private temp file because SKILL's ``csh()`` only
+        returns t/nil.
+        """
+        from virtuoso_bridge.virtuoso.skill_output import parse_sexpr
+
         effective_timeout = timeout if timeout is not None else self._timeout
-        escaped = _escape_skill_string(cmd)
-        result = self.execute_skill(f'csh("{escaped}")', timeout=effective_timeout)
+        escaped = _escape_skill_string(cmd).replace("\n", "\\n")  # keep line breaks
+        skill = (
+            "let((vbScript vbOut vbOk vbPort vbLine vbText) "
+            'vbScript = makeTempFileName("/tmp/vb_shell_cmd") '
+            'vbOut = makeTempFileName("/tmp/vb_shell_out") '
+            "vbPort = outfile(vbScript) "
+            f'fprintf(vbPort "%s\\n" "{escaped}") '
+            "close(vbPort) "
+            'vbOk = csh(strcat("umask 077; ( source " vbScript " ) >& " vbOut)) '
+            'vbText = "" '
+            "when(vbPort = infile(vbOut) "
+            "while(gets(vbLine vbPort) vbText = strcat(vbText vbLine)) "
+            "close(vbPort)) "
+            "deleteFile(vbScript) "
+            "deleteFile(vbOut) "
+            "list(if(vbOk t nil) vbText))"
+        )
+        result = self.execute_skill(skill, timeout=effective_timeout)
         if result.status != ExecutionStatus.SUCCESS:
             return result
-        if (result.output or "").strip().lower() == "nil":
+        try:
+            parsed = parse_sexpr((result.output or "").strip())
+        except ValueError:
+            parsed = None
+        if not isinstance(parsed, list) or len(parsed) != 2:
             return VirtuosoResult(
                 status=ExecutionStatus.ERROR,
-                errors=[f"Shell command failed (csh returned nil): {cmd}"],
+                errors=[f"Shell command returned malformed output: {result.output!r}"],
                 metadata={"cmd": cmd},
                 execution_time=result.execution_time,
             )
-        return result
+        succeeded, text = parsed[0] is True, parsed[1] if isinstance(parsed[1], str) else ""
+        if not succeeded:
+            last = text.strip().splitlines()[-1] if text.strip() else ""
+            return VirtuosoResult(
+                status=ExecutionStatus.ERROR,
+                output=text,
+                errors=[f"Shell command failed: {cmd}" + (f" ({last})" if last else "")],
+                metadata={"cmd": cmd},
+                execution_time=result.execution_time,
+            )
+        return VirtuosoResult(
+            status=ExecutionStatus.SUCCESS,
+            output=text,
+            metadata={"cmd": cmd},
+            execution_time=result.execution_time,
+        )
 
     # -- X11 dialog recovery (bypasses SKILL channel) ----------------------
 
