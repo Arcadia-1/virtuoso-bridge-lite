@@ -1,0 +1,18 @@
+[
+  {
+    "skill": "error(\"VB fixture error %d\" 3)",
+    "reply": "(\"error\" 0 t nil (\"*Error* VB fixture error 3\"))"
+  },
+  {
+    "skill": "car(1)",
+    "reply": "(\"car\" 0 t nil (\"*Error* car: argument #1 should be a list (type template = \\\"l\\\")\" 1))"
+  },
+  {
+    "skill": "vbFixtureUndefinedFunction()",
+    "reply": "(\"eval\" 0 t nil (\"*Error* eval: undefined function\" vbFixtureUndefinedFunction))"
+  },
+  {
+    "skill": "progn(\n  car(1)\n)",
+    "reply": "(\"error\" 0 t nil (\"*Error* car: argument #1 should be a list (type template = \\\"l\\\") - 1\"))"
+  }
+]
