@@ -81,6 +81,61 @@ def _resolve_spectre_invocation(
     parts = shlex.split(spectre_cmd) if spectre_cmd.strip() else ["spectre"]
     return parts[0], parts[1:]
 
+def spectre_probe_script(spectre_cmd: str = "") -> str:
+    """POSIX sh printing ``SPECTRE_PATH=<command>`` (or ``NOTFOUND``) and ``-V`` output.
+
+    A few lines of ``-V`` output are kept because site wrappers may print a
+    banner before the version line.
+
+    A configured command is split like a simulation's, so a site wrapper with
+    arguments (``site-wrapper spectre``) is probed exactly as it will run.
+    Without one, ``spectre`` on PATH is used.
+    """
+    if not spectre_cmd.strip():
+        return (
+            'if p=$(command -v spectre 2>/dev/null); then printf "SPECTRE_PATH=%s\\n" "$p"; '
+            'spectre -V 2>&1 | head -n 5; else printf "SPECTRE_PATH=NOTFOUND\\n"; fi'
+        )
+    exe, prefix = _resolve_spectre_invocation(spectre_cmd)
+    argv = " ".join(shlex.quote(part) for part in (exe, *prefix))
+    return (
+        f"if command -v {shlex.quote(exe)} >/dev/null 2>&1; then "
+        f"printf 'SPECTRE_PATH=%s\\n' {shlex.quote(spectre_cmd)}; {argv} -V 2>&1 | head -n 5; "
+        "else printf 'SPECTRE_PATH=NOTFOUND\\n'; fi"
+    )
+
+
+def parse_spectre_probe(stdout: str) -> tuple[str | None, str | None]:
+    """Return (command or path, version line) from :func:`spectre_probe_script` output."""
+    path = version = None
+    for line in stdout.splitlines():
+        line = line.strip()
+        if line.startswith("SPECTRE_PATH="):
+            value = line.split("=", 1)[1]
+            path = None if value == "NOTFOUND" else value
+        elif line.startswith("@(#)$CDS:") and version is None:
+            version = line
+    return path, version
+
+
+def probe_spectre_locally(spectre_cmd: str = "") -> tuple[str | None, str | None]:
+    """Like :func:`spectre_probe_script` on this machine, without a shell."""
+    exe, prefix = _resolve_spectre_invocation(spectre_cmd or "spectre")
+    path = shutil.which(exe)
+    if not path:
+        return None, None
+    try:
+        result = subprocess.run([path, *prefix, "-V"], capture_output=True, text=True, timeout=15)
+    except Exception:
+        return (spectre_cmd if prefix else path), None
+    version = next(
+        (line.strip() for line in (result.stdout + result.stderr).splitlines()
+         if line.strip().startswith("@(#)$CDS:")),
+        None,
+    )
+    return (spectre_cmd if prefix else path), version
+
+
 def spectre_mode_args(mode: str) -> list[str]:
     """Return standard Spectre CLI arguments for a named simulation mode."""
     key = mode.strip().lower()
@@ -875,20 +930,11 @@ class SpectreSimulator:
                 "version": None,
                 "licenses": [],
             }
-            spectre_path = shutil.which(self._spectre_cmd)
+            spectre_path, version = probe_spectre_locally(self._spectre_cmd)
             if spectre_path:
                 info["spectre_path"] = spectre_path
+                info["version"] = version
                 info["ok"] = True
-                try:
-                    ver = subprocess.run(
-                        [self._spectre_cmd, "-V"],
-                        capture_output=True, text=True, timeout=15,
-                    )
-                    ver_line = (ver.stdout or ver.stderr or "").strip().splitlines()
-                    if ver_line:
-                        info["version"] = ver_line[0]
-                except Exception:
-                    pass
                 try:
                     lm = subprocess.run(
                         ["lmstat", "-a"],
@@ -905,23 +951,11 @@ class SpectreSimulator:
 
         runner = None if is_local else self._get_ssh_runner()
 
-        suffix = f"_{self._profile}" if self._profile else ""
-        spectre_bin = (
-            os.environ.get(f"VB_SPECTRE_BIN{suffix}", "").strip()
-            or os.environ.get("VB_SPECTRE_BIN", "").strip()
-        )
-
-        if spectre_bin:
-            quoted_bin = shlex.quote(spectre_bin)
-            path_command = f"printf 'SPECTRE_PATH=%s\\n' {quoted_bin}"
-            ver_cmd = f"{quoted_bin} -V"
-        else:
-            path_command = 'printf "SPECTRE_PATH=%s\\n" "$(which spectre 2>/dev/null || echo NOTFOUND)"'
-            ver_cmd = "spectre -V"
-
+        # Probe what a simulation runs: the configured command (VB_SPECTRE_BIN
+        # is applied in __init__) or spectre on PATH.
+        configured = "" if self._spectre_cmd == "spectre" else self._spectre_cmd
         check_script = environment.wrap(
-            f'{path_command}; '
-            f'{ver_cmd} 2>&1 | head -1; '
+            f"{spectre_probe_script(configured)}; "
             'lmstat -a 2>/dev/null | grep -E "Users of" | grep "licenses in use" | grep -v "0 licenses in use"'
         )
 
@@ -941,16 +975,8 @@ class SpectreSimulator:
             "licenses": [],
         }
 
-        for line in stdout.splitlines():
-            line = line.strip()
-            if line.startswith("SPECTRE_PATH="):
-                path = line.split("=", 1)[1]
-                if path != "NOTFOUND":
-                    info["spectre_path"] = path
-            elif line.startswith("@(#)$CDS:"):
-                info["version"] = line
-            elif "Users of" in line:
-                info["licenses"].append(line)
+        info["spectre_path"], info["version"] = parse_spectre_probe(stdout)
+        info["licenses"] = [line.strip() for line in stdout.splitlines() if "Users of" in line]
 
         if info["spectre_path"]:
             info["ok"] = True

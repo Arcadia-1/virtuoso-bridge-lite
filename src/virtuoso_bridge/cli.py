@@ -733,14 +733,18 @@ def _print_status() -> int:
 def _print_spectre_status(profile: str | None, suffix: str) -> None:
     """Check and print Spectre availability.
 
-    For local mode: uses shutil.which and subprocess locally.
-    For remote mode: SSH-based check via SSHClient.
-
-    A configured environment selector is authoritative; otherwise use PATH.
+    Probes exactly what a simulation runs: VB_SPECTRE_BIN (which may be a
+    site wrapper with arguments) or spectre on PATH, inside the configured
+    environment selector when there is one. Locally without a selector the
+    probe runs without a shell; otherwise over SSH.
     """
-    import shutil
     import subprocess
 
+    from virtuoso_bridge.spectre.runner import (
+        parse_spectre_probe,
+        probe_spectre_locally,
+        spectre_probe_script,
+    )
     from virtuoso_bridge.transport.tunnel import SSHClient, _is_localhost
 
     configured_host = remote_host_roles_from_os(profile, load=False).spectre_host or ""
@@ -754,102 +758,55 @@ def _print_spectre_status(profile: str | None, suffix: str) -> None:
         os.getenv(f"VB_SPECTRE_BIN{suffix}", "").strip()
         or os.getenv("VB_SPECTRE_BIN", "").strip()
     )
-    probe = (
-        f"printf '%s\\n' {shlex.quote(spectre_bin)}; {shlex.quote(spectre_bin)} -V 2>&1 | head -1"
-        if spectre_bin else "which spectre 2>/dev/null && spectre -V 2>&1 | head -1"
-    )
+    probe = spectre_probe_script(spectre_bin)
 
-    if is_local:
-        try:
-            spectre_path = spectre_bin or shutil.which("spectre")
-            version = None
-            if environment.script:
-                result = subprocess.run(
-                    ["sh", "-c", environment.wrap(probe)],
-                    capture_output=True, text=True, timeout=30,
-                )
-                lines = result.stdout.strip().splitlines()
-                spectre_path = lines[0] if result.returncode == 0 and lines else None
-                version = next((line for line in lines[1:] if line.startswith("@(#)$CDS:")), None)
-                if result.returncode != 0 and result.stderr.strip():
-                    print(f"\n[spectre] environment/probe error: {result.stderr.strip()}")
-                    return
-            elif spectre_path:
-                try:
-                    result = subprocess.run(
-                        [spectre_path, "-V"],
-                        capture_output=True, text=True, timeout=10,
-                    )
-                    for line in (result.stdout + result.stderr).splitlines():
-                        if line.strip().startswith("@(#)$CDS:"):
-                            version = line.strip()
-                            break
-                except Exception:
-                    pass
-            if spectre_path:
-                print("\n[spectre] OK")
-                print(f"  path    : {spectre_path}")
-                if version:
-                    print(f"  version : {version}")
-            else:
-                print("\n[spectre] NOT FOUND")
-        except Exception as e:
-            print(f"\n[spectre] error: {e}")
-        return
-
-    # Remote mode — SSH-based check
-    ssh = None
-    try:
-        ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
-        runner = ssh.spectre_runner
-        if runner is None:
-            print("\n[spectre] local mode (no SSH runner)")
-            return
-        runner._verbose = False
-
-        if spectre_bin and not environment.script:
-            # Explicit binary path — skip auto-detection.
-            quoted = shlex.quote(spectre_bin)
-            check_cmd = f"{quoted} -V 2>&1 | head -1"
-            print("\n[spectre] probing...", flush=True)
-            result = runner.run_command(check_cmd, timeout=60)
-            stdout = result.stdout.strip()
-            version = None
-            for line in stdout.splitlines():
-                if line.strip().startswith("@(#)$CDS:"):
-                    version = line.strip()
-                    break
-            print("[spectre] OK")
-            print(f"  path    : {spectre_bin}")
-            if version:
-                print(f"  version : {version}")
-            return
-
-        # One SSH handshake. Source the selected shell before any tool probe.
-        check_cmd = environment.wrap(probe)
-        print("\n[spectre] probing...", flush=True)
-        result = runner.run_command(check_cmd, timeout=60)
-        stdout = result.stdout.strip()
-        if result.returncode != 0 and result.stderr.strip():
-            print(f"[spectre] environment/probe error: {result.stderr.strip()}")
-            return
-
-        spectre_path = None
-        version = None
-        for line in stdout.splitlines():
-            line = line.strip()
-            if line.startswith("@(#)$CDS:"):
-                version = line
-            elif "/" in line and "spectre" in line.lower():
-                spectre_path = line
-
+    def report(spectre_path: str | None, version: str | None) -> None:
         if spectre_path:
             print("[spectre] OK")
             print(f"  path    : {spectre_path}")
             if version:
                 print(f"  version : {version}")
+            else:
+                print("  version : not reported by -V")
+        elif spectre_bin:
+            print(f"[spectre] NOT FOUND: VB_SPECTRE_BIN={spectre_bin} does not name an executable")
         else:
             print("[spectre] NOT FOUND")
+            print("  Set VB_SPECTRE_BIN to the spectre command (a site wrapper with arguments")
+            print("  works), or VB_CADENCE_CSHRC to a script that sets up the Cadence environment.")
+
+    print("\n[spectre] probing...", flush=True)
+    if is_local:
+        try:
+            if environment.script:
+                result = subprocess.run(
+                    ["sh", "-c", environment.wrap(probe)],
+                    capture_output=True, text=True, timeout=30,
+                )
+                if result.returncode != 0 and result.stderr.strip():
+                    print(f"[spectre] environment/probe error: {result.stderr.strip()}")
+                    return
+                report(*parse_spectre_probe(result.stdout))
+            else:
+                report(*probe_spectre_locally(spectre_bin))
+        except Exception as e:
+            print(f"[spectre] error: {e}")
+        return
+
+    # Remote mode — one SSH command; the selector is sourced before the probe.
+    ssh = None
+    try:
+        ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
+        runner = ssh.spectre_runner
+        if runner is None:
+            print("[spectre] local mode (no SSH runner)")
+            return
+        runner._verbose = False
+        result = runner.run_command(environment.wrap(probe), timeout=60)
+        if result.returncode != 0 and result.stderr.strip():
+            print(f"[spectre] environment/probe error: {result.stderr.strip()}")
+            return
+        report(*parse_spectre_probe(result.stdout))
     except Exception as e:
         print(f"[spectre] error: {e}")
     finally:
@@ -909,12 +866,6 @@ def cli_status() -> int:
 def cli_license() -> int:
     _load_cli_env()
     profile = _get_cli_profile()
-    suffix = f"_{profile}" if profile else ""
-    cadence_cshrc = os.getenv(f"VB_CADENCE_CSHRC{suffix}", "").strip() or os.getenv("VB_CADENCE_CSHRC", "").strip()
-    if not cadence_cshrc:
-        print("VB_CADENCE_CSHRC is not set.")
-        return 1
-
     from virtuoso_bridge.transport.tunnel import SSHClient
     if not SSHClient.is_running(profile):
         hint = f"Run `virtuoso-bridge start -p {profile}` first." if profile else "Run `virtuoso-bridge start` first."
@@ -943,7 +894,7 @@ def cli_license() -> int:
 
         info = sim.check_license()
 
-        print(f"[spectre] {info.get('spectre_path', 'NOT FOUND')}")
+        print(f"[spectre] {info.get('spectre_path') or 'NOT FOUND'}")
         if info.get("version"):
             print(f"  version: {info['version']}")
         licenses = info.get("licenses", [])
