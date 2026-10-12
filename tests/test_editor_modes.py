@@ -91,3 +91,48 @@ def test_layout_modify_does_not_claim_a_cellview_the_window_already_holds() -> N
     assert "rbEditCv = geGetEditCellView() vbEditorOpenedCv = nil " in batch
     assert "then rbEditCv else progn(vbEditorOpenedCv = t dbOpenCellViewByType(" in batch
     assert "vbEditorCv = cv vbEditorOpenedCv = vbEditorOpenedCv" in batch
+
+
+def _failed(metadata):
+    from virtuoso_bridge.models import ExecutionStatus, VirtuosoResult
+
+    return VirtuosoResult(status=ExecutionStatus.ERROR, errors=["request outcome unknown"], metadata=metadata)
+
+
+def test_edit_failure_without_guard_metadata_stays_a_plain_runtime_error() -> None:
+    from virtuoso_bridge.virtuoso.editor import ensure_operation_response
+
+    with pytest.raises(RuntimeError) as caught:
+        ensure_operation_response(_failed({}), context="schematic edit")
+    assert type(caught.value) is RuntimeError
+    assert str(caught.value) == "schematic edit failed: request outcome unknown"
+
+
+def test_guarded_edit_failure_keeps_the_request_handle() -> None:
+    from virtuoso_bridge.virtuoso.requests import RequestHandle, RequestRecoveryError
+
+    handle = {"request_id": "a" * 32, "daemon_instance": "b" * 32, "virtuoso_pid": 4242}
+
+    class _Client:
+        def execute_operations(self, commands, *, timeout=None, wrap_in_progn=True):
+            return _failed({"request_handle": handle, "outcome": "unknown"})
+
+    with pytest.raises(RequestRecoveryError) as caught:
+        with SchematicOps(_Client()).create("demoLib", "demoCell"):
+            pass
+    assert caught.value.handle == RequestHandle.model_validate(handle)
+    assert str(caught.value) == "schematic edit failed: request outcome unknown"
+    assert isinstance(caught.value, RuntimeError)
+
+
+def test_dialog_blocked_edit_raises_dialog_blocked_error() -> None:
+    from virtuoso_bridge.virtuoso.dialogs import DialogBlockedError
+    from virtuoso_bridge.virtuoso.editor import ensure_operation_response
+
+    with pytest.raises(DialogBlockedError) as caught:
+        ensure_operation_response(
+            _failed({"dialog_guard": {"status": "blocked"}, "outcome": "not_started"}),
+            context="layout edit",
+        )
+    assert caught.value.outcome == "not_started"
+    assert str(caught.value) == "layout edit failed: request outcome unknown"
