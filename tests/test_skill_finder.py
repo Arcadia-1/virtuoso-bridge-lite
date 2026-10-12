@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import virtuoso_bridge
+from virtuoso_bridge import cli
 from virtuoso_bridge.cli import main
 from virtuoso_bridge.transport.ssh import CommandResult
 from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
@@ -45,7 +45,11 @@ def _patch_cli_client(monkeypatch):
             seen_profiles.append(profile)
             return fake
 
-    monkeypatch.setattr(virtuoso_bridge, "VirtuosoClient", _FakeVirtuosoClient)
+    # Documentation commands build their client without the daemon.
+    monkeypatch.setattr(
+        "virtuoso_bridge.cli._docs_client",
+        lambda: _FakeVirtuosoClient.from_env(profile=cli._get_cli_profile()),
+    )
     monkeypatch.setattr("virtuoso_bridge.cli._load_cli_env", lambda: None)
     monkeypatch.setattr("virtuoso_bridge.profile.resolve_profile", lambda explicit=None: explicit)
     return fake, seen_profiles

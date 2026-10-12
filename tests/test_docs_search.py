@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import virtuoso_bridge
+from virtuoso_bridge import cli
 from virtuoso_bridge.cli import main
 from virtuoso_bridge.transport.ssh import CommandResult
 from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
@@ -151,7 +151,11 @@ def test_doc_search_cli_uses_bridge_when_no_doc_root(capsys, monkeypatch) -> Non
 
     seen_profiles: list[str | None] = []
     seen_calls: list[tuple[str, int, bool]] = []
-    monkeypatch.setattr(virtuoso_bridge, "VirtuosoClient", _FakeDocsClient)
+    # Documentation commands build their client without the daemon.
+    monkeypatch.setattr(
+        "virtuoso_bridge.cli._docs_client",
+        lambda: _FakeDocsClient.from_env(profile=cli._get_cli_profile()),
+    )
     monkeypatch.setattr("virtuoso_bridge.cli._load_cli_env", lambda: None)
     monkeypatch.setattr("virtuoso_bridge.profile.resolve_profile", lambda explicit=None: explicit)
 
@@ -369,7 +373,11 @@ def test_doc_search_cli_passes_rebuild_index(capsys, monkeypatch) -> None:
             return {"doc_roots": ["/cad/ic/doc"], "results": []}
 
     seen_calls: list[tuple[str, int, bool]] = []
-    monkeypatch.setattr(virtuoso_bridge, "VirtuosoClient", _FakeDocsClient)
+    # Documentation commands build their client without the daemon.
+    monkeypatch.setattr(
+        "virtuoso_bridge.cli._docs_client",
+        lambda: _FakeDocsClient.from_env(profile=cli._get_cli_profile()),
+    )
     monkeypatch.setattr("virtuoso_bridge.cli._load_cli_env", lambda: None)
 
     rc = main(["doc-search", "net expression", "--rebuild-index", "--json"])
@@ -1042,7 +1050,11 @@ def test_doc_info_cli_bridge_mode_json_schema_matches_local(tmp_path: Path, caps
         def doc_info(self):
             return {"ok": True, "doc_roots": local_infos}
 
-    monkeypatch.setattr(virtuoso_bridge, "VirtuosoClient", _FakeDocsClient)
+    # Documentation commands build their client without the daemon.
+    monkeypatch.setattr(
+        "virtuoso_bridge.cli._docs_client",
+        lambda: _FakeDocsClient.from_env(profile=cli._get_cli_profile()),
+    )
     monkeypatch.setattr("virtuoso_bridge.cli._load_cli_env", lambda: None)
     monkeypatch.setattr("virtuoso_bridge.profile.resolve_profile", lambda explicit=None: explicit)
 
