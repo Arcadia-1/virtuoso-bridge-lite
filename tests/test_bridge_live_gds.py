@@ -17,10 +17,14 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.skipif(
-    os.getenv("VB_RUN_LIVE_TESTS") != "1",
-    reason="set VB_RUN_LIVE_TESTS=1 to run against a live Virtuoso session",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        os.getenv("VB_RUN_LIVE_TESTS") != "1",
+        reason="set VB_RUN_LIVE_TESTS=1 to run against a live Virtuoso session",
+    ),
+    # Transfers must use the client's real local tar (e.g. macOS bsdtar options).
+    pytest.mark.usefixtures("real_tar_detection"),
+]
 
 if os.getenv("VB_RUN_LIVE_TESTS") == "1" and os.getenv("VB_TEST_ENV_FILE"):
     from virtuoso_bridge.env import set_runtime_env_file
