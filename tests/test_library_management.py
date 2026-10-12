@@ -103,7 +103,24 @@ def test_library_rename_skill_uses_ccp_rename_without_overwrite() -> None:
     skill = library_rename_skill("demoLib", "renamedLib")
 
     assert "ccpRename(vbSource vbDestination nil)" in skill
-    assert 'if(vbRenamed && vbLib && !ddGetObj("demoLib")' in skill
+    assert '(vbRenamed && vbLib && !ddGetObj("demoLib")' in skill
+
+
+def test_library_rename_skill_removes_only_an_empty_destination_it_created() -> None:
+    skill = library_rename_skill("demoLib", "renamedLib")
+
+    # The destination is checked to be absent before ccpRename runs, so a
+    # destination present afterwards was created by this failed rename.
+    assert skill.index('if(ddGetObj("renamedLib")') < skill.index("ccpRename(")
+    assert "car(errset(ccpRename(vbSource vbDestination nil) t))" in skill
+    rollback = skill[skill.index("(vbLib && ddGetObj"):skill.index('list("error" "renameFailed"))')]
+    assert '!vbLib~>cells' in rollback
+    assert "vbLib~>readPath != vbSourcePath" in rollback
+    assert rollback.index("!vbLib~>cells") < rollback.index("ddDeleteObj(vbLib)")
+    assert '!ddGetObj("renamedLib")' in rollback
+    # Any other state with both names defined is reported, not repaired.
+    assert skill.count('(vbLib && ddGetObj("demoLib")') == 2
+    assert 'list("error" "renameIncomplete")' in skill
 
 
 def test_library_set_technology_uses_bind_for_new_and_set_for_existing() -> None:
@@ -209,6 +226,7 @@ def test_create_library_reports_partial_technology_binding() -> None:
         ('("error" "destinationExists")', "destination library already exists"),
         ('("error" "technologyLibraryNotFound")', "technology library does not exist"),
         ('("error" "renameFailed")', "renameFailed"),
+        ('("error" "renameIncomplete")', "left both libraries defined"),
     ],
 )
 def test_library_operations_raise_explicit_operation_errors(output: str, message: str) -> None:

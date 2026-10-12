@@ -277,9 +277,6 @@ def test_library_create_rename_delete_with_technology(client, lib):
         _drop_libraries(client, name, name + "_r")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "open bug: renaming a library with no cells and no technology fails in ccpRename "
-    "('Invalid list to copy') and leaves both the old and the new library defined"))
 def test_failed_library_rename_never_leaves_both_names(client, lib):
     parent = posixpath.dirname(client.library.get(lib).path)
     name = f"{PREFIX}empty_{RUN}"
