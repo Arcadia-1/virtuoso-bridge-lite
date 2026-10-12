@@ -62,18 +62,18 @@ def _find_locks(client: VirtuosoClient, lib_path: str) -> list[str]:
         raise RuntimeError(f"find failed on remote: {r.errors[0]}")
     # SKILL system() returns nil/t (success/failure indicator), not stdout.
     # Run it via the remote shell directly so we get stdout.
-    cmd = client.ssh_runner.run(f"find {lib_path} -name '.cdslck' -print 2>/dev/null")
+    cmd = client.ssh_runner.run_command(f"find {lib_path} -name '.cdslck' -print 2>/dev/null")
     return [line.strip() for line in (cmd.stdout or "").splitlines() if line.strip()]
 
 
 def _read_lock(client: VirtuosoClient, path: str) -> str:
-    cmd = client.ssh_runner.run(f"cat {path} 2>/dev/null")
+    cmd = client.ssh_runner.run_command(f"cat {path} 2>/dev/null")
     return (cmd.stdout or "").strip()
 
 
 def _stat_age(client: VirtuosoClient, path: str) -> float | None:
     """Return the lock file's age in seconds, or None if stat fails."""
-    cmd = client.ssh_runner.run(f"stat -c %Y {path} 2>/dev/null")
+    cmd = client.ssh_runner.run_command(f"stat -c %Y {path} 2>/dev/null")
     try:
         mtime = int((cmd.stdout or "").strip())
         return time.time() - mtime
