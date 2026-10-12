@@ -99,6 +99,37 @@ Use the setup or wrapper of the IC version the CIW runs, and update it when
 that version changes. Hosts or versions with different setups use profile
 suffixes such as `VB_CADENCE_CSHRC_worker`.
 
+## Read-only setup check
+
+When a setup misbehaves in a way `status` does not explain, or before handing
+a host to automation, run the doctor. It checks one profile per run; select it
+with `-p`/`--env` as for `status`:
+
+```bash
+virtuoso-bridge doctor
+virtuoso-bridge doctor --json   # [{"name", "status", "detail", "fix"}, ...]
+```
+
+Each check prints `OK`, `WARN`, `FAIL` or `SKIP` with a one-line reason and,
+for WARN/FAIL, a fix; the exit status is 1 only when a check FAILs. It checks
+the loaded `.env`, profile and target; the tunnel, signed daemon handshake,
+daemon owner and IPC lane; a daemon listening beyond 127.0.0.1
+(`VB_DAEMON_LISTEN_ALL`); that the remote deploy directories are yours, mode
+0700 and free of symlinks; open dialogs (X11, out of band) and PDK first-use
+forms; `<X>_UseNextLicense` values other than `"always"`, whose "Next License"
+prompt blocks the CIW on the first edit; Spectre; and the documentation that
+`skill-find`/`doc-search` would use.
+
+The doctor changes nothing: it never starts, stops, restarts or deploys, writes
+no file on the remote host, sends only read-only SKILL (no `envSetVal`) and
+dismisses no dialog; apply its fixes yourself. It sends no SKILL while the
+daemon's lane is busy or a dialog blocks the CIW. Without a running tunnel or
+daemon, the checks that need one report SKIP, while the scratch directory,
+Spectre and documentation are still checked over SSH. A PDK's first-use form
+otherwise blocks the first bridge request that touches its technology; for a
+headless Virtuoso, initialise the technology in `.cdsinit` or the `-restore`
+script before the bridge is used, e.g. `techGetTechFile(ddGetObj("<pdkLib>"))`.
+
 ## Optional advanced installations
 
 Only configure extra roles when the user actually has a split installation.

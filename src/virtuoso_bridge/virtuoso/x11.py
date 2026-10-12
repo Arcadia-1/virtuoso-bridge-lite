@@ -146,8 +146,14 @@ def inspect_dialogs(
     runner: SSHRunner | None, user: str, *, pid: int,
     display: str | None = None, ciw_window: str | None = None,
     profile: str | None = None, timeout: float = 15,
+    deploy_helper: bool = True,
 ) -> dict[str, Any]:
-    """Read-only inspection of one CIW process, without broad DISPLAY discovery."""
+    """Read-only inspection of one CIW process, without broad DISPLAY discovery.
+
+    Over SSH the helper is uploaded once to the profile scratch directory.
+    With ``deploy_helper=False`` its source is streamed to the remote Python
+    on stdin instead, so nothing is written to the remote host.
+    """
     import math
 
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
@@ -162,9 +168,16 @@ def inspect_dialogs(
             raise TimeoutError("X11 inspection budget exhausted")
         return value
 
+    streamed_source: str | None = None
     if runner is None:
         script = str(_HELPER_SCRIPT)
         py = _detect_remote_python(None, timeout=remaining())
+    elif not deploy_helper:
+        # A here-document feeds the helper to ``python -``: no remote file is
+        # created, and no file planted in a shared scratch path is executed.
+        script = "-"
+        streamed_source = _HELPER_SCRIPT.read_text(encoding="utf-8").rstrip("\n")
+        py = _detect_remote_python(runner, timeout=remaining())
     else:
         # A content-addressed helper cannot be overwritten by another installed
         # Bridge version sharing the same profile scratch directory.
@@ -191,6 +204,11 @@ def inspect_dialogs(
         cmd += f" {shlex.quote(display)}"
     execution_budget = remaining()
     cmd += f" --timeout {execution_budget}"
+    if streamed_source is not None:
+        marker = "VB_DIALOG_HELPER_SOURCE_END"
+        if marker in streamed_source:
+            raise RuntimeError("X11 inspection helper source contains its stdin end marker")
+        cmd += f" <<'{marker}'\n{streamed_source}\n{marker}"
     result = _run(runner, cmd, timeout=execution_budget)
     items = _parse_result(result)
     reports = [item for item in items if isinstance(item, dict) and "status" in item]

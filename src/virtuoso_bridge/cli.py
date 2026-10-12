@@ -870,6 +870,39 @@ def cli_status() -> int:
     return _for_each_profile(_print_status)
 
 
+# -- doctor -----------------------------------------------------------------
+
+def cli_doctor(*, json_output: bool = False) -> int:
+    """Run the read-only setup checks; exit 1 when any check FAILs."""
+    import json
+
+    from virtuoso_bridge import doctor
+
+    env_path, env_error = None, ""
+    try:
+        env_path = load_vb_env()
+    except FileNotFoundError as exc:
+        env_error = str(exc)
+    profile = _get_cli_profile()
+    ctx = doctor.DoctorContext(profile, env_path=env_path, env_error=env_error)
+    if not json_output:
+        label = f" [{profile}]" if profile else ""
+        print(f"virtuoso-bridge doctor{label}: read-only, changes nothing", flush=True)
+    try:
+        results = doctor.run_checks(
+            ctx,
+            on_result=None if json_output else (
+                lambda result: print(doctor.format_result(result), flush=True)),
+        )
+    finally:
+        ctx.close()
+    if json_output:
+        print(json.dumps([result.to_dict() for result in results], indent=2, ensure_ascii=False))
+    else:
+        print(doctor.format_summary(results))
+    return doctor.exit_code(results)
+
+
 # -- license ----------------------------------------------------------------
 
 def cli_license() -> int:
@@ -2114,6 +2147,27 @@ def build_parser() -> argparse.ArgumentParser:
             sp.add_argument("--bind-venv", action="store_true",
                             help="Bind the active virtualenv to this -p profile before starting")
 
+    sp_doctor = subparsers.add_parser(
+        "doctor",
+        help="Read-only check of configuration, tunnel/daemon, dialogs, Spectre and docs",
+        description=(
+            "Checks what most often breaks a setup and prints OK, WARN, FAIL or SKIP per "
+            "check, with a fix for each WARN/FAIL: configuration, tunnel and daemon "
+            "identity, daemon listen address, remote scratch directory permissions, open "
+            "dialogs and PDK popups, the license checkout policy, Spectre and Cadence "
+            "documentation. Read-only: it never starts, stops or restarts the tunnel or "
+            "daemon, deploys nothing, writes nothing on the remote host, changes no "
+            "Virtuoso setting and dismisses no dialog. Checks that need the daemon are "
+            "skipped when no tunnel or daemon answers. Exit status 1 when a check FAILs."
+        ),
+    )
+    sp_doctor.add_argument("-p", "--profile", default=None,
+                           help="Connection profile (reads VB_*_<profile> env vars)")
+    sp_doctor.add_argument("--env", default=None,
+                           help="Explicit .env file path (highest priority)")
+    sp_doctor.add_argument("--json", action="store_true",
+                           help="Output a JSON list of {name, status, detail, fix}")
+
     sp_profile = subparsers.add_parser("profile", help="Show or edit profile bindings")
     profile_sub = sp_profile.add_subparsers(dest="profile_action", required=True)
     sp_profile_list = profile_sub.add_parser("list", help="List resolved configuration and sources (no connections)")
@@ -2538,6 +2592,7 @@ def _run_command(parser: argparse.ArgumentParser, args: argparse.Namespace) -> i
         "stop": cli_stop,
         "restart": cli_restart,
         "status": cli_status,
+        "doctor": lambda: cli_doctor(json_output=getattr(args, "json", False)),
         "license": cli_license,
         "sos": lambda: cli_sos(
             action=getattr(args, "sos_action"),
