@@ -25,7 +25,11 @@ from virtuoso_bridge.env import load_vb_env, resolve_env_path
 from virtuoso_bridge.profile import resolve_profile
 from virtuoso_bridge.runtime_paths import legacy_cache_state_file, state_dir
 from virtuoso_bridge.transport.remote_paths import (
+    REMOTE_SCRATCH_ROOT_ENV,
     default_virtuoso_bridge_dir,
+    private_dir_shell_prelude,
+    private_dirs_below,
+    remote_scratch_root,
     resolve_client_id,
     resolve_remote_username,
 )
@@ -695,14 +699,24 @@ class SSHClient:
         remote_setup = f"{self._remote_work_dir}/virtuoso_setup.il"
         remote_identity = f"{self._remote_work_dir}/daemon_identity.txt"
 
+        # The CIW loads (and .cdsinit may autoload) code from this directory,
+        # so every level below the scratch root must be ours and private.
         logger.info("Creating remote directory: %s", self._remote_work_dir)
+        scratch_root = remote_scratch_root()
         mkdir_result = runner.run_command(
-            f"mkdir -p {shlex.quote(self._remote_work_dir)} && "
-            f"chmod 755 {shlex.quote(self._remote_work_dir)} && "
-            f"rm -f {shlex.quote(remote_identity)}"
+            private_dir_shell_prelude("bridge")
+            + "".join(
+                f"vb_ensure_dir {shlex.quote(directory)} || exit $?\n"
+                for directory in private_dirs_below(scratch_root, self._remote_work_dir)
+            )
+            + f"rm -f {shlex.quote(remote_identity)}\n"
         )
         if mkdir_result.returncode != 0:
-            raise RuntimeError(f"Failed to create remote directory: {mkdir_result.stderr.strip()}")
+            raise RuntimeError(
+                f"Refusing to deploy the bridge into {self._remote_work_dir}: "
+                f"{mkdir_result.stderr.strip() or f'exit status {mkdir_result.returncode}'}. "
+                f"Set {REMOTE_SCRATCH_ROOT_ENV} to a directory only you can write."
+            )
 
         logger.info("Uploading daemon script (%s) to %s", daemon_filename, remote_daemon)
         daemon_content = daemon_local.read_text(encoding="utf-8")

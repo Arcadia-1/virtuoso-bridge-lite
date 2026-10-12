@@ -21,6 +21,7 @@ from typing import Callable, Literal, cast
 from virtuoso_bridge.models import ExecutionStatus
 from virtuoso_bridge.transport.remote_paths import (
     default_virtuoso_bridge_dir,
+    private_dir_shell_prelude,
     resolve_client_id,
     sanitize_username_for_path,
 )
@@ -192,51 +193,7 @@ class _RemoteFinalizationFailure(RuntimeError):
 
 
 def _remote_security_prelude() -> str:
-    return r"""umask 077
-vb_uid=$(id -u) || exit $?
-vb_read_meta() {
-    vb_meta=$(stat -c '%u %a' "$1" 2>/dev/null) ||
-        vb_meta=$(stat -f '%u %Lp' "$1" 2>/dev/null) || return 74
-    set -- $vb_meta
-    vb_owner=$1
-    vb_mode=$2
-}
-vb_verify_dir() {
-    vb_path=$1
-    if [ -L "$vb_path" ] || [ ! -d "$vb_path" ]; then
-        printf 'unsafe remote XStream directory: %s\n' "$vb_path" >&2
-        return 73
-    fi
-    vb_read_meta "$vb_path" || return $?
-    if [ "$vb_owner" != "$vb_uid" ]; then
-        printf 'remote XStream directory has wrong owner: %s\n' "$vb_path" >&2
-        return 75
-    fi
-    if [ "$vb_mode" != 700 ]; then
-        chmod 700 "$vb_path" || return $?
-        if [ -L "$vb_path" ] || [ ! -d "$vb_path" ]; then
-            printf 'unsafe remote XStream directory after chmod: %s\n' "$vb_path" >&2
-            return 73
-        fi
-        vb_read_meta "$vb_path" || return $?
-        if [ "$vb_owner" != "$vb_uid" ] || [ "$vb_mode" != 700 ]; then
-            printf 'remote XStream directory is not private: %s\n' "$vb_path" >&2
-            return 76
-        fi
-    fi
-}
-vb_ensure_dir() {
-    vb_path=$1
-    if [ -L "$vb_path" ]; then
-        printf 'remote XStream directory is a symlink: %s\n' "$vb_path" >&2
-        return 73
-    fi
-    if [ ! -e "$vb_path" ]; then
-        mkdir -m 700 "$vb_path" || return $?
-    fi
-    vb_verify_dir "$vb_path"
-}
-"""
+    return private_dir_shell_prelude("XStream")
 
 
 def _remote_private_chain(
