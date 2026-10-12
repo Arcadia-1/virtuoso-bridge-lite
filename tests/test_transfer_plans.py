@@ -2,23 +2,78 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import logging
 import os
 import re
 import shlex
 import shutil
 import subprocess
+import tarfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from virtuoso_bridge.transport import transfer
 from virtuoso_bridge.transport.transfer import (
     build_file_download_plan,
     build_tar_download_plan,
     build_tar_upload_plans,
     build_text_upload_plan,
     install_staged_item,
+    install_staged_path,
 )
+
+# Cadence IC23.1 netlist directories hold real files whose names macOS bsdtar
+# would otherwise read as AppleDouble metadata for the following entry.
+_CADENCE_NETLIST_FILES = {
+    "netlist/.__master.optionFile": b"simulatorOptions options reltol=1e-3\n" * 13,
+    "netlist/designInfo": b"designInfo contents\n",
+    "netlist/.__master.termorder": b"termorder\n" * 7,
+    "netlist/input.scs": b"simulator lang=spectre\n",
+}
+
+
+def _cadence_netlist_archive() -> bytes:
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w:gz", format=tarfile.PAX_FORMAT) as archive:
+        directory = tarfile.TarInfo("netlist")
+        directory.type = tarfile.DIRTYPE
+        directory.mode = 0o755
+        archive.addfile(directory)
+        for name, contents in _CADENCE_NETLIST_FILES.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(contents)
+            info.mode = 0o644
+            archive.addfile(info, io.BytesIO(contents))
+    return payload.getvalue()
+
+
+def _set_test_xattr(path: Path) -> None:
+    xattr = shutil.which("xattr")
+    if xattr is None:
+        pytest.skip("requires the macOS xattr command")
+    subprocess.run([xattr, "-w", "com.example.test", "1", str(path)], check=True)
+    shown = subprocess.run(
+        [xattr, "-p", "com.example.test", str(path)],
+        capture_output=True,
+        check=True,
+    )
+    assert shown.stdout.strip() == b"1"
+
+
+def _fake_tar_version(monkeypatch, output: bytes) -> list[list[str]]:
+    probes: list[list[str]] = []
+
+    def run(command, **kwargs):
+        probes.append(list(command))
+        assert kwargs["timeout"] > 0
+        return subprocess.CompletedProcess(command, 0, output, b"")
+
+    monkeypatch.setattr(transfer, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(transfer.subprocess, "run", run)
+    return probes
 
 
 def _decode_remote_script(command: str) -> str:
@@ -179,6 +234,191 @@ def test_upload_plan_uses_option_terminator_for_dash_prefixed_name(
     )[0]
 
     assert plan.local_command[-2:] == ("--", "-payload.scs")
+
+
+def test_local_tar_probe_runs_only_on_macos(monkeypatch, real_tar_detection) -> None:
+    probes = _fake_tar_version(monkeypatch, b"bsdtar 3.5.3 - libarchive 3.7.4\n")
+    for platform in ("linux", "win32"):
+        monkeypatch.setattr(transfer, "sys", SimpleNamespace(platform=platform))
+
+        assert transfer._is_macos_bsdtar("/usr/bin/tar") is False
+
+    assert probes == []
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        (b"bsdtar 3.5.3 - libarchive 3.7.4 zlib/1.2.12 liblzma/5.4.3\n", True),
+        (b"tar (GNU tar) 1.35\nCopyright (C) 2023 Free Software Foundation\n", False),
+    ],
+    ids=["bsdtar", "gnu-tar"],
+)
+def test_local_tar_probe_identifies_macos_bsdtar_once_per_path(
+    monkeypatch,
+    real_tar_detection,
+    version: bytes,
+    expected: bool,
+) -> None:
+    probes = _fake_tar_version(monkeypatch, version)
+
+    assert transfer._is_macos_bsdtar("/usr/bin/tar") is expected
+    assert transfer._is_macos_bsdtar("/usr/bin/tar") is expected
+    assert transfer._is_macos_bsdtar("/opt/tools/bin/tar") is expected
+
+    assert probes == [
+        ["/usr/bin/tar", "--version"],
+        ["/opt/tools/bin/tar", "--version"],
+    ]
+
+
+def test_unrunnable_local_tar_keeps_portable_commands(
+    monkeypatch,
+    real_tar_detection,
+    tmp_path: Path,
+) -> None:
+    def missing_tar(command, **_kwargs):
+        raise FileNotFoundError(command[0])
+
+    monkeypatch.setattr(transfer, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(transfer.subprocess, "run", missing_tar)
+
+    plan = build_tar_download_plan(
+        "/missing/tar",
+        "/remote/netlist",
+        tmp_path / "netlist",
+    )
+
+    assert plan.local_command == ("/missing/tar", "xzf", "-")
+
+
+def test_macos_bsdtar_download_reads_appledouble_names_as_files(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    checked: list[str] = []
+
+    def is_macos_bsdtar(tar_command: str) -> bool:
+        checked.append(tar_command)
+        return True
+
+    monkeypatch.setattr(transfer, "_is_macos_bsdtar", is_macos_bsdtar)
+
+    plan = build_tar_download_plan(
+        "/usr/bin/tar",
+        "/remote/sim/netlist",
+        tmp_path / "netlist",
+    )
+
+    assert checked == ["/usr/bin/tar"]
+    assert plan.local_command == (
+        "/usr/bin/tar",
+        "--options",
+        "!mac-ext",
+        "-xzf",
+        "-",
+    )
+    inner_command = _decode_remote_script(plan.remote_command)
+    assert 'cd "$d" && tar czf - -- "$b"' in inner_command
+
+
+def test_macos_bsdtar_upload_omits_appledouble_members(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first.txt"
+    second = tmp_path / "-second.txt"
+    first.write_text("first", encoding="utf-8")
+    second.write_text("second", encoding="utf-8")
+    checked: list[str] = []
+
+    def is_macos_bsdtar(tar_command: str) -> bool:
+        checked.append(tar_command)
+        return True
+
+    monkeypatch.setattr(transfer, "_is_macos_bsdtar", is_macos_bsdtar)
+
+    plans = build_tar_upload_plans(
+        "/usr/bin/tar",
+        [(first, "/remote/first.txt"), (second, "/remote/-second.txt")],
+    )
+
+    assert checked == ["/usr/bin/tar"]
+    assert [plan.local_command for plan in plans] == [
+        (
+            "/usr/bin/tar",
+            "--no-mac-metadata",
+            "--no-xattrs",
+            "-cf",
+            "-",
+            "-C",
+            str(tmp_path.absolute()).replace("\\", "/"),
+            "--",
+            "first.txt",
+            "-second.txt",
+        )
+    ]
+
+
+def test_macos_bsdtar_download_command_keeps_appledouble_named_files(
+    macos_bsdtar: str,
+    tmp_path: Path,
+) -> None:
+    local_path = tmp_path / "downloads" / "netlist"
+    local_path.parent.mkdir()
+    plan = build_tar_download_plan(macos_bsdtar, "/remote/sim/netlist", local_path)
+    assert plan.local_command[1:3] == ("--options", "!mac-ext")
+    plan.stage_path.mkdir()
+
+    completed = subprocess.run(
+        plan.local_command,
+        input=_cadence_netlist_archive(),
+        capture_output=True,
+        cwd=plan.stage_path,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr.decode("utf-8", "replace")
+    install_staged_path(plan)
+    assert sorted(path.name for path in local_path.iterdir()) == sorted(
+        name.split("/", 1)[1] for name in _CADENCE_NETLIST_FILES
+    )
+    for name, contents in _CADENCE_NETLIST_FILES.items():
+        assert (local_path / name.split("/", 1)[1]).read_bytes() == contents
+    assert not list(local_path.parent.glob(".vbtmp-*"))
+
+
+def test_macos_bsdtar_upload_command_omits_appledouble_members(
+    macos_bsdtar: str,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    tree = source / "tree"
+    tree.mkdir(parents=True)
+    nested = tree / "nested.scs"
+    nested.write_text("nested\n", encoding="utf-8")
+    single = source / "single.scs"
+    single.write_text("single\n", encoding="utf-8")
+    for path in (tree, nested, single):
+        _set_test_xattr(path)
+
+    plans = build_tar_upload_plans(
+        macos_bsdtar,
+        [(tree, "/remote/tree"), (single, "/remote/single.scs")],
+    )
+    assert len(plans) == 1
+    assert plans[0].local_command[1:4] == ("--no-mac-metadata", "--no-xattrs", "-cf")
+    archive = subprocess.run(
+        plans[0].local_command,
+        capture_output=True,
+        check=True,
+    ).stdout
+
+    with tarfile.open(fileobj=io.BytesIO(archive)) as listing:
+        members = listing.getmembers()
+    assert sorted(m.name for m in members) == ["single.scs", "tree", "tree/nested.scs"]
+    # GNU tar warns about every macOS xattr record it cannot apply.
+    assert not [key for m in members for key in m.pax_headers if "xattr" in key.lower()]
 
 
 def test_upload_plan_rejects_duplicate_remote_targets(tmp_path: Path) -> None:
