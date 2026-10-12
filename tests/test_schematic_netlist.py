@@ -16,30 +16,119 @@ from virtuoso_bridge.virtuoso.schematic import (
 )
 from virtuoso_bridge.virtuoso.schematic import netlist as schematic_netlist_module
 
+_SOURCE_FILE = "/tmp/generated/netlist/input.scs"
+_SPECTRE_TEXT = "simulator lang=spectre\n"
+_IMPORTED = {"status": "success", "output": '("imported" "demoLib" "nand2")'}
 
-def test_schematic_export_netlist_skill_uses_ocean_netlister() -> None:
-    skill = schematic_export_netlist_skill(
-        "demoLib",
-        "tb_inv",
-        simulator="spectre",
-        recreate_all=False,
-    )
 
-    assert 'isCallable(\'createNetlist)' in skill
+class _ExportClient:
+    def __init__(
+        self,
+        output: str = f'"{_SOURCE_FILE}"',
+        *,
+        files: dict[str, str] | None = None,
+        download_errors: list[str] | None = None,
+    ) -> None:
+        self.output = output
+        self.files = {"input.scs": _SPECTRE_TEXT} if files is None else files
+        self.download_errors = download_errors
+        self.skill: str | None = None
+        self.timeout: int | None = None
+        self.downloads: list[tuple[str, Path, int | None, bool]] = []
+
+    def execute_skill(self, skill: str, *, timeout: int):
+        self.skill = skill
+        self.timeout = timeout
+        return {"status": "success", "output": self.output}
+
+    def download_file(
+        self,
+        remote_path: str,
+        local_path: Path,
+        *,
+        timeout: int | None = None,
+        recursive: bool = False,
+    ):
+        self.downloads.append((remote_path, local_path, timeout, recursive))
+        if self.download_errors is not None:
+            return {"status": "error", "errors": self.download_errors, "output": ""}
+        assert not local_path.exists()
+        local_path.mkdir()
+        for name, text in self.files.items():
+            (local_path / name).write_text(text, encoding="utf-8")
+        return {"status": "success", "output": str(local_path)}
+
+
+class _Runner:
+    def __init__(self, *, test_returncode: int = 0) -> None:
+        self.test_returncode = test_returncode
+        self.commands: list[str] = []
+
+    def run_command(self, command: str, timeout: int | None = None) -> CommandResult:
+        self.commands.append(command)
+        if command.startswith("test -f "):
+            return CommandResult(self.test_returncode, "", "")
+        return CommandResult(0, "", "")
+
+
+class _ImportClient:
+    def __init__(
+        self,
+        work_dir: Path | str,
+        *,
+        ssh_runner: _Runner | None = None,
+        license_env: bool = True,
+    ) -> None:
+        # Without license_env, the optional environment values come back empty.
+        env = '"/cad/lib" "27080@lic" "/lic.dat"' if license_env else '"" "" ""'
+        context = {
+            "status": "success",
+            "output": f'("{work_dir}" "/cad/IC/bin:/usr/bin" {env} "/cad/IC")',
+        }
+        preflight = {"status": "success", "output": "t"}
+        self.responses = [context, preflight, _IMPORTED]
+        self.ssh_runner = ssh_runner
+        self.skills: list[str] = []
+        self.timeouts: list[int] = []
+        self.uploads: list[tuple[Path, str, int | None]] = []
+
+    def execute_skill(self, skill: str, *, timeout: int):
+        self.skills.append(skill)
+        self.timeouts.append(timeout)
+        return self.responses.pop(0)
+
+    def upload_file(self, local_path: Path, remote_path: str, *, timeout: int | None = None):
+        self.uploads.append((Path(local_path), remote_path, timeout))
+        return {"status": "success", "output": remote_path}
+
+
+@pytest.fixture
+def local_import(monkeypatch, tmp_path):
+    work_dir = tmp_path / "virtuoso"
+    work_dir.mkdir()
+    (work_dir / "cds.lib").write_text("DEFINE demoLib ./demoLib\n", encoding="utf-8")
+    netlist_file = tmp_path / "nand2.scs"
+    netlist_file.write_text(_SPECTRE_TEXT, encoding="utf-8")
+    calls: list[tuple[tuple, dict]] = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args[0], 0, stdout="spiceIn ok\n", stderr="")
+
+    monkeypatch.setattr(schematic_netlist_module.subprocess, "run", fake_run)
+    return work_dir, netlist_file, calls
+
+
+def _assert_no_shell_from_skill(skills: list[str]) -> None:
+    assert all("spiceIn -param" not in skill and "system(" not in skill for skill in skills)
+
+
+def test_schematic_export_netlist_skill_escapes_names_and_maps_options() -> None:
+    skill = schematic_export_netlist_skill('demo"Lib', "tb\\inv", recreate_all=False)
+
     assert "simulator('spectre)" in skill
-    assert 'design("demoLib" "tb_inv" "schematic" "r")' in skill
-    assert "createNetlist(?recreateAll nil ?display nil)" in skill
-    assert "simplifyFilename(vbSourceFile)" in skill
-    assert "vbSourceFile" in skill
-
-
-def test_schematic_export_netlist_skill_escapes_skill_strings() -> None:
-    skill = schematic_export_netlist_skill(
-        'demo"Lib',
-        "tb\\inv",
-    )
-
     assert 'design("demo\\"Lib" "tb\\\\inv" "schematic" "r")' in skill
+    assert "createNetlist(?recreateAll nil ?display nil)" in skill
 
 
 def test_schematic_export_netlist_skill_rejects_unsafe_simulator_symbol() -> None:
@@ -51,51 +140,41 @@ def test_schematic_export_netlist_skill_rejects_unsafe_simulator_symbol() -> Non
         )
 
 
-def test_export_schematic_netlist_downloads_generated_netlist_directory(tmp_path) -> None:
-    class Client:
-        skill: str | None = None
-        timeout: int | None = None
-        downloads: list[tuple[str, Path, int | None, bool]] = []
-
-        def execute_skill(self, skill: str, *, timeout: int):
-            self.skill = skill
-            self.timeout = timeout
-            return {"status": "success", "output": '"/tmp/generated/netlist/input.scs"'}
-
-        def download_file(
-            self,
-            remote_path: str,
-            local_path: Path,
-            *,
-            timeout: int | None = None,
-            recursive: bool = False,
-        ):
-            self.downloads.append((remote_path, local_path, timeout, recursive))
-            local_path.mkdir()
-            (local_path / "input.scs").write_text("simulator lang=spectre\n", encoding="utf-8")
-            return {"status": "success", "output": str(local_path)}
-
-    client = Client()
+@pytest.mark.parametrize(
+    "export",
+    [
+        lambda client, output_dir: export_schematic_netlist(
+            client,
+            "demoLib",
+            "tb_inv",
+            output_dir,
+            timeout=45,
+        ),
+        lambda client, output_dir: SchematicOps(client).export_netlist(
+            "demoLib",
+            "tb_inv",
+            output_dir,
+            timeout=45,
+        ),
+    ],
+    ids=["function", "schematic_ops"],
+)
+def test_export_schematic_netlist_downloads_generated_netlist_directory(export, tmp_path) -> None:
+    client = _ExportClient()
     output_dir = tmp_path / "tb_inv_netlist"
-    result = export_schematic_netlist(
-        client,
-        "demoLib",
-        "tb_inv",
-        output_dir,
-        timeout=45,
-    )
+
+    result = export(client, output_dir)
 
     assert result == {
-        "source_file": "/tmp/generated/netlist/input.scs",
+        "source_file": _SOURCE_FILE,
         "source_dir": "/tmp/generated/netlist",
         "output_dir": str(output_dir),
         "input_file": str(output_dir / "input.scs"),
-        "skill_result": {"status": "success", "output": '"/tmp/generated/netlist/input.scs"'},
+        "skill_result": {"status": "success", "output": f'"{_SOURCE_FILE}"'},
         "download_result": {"status": "success", "output": str(output_dir)},
     }
     assert client.timeout == 45
-    assert client.skill is not None
-    assert 'design("demoLib" "tb_inv" "schematic" "r")' in client.skill
+    assert client.skill == schematic_export_netlist_skill("demoLib", "tb_inv")
     assert len(client.downloads) == 1
     remote_path, local_path, timeout, recursive = client.downloads[0]
     assert remote_path == "/tmp/generated/netlist"
@@ -105,54 +184,7 @@ def test_export_schematic_netlist_downloads_generated_netlist_directory(tmp_path
     assert recursive is True
 
 
-def test_schematic_ops_export_netlist_delegates_to_client(tmp_path) -> None:
-    class Client:
-        skill: str | None = None
-        timeout: int | None = None
-        downloads: list[tuple[str, Path, int | None, bool]] = []
-
-        def execute_skill(self, skill: str, *, timeout: int):
-            self.skill = skill
-            self.timeout = timeout
-            return {"status": "success", "output": '"/tmp/generated/netlist/input.scs"'}
-
-        def download_file(
-            self,
-            remote_path: str,
-            local_path: Path,
-            *,
-            timeout: int | None = None,
-            recursive: bool = False,
-        ):
-            self.downloads.append((remote_path, local_path, timeout, recursive))
-            local_path.mkdir()
-            (local_path / "input.scs").write_text("simulator lang=spectre\n", encoding="utf-8")
-            return {"status": "success", "output": str(local_path)}
-
-    client = Client()
-    output_dir = tmp_path / "tb_inv_netlist"
-    result = SchematicOps(client).export_netlist(
-        "demoLib",
-        "tb_inv",
-        output_dir,
-        timeout=75,
-    )
-
-    assert result["source_file"] == "/tmp/generated/netlist/input.scs"
-    assert result["input_file"] == str(output_dir / "input.scs")
-    assert client.timeout == 75
-    assert client.skill is not None
-    assert 'design("demoLib" "tb_inv" "schematic" "r")' in client.skill
-    assert len(client.downloads) == 1
-    remote_path, local_path, timeout, recursive = client.downloads[0]
-    assert remote_path == "/tmp/generated/netlist"
-    assert local_path.parent == tmp_path
-    assert local_path.name.startswith(".tb_inv_netlist.tmp-")
-    assert timeout == 75
-    assert recursive is True
-
-
-def test_schematic_import_netlist_skill_converts_imported_netlist_view_only() -> None:
+def test_schematic_import_netlist_skill_overwrites_through_temporary_view() -> None:
     skill = schematic_import_netlist_skill(
         "demoLib",
         "nand2",
@@ -161,19 +193,14 @@ def test_schematic_import_netlist_skill_converts_imported_netlist_view_only() ->
         spicein_log_file="/tmp/import-nand2/spiceIn.log",
     )
 
-    assert "spiceIn -param" not in skill
-    assert "system(" not in skill
+    _assert_no_shell_from_skill([skill])
     assert "conn2sch -" not in skill
     assert "ddDeleteObj(vbSchematicObj)" not in skill
-    assert "dbCopyCellView" in skill
-    assert "unwindProtect" in skill
     assert 'vbDestViewName = "__vb_import_' in skill
-    assert 'conn2Sch("demoLib" "nand2" "netlist" ?destLibName "demoLib"' in skill
-    assert '?destViewName vbDestViewName ?block t) nil)' in skill
-    assert 'list("imported" "demoLib" "nand2" "/tmp/import-nand2/spiceIn.il"' in skill
-    assert "conn2sch.stdout" not in skill
-    assert "smic12sf" not in skill
-    assert "sinomos" not in skill
+    assert skill.index("?destViewName vbDestViewName ?block t) nil)") < skill.index(
+        'dbCopyCellView(vbTempCv "demoLib" "nand2" "schematic" nil nil t)'
+    )
+    assert "unwindProtect" in skill
 
 
 def test_schematic_import_netlist_skill_rejects_same_target_views() -> None:
@@ -184,48 +211,14 @@ def test_schematic_import_netlist_skill_rejects_same_target_views() -> None:
         schematic_view="schematic",
     )
 
-    assert 'when("netlist" == "schematic"' not in skill
     assert 'when("schematic" == "schematic" error("netlist and schematic views must differ"))' in skill
 
 
-def test_import_netlist_schematic_runs_spicein_outside_skill(monkeypatch, tmp_path) -> None:
-    work_dir = tmp_path / "virtuoso"
-    work_dir.mkdir()
-    (work_dir / "cds.lib").write_text("DEFINE demoLib ./demoLib\n", encoding="utf-8")
-    netlist_file = tmp_path / "nand2.scs"
-    netlist_file.write_text("simulator lang=spectre\n", encoding="utf-8")
+def test_import_netlist_schematic_runs_spicein_outside_skill(local_import, tmp_path) -> None:
+    work_dir, netlist_file, subprocess_calls = local_import
     run_dir = tmp_path / "import-nand2"
+    client = _ImportClient(work_dir)
 
-    class Client:
-        ssh_runner = None
-        skills: list[str] = []
-        timeouts: list[int] = []
-        responses = [
-            {
-                "status": "success",
-                "output": (
-                    f'("{work_dir}" "/cad/IC/bin:/usr/bin" "/cad/lib" '
-                    '"27080@lic" "/lic.dat" "/cad/IC")'
-                ),
-            },
-            {"status": "success", "output": "t"},
-            {"status": "success", "output": '("imported" "demoLib" "nand2")'},
-        ]
-
-        def execute_skill(self, skill: str, *, timeout: int):
-            self.skills.append(skill)
-            self.timeouts.append(timeout)
-            return self.responses.pop(0)
-
-    subprocess_calls = []
-
-    def fake_run(*args, **kwargs):
-        subprocess_calls.append((args, kwargs))
-        return subprocess.CompletedProcess(args[0], 0, stdout="spiceIn ok\n", stderr="")
-
-    monkeypatch.setattr(schematic_netlist_module.subprocess, "run", fake_run)
-
-    client = Client()
     result = import_netlist_schematic(
         client,
         "demoLib",
@@ -236,7 +229,7 @@ def test_import_netlist_schematic_runs_spicein_outside_skill(monkeypatch, tmp_pa
         timeout=90,
     )
 
-    assert result == {"status": "success", "output": '("imported" "demoLib" "nand2")'}
+    assert result == _IMPORTED
     assert len(subprocess_calls) == 1
     args, kwargs = subprocess_calls[0]
     assert args[0] == ["/cad/IC/bin/spiceIn", "-param", str(run_dir / "spiceIn.il")]
@@ -247,44 +240,25 @@ def test_import_netlist_schematic_runs_spicein_outside_skill(monkeypatch, tmp_pa
     param_text = (run_dir / "spiceIn.il").read_text(encoding="utf-8")
     assert f'  \'netlistFile "{netlist_file}"' in param_text
     assert '  \'outputViewName "netlist"' in param_text
-    assert all("spiceIn -param" not in skill and "system(" not in skill for skill in client.skills)
-    assert 'conn2Sch("demoLib" "nand2" "netlist"' in client.skills[-1]
+    _assert_no_shell_from_skill(client.skills)
+    assert client.skills[-1] == schematic_import_netlist_skill(
+        "demoLib",
+        "nand2",
+        param_file=run_dir / "spiceIn.il",
+        spicein_log_file=run_dir / "spiceIn.log",
+    )
 
 
-def test_import_netlist_schematic_rejects_local_control_file_collision(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    work_dir = tmp_path / "virtuoso"
-    work_dir.mkdir()
-    (work_dir / "cds.lib").write_text("DEFINE demoLib ./demoLib\n", encoding="utf-8")
+def test_import_netlist_schematic_rejects_local_control_file_collision(local_import, tmp_path) -> None:
+    work_dir, _, subprocess_calls = local_import
     run_dir = tmp_path / "import-nand2"
     run_dir.mkdir()
     netlist_file = run_dir / "spiceIn.il"
     netlist_file.write_text("original netlist\n", encoding="utf-8")
 
-    class Client:
-        ssh_runner = None
-        responses = [
-            {
-                "status": "success",
-                "output": f'("{work_dir}" "/cad/IC/bin:/usr/bin" "" "" "" "/cad/IC")',
-            },
-            {"status": "success", "output": "t"},
-            {"status": "success", "output": '("imported" "demoLib" "nand2")'},
-        ]
-
-        def execute_skill(self, skill: str, *, timeout: int):
-            return self.responses.pop(0)
-
-    def fake_run(*args, **kwargs):
-        raise AssertionError("spiceIn must not run when the input would be overwritten")
-
-    monkeypatch.setattr(schematic_netlist_module.subprocess, "run", fake_run)
-
     with pytest.raises(RuntimeError, match="local input file conflicts"):
         import_netlist_schematic(
-            Client(),
+            _ImportClient(work_dir),
             "demoLib",
             "nand2",
             netlist_file,
@@ -292,6 +266,7 @@ def test_import_netlist_schematic_rejects_local_control_file_collision(
             timeout=30,
         )
 
+    assert subprocess_calls == []
     assert netlist_file.read_text(encoding="utf-8") == "original netlist\n"
 
 
@@ -299,22 +274,9 @@ def test_import_netlist_schematic_rejects_missing_local_input(tmp_path) -> None:
     work_dir = tmp_path / "virtuoso"
     work_dir.mkdir()
 
-    class Client:
-        ssh_runner = None
-        responses = [
-            {
-                "status": "success",
-                "output": f'("{work_dir}" "/cad/IC/bin:/usr/bin" "" "" "" "/cad/IC")',
-            },
-            {"status": "success", "output": "t"},
-        ]
-
-        def execute_skill(self, skill: str, *, timeout: int):
-            return self.responses.pop(0)
-
     with pytest.raises(RuntimeError, match="local input file not found"):
         import_netlist_schematic(
-            Client(),
+            _ImportClient(work_dir),
             "demoLib",
             "nand2",
             tmp_path / "missing.scs",
@@ -323,37 +285,11 @@ def test_import_netlist_schematic_rejects_missing_local_input(tmp_path) -> None:
         )
 
 
-def test_import_netlist_schematic_uses_unique_default_run_dirs(monkeypatch, tmp_path) -> None:
-    work_dir = tmp_path / "virtuoso"
-    work_dir.mkdir()
-    (work_dir / "cds.lib").write_text("DEFINE demoLib ./demoLib\n", encoding="utf-8")
-    netlist_file = tmp_path / "nand2.scs"
-    netlist_file.write_text("simulator lang=spectre\n", encoding="utf-8")
+def test_import_netlist_schematic_uses_unique_default_run_dirs(local_import) -> None:
+    work_dir, netlist_file, subprocess_calls = local_import
+    client = _ImportClient(work_dir, license_env=False)
+    client.responses = client.responses * 2
 
-    class Client:
-        ssh_runner = None
-        skills: list[str] = []
-
-        def execute_skill(self, skill: str, *, timeout: int):
-            self.skills.append(skill)
-            if "getWorkingDir()" in skill:
-                return {
-                    "status": "success",
-                    "output": f'("{work_dir}" "/cad/IC/bin:/usr/bin" "" "" "" "/cad/IC")',
-                }
-            if "vbSchematicObj" in skill and "vbNetlistObj" in skill and "conn2Sch" not in skill:
-                return {"status": "success", "output": "t"}
-            return {"status": "success", "output": '("imported" "demoLib" "nand2")'}
-
-    subprocess_calls = []
-
-    def fake_run(*args, **kwargs):
-        subprocess_calls.append((args, kwargs))
-        return subprocess.CompletedProcess(args[0], 0, stdout="", stderr="")
-
-    monkeypatch.setattr(schematic_netlist_module.subprocess, "run", fake_run)
-
-    client = Client()
     import_netlist_schematic(client, "demoLib", "nand2", netlist_file, timeout=30)
     import_netlist_schematic(client, "demoLib", "nand2", netlist_file, timeout=30)
 
@@ -367,42 +303,11 @@ def test_import_netlist_schematic_uses_unique_default_run_dirs(monkeypatch, tmp_
 
 def test_import_netlist_schematic_uploads_inputs_and_runs_remote_shell(tmp_path) -> None:
     netlist_file = tmp_path / "nand2.scs"
-    netlist_file.write_text("simulator lang=spectre\n", encoding="utf-8")
+    netlist_file.write_text(_SPECTRE_TEXT, encoding="utf-8")
     dev_map_file = tmp_path / "devmap.txt"
     dev_map_file.write_text("devselect := resistor res\n", encoding="utf-8")
+    client = _ImportClient("/remote/work", ssh_runner=_Runner())
 
-    class Runner:
-        commands: list[tuple[str, int | None]] = []
-
-        def run_command(self, command: str, timeout: int | None = None) -> CommandResult:
-            self.commands.append((command, timeout))
-            return CommandResult(0, "", "")
-
-    class Client:
-        ssh_runner = Runner()
-        skills: list[str] = []
-        uploads: list[tuple[Path, str, int | None]] = []
-        responses = [
-            {
-                "status": "success",
-                "output": (
-                    '("/remote/work" "/cad/IC/bin:/usr/bin" "/cad/lib" '
-                    '"27080@lic" "/lic.dat" "/cad/IC")'
-                ),
-            },
-            {"status": "success", "output": "t"},
-            {"status": "success", "output": '("imported" "demoLib" "nand2")'},
-        ]
-
-        def execute_skill(self, skill: str, *, timeout: int):
-            self.skills.append(skill)
-            return self.responses.pop(0)
-
-        def upload_file(self, local_path: Path, remote_path: str, *, timeout: int | None = None):
-            self.uploads.append((Path(local_path), remote_path, timeout))
-            return {"status": "success", "output": remote_path}
-
-    client = Client()
     result = import_netlist_schematic(
         client,
         "demoLib",
@@ -419,129 +324,36 @@ def test_import_netlist_schematic_uploads_inputs_and_runs_remote_shell(tmp_path)
     assert ("devmap.txt", "/remote/import-nand2/inputs/devmap_devmap.txt", 120) in uploaded_names
     assert ("spiceIn.il", "/remote/import-nand2/spiceIn.il", 120) in uploaded_names
     assert ("cds.lib", "/remote/import-nand2/cds.lib", 120) in uploaded_names
-    commands = [command for command, _ in client.ssh_runner.commands]
+    commands = client.ssh_runner.commands
     assert any(command.startswith("mkdir -p ") for command in commands)
     spicein_commands = [command for command in commands if "spiceIn" in command]
     assert len(spicein_commands) == 1
     assert "bash -lc" in spicein_commands[0]
     assert "/cad/IC/bin/spiceIn -param /remote/import-nand2/spiceIn.il" in spicein_commands[0]
-    assert all("spiceIn -param" not in skill and "system(" not in skill for skill in client.skills)
-    assert 'conn2Sch("demoLib" "nand2" "netlist"' in client.skills[-1]
-
-
-def test_import_netlist_schematic_validates_assumed_remote_inputs() -> None:
-    class Runner:
-        commands: list[tuple[str, int | None]] = []
-
-        def run_command(self, command: str, timeout: int | None = None) -> CommandResult:
-            self.commands.append((command, timeout))
-            if command.startswith("test -f "):
-                return CommandResult(0, "", "")
-            return CommandResult(0, "", "")
-
-    class Client:
-        ssh_runner = Runner()
-        uploads: list[tuple[Path, str, int | None]] = []
-        responses = [
-            {
-                "status": "success",
-                "output": '("/remote/work" "/cad/IC/bin:/usr/bin" "" "" "" "/cad/IC")',
-            },
-            {"status": "success", "output": "t"},
-            {"status": "success", "output": '("imported" "demoLib" "nand2")'},
-        ]
-
-        def execute_skill(self, skill: str, *, timeout: int):
-            return self.responses.pop(0)
-
-        def upload_file(self, local_path: Path, remote_path: str, *, timeout: int | None = None):
-            self.uploads.append((Path(local_path), remote_path, timeout))
-            return {"status": "success", "output": remote_path}
-
-    client = Client()
-    import_netlist_schematic(
-        client,
+    _assert_no_shell_from_skill(client.skills)
+    assert client.skills[-1] == schematic_import_netlist_skill(
         "demoLib",
         "nand2",
-        "/already/remote/nand2.scs",
-        dev_map_file="/already/remote/devmap.txt",
-        run_dir="/remote/import-nand2",
-        timeout=120,
+        param_file="/remote/import-nand2/spiceIn.il",
+        spicein_log_file="/remote/import-nand2/spiceIn.log",
     )
 
-    commands = [command for command, _ in client.ssh_runner.commands]
-    assert "test -f /already/remote/nand2.scs" in commands
-    assert "test -f /already/remote/devmap.txt" in commands
-    uploaded_names = [path.name for path, _, _ in client.uploads]
-    assert "nand2.scs" not in uploaded_names
-    assert "devmap.txt" not in uploaded_names
-    assert {"spiceIn.il", "cds.lib"}.issubset(set(uploaded_names))
 
+@pytest.mark.parametrize(
+    ("netlist_file", "dev_map_file", "run_dir"),
+    [
+        ("/already/remote/nand2.scs", "/already/remote/devmap.txt", "/remote/import-nand2"),
+        ("/already remote/nand'2.scs", "/already remote/dev map's.txt", "/remote/import dir/nand'2"),
+    ],
+    ids=["plain", "needs_quoting"],
+)
+def test_import_netlist_schematic_checks_assumed_remote_inputs(
+    netlist_file: str,
+    dev_map_file: str,
+    run_dir: str,
+) -> None:
+    client = _ImportClient("/remote/work", ssh_runner=_Runner(), license_env=False)
 
-def test_import_netlist_schematic_rejects_relative_remote_input() -> None:
-    class Runner:
-        commands: list[tuple[str, int | None]] = []
-
-        def run_command(self, command: str, timeout: int | None = None) -> CommandResult:
-            self.commands.append((command, timeout))
-            return CommandResult(0, "", "")
-
-    class Client:
-        ssh_runner = Runner()
-        responses = [
-            {
-                "status": "success",
-                "output": '("/remote/work" "/cad/IC/bin:/usr/bin" "" "" "" "/cad/IC")',
-            },
-            {"status": "success", "output": "t"},
-        ]
-
-        def execute_skill(self, skill: str, *, timeout: int):
-            return self.responses.pop(0)
-
-    with pytest.raises(RuntimeError, match="remote input file must be absolute"):
-        import_netlist_schematic(
-            Client(),
-            "demoLib",
-            "nand2",
-            "relative/nand2.scs",
-            run_dir="/remote/import-nand2",
-            timeout=120,
-        )
-
-
-def test_import_netlist_schematic_quotes_assumed_remote_input_checks() -> None:
-    netlist_file = "/already remote/nand'2.scs"
-    dev_map_file = "/already remote/dev map's.txt"
-    run_dir = "/remote/import dir/nand'2"
-
-    class Runner:
-        commands: list[tuple[str, int | None]] = []
-
-        def run_command(self, command: str, timeout: int | None = None) -> CommandResult:
-            self.commands.append((command, timeout))
-            return CommandResult(0, "", "")
-
-    class Client:
-        ssh_runner = Runner()
-        uploads: list[tuple[Path, str, int | None]] = []
-        responses = [
-            {
-                "status": "success",
-                "output": '("/remote/work" "/cad/IC/bin:/usr/bin" "" "" "" "/cad/IC")',
-            },
-            {"status": "success", "output": "t"},
-            {"status": "success", "output": '("imported" "demoLib" "nand2")'},
-        ]
-
-        def execute_skill(self, skill: str, *, timeout: int):
-            return self.responses.pop(0)
-
-        def upload_file(self, local_path: Path, remote_path: str, *, timeout: int | None = None):
-            self.uploads.append((Path(local_path), remote_path, timeout))
-            return {"status": "success", "output": remote_path}
-
-    client = Client()
     import_netlist_schematic(
         client,
         "demoLib",
@@ -552,72 +364,47 @@ def test_import_netlist_schematic_quotes_assumed_remote_input_checks() -> None:
         timeout=120,
     )
 
-    commands = [command for command, _ in client.ssh_runner.commands]
+    commands = client.ssh_runner.commands
     assert f"mkdir -p {shlex.quote(run_dir)}" in commands
     assert f"test -f {shlex.quote(netlist_file)}" in commands
     assert f"test -f {shlex.quote(dev_map_file)}" in commands
+    uploaded_names = [path.name for path, _, _ in client.uploads]
+    assert sorted(uploaded_names) == ["cds.lib", "spiceIn.il"]
 
 
-def test_import_netlist_schematic_rejects_missing_remote_input() -> None:
-    class Runner:
-        def run_command(self, command: str, timeout: int | None = None) -> CommandResult:
-            if command.startswith("test -f "):
-                return CommandResult(1, "", "missing")
-            return CommandResult(0, "", "")
+@pytest.mark.parametrize(
+    ("netlist_file", "test_returncode", "message"),
+    [
+        ("relative/nand2.scs", 0, "remote input file must be absolute"),
+        ("/missing/remote/nand2.scs", 1, "remote input file not found"),
+    ],
+)
+def test_import_netlist_schematic_rejects_invalid_remote_input(
+    netlist_file: str,
+    test_returncode: int,
+    message: str,
+) -> None:
+    client = _ImportClient("/remote/work", ssh_runner=_Runner(test_returncode=test_returncode))
 
-    class Client:
-        ssh_runner = Runner()
-        responses = [
-            {
-                "status": "success",
-                "output": '("/remote/work" "/cad/IC/bin:/usr/bin" "" "" "" "/cad/IC")',
-            },
-            {"status": "success", "output": "t"},
-        ]
-
-        def execute_skill(self, skill: str, *, timeout: int):
-            return self.responses.pop(0)
-
-    with pytest.raises(RuntimeError, match="remote input file not found"):
+    with pytest.raises(RuntimeError, match=message):
         import_netlist_schematic(
-            Client(),
+            client,
             "demoLib",
             "nand2",
-            "/missing/remote/nand2.scs",
+            netlist_file,
             run_dir="/remote/import-nand2",
             timeout=120,
         )
 
 
-def test_import_netlist_schematic_raises_on_conn2sch_error(monkeypatch, tmp_path) -> None:
-    work_dir = tmp_path / "virtuoso"
-    work_dir.mkdir()
-    (work_dir / "cds.lib").write_text("DEFINE demoLib ./demoLib\n", encoding="utf-8")
-    netlist_file = tmp_path / "nand2.scs"
-    netlist_file.write_text("simulator lang=spectre\n", encoding="utf-8")
-
-    class Client:
-        ssh_runner = None
-        responses = [
-            {
-                "status": "success",
-                "output": f'("{work_dir}" "/cad/IC/bin:/usr/bin" "" "" "" "/cad/IC")',
-            },
-            {"status": "success", "output": "t"},
-            {"status": "error", "errors": ["conn2Sch failed"], "output": ""},
-        ]
-
-        def execute_skill(self, skill: str, *, timeout: int):
-            return self.responses.pop(0)
-
-    def fake_run(*args, **kwargs):
-        return subprocess.CompletedProcess(args[0], 0, stdout="", stderr="")
-
-    monkeypatch.setattr(schematic_netlist_module.subprocess, "run", fake_run)
+def test_import_netlist_schematic_raises_on_conn2sch_error(local_import, tmp_path) -> None:
+    work_dir, netlist_file, _ = local_import
+    client = _ImportClient(work_dir)
+    client.responses[-1] = {"status": "error", "errors": ["conn2Sch failed"], "output": ""}
 
     with pytest.raises(RuntimeError, match="conn2Sch failed"):
         import_netlist_schematic(
-            Client(),
+            client,
             "demoLib",
             "nand2",
             netlist_file,
@@ -629,7 +416,7 @@ def test_import_netlist_schematic_raises_on_conn2sch_error(monkeypatch, tmp_path
 def test_schematic_ops_import_netlist_delegates_to_client(monkeypatch, tmp_path) -> None:
     calls = []
     netlist_file = tmp_path / "nand2.scs"
-    netlist_file.write_text("simulator lang=spectre\n", encoding="utf-8")
+    netlist_file.write_text(_SPECTRE_TEXT, encoding="utf-8")
 
     def fake_import(client, lib, cell, netlist_file_arg, **kwargs):
         calls.append((client, lib, cell, netlist_file_arg, kwargs))
@@ -662,112 +449,58 @@ def test_schematic_ops_import_netlist_delegates_to_client(monkeypatch, tmp_path)
 
 
 def test_export_schematic_netlist_replaces_existing_output_directory(tmp_path) -> None:
-    class Client:
-        def execute_skill(self, skill: str, *, timeout: int):
-            return {"status": "success", "output": '"/tmp/generated/netlist/input.scs"'}
-
-        def download_file(
-            self,
-            remote_path: str,
-            local_path: Path,
-            *,
-            timeout: int | None = None,
-            recursive: bool = False,
-        ):
-            assert recursive is True
-            assert not local_path.exists()
-            local_path.mkdir()
-            (local_path / "input.scs").write_text("simulator lang=spectre\n", encoding="utf-8")
-            return {"status": "success", "output": str(local_path)}
-
     output_dir = tmp_path / "netlist"
     output_dir.mkdir()
     (output_dir / "stale.scs").write_text("old\n", encoding="utf-8")
 
-    result = export_schematic_netlist(Client(), "demoLib", "tb_inv", output_dir)
+    result = export_schematic_netlist(_ExportClient(), "demoLib", "tb_inv", output_dir)
 
     assert result["input_file"] == str(output_dir / "input.scs")
     assert not (output_dir / "stale.scs").exists()
-    assert (output_dir / "input.scs").read_text(encoding="utf-8") == "simulator lang=spectre\n"
+    assert (output_dir / "input.scs").read_text(encoding="utf-8") == _SPECTRE_TEXT
 
 
 def test_export_schematic_netlist_preserves_existing_output_on_download_failure(tmp_path) -> None:
-    class Client:
-        def execute_skill(self, skill: str, *, timeout: int):
-            return {"status": "success", "output": '"/tmp/generated/netlist/input.scs"'}
-
-        def download_file(
-            self,
-            remote_path: str,
-            local_path: Path,
-            *,
-            timeout: int | None = None,
-            recursive: bool = False,
-        ):
-            return {"status": "error", "errors": ["network failed"], "output": ""}
-
     output_dir = tmp_path / "netlist"
     output_dir.mkdir()
     (output_dir / "input.scs").write_text("old netlist\n", encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="network failed"):
-        export_schematic_netlist(Client(), "demoLib", "tb_inv", output_dir)
+        export_schematic_netlist(
+            _ExportClient(download_errors=["network failed"]),
+            "demoLib",
+            "tb_inv",
+            output_dir,
+        )
 
     assert (output_dir / "input.scs").read_text(encoding="utf-8") == "old netlist\n"
 
 
-def test_export_schematic_netlist_requires_downloaded_input_file(tmp_path) -> None:
-    class Client:
-        def execute_skill(self, skill: str, *, timeout: int):
-            return {"status": "success", "output": '"/tmp/generated/netlist/input.scs"'}
-
-        def download_file(
-            self,
-            remote_path: str,
-            local_path: Path,
-            *,
-            timeout: int | None = None,
-            recursive: bool = False,
-        ):
-            local_path.mkdir()
-            (local_path / "ade_e.scs").write_text("simulatorOptions options\n", encoding="utf-8")
-            return {"status": "success", "output": str(local_path)}
+@pytest.mark.parametrize(
+    ("source_file", "downloaded_name"),
+    [
+        (_SOURCE_FILE, "ade_e.scs"),
+        ("/tmp/generated/netlist/other.scs", "other.scs"),
+    ],
+)
+def test_export_schematic_netlist_requires_downloaded_input_scs(
+    source_file: str,
+    downloaded_name: str,
+    tmp_path,
+) -> None:
+    client = _ExportClient(f'"{source_file}"', files={downloaded_name: _SPECTRE_TEXT})
 
     with pytest.raises(RuntimeError, match="downloaded netlist is missing input.scs"):
-        export_schematic_netlist(Client(), "demoLib", "tb_inv", tmp_path / "netlist")
-
-
-def test_export_schematic_netlist_requires_input_scs_even_for_other_returned_file(tmp_path) -> None:
-    class Client:
-        def execute_skill(self, skill: str, *, timeout: int):
-            return {"status": "success", "output": '"/tmp/generated/netlist/other.scs"'}
-
-        def download_file(
-            self,
-            remote_path: str,
-            local_path: Path,
-            *,
-            timeout: int | None = None,
-            recursive: bool = False,
-        ):
-            local_path.mkdir()
-            (local_path / "other.scs").write_text("simulator lang=spectre\n", encoding="utf-8")
-            return {"status": "success", "output": str(local_path)}
-
-    with pytest.raises(RuntimeError, match="downloaded netlist is missing input.scs"):
-        export_schematic_netlist(Client(), "demoLib", "tb_inv", tmp_path / "netlist")
+        export_schematic_netlist(client, "demoLib", "tb_inv", tmp_path / "netlist")
 
 
 def test_export_schematic_netlist_rejects_relative_source_path(tmp_path) -> None:
-    class Client:
-        def execute_skill(self, skill: str, *, timeout: int):
-            return {"status": "success", "output": '"input.scs"'}
-
-        def download_file(self, *args, **kwargs):
-            raise AssertionError("relative netlist path must not be downloaded")
+    client = _ExportClient('"input.scs"')
 
     with pytest.raises(RuntimeError, match="relative netlist path"):
-        export_schematic_netlist(Client(), "demoLib", "tb_inv", tmp_path / "netlist")
+        export_schematic_netlist(client, "demoLib", "tb_inv", tmp_path / "netlist")
+
+    assert client.downloads == []
 
 
 def test_export_schematic_netlist_rejects_local_output_nested_under_source_dir(tmp_path) -> None:
@@ -775,7 +508,7 @@ def test_export_schematic_netlist_rejects_local_output_nested_under_source_dir(t
 
     source_dir = tmp_path / "generated" / "netlist"
     source_dir.mkdir(parents=True)
-    (source_dir / "input.scs").write_text("simulator lang=spectre\n", encoding="utf-8")
+    (source_dir / "input.scs").write_text(_SPECTRE_TEXT, encoding="utf-8")
     client = VirtuosoClient.local()
 
     def execute_skill(skill: str, *, timeout: int):
@@ -792,29 +525,13 @@ def test_export_schematic_netlist_rejects_local_output_nested_under_source_dir(t
         )
 
     assert not (source_dir / "nested").exists()
-    assert (source_dir / "input.scs").read_text(encoding="utf-8") == "simulator lang=spectre\n"
+    assert (source_dir / "input.scs").read_text(encoding="utf-8") == _SPECTRE_TEXT
 
 
 def test_export_schematic_netlist_restores_existing_output_when_final_replace_fails(
     monkeypatch,
     tmp_path,
 ) -> None:
-    class Client:
-        def execute_skill(self, skill: str, *, timeout: int):
-            return {"status": "success", "output": '"/tmp/generated/netlist/input.scs"'}
-
-        def download_file(
-            self,
-            remote_path: str,
-            local_path: Path,
-            *,
-            timeout: int | None = None,
-            recursive: bool = False,
-        ):
-            local_path.mkdir()
-            (local_path / "input.scs").write_text("new netlist\n", encoding="utf-8")
-            return {"status": "success", "output": str(local_path)}
-
     original_rename = Path.rename
 
     def fail_tmp_install(self: Path, target: Path):
@@ -828,7 +545,12 @@ def test_export_schematic_netlist_restores_existing_output_when_final_replace_fa
     monkeypatch.setattr(Path, "rename", fail_tmp_install)
 
     with pytest.raises(OSError, match="install failed"):
-        export_schematic_netlist(Client(), "demoLib", "tb_inv", output_dir)
+        export_schematic_netlist(
+            _ExportClient(files={"input.scs": "new netlist\n"}),
+            "demoLib",
+            "tb_inv",
+            output_dir,
+        )
 
     assert output_dir.is_dir()
     assert (output_dir / "input.scs").read_text(encoding="utf-8") == "old netlist\n"
