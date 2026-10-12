@@ -480,9 +480,6 @@ def test_maestro_sweep_bandwidth_matches_analytic(client, lib, maestro_rc):
     assert by_c["1p"]["pass_fail"] == "fail" and by_c["100f"]["pass_fail"] == "pass"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "open bug: the completion callback records the integer runID as history, so "
-    "status() stays 'unknown' for a finished job"))
 def test_maestro_durable_job_reports_completed(client, maestro_rc, tmp_path):
     from virtuoso_bridge.virtuoso.maestro import MaestroJobManager
 

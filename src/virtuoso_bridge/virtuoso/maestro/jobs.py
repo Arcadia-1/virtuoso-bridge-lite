@@ -42,6 +42,9 @@ MaestroJobTransport = Literal["ssh", "local"]
 
 _RUN_ID = re.compile(r"^[a-z0-9][a-z0-9-]{2,63}$")
 _PID = re.compile(r"^[1-9][0-9]*$")
+# maeRunSimulation(?callback ...) calls back with (session x_runID) on IC6.1.8:
+# an integer run id, not the history name returned at submission.
+_CADENCE_RUN_ID = re.compile(r"^[0-9]+$")
 _MANIFEST_SCHEMA = 2
 
 
@@ -783,10 +786,14 @@ class MaestroJobManager:
         )
         observed_history = _strip_skill_atom(observed.get("callback_history", ""))
         observed_session = _strip_skill_atom(observed.get("callback_session", ""))
+        # The callback procedure is unique to this job, so the run reference
+        # it receives only has to look like one: Cadence's integer run id, or
+        # the exact history name on releases that pass the name instead.
+        is_run_id = bool(_CADENCE_RUN_ID.fullmatch(observed_history))
         callback_matches = (
             observed_session == job.session
             and bool(observed_history)
-            and (job.history is None or observed_history == job.history)
+            and (job.history is None or observed_history == job.history or is_run_id)
         )
         if observed.get("exists") != "1":
             state = "missing"
@@ -805,7 +812,7 @@ class MaestroJobManager:
         return MaestroJobStatus(
             run_id=job.run_id,
             state=state,
-            history=job.history or observed_history or None,
+            history=job.history or (None if is_run_id else observed_history) or None,
             session=job.session,
             work_dir=job.work_dir,
             transport=job.transport,
