@@ -106,6 +106,11 @@ If deployed files are not visible to CIW, choose a shared
 
 Named profiles use case-sensitive suffixes and `-p PROFILE`. Keep existing
 one-host configuration unchanged unless the task requires these overrides.
+Separate `.env` files for different hosts, users or daemon ports keep
+separate tunnels and can run at the same time without profiles: each command
+acts on the tunnel of the configuration it loads (`--env FILE`), `status`
+names the others, and a busy local port moves to a free one written back to
+that file.
 Configured process/version metadata is a declaration, not verified runtime
 CIW identity. Read the checkout's profile documentation for supported fields.
 

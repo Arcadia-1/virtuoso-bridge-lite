@@ -593,6 +593,15 @@ def _print_status() -> int:
             setup_path = state.get("setup_path")
         else:
             setup_path = None
+        if not running:
+            # Tunnels of other .env files or profiles are separate; name them
+            # so "NOT running" is not mistaken for "no tunnel at all".
+            others = [
+                f"{target} [{other}]" if other else target
+                for other, target in SSHClient.running_targets()
+            ]
+            if others:
+                print(f"  other tunnels running: {', '.join(others)}")
 
     if not setup_path:
         setup_path = _infer_setup_path()
