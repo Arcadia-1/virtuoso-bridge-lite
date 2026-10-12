@@ -139,7 +139,7 @@ def test_foreign_owner_never_uses_local_pid(tmp_path, version, python, owner_kin
                 if not chunk:
                     break
                 response += chunk
-            assert b"watchdog fired" in response
+            assert b"did not answer within the request timeout" in response
         time.sleep(0.1)
         assert bystander.poll() is None, "watchdog signalled an unrelated local process"
         bystander.kill()
