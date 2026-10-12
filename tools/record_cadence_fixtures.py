@@ -125,6 +125,25 @@ def record_tall_form(client) -> dict:
     }
 
 
+# Requests that fail in SKILL. The multi-line one goes through the daemon's
+# load()-and-re-raise path, the others through the single-line path.
+SKILL_ERRORS = (
+    'error("VB fixture error %d" 3)',
+    "car(1)",
+    "vbFixtureUndefinedFunction()",
+    "progn(\n  car(1)\n)",
+)
+
+
+def record_skill_errors(client) -> dict:
+    replies = []
+    for code in SKILL_ERRORS:
+        result = client.execute_skill(code)
+        reply = result.metadata.get("skill_error") or (result.errors or [""])[0]
+        replies.append({"skill": code, "reply": reply})
+    return {"skill_errors.json": json.dumps(replies, indent=2) + "\n"}
+
+
 def record_schcheck_warnings(client, lib: str) -> dict:
     from virtuoso_bridge.virtuoso.schematic.ops import schematic_create_inst_by_master_name as inst
     from virtuoso_bridge.virtuoso.schematic.ops import schematic_label_instance_term as label
@@ -164,6 +183,7 @@ def main() -> int:
     files = {}
     files.update(record_tall_form(client))
     files.update(record_schcheck_warnings(client, args.lib))
+    files.update(record_skill_errors(client))
     version = client.execute_skill("getVersion(t)").output.strip().strip('"').strip()
     args.out.mkdir(parents=True, exist_ok=True)
     for name, content in files.items():

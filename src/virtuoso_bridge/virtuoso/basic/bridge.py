@@ -102,6 +102,45 @@ def _escape_for_skill_evalstring_source(s: str) -> str:
 # VirtuosoClient — pure SKILL execution client
 # ---------------------------------------------------------------------------
 
+
+def _skill_error_text(payload: str) -> str:
+    """Cadence's error message from the daemon's ``errset.errset`` reply.
+
+    The CIW handler reports a failed request as ``errset.errset`` printed
+    with ``%L``, e.g. ``("car" 0 t nil ("*Error* car: argument #1 should be
+    a list ..." 1))``. Its fifth element holds the message and the offending
+    arguments; the result reads like the CIW: ``car: argument #1 should be a
+    list ... - 1``. Other replies are returned unchanged.
+    """
+    from virtuoso_bridge.virtuoso.skill_output import is_single_complete_skill_list, parse_sexpr
+
+    if not is_single_complete_skill_list(payload):
+        return payload
+    try:
+        parsed = parse_sexpr(payload)
+    except ValueError:
+        return payload
+    if not isinstance(parsed, list) or len(parsed) != 5:
+        return payload
+    detail = parsed[4]
+    if not isinstance(detail, list) or not detail or not isinstance(detail[0], str):
+        return payload
+    message = detail[0]
+    if message.startswith("*Error* "):
+        message = message[len("*Error* "):]
+    arguments = " ".join(_skill_value_text(value) for value in detail[1:])
+    return f"{message} - {arguments}" if arguments else message
+
+
+def _skill_value_text(value: Any) -> str:
+    if value is None:
+        return "nil"
+    if value is True:
+        return "t"
+    if isinstance(value, list):
+        return "(" + " ".join(_skill_value_text(item) for item in value) + ")"
+    return str(value)
+
 class VirtuosoClient(VirtuosoInterface):
     """Virtuoso SKILL bridge using the RAMIC daemon over TCP.
 
@@ -1930,7 +1969,14 @@ let((result winName ciwNum)
         if raw.startswith(_STX):
             return VirtuosoResult(status=ExecutionStatus.SUCCESS, output=raw[1:], execution_time=elapsed)
         if raw.startswith(_NAK):
-            return VirtuosoResult(status=ExecutionStatus.ERROR, errors=[raw[1:]], execution_time=elapsed)
+            payload = raw[1:]
+            message = _skill_error_text(payload)
+            return VirtuosoResult(
+                status=ExecutionStatus.ERROR,
+                errors=[message],
+                execution_time=elapsed,
+                metadata={"skill_error": payload} if message != payload else {},
+            )
         return VirtuosoResult(status=ExecutionStatus.SUCCESS, output=raw, execution_time=elapsed,
                               warnings=["Response did not contain a standard status marker"])
 

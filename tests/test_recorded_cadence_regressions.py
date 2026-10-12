@@ -252,3 +252,43 @@ def test_bridge_never_sends_nonexistent_getpid_skill():
             if re.search(r"""["'(]getpid\(\)""", line):
                 offenders.append(f"{path.relative_to(SRC)}:{number}")
     assert offenders == []
+
+
+# ---------------------------------------------------------------------------
+# SKILL error replies (errset.errset as the CIW handler sends it)
+# ---------------------------------------------------------------------------
+
+SKILL_ERRORS = {item["skill"]: item["reply"] for item in json.loads(_fixture("skill_errors.json"))}
+
+
+@pytest.mark.parametrize("skill, message", [
+    ('error("VB fixture error %d" 3)', "VB fixture error 3"),
+    ("car(1)", 'car: argument #1 should be a list (type template = "l") - 1'),
+    ("vbFixtureUndefinedFunction()", "eval: undefined function - vbFixtureUndefinedFunction"),
+    # Multi-line requests are re-raised by the daemon with the arguments
+    # already folded into the message.
+    ("progn(\n  car(1)\n)", 'car: argument #1 should be a list (type template = "l") - 1'),
+])
+def test_recorded_skill_error_replies_read_like_the_ciw(skill, message):
+    from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
+
+    result = VirtuosoClient._parse_response("\x15" + SKILL_ERRORS[skill], 0.1)
+
+    assert result.errors == [message]
+    assert result.metadata["skill_error"] == SKILL_ERRORS[skill]
+
+
+@pytest.mark.parametrize("reply", [
+    "IPC lane is busy",
+    "AuthError: bad token",
+    '("error" 0 t nil nil)',
+    '("not" "an" "errset")',
+    "(unbalanced",
+])
+def test_other_error_replies_are_passed_through(reply):
+    from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
+
+    result = VirtuosoClient._parse_response("\x15" + reply, 0.1)
+
+    assert result.errors == [reply]
+    assert result.metadata == {}
