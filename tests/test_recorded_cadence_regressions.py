@@ -232,9 +232,6 @@ def test_finger_width_shorthand_is_refused_without_wfg():
 RECORDED_MARKER = 'completed\nsession="{session}"\nhistory=1\n'
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "open bug: the callback records x_runID as history and status() compares it to the "
-    "history name, so a finished job stays 'unknown'"))
 def test_job_with_recorded_cadence_marker_reports_completed(tmp_path, portable_local_process_identity):  # noqa: F811
     client = FakeClient()
     jobs = MaestroJobManager.from_client(

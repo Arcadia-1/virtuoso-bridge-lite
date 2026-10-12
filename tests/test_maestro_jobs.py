@@ -543,6 +543,29 @@ def test_pid_reuse_does_not_report_running(tmp_path) -> None:
     assert manager.status(job).state == "unknown"
 
 
+@pytest.mark.parametrize(("callback_history", "state"), [
+    ("1", "completed"),               # IC6.1.8 passes the integer run id
+    ("Interactive.7", "completed"),   # releases that pass the history name
+    ("Interactive.9", "unknown"),     # some other history
+    ("Interactive", "unknown"),
+])
+def test_callback_run_reference_must_be_a_run_id_or_this_history(
+    tmp_path, callback_history, state
+) -> None:
+    runner = RecordingRunner()
+    manager = remote_manager(tmp_path, runner, FakeClient(runner))
+    job = manager.submit(session="fnxSession4", run_id="callback-ref-001")
+    runner.status_output = (
+        "exists=1\ncompleted=1\nalive=1\nprocess_match=1\n"
+        "process_start=linux:777\nmarker=completed\n"
+        f"callback_session=fnxSession4\ncallback_history={callback_history}\npid=4242\n"
+    )
+
+    status = manager.status(job)
+    assert status.state == state
+    assert status.history == "Interactive.7"
+
+
 def test_callback_identity_mismatch_is_not_completed(tmp_path) -> None:
     runner = RecordingRunner()
     manager = remote_manager(tmp_path, runner, FakeClient(runner))
