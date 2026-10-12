@@ -47,6 +47,12 @@ else:
 The parameterized smoke example at
 `examples/01_virtuoso/layout/15_export_gds.py` exposes the same controls.
 
+The export sets the XStream Out form fields it needs and restores them after
+launching, except **Show Completion Message Box**: Virtuoso reads it when the
+non-blocking translation finishes, and a checked box raises a modal dialog that
+blocks the CIW. The bridge unchecks it and leaves it unchecked in that session;
+check it again in the XStream Out form if you want the box for manual exports.
+
 ### Paths, mode selection, and failures
 
 - `output_path`, `log_path`, and `stream_map` are **caller-host paths**. The
