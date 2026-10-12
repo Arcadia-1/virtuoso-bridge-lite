@@ -49,6 +49,11 @@ unless(boundp('RBStderrBuf) RBStderrBuf = "")
 ; by Refresh / Finish / Stop so post-mortem messages keep showing
 ; pid/host/port even after the IPC handle has been freed.
 unless(boundp('RBLastPid) RBLastPid = nil)
+; When the current daemon was launched. Its banner is read by an IPC handler
+; that only runs once Virtuoso is idle, so a daemon launched moments ago has
+; no RBLastPid yet; .cdsinit and -restore can load this file back to back.
+unless(boundp('RBLaunchedAt) RBLaunchedAt = nil)
+RBStartGraceSeconds = 30
 unless(boundp('RBLastBind) RBLastBind = "")
 unless(boundp('RBLastHost) RBLastHost = "")
 unless(boundp('RBLastIP) RBLastIP = "")
@@ -216,6 +221,8 @@ procedure(RBStart()
     ; state so we don't loop forever printing "already running" against
     ; a dead daemon.
     when(boundp('RBIpc) && ipcIsAliveProcess(RBIpc) && !RBLastPid
+            && !(stringp(RBLaunchedAt)
+                 && compareTime(getCurrentTime() RBLaunchedAt) < RBStartGraceSeconds)
         printf("[RAMIC Bridge] zombie detected (ipc %L alive, no banner); resetting\n" RBIpc)
         errset(ipcKillProcess(RBIpc))
         RBIpc = 'unbound
@@ -226,7 +233,10 @@ procedure(RBStart()
         RBStatErrors = 0
         RBStatUptime = 0)
 
-    if(boundp('RBIpc) && ipcIsAliveProcess(RBIpc) then
+    if(boundp('RBIpc) && ipcIsAliveProcess(RBIpc) && !RBLastPid then
+        printf("[RAMIC Bridge ipc=%L] already starting (launched at %s); not launching a second daemon\n"
+            RBIpc RBLaunchedAt)
+    else if(boundp('RBIpc) && ipcIsAliveProcess(RBIpc) then
         printf("[RAMIC Bridge ipc=%L pid=%L running_bind=%s] already running; load() does not replace a running daemon; current config port=%d\n"
             RBIpc RBLastPid
             if(RBLastBind && strlen(RBLastBind) > 0 RBLastBind "unknown")
@@ -263,6 +273,7 @@ procedure(RBStart()
             ; so the system Python links against its own libs, not Virtuoso's
             ; bundled (and often incompatible) copies.
             ; Bind the daemon to this Virtuoso, not the intermediate cdsServIpc.
+            RBLaunchedAt = getCurrentTime()
             RBIpc = ipcBeginProcess(sprintf(nil "/usr/bin/env -u LD_LIBRARY_PATH -u LD_PRELOAD RB_VIRTUOSO_PID=%d RB_VIRTUOSO_BOOT_ID=%s stdbuf -oL %s -u %L %L %L" ipcGetPid() RBQuoteShellArg(RBOwnerBootId()) RBPython RBDPath host RBPort) "" 'RBIpcDataHandler 'RBIpcErrHandler 'RBIpcFinishHandler logpath)
         )
         printf("[RAMIC Bridge ipc=%L] launching daemon (bind=%s:%d) at (%s)\n"
@@ -270,7 +281,7 @@ procedure(RBStart()
             if(RBLocal "127.0.0.1" "0.0.0.0")
             RBPort
             getCurrentTime())
-    )
+    ))
 )
 
 procedure(RBStop()
