@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Delete the first instance from the currently open schematic.
+"""Delete one instance from an explicit schematic.
 
-Run once per instance to delete them one at a time.
+Usage::
 
-Prerequisites:
-  - virtuoso-bridge service running (virtuoso-bridge start)
-  - A schematic open in Virtuoso
+    python 06_delete_instance.py <LIB> <CELL> [--instance NAME] [--yes]
+
+Without --yes it only reports which instance it would delete.
 """
 
 from __future__ import annotations
@@ -16,43 +16,48 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from _timing import format_elapsed, timed_call
-from virtuoso_bridge import VirtuosoClient
+from _target import parse_target
+from virtuoso_bridge import VirtuosoClient, decode_skill_output
+from virtuoso_bridge.virtuoso.ops import escape_skill_string
 
 
 def main() -> int:
+    args = parse_target(
+        "Delete one instance from an explicit schematic.", destructive=True,
+        extra=lambda p: p.add_argument("--instance", help="instance to delete (default: the first)"),
+    )
     client = VirtuosoClient.from_env()
+    cv = (f'dbOpenCellViewByType("{escape_skill_string(args.lib)}" '
+          f'"{escape_skill_string(args.cell)}" "schematic" nil "a")')
 
-    # List current instances
-    r = client.execute_skill('''
+    r = client.execute_skill(f"""
 let((cv out)
-  cv = geGetEditCellView()
+  cv = {cv}
   out = ""
   foreach(inst cv~>instances
     out = strcat(out inst~>name "\\n"))
   out)
-''')
-    from virtuoso_bridge import decode_skill_output
-    raw = decode_skill_output(r.output)
-    names = [n for n in raw.splitlines() if n]
+""")
+    names = [n for n in decode_skill_output(r.output).splitlines() if n]
     print(f"Instances: {names}")
-
-    if not names:
-        print("No instances to delete.")
+    target = args.instance or (names[0] if names else None)
+    if target not in names:
+        print(f"No instance {target!r} in {args.lib}/{args.cell}.")
+        return 1
+    if not args.yes:
+        print(f"Would delete {target} from {args.lib}/{args.cell}; pass --yes to do it.")
         return 0
 
-    # Save, delete first instance, save again
-    target = names[0]
-    elapsed, r = timed_call(lambda: client.execute_skill(f'''
+    elapsed, r = timed_call(lambda: client.execute_skill(f"""
 let((cv inst)
-  cv = geGetEditCellView()
-  schCheck(cv) dbSave(cv)
-  inst = car(setof(x cv~>instances x~>name == "{target}"))
+  cv = {cv}
+  inst = car(setof(x cv~>instances x~>name == "{escape_skill_string(target)}"))
   when(inst dbDeleteObject(inst))
   schCheck(cv) dbSave(cv)
-  sprintf(nil "deleted: {target}"))
-'''))
+  sprintf(nil "deleted: %s" "{escape_skill_string(target)}"))
+"""))
     print(f"{r.output}  [{format_elapsed(elapsed)}]")
-    return 0
+    return 0 if r.status.value == "success" else 1
 
 
 if __name__ == "__main__":
