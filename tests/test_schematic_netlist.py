@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shlex
+import re
 import subprocess
 from pathlib import Path
 
@@ -582,3 +583,43 @@ def test_export_schematic_netlist_restores_existing_output_when_final_replace_fa
 
     assert output_dir.is_dir()
     assert (output_dir / "input.scs").read_text(encoding="utf-8") == "old netlist\n"
+
+
+def _devmap_seen_by_spicein(monkeypatch, run_dir) -> dict:
+    seen = {}
+
+    def fake_run(*args, **kwargs):
+        params = (run_dir / "spiceIn.il").read_text(encoding="utf-8")
+        devmap = re.search(r"'devMapFile \"([^\"]*)\"", params).group(1)
+        seen["path"] = devmap
+        seen["text"] = Path(devmap).read_text(encoding="utf-8") if devmap else None
+        return subprocess.CompletedProcess(args[0], 0, stdout="spiceIn ok\n", stderr="")
+
+    monkeypatch.setattr(schematic_netlist_module.subprocess, "run", fake_run)
+    return seen
+
+
+def test_import_without_a_device_map_uses_the_analoglib_defaults(local_import, tmp_path, monkeypatch) -> None:
+    work_dir, netlist_file, _ = local_import
+    run_dir = tmp_path / "import-nand2"
+    seen = _devmap_seen_by_spicein(monkeypatch, run_dir)
+
+    import_netlist_schematic(_ImportClient(work_dir), "demoLib", "nand2", netlist_file, run_dir=run_dir)
+
+    assert seen["text"] == schematic_netlist_module.DEFAULT_DEVICE_MAP
+    assert "devselect := resistor res" in seen["text"]
+    assert not Path(seen["path"]).exists(), "the staged default map is removed afterwards"
+
+
+def test_a_given_device_map_replaces_the_defaults(local_import, tmp_path, monkeypatch) -> None:
+    work_dir, netlist_file, _ = local_import
+    run_dir = tmp_path / "import-nand2"
+    own = tmp_path / "pdk.devmap"
+    own.write_text("devselect := resistor rppoly\n", encoding="utf-8")
+    seen = _devmap_seen_by_spicein(monkeypatch, run_dir)
+
+    import_netlist_schematic(
+        _ImportClient(work_dir), "demoLib", "nand2", netlist_file, run_dir=run_dir, dev_map_file=own,
+    )
+
+    assert seen["text"] == "devselect := resistor rppoly\n"

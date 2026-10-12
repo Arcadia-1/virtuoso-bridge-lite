@@ -215,6 +215,12 @@ imported = client.schematic.import_netlist(
 )
 ```
 
+`cell` names the subcircuit to import (spiceIn's import sub-circuit), so it
+must match a `subckt` / `.SUBCKT` name in the netlist; one call converts one
+subcircuit, so import a hierarchy leaf-first. Without `dev_map_file`, a default
+device map sends `resistor`/`capacitor`/`inductor` primitives to analogLib
+`res`/`cap`/`ind`; a map you pass replaces it (use one for PDK devices).
+
 With `overwrite=True` the import refuses a target schematic that is open for
 editing (for example in a window), before `spiceIn` runs: Virtuoso cannot copy
 over it. Close the window first; read-only opens do not block the import.
