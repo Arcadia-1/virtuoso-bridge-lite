@@ -1,0 +1,5 @@
+\o INFO (SCH-1170): Extracting "floating_res schematic"
+\o Warning: Pin "MINUS" on instance "R0": floating input/output.
+\o Warning: Pin "PLUS" on instance "R0": floating input/output.
+\o Warning: Floating net "B" at (0.0000, -0.6250).
+\o Warning: Floating net "A" at (0.0000, 0.2500).

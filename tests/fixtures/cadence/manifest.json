@@ -1,0 +1,13 @@
+{
+  "virtuoso": "sub-version  IC6.1.8-64b.500.26",
+  "recorded": "2026-10-12",
+  "recorder": "tools/record_cadence_fixtures.py",
+  "pdk": null,
+  "files": [
+    "ciw.xprop",
+    "schcheck_floating.json",
+    "schcheck_floating.lines",
+    "tall_form.xprop",
+    "windows.json"
+  ]
+}

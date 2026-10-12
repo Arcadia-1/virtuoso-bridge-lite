@@ -1,0 +1,10 @@
+_NET_WM_PID(CARDINAL) = 47983
+WM_TRANSIENT_FOR(WINDOW): window id # 0x40000a
+WM_CLIENT_LEADER(WINDOW): window id # 0x40000a
+WM_CLIENT_MACHINE(STRING) = "eda-host"
+_NET_WM_STATE:  not found.
+_NET_WM_NAME(UTF8_STRING) = "VB fixture tall form"
+WM_NAME(STRING) = "VB fixture tall form"
+WM_CLASS(STRING) = "virtuoso", "virtuoso"
+WM_STATE:  not found.
+_NET_WM_WINDOW_TYPE(ATOM) = _NET_WM_WINDOW_TYPE_DIALOG, _NET_WM_WINDOW_TYPE_NORMAL
