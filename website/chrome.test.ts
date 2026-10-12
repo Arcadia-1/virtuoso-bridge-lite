@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const read = (path: string) =>
   readFileSync(new URL(`../docs/${path}`, import.meta.url), "utf8");
-const pages = ["index.html", "privacy/index.html"].map(
+const pages = ["index.html", "privacy/index.html", "guide/index.html"].map(
   read,
 );
 
@@ -26,8 +26,8 @@ describe("shared light website chrome", () => {
         "https://chip-arena.com/",
         "https://circuits-and-systems.tokenzhang.com/",
         "https://www.tokenzhang.com/",
-        'href="https://github.com/Arcadia-1/virtuoso-bridge-lite#readme"',
-        'href="https://github.com/Arcadia-1/virtuoso-bridge-lite#citation"',
+        'href="/guide/" data-internal',
+        'href="/guide/#cite" data-internal',
         'href="/privacy/"',
         'href="/analytics/"',
         "Analog Canvas",
@@ -63,6 +63,7 @@ describe("shared light website chrome", () => {
     expect(favicon).not.toContain("<rect");
     expect(favicon).toContain("prefers-color-scheme: dark");
     expect(read("assets/social-card.svg")).toContain(`d="${mark}"`);
+    expect(read("assets/architecture.svg")).toContain(`d="${mark}"`);
     for (const page of pages)
       expect(page).toContain('src="/assets/mark.svg?v=20261012-vb"');
   });
@@ -83,13 +84,19 @@ describe("shared light website chrome", () => {
     }
   });
 
+  it("keeps the two-line hero headline", () => {
+    const h1 = pages[0].match(/<h1>[\s\S]*?<\/h1>/)?.[0] ?? "";
+    expect(h1).toContain('Your agent.<span class="gradient-text">Inside Virtuoso.</span>');
+    expect(h1).toContain('让智能体，<span class="gradient-text">走进 Virtuoso。</span>');
+  });
+
   it("keeps the landing page a short front door with a correct quick start", () => {
     const landing = pages[0];
     expect(landing.split("\n").length).toBeLessThan(450);
     // `start` opens the tunnel; the CIW load(...) line is printed by `status`.
     expect(landing).toMatch(/virtuoso-bridge status\s+<span class="comment"># prints the load/);
     expect(landing).not.toMatch(/load\([^)]*\)[^<]*(printed by|输出的)[^<]*start/);
-    expect(landing).not.toContain("/guide/");
+    expect(landing).not.toContain("virtuoso-bridge-lite#readme");
   });
 
   it("compares with skillbridge in one labelled table", () => {
@@ -103,12 +110,15 @@ describe("shared light website chrome", () => {
       expect(row.match(/data-label="(Virtuoso Bridge|skillbridge)"/g)).toHaveLength(2);
   });
 
-  it("redirects the retired guide to the README and keeps it out of search", () => {
-    const guide = read("guide/index.html");
+  it("serves the guide as an indexed page that replaces the README body", () => {
+    const guide = pages[2];
+    expect(guide).not.toContain('http-equiv="refresh"');
+    expect(guide).not.toContain('content="noindex"');
     expect(guide).toContain(
-      'content="0; url=https://github.com/Arcadia-1/virtuoso-bridge-lite#readme"',
+      '<link rel="canonical" href="https://virtuoso-bridge.tokenzhang.com/guide/" />',
     );
-    expect(guide).toContain('<meta name="robots" content="noindex" />');
-    expect(read("sitemap.xml")).not.toContain("/guide/");
+    for (const id of ["install", "config", "cli", "agents", "cite"])
+      expect(guide).toContain(`<section class="block" id="${id}">`);
+    expect(read("sitemap.xml")).toContain("/guide/");
   });
 });

@@ -1,15 +1,436 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Virtuoso Bridge guide → README</title>
-    <meta name="robots" content="noindex" />
-    <link rel="canonical" href="https://github.com/Arcadia-1/virtuoso-bridge-lite#readme" />
-    <meta http-equiv="refresh" content="0; url=https://github.com/Arcadia-1/virtuoso-bridge-lite#readme" />
+    <meta name="theme-color" content="#f7f8fa" />
+    <title>Virtuoso Bridge guide — setup, configuration and CLI</title>
+    <meta name="description" content="How to install, connect and configure Virtuoso Bridge, run SKILL from Python or the CLI, and set it up for coding agents." />
+    <meta name="site-title-en" content="Virtuoso Bridge guide — setup, configuration and CLI" />
+    <meta name="site-title-zh" content="Virtuoso Bridge 使用文档 — 安装、配置与命令行" />
+    <meta property="og:title" content="Virtuoso Bridge guide — setup, configuration and CLI" />
+    <meta property="og:description" content="How to install, connect and configure Virtuoso Bridge, run SKILL from Python or the CLI, and set it up for coding agents." />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://virtuoso-bridge.tokenzhang.com/guide/" />
+    <meta
+      property="og:image"
+      content="https://virtuoso-bridge.tokenzhang.com/assets/social-card.png?v=20261012-vb"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="canonical" href="https://virtuoso-bridge.tokenzhang.com/guide/" />
+    <link rel="icon" href="/favicon.svg?v=20261012-vb" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20261012-vb" />
+    <script>
+      document.documentElement.classList.add("js");
+      try {
+        var l =
+          new URLSearchParams(location.search).get("lang") ||
+          localStorage.getItem("vb-language") ||
+          (navigator.language.startsWith("zh") ? "zh" : "en");
+        document.documentElement.dataset.lang = l === "zh" ? "zh" : "en";
+        document.documentElement.lang = l === "zh" ? "zh-CN" : "en";
+      } catch (e) {}
+    </script>
+    <link rel="stylesheet" href="/site.css?v=20261012-hero" />
+    <script src="/site.js?v=20261012-hero" defer></script>
+    <script type="module" src="/analytics/track.js?v=20261012-light"></script>
   </head>
   <body>
-    <p>The setup guide now lives in the <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite#readme">README</a>.
-    使用文档已移至 <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite#readme">README</a>。</p>
+    <a class="skip-link" href="#main"
+      ><span class="en">Skip to content</span
+      ><span class="zh">跳转到正文</span></a
+    >
+    <header class="site-header">
+      <div class="wrap header-inner">
+        <div class="brand-cluster">
+          <a
+            class="brand"
+            href="/"
+            data-internal
+            aria-label="Virtuoso Bridge home"
+            ><img
+              src="/assets/mark.svg?v=20261012-vb"
+              width="24"
+              height="24"
+              alt=""
+            /><span>Virtuoso Bridge</span></a
+          >
+          <details class="site-switcher">
+            <summary
+              aria-label="Related projects / 相关项目"
+              title="Related projects / 相关项目"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                aria-hidden="true"
+              >
+                <rect x="3" y="3" width="7" height="7" rx="1.5" />
+                <rect x="14" y="3" width="7" height="7" rx="1.5" />
+                <rect x="3" y="14" width="7" height="7" rx="1.5" />
+                <rect x="14" y="14" width="7" height="7" rx="1.5" />
+              </svg>
+              <span class="en">Projects</span><span class="zh">项目</span>
+              <svg
+                class="menu-chevron"
+                width="12"
+                height="12"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                aria-hidden="true"
+              >
+                <path d="m4 6 4 4 4-4" />
+              </svg>
+            </summary>
+            <nav class="site-menu" aria-label="Related sites">
+              <a href="https://analog-canvas.tokenzhang.com/"
+                ><img
+                  src="/assets/analog-canvas.svg"
+                  width="20"
+                  height="20"
+                  alt=""
+                /><span>Analog Canvas</span
+                ><span aria-hidden="true">↗</span></a
+              >
+              <a href="https://chip-arena.com/"
+                ><img
+                  src="/assets/chip-arena.svg"
+                  width="20"
+                  height="20"
+                  alt=""
+                /><span>Chip Arena</span><span aria-hidden="true">↗</span></a
+              >
+              <a href="https://circuits-and-systems.tokenzhang.com/"
+                ><img
+                  src="/assets/classroom.svg"
+                  width="20"
+                  height="20"
+                  alt=""
+                /><span>CAS Classroom</span
+                ><span aria-hidden="true">↗</span></a
+              >
+              <a class="site-menu-home" href="https://www.tokenzhang.com/"
+                ><svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  aria-hidden="true"
+                >
+                  <circle cx="12" cy="8" r="3.5" />
+                  <path d="M5 21v-2a7 7 0 0 1 14 0v2" /></svg
+                ><span
+                  ><span class="en">Zhishuai Zhang</span
+                  ><span class="zh">张智帅 · 个人主页</span></span
+                ><span aria-hidden="true">↗</span></a
+              >
+            </nav>
+          </details>
+        </div>
+        <nav class="header-nav" aria-label="Main navigation">
+          <a class="nav-guide" href="/guide/" data-internal
+            ><svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path
+                d="M12 5c-3-2-6-2-9-1v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-3-1-6-1-9 1Zm0 0v15"
+              /></svg
+            ><span class="en">Docs</span><span class="zh">使用文档</span></a
+          >
+        </nav>
+        <div class="header-actions">
+          <a
+            class="report-link"
+            href="https://github.com/Arcadia-1/virtuoso-bridge-lite/issues"
+            title="Report an issue / 反馈问题"
+            ><svg
+              width="15"
+              height="15"
+              viewBox="0 0 20 20"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.3"
+              aria-hidden="true"
+            >
+              <circle cx="10" cy="10" r="7.5" />
+              <path d="M10 5.5v5M10 13v1" /></svg
+            ><span class="en">Report issue</span
+            ><span class="zh">反馈问题</span></a
+          >
+          <a
+            class="nav-source"
+            href="https://github.com/Arcadia-1/virtuoso-bridge-lite"
+            aria-label="GitHub repository"
+            title="GitHub"
+            ><svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path
+                d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.87c-2.78.6-3.37-1.18-3.37-1.18-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.61.07-.61 1 .07 1.53 1.03 1.53 1.03.9 1.53 2.35 1.09 2.92.83.09-.65.35-1.09.64-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02A9.6 9.6 0 0 1 12 6.82a9.6 9.6 0 0 1 2.5.34c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.56 4.93.36.31.68.92.68 1.85v2.77c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"
+              /></svg
+          ></a>
+          <button
+            class="lang-switch js-only"
+            type="button"
+            data-language-toggle
+            aria-label="切换到中文"
+            title="切换到中文"
+          >
+            <span class="en" lang="zh-CN">中文</span>
+            <span class="zh" lang="en">EN</span>
+          </button>
+        </div>
+      </div>
+    </header>
+    <main id="main" class="page guide">
+      <section class="guide-head" id="top">
+        <h1><span class="en">Guide</span><span class="zh">使用文档</span></h1>
+        <p class="lead"><span class="en">Setup, configuration, Python and CLI use, and the parts for coding agents.</span><span class="zh">安装、配置、Python 与命令行用法，以及给编程智能体的部分。</span></p>
+        <nav class="toc" aria-label="Contents"><ol><li><a href="#overview"><span class="en">Overview</span><span class="zh">概览</span></a></li><li><a href="#setup"><span class="en">Choose your setup</span><span class="zh">选择使用方式</span></a></li><li><a href="#install"><span class="en">Install and connect</span><span class="zh">安装与连接</span></a></li><li><a href="#skill"><span class="en">Run SKILL</span><span class="zh">执行 SKILL</span></a></li><li><a href="#design"><span class="en">Schematic, layout and Spectre</span><span class="zh">原理图、版图与 Spectre</span></a></li><li><a href="#maestro"><span class="en">Maestro snapshots</span><span class="zh">Maestro 快照</span></a></li><li><a href="#ciw"><span class="en">Shared CIW</span><span class="zh">共享 CIW</span></a></li><li><a href="#config"><span class="en">Configuration</span><span class="zh">配置</span></a></li><li><a href="#cli"><span class="en">CLI reference</span><span class="zh">命令行参考</span></a></li><li><a href="#agents"><span class="en">Coding agents</span><span class="zh">编程智能体</span></a></li><li><a href="#architecture"><span class="en">Architecture</span><span class="zh">架构</span></a></li><li><a href="#cite"><span class="en">Citation</span><span class="zh">引用</span></a></li></ol></nav>
+      </section>
+<section class="block" id="overview">
+<h2><span class="en">Overview</span><span class="zh">概览</span></h2>
+<p><span class="en">Virtuoso Bridge lets AI agents drive Cadence Virtuoso and Spectre, locally or on a remote server, through Python, SKILL or the command line.</span><span class="zh">Virtuoso Bridge 让 AI 智能体通过 Python、SKILL 或命令行操作 Cadence Virtuoso 与 Spectre，可以在本机，也可以在远程服务器上。</span></p>
+<p><span class="en"><strong>Lite by default.</strong> Spectre execution and PDK/CDF callbacks are the core, for GUI-equivalent electrical results with matching netlists, models and options. Common schematic, symbol and GDS operations get lightweight wrappers; anything else goes through raw SKILL. Multi-server, multi-account and process configuration are optional, never a prerequisite for the one-host workflow.</span><span class="zh"><strong>默认轻量。</strong>核心是 Spectre 执行与 PDK/CDF 回调，保证网表、模型和选项一致时得到与 GUI 相同的电学结果。常用的原理图、符号和 GDS 操作有轻量封装，其余都可以直接写 SKILL。多服务器、多账号与工艺配置都是可选项，单主机的常规用法不需要它们。</span></p>
+<ul class="bullets"><li><span class="en">Run inline SKILL, load <code>.il</code> files, or use the Python APIs.</span><span class="zh">执行内联 SKILL、加载 <code>.il</code> 文件，或使用 Python API。</span></li><li><span class="en">Four design domains: schematic editing, layout generation, Maestro simulation setup, and standalone Spectre with PSF ASCII parsing.</span><span class="zh">四个设计领域：原理图编辑、版图生成、Maestro 仿真设置，以及解析 PSF ASCII 结果的独立 Spectre。</span></li><li><span class="en">Deterministic schematic planning: explicit connectivity plus grid, polarity-row, differential-pair, pin-column and output-stage constraints.</span><span class="zh">确定性的原理图规划：显式连接关系，加上网格、极性行、差分对、引脚列和输出级约束。</span></li><li><span class="en">Exact schematic recreation across PDKs through explicit process maps, symbol-pin audits, readback checks and GUI screenshots.</span><span class="zh">跨 PDK 精确复现原理图：显式工艺映射、符号引脚核对、回读校验和 GUI 截图。</span></li><li><span class="en">Optional SOS cellview control: status, checkout, cancel, checkin and registration, with dry runs and post-state checks.</span><span class="zh">可选的 SOS cellview 管理：状态、检出、取消检出、检入和注册，支持试运行与结果核对。</span></li><li><span class="en">Optional scale-out: several design servers, each with its own tunnel, and parallel simulations across servers and accounts.</span><span class="zh">可选的横向扩展：连接多台设计服务器，各自独立隧道，并可跨服务器和账号并行仿真。</span></li><li><span class="en">Built for coding agents: CLI-first lifecycle (<code>start</code> / <code>status</code> / <code>restart</code>), agent skill files in <code>skills/</code>, and role-aware SSH routing.</span><span class="zh">为编程智能体设计：命令行优先的生命周期（<code>start</code> / <code>status</code> / <code>restart</code>）、<code>skills/</code> 里的智能体技能文件，以及按角色区分的 SSH 路由。</span></li><li><span class="en">Client on macOS, Windows and Linux (CI covers Linux and Windows); the Virtuoso side runs on Linux.</span><span class="zh">客户端支持 macOS、Windows 和 Linux（CI 覆盖 Linux 与 Windows）；Virtuoso 端运行在 Linux 上。</span></li></ul>
+<p class="note"><span class="en">How it compares with skillbridge: see the <a href="/#skillbridge" data-internal>table on the home page</a>.</span><span class="zh">与 skillbridge 的区别见<a href="/#skillbridge" data-internal>首页的对比表</a>。</span></p>
+</section>
+<section class="block" id="setup">
+<h2><span class="en">Choose your setup</span><span class="zh">选择使用方式</span></h2>
+<table class="doc-table"><thead><tr><th scope="col"><span class="en">You want to…</span><span class="zh">你想要…</span></th><th scope="col"><span class="en">Use</span><span class="zh">使用</span></th><th scope="col"><span class="en">Needs</span><span class="zh">需要</span></th></tr></thead><tbody><tr><td><span class="en">Drive Virtuoso on a remote EDA server</span><span class="zh">操作远程 EDA 服务器上的 Virtuoso</span></td><td><span class="en">Remote mode</span><span class="zh">远程模式</span></td><td><span class="en">SSH access, running Virtuoso, <code>load(...)</code> in the CIW</span><span class="zh">SSH 访问、正在运行的 Virtuoso、在 CIW 中执行 <code>load(...)</code></span></td></tr><tr><td><span class="en">Drive Virtuoso on this machine</span><span class="zh">操作本机上的 Virtuoso</span></td><td><span class="en">Local mode</span><span class="zh">本机模式</span></td><td><span class="en">Running Virtuoso, <code>VB_REMOTE_HOST=localhost</code></span><span class="zh">正在运行的 Virtuoso、<code>VB_REMOTE_HOST=localhost</code></span></td></tr><tr><td><span class="en">Run Spectre from netlists</span><span class="zh">从网表运行 Spectre</span></td><td><span class="en">Spectre simulator</span><span class="zh">Spectre 仿真器</span></td><td><span class="en"><code>spectre</code> on PATH, or <code>VB_CADENCE_CSHRC</code></span><span class="zh"><code>spectre</code> 在 PATH 中，或设置 <code>VB_CADENCE_CSHRC</code></span></td></tr><tr><td><span class="en">Run reproducible optimization workflows</span><span class="zh">运行可复现的优化流程</span></td><td><span class="en">Optimizer skill</span><span class="zh">optimizer 技能</span></td><td><span class="en">Spectre/OCEAN setup, requirement files</span><span class="zh">Spectre/OCEAN 环境、需求文件</span></td></tr><tr><td><span class="en">Let a coding agent operate Cadence</span><span class="zh">让编程智能体操作 Cadence</span></td><td><span class="en">Agent skills</span><span class="zh">智能体技能</span></td><td><span class="en">Link <code>skills/</code> into the agent's skill directory (<a href="#agents">below</a>)</span><span class="zh">把 <code>skills/</code> 链接到智能体的技能目录（<a href="#agents">见下文</a>）</span></td></tr></tbody></table>
+<p><span class="en">SKILL execution and Spectre simulation are independent: you can run Spectre without the SKILL bridge, and use the SKILL bridge without Spectre.</span><span class="zh">SKILL 执行与 Spectre 仿真彼此独立：不用 SKILL 桥也能跑 Spectre，不用 Spectre 也能用 SKILL 桥。</span></p>
+<p class="note"><span class="en">Advanced: audit existing profiles with <code>virtuoso-bridge profile list --json</code>, or select a POSIX sh site environment with <code>VB_CADENCE_ENV_SHELL=sh</code> (default csh). See <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/docs/profile-audit.md">profile audit</a>.</span><span class="zh">进阶：用 <code>virtuoso-bridge profile list --json</code> 审查已有配置，或用 <code>VB_CADENCE_ENV_SHELL=sh</code> 选择 POSIX sh 站点环境（默认 csh）。见 <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/docs/profile-audit.md">profile audit</a>。</span></p>
+</section>
+<section class="block" id="install">
+<h2><span class="en">Install and connect</span><span class="zh">安装与连接</span></h2>
+<div class="code"><div class="code-head"><span>macOS · Linux</span><button class="copy-button js-only" type="button" data-copy="guide-code-1"><span class="en">Copy</span><span class="zh">复制</span></button></div><pre id="guide-code-1"><code><span class="comment"># 0. Get the source</span>
+git clone https://github.com/Arcadia-1/virtuoso-bridge-lite.git
+cd virtuoso-bridge-lite
+
+<span class="comment"># 1. Install in a virtual environment</span>
+uv venv .venv
+source .venv/bin/activate
+uv pip install -e .
+
+<span class="comment"># 2. Create ~/.virtuoso-bridge/.env</span>
+virtuoso-bridge init user@host [-J user@jump-host]
+<span class="comment"># or: virtuoso-bridge init   (empty template; set VB_REMOTE_HOST yourself)</span>
+
+<span class="comment"># 3. Start and verify</span>
+virtuoso-bridge start     <span class="comment"># starts the tunnel and prints the CIW load(...) line</span>
+virtuoso-bridge status    <span class="comment"># tunnel, Virtuoso daemon and Spectre availability</span></code></pre></div>
+<p><span class="en">On Windows PowerShell, activate with <code>.\.venv\Scripts\Activate.ps1</code>. Then paste the printed <code>load(...)</code> line into the Virtuoso CIW you want to drive.</span><span class="zh">Windows PowerShell 下用 <code>.\.venv\Scripts\Activate.ps1</code> 激活。然后把打印出的 <code>load(...)</code> 粘贴到要控制的 Virtuoso CIW。</span></p>
+<p><span class="en">Optional X11 bootstrap: pick one top-level CIW explicitly and inject only the generated setup command. <code>bootstrap</code> refuses windows that are not a CIW and never accepts arbitrary SKILL.</span><span class="zh">可选的 X11 自动加载：先明确选定一个顶层 CIW，只注入生成的 setup 命令。<code>bootstrap</code> 会拒绝不是 CIW 的窗口，也不接受任意 SKILL。</span></p>
+<div class="code"><div class="code-head"><span>shell</span></div><pre><code>virtuoso-bridge list-windows --top-level --json
+virtuoso-bridge bootstrap --window 0x3000012</code></pre></div>
+<h3 id="local-mode"><span class="en">Local mode</span><span class="zh">本机模式</span></h3>
+<p><span class="en">When Virtuoso runs on the same machine, set <code>VB_REMOTE_HOST=localhost</code>: no SSH, and the setup uses the local Python. Details: <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/skills/virtuoso/references/connection.md">connection guide</a>.</span><span class="zh">Virtuoso 在本机运行时设置 <code>VB_REMOTE_HOST=localhost</code>：不走 SSH，setup 使用本机 Python。详见 <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/skills/virtuoso/references/connection.md">connection guide</a>。</span></p>
+<h3 id="env-file"><span class="en">Which .env is used</span><span class="zh">使用哪个 .env</span></h3>
+<p><span class="en">Python entry points load the nearest parent <code>.env</code> that sets a bridge host role (<code>VB_REMOTE_HOST</code>, <code>VB_GUI_HOST</code>, <code>VB_DAEMON_HOST</code>…) or <code>VB_LOCAL_PORT</code>, with <code>override=True</code>. That can switch a long-lived process between local and remote mode, so pin the file before creating a client when you embed the bridge:</span><span class="zh">Python 入口会加载最近的上级目录中设置了桥接主机角色（<code>VB_REMOTE_HOST</code>、<code>VB_GUI_HOST</code>、<code>VB_DAEMON_HOST</code>…）或 <code>VB_LOCAL_PORT</code> 的 <code>.env</code>，并且 <code>override=True</code>。这可能让长期运行的进程在本机/远程模式之间切换，所以嵌入使用时先固定文件再创建客户端：</span></p>
+<div class="code"><div class="code-head"><span>python</span></div><pre><code>from virtuoso_bridge.env import set_runtime_env_file
+
+set_runtime_env_file("/path/to/virtuoso-bridge.env")</code></pre></div>
+</section>
+<section class="block" id="skill">
+<h2><span class="en">Run SKILL</span><span class="zh">执行 SKILL</span></h2>
+<div class="code"><div class="code-head"><span>python</span></div><pre><code>from virtuoso_bridge import VirtuosoClient
+
+client = VirtuosoClient.from_env()
+client.execute_skill("1+2")  <span class="comment"># VirtuosoResult(status=SUCCESS, output='3')</span></code></pre></div>
+<p><span class="en">Or skip Python and run SKILL from the shell:</span><span class="zh">也可以不写 Python，直接在命令行执行 SKILL：</span></p>
+<div class="code"><div class="code-head"><span>shell</span></div><pre><code><span class="comment"># One-liner: full VirtuosoResult JSON on stdout</span>
+virtuoso-bridge eval 'getCurrentTime()'
+
+<span class="comment"># Multi-line SKILL via heredoc (wrapped in progn; returns the last form)</span>
+virtuoso-bridge eval --stdin &lt;&lt;'EOF'
+let((libs)
+  libs = mapcar(lambda((l) l~&gt;name) ddGetLibList())
+  printf("found %d libraries\n" length(libs))
+  libs)
+EOF
+
+<span class="comment"># Whole .il file, uploaded automatically in SSH mode</span>
+virtuoso-bridge load my_script.il</code></pre></div>
+<p><span class="en">Useful first commands once the bridge is up:</span><span class="zh">桥接启动后常用的几个命令：</span></p>
+<div class="code"><div class="code-head"><span>shell</span></div><pre><code>virtuoso-bridge windows       <span class="comment"># list open Virtuoso windows</span>
+virtuoso-bridge screenshot    <span class="comment"># screenshot the CIW into the artifact directory</span>
+virtuoso-bridge export-visio MyLib MyCell -o MyCell.vsdx   <span class="comment"># Windows + Visio</span></code></pre></div>
+</section>
+<section class="block" id="design">
+<h2><span class="en">Schematic, layout and Spectre</span><span class="zh">原理图、版图与 Spectre</span></h2>
+<p><span class="en">Operation-scoped schematic diagnostics: only messages from this <code>schCheck</code>/<code>dbSave</code>, with a blocking modal reported separately instead of stale CIW history.</span><span class="zh">只针对本次操作的原理图诊断：只收集这次 <code>schCheck</code>/<code>dbSave</code> 的消息，阻塞弹窗单独报告，不混入旧的 CIW 历史。</span></p>
+<div class="code"><div class="code-head"><span>python</span></div><pre><code>report = client.schematic.check_and_save("myLib", "myCell")
+print(report.status, report.check_error_count, report.check_warning_count)
+for diagnostic in report.diagnostics:
+    print(diagnostic.severity, diagnostic.code, diagnostic.message)</code></pre></div>
+<p><span class="en">Recreate existing drawings across PDKs with the exact-coordinate manifest workflow; it never guesses devices or placement. JSON contracts and a runner: <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/examples/01_virtuoso/schematic_manifest">examples/01_virtuoso/schematic_manifest</a>.</span><span class="zh">用精确坐标的 manifest 流程在多个 PDK 上复现已有原理图，不会猜测器件或摆放。JSON 约定和完整脚本见 <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/examples/01_virtuoso/schematic_manifest">examples/01_virtuoso/schematic_manifest</a>。</span></p>
+<div class="code"><div class="code-head"><span>python</span></div><pre><code>result = client.schematic.import_manifest(
+    "source.json",
+    "process-map.json",
+    processes=["pdk180", "pdk28"],
+)
+client.schematic.capture_import_result(result, "output/evidence")</code></pre></div>
+<p><span class="en">Standalone Spectre with strict PSF ASCII helpers, so missing files, keys or shapes fail fast instead of being guessed:</span><span class="zh">独立 Spectre 与严格的 PSF ASCII 读取函数：文件、键名或数据形状不对时直接报错，不做猜测：</span></p>
+<div class="code"><div class="code-head"><span>python</span></div><pre><code>from pathlib import Path
+from virtuoso_bridge.spectre import SpectreSimulator
+from virtuoso_bridge.spectre.psf import frequency_hz, read_psf_ascii, result_file, vector
+
+result = SpectreSimulator.from_env(work_dir="output").run_simulation("tb.scs")
+if not result.ok:
+    raise RuntimeError(result.errors)
+raw_psf = Path(result.metadata["output_dir"])
+ac = read_psf_ascii(result_file(raw_psf, "*.ac"))
+frequency = frequency_hz(ac)
+vout = vector(ac, "VOUT")  <span class="comment"># exact raw PSF key; missing or invalid data raises</span></code></pre></div>
+<p class="note"><span class="en">More runnable workflows: <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/examples">examples/</a>.</span><span class="zh">更多可运行的流程：<a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/examples">examples/</a>。</span></p>
+</section>
+<section class="block" id="maestro">
+<h2><span class="en">Maestro snapshots</span><span class="zh">Maestro 快照</span></h2>
+<p><span class="en">Pull the focused Maestro session's setup and latest-run artifacts into a local folder:</span><span class="zh">把当前聚焦的 Maestro 会话的设置和最近一次运行的产物拉到本地目录：</span></p>
+<div class="code"><div class="code-head"><span>shell</span></div><pre><code>virtuoso-bridge snapshot -o output                              <span class="comment"># newest history</span>
+virtuoso-bridge snapshot -o output --history Interactive.160    <span class="comment"># a specific history</span></code></pre></div>
+<div class="code"><div class="code-head"><span>output/</span></div><pre><code>output/20260422_142137__MyLib__myTB/
+├── maestro.sdb, active.state                        raw Cadence files
+├── state_from_sdb.xml, state_from_active_state.xml  filtered, high-signal
+├── state_from_skill.txt                             SKILL-probe setup summary
+└── Interactive.N/
+    ├── Interactive.N.{log,rdb,msg.db}               run level (rdb = SQLite)
+    └── &lt;pt&gt;/&lt;tb&gt;/
+        ├── netlist/   netlist, input.scs, qpInformation.ils, exprOutputs.json, paramInfo.ils
+        └── psf/       spectre.out, logFile, dcOp.dc, *.ac, *.tran, ...</code></pre></div>
+<p><span class="en">Each point keeps the five netlist files that describe the runnable design, plus stdout, logs and non-binary results. The rules live in <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/src/virtuoso_bridge/virtuoso/maestro/snapshot_filter.yaml">snapshot_filter.yaml</a>; comment lines in or out to change them. Binary waveforms are never pulled; read scalar results with <code>client.maestro.read_results()</code>.</span><span class="zh">每个点只保留描述可运行设计的 5 个网表文件，以及 stdout、日志和非二进制结果。规则在 <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/src/virtuoso_bridge/virtuoso/maestro/snapshot_filter.yaml">snapshot_filter.yaml</a> 里，注释或取消注释即可调整。二进制波形不会拉取，标量结果用 <code>client.maestro.read_results()</code> 读取。</span></p>
+</section>
+<section class="block" id="ciw">
+<h2><span class="en">Shared CIW</span><span class="zh">共享 CIW</span></h2>
+<p><span class="en">When people also use the CIW, opt into <code>client.dialogs.enable_guard(protect_inflight=True)</code> with an upgraded daemon. A request that meets a popup returns a recovery handle instead of interrupting Virtuoso or retrying; after the user resolves the popup, read the original result with <code>client.requests.receipt(handle)</code>. This mode is off by default.</span><span class="zh">有人同时在用 CIW 时，配合新版 daemon 开启 <code>client.dialogs.enable_guard(protect_inflight=True)</code>。遇到弹窗的请求会返回一个恢复句柄，不会打断 Virtuoso，也不会自动重试；用户处理完弹窗后，用 <code>client.requests.receipt(handle)</code> 取回原请求的结果。此模式默认关闭。</span></p>
+<p><span class="en">Closing an informational popup is also opt-in: a single-use visual approval bound to the exact CIW and window, with no automatic key injection or forced close.</span><span class="zh">关闭提示类弹窗同样需要显式开启：一次性的可视化确认，绑定到具体的 CIW 和窗口，不会自动注入按键或强制关闭。</span></p>
+<p class="note"><span class="en">Requirements and limits: <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/skills/virtuoso/references/shared-ciw-dialogs.md">shared CIW dialogs</a>.</span><span class="zh">部署要求与限制见 <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/skills/virtuoso/references/shared-ciw-dialogs.md">shared CIW dialogs</a>。</span></p>
+</section>
+<section class="block" id="config">
+<h2><span class="en">Configuration</span><span class="zh">配置</span></h2>
+<h3 id="split-hosts"><span class="en">Split GUI and daemon hosts</span><span class="zh">GUI 与 daemon 分机部署</span></h3>
+<p><span class="en"><code>VB_REMOTE_HOST</code> stays the simple one-host setting. Where Virtuoso runs on a GUI/login host but <code>ipcBeginProcess()</code> starts the daemon on a compute host, set the roles explicitly:</span><span class="zh"><code>VB_REMOTE_HOST</code> 仍是最简单的单主机设置。如果 Virtuoso 跑在 GUI/登录主机上，而 <code>ipcBeginProcess()</code> 把 daemon 启动在计算主机上，就显式配置各角色：</span></p>
+<div class="code"><div class="code-head"><span>.env</span></div><pre><code>VB_GUI_HOST=gui-host-a
+VB_DEPLOY_HOST=gui-host-a
+VB_DAEMON_HOST=compute-host-b
+VB_SPECTRE_HOST=compute-host-b
+VB_REMOTE_USER=user
+VB_JUMP_HOST=gui-host-a
+
+<span class="comment"># Must be readable from the CIW and daemon host; /tmp is often isolated.</span>
+VB_REMOTE_SCRATCH_ROOT=/home/user/.virtuoso-bridge</code></pre></div>
+<p><span class="en">Defaults: deployment follows the GUI host, Spectre follows the legacy/daemon host, and the jump host is skipped when the target is the jump host itself. <code>status</code> reads a daemon identity file written from the CIW banner, so it can diagnose a daemon/tunnel host mismatch even when the TCP endpoint is wrong.</span><span class="zh">默认：部署主机跟随 GUI 主机，Spectre 跟随旧版/daemon 主机；目标本身就是跳板机时会自动跳过跳板。<code>status</code> 会读取 CIW 横幅写下的 daemon 身份文件，即使 TCP 端点不对，也能诊断出 daemon 与隧道主机不一致。</span></p>
+<h3 id="listen"><span class="en">Daemon network access</span><span class="zh">daemon 的网络访问</span></h3>
+<p><span class="en">The daemon listens on 127.0.0.1; SSH tunnels and local mode both reach it through loopback. Only if clients connect over the network (VPN or LAN, no tunnel), set <code>VB_DAEMON_LISTEN_ALL=1</code> in the <code>.env</code> to listen on all interfaces. Requests stay token-signed either way.</span><span class="zh">daemon 只监听 127.0.0.1，SSH 隧道和本机模式都经回环地址访问。只有客户端经网络直连（VPN 或局域网、不走隧道）时，才在 <code>.env</code> 里设置 <code>VB_DAEMON_LISTEN_ALL=1</code> 监听所有网卡。无论哪种方式，请求都带令牌签名。</span></p>
+<h3 id="logging"><span class="en">IPC logging</span><span class="zh">IPC 日志</span></h3>
+<p><span class="en">Off by default. Set <code>RB_LOG_ENABLED=1</code> in the environment that launches Virtuoso; <code>RB_LOG_PATH</code> optionally picks the file (default <code>ramic-bridge.log</code> in Virtuoso's working directory). These are Virtuoso-process variables, not <code>.env</code> settings, and do not change a running Virtuoso. The monitor's logging toggle uses the configured path and restarts only the daemon.</span><span class="zh">默认关闭。在启动 Virtuoso 的环境里设置 <code>RB_LOG_ENABLED=1</code>；<code>RB_LOG_PATH</code> 可指定文件（默认是 Virtuoso 工作目录下的 <code>ramic-bridge.log</code>）。这些是 Virtuoso 进程的环境变量，不是 <code>.env</code> 设置，改了也不影响已运行的 Virtuoso。监视窗口里的日志开关使用已配置的路径，只重启 daemon。</span></p>
+<h3 id="nonce-cache"><span class="en">Replay cache size</span><span class="zh">防重放缓存大小</span></h3>
+<p><span class="en">The daemon remembers signed request nonces to reject replays: 4096 by default, and when full it rejects new requests rather than forgetting live entries. For sustained high request rates set, for example, <code>RB_NONCE_CACHE_MAX=8192</code> where Virtuoso is launched, then restart Virtuoso and the daemon.</span><span class="zh">daemon 记住已签名请求的 nonce 以拒绝重放：默认容量 4096，满了会拒绝新请求，而不是丢弃仍有效的记录。持续高频请求时，在启动 Virtuoso 的环境里设置例如 <code>RB_NONCE_CACHE_MAX=8192</code>，然后重启 Virtuoso 和 daemon。</span></p>
+<h3 id="paramiko"><span class="en">SSH concurrency with Paramiko</span><span class="zh">用 Paramiko 复用 SSH 连接</span></h3>
+<p><span class="en">OpenSSH <code>ControlMaster</code> does not work with every Windows SSH build. For real multiplexing inside one bridge process, install the Paramiko backend and select it:</span><span class="zh">并非所有 Windows 版 SSH 都支持 OpenSSH <code>ControlMaster</code>。要在一个桥接进程内真正复用连接，安装并选用 Paramiko 后端：</span></p>
+<div class="code"><div class="code-head"><span>shell</span></div><pre><code>uv pip install -e '.[ssh]'</code></pre></div>
+<div class="code"><div class="code-head"><span>.env</span></div><pre><code>VB_SSH_BACKEND=paramiko
+VB_SSH_MAX_SESSIONS=10
+<span class="comment"># Optional: route the first SSH hop through an unauthenticated SOCKS5 proxy.</span>
+VB_SSH_PROXY=socks5://127.0.0.1:10800</code></pre></div>
+<p><span class="en">Commands and file transfers then share one authenticated SSH transport, one channel per operation. <code>VB_SSH_MAX_SESSIONS</code> is a client-side gate and must not exceed the server's <code>MaxSessions</code>; extra work waits at the gate. There is no automatic fallback to separate connections. The long-lived tunnel from <code>virtuoso-bridge start</code> stays a standalone OpenSSH process.</span><span class="zh">之后命令和文件传输共用一条已认证的 SSH 连接，每个操作开一个通道。<code>VB_SSH_MAX_SESSIONS</code> 是客户端限流，不能超过服务器的 <code>MaxSessions</code>；超出的任务会排队。不会自动退回多条独立连接。<code>virtuoso-bridge start</code> 建立的长期隧道仍是独立的 OpenSSH 进程。</span></p>
+<p><span class="en"><code>VB_SSH_PROXY</code> (a <code>socks5://host:port</code> URL without credentials) applies only to Paramiko commands and transfers, not to the OpenSSH tunnel; if the tunnel also needs SOCKS5, configure an OpenSSH <code>ProxyCommand</code>. Proxy failures are reported, never bypassed.</span><span class="zh"><code>VB_SSH_PROXY</code>（不带凭据的 <code>socks5://host:port</code>）只作用于 Paramiko 的命令和传输，不影响 OpenSSH 隧道；隧道也要走 SOCKS5 的话，请配置 OpenSSH <code>ProxyCommand</code>。代理失败会直接报错，不会绕过。</span></p>
+<p><span class="en">Paramiko reads <code>VB_SSH_CONFIG</code> or the normal SSH config files (<code>Include</code>, aliases, <code>HostName</code>/<code>User</code>/<code>Port</code>, <code>IdentityFile</code>, <code>IdentitiesOnly</code>, one <code>ProxyJump</code> hop). <code>ProxyCommand</code>, chained <code>ProxyJump</code> and revoked-key files fail at start-up instead of being ignored. Host keys must already be in <code>known_hosts</code>: run <code>ssh &lt;host&gt; echo ok</code> once with OpenSSH first.</span><span class="zh">Paramiko 读取 <code>VB_SSH_CONFIG</code> 或常规 SSH 配置（<code>Include</code>、别名、<code>HostName</code>/<code>User</code>/<code>Port</code>、<code>IdentityFile</code>、<code>IdentitiesOnly</code>、一跳 <code>ProxyJump</code>）。<code>ProxyCommand</code>、多跳 <code>ProxyJump</code> 和吊销密钥文件会在启动时报错，不会被悄悄忽略。主机密钥必须已在 <code>known_hosts</code> 中：先用 OpenSSH 执行一次 <code>ssh &lt;host&gt; echo ok</code>。</span></p>
+</section>
+<section class="block" id="cli">
+<h2><span class="en">CLI reference</span><span class="zh">命令行参考</span></h2>
+<p><span class="en">Every command takes <code>-p PROFILE</code> / <code>--env PATH</code> for a non-default configuration; <code>virtuoso-bridge &lt;cmd&gt; --help</code> lists all flags. SOS cellview commands live under <code>virtuoso-bridge sos</code>.</span><span class="zh">所有命令都支持 <code>-p PROFILE</code> / <code>--env PATH</code> 选择非默认配置；<code>virtuoso-bridge &lt;cmd&gt; --help</code> 列出全部参数。SOS cellview 命令在 <code>virtuoso-bridge sos</code> 下。</span></p>
+<table class="doc-table"><thead><tr><th scope="col"><span class="en">Command</span><span class="zh">命令</span></th><th scope="col"><span class="en">What it does</span><span class="zh">作用</span></th></tr></thead><tbody><tr class="group"><th colspan="2" scope="colgroup"><span class="en">Tunnel and lifecycle</span><span class="zh">隧道与生命周期</span></th></tr><tr><td><code>init [user@host] [-J jump]</code></td><td><span class="en">Write a starter <code>.env</code> (no arguments: empty template)</span><span class="zh">生成初始 <code>.env</code>（无参数时为空模板）</span></td></tr><tr><td><code>start [--bind-venv]</code></td><td><span class="en">Start the SSH tunnel and deploy the daemon; <code>--bind-venv</code> (with <code>-p X</code>) binds the active virtualenv to profile X</span><span class="zh">启动 SSH 隧道并部署 daemon；<code>--bind-venv</code>（配合 <code>-p X</code>）把当前虚拟环境绑定到配置 X</span></td></tr><tr><td><code>stop</code></td><td><span class="en">Stop the SSH tunnel</span><span class="zh">停止 SSH 隧道</span></td></tr><tr><td><code>restart</code></td><td><span class="en">Restart the tunnel and refresh the deployed daemon setup</span><span class="zh">重启隧道并刷新已部署的 daemon</span></td></tr><tr><td><code>status</code></td><td><span class="en">Tunnel, daemon health and Spectre availability</span><span class="zh">隧道、daemon 状态与 Spectre 可用性</span></td></tr><tr><td><code>license</code></td><td><span class="en">Check Spectre license availability</span><span class="zh">检查 Spectre 许可证</span></td></tr><tr class="group"><th colspan="2" scope="colgroup"><span class="en">Profiles</span><span class="zh">配置绑定</span></th></tr><tr><td><code>profile show</code></td><td><span class="en">Resolved profile, its source and the venv binding path</span><span class="zh">当前解析出的配置、来源和虚拟环境绑定路径</span></td></tr><tr><td><code>profile bind PROFILE --venv</code></td><td><span class="en">Pin the active virtualenv to PROFILE</span><span class="zh">把当前虚拟环境固定到 PROFILE</span></td></tr><tr><td><code>profile clear --venv</code></td><td><span class="en">Remove the venv binding</span><span class="zh">移除虚拟环境绑定</span></td></tr><tr class="group"><th colspan="2" scope="colgroup"><span class="en">SKILL execution</span><span class="zh">SKILL 执行</span></th></tr><tr><td><code>load FILE.il</code></td><td><span class="en">Run an <code>.il</code> file (uploaded in SSH mode); prints <code>VirtuosoResult</code> JSON</span><span class="zh">运行 <code>.il</code> 文件（SSH 模式下自动上传），输出 <code>VirtuosoResult</code> JSON</span></td></tr><tr><td><code>eval 'EXPR'</code> / <code>eval --stdin</code></td><td><span class="en">Run inline SKILL; several statements are wrapped in <code>progn(...)</code></span><span class="zh">执行内联 SKILL；多条语句会自动包进 <code>progn(...)</code></span></td></tr><tr class="group"><th colspan="2" scope="colgroup"><span class="en">Interaction and diagnostics</span><span class="zh">交互与诊断</span></th></tr><tr><td><code>windows</code></td><td><span class="en">List open Virtuoso windows</span><span class="zh">列出打开的 Virtuoso 窗口</span></td></tr><tr><td><code>screenshot [ciw|current|N] [-o DIR|FILE]</code></td><td><span class="en">Capture a window into the artifact screenshots directory</span><span class="zh">截取窗口，默认存到截图目录</span></td></tr><tr><td><code>inspect-dialogs --pid PID</code></td><td><span class="en">Read-only, process-scoped X11 blocker inspection (<code>--json</code>)</span><span class="zh">只读、按进程检查 X11 阻塞弹窗（支持 <code>--json</code>）</span></td></tr><tr><td><code>dismiss-dialog --legacy-bulk</code></td><td><span class="en">Explicit legacy bulk dismissal; unsuitable for shared CIWs</span><span class="zh">显式的旧版批量关闭；不适用于共享 CIW</span></td></tr><tr><td><code>list-windows [--top-level] [--json]</code></td><td><span class="en">Enumerate Virtuoso windows over X11; <code>--top-level</code> gives one entry per frame</span><span class="zh">通过 X11 列出窗口；<code>--top-level</code> 每个窗口框只列一项</span></td></tr><tr><td><code>bootstrap --window WINDOW_ID</code></td><td><span class="en">Inject only the generated <code>load(...)</code> into one verified CIW</span><span class="zh">只向一个已验证的 CIW 注入生成的 <code>load(...)</code></span></td></tr><tr><td><code>dismiss-window WINDOW_ID [--action …]</code></td><td><span class="en">Send enter, escape, alt-y or alt-n to one window from <code>list-windows</code></span><span class="zh">向 <code>list-windows</code> 给出的某个窗口发送 enter、escape、alt-y 或 alt-n</span></td></tr><tr><td><code>snapshot [-o DIR] [--history H]</code></td><td><span class="en">Dump the focused window (Maestro, schematic…); full dump with <code>-o</code></span><span class="zh">导出当前聚焦窗口（Maestro、原理图…）；加 <code>-o</code> 完整导出</span></td></tr><tr class="group"><th colspan="2" scope="colgroup"><span class="en">Export and documentation</span><span class="zh">导出与文档</span></th></tr><tr><td><code>export-visio LIB CELL -o OUT.vsdx</code></td><td><span class="en">Render a schematic to Microsoft Visio (Windows + pywin32)</span><span class="zh">把原理图导出为 Visio（Windows + pywin32）</span></td></tr><tr><td><code>skill-find &lt;query&gt;</code></td><td><span class="en">Search SKILL functions by name</span><span class="zh">按名称搜索 SKILL 函数</span></td></tr><tr><td><code>skill-info &lt;fn&gt;</code></td><td><span class="en">Detailed docs for one SKILL function</span><span class="zh">查看某个 SKILL 函数的详细文档</span></td></tr><tr><td><code>doc-search &lt;query&gt;</code></td><td><span class="en">Search installed Cadence docs through the bridge, or offline with <code>--doc-root</code></span><span class="zh">经桥接搜索已安装的 Cadence 文档，或用 <code>--doc-root</code> 离线搜索</span></td></tr></tbody></table>
+</section>
+<section class="block" id="agents">
+<h2><span class="en">Coding agents</span><span class="zh">编程智能体</span></h2>
+<p><span class="en">Point the agent at <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/AGENTS.md">AGENTS.md</a> first. The <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/skills">skills/</a> directory ships four skills: virtuoso, spectre, netlist and optimizer. They are not linked into the repo on purpose (tracked symlinks break on Windows and hard-code one user's paths); link them once into your own skills directory:</span><span class="zh">先让智能体读 <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/AGENTS.md">AGENTS.md</a>。<a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/skills">skills/</a> 目录提供四个技能：virtuoso、spectre、netlist、optimizer。仓库里故意没有建链接（被跟踪的符号链接在 Windows 上会失效，还会写死某个人的路径），请在自己的技能目录里链接一次：</span></p>
+<div class="code"><div class="code-head"><span>macOS · Linux</span><button class="copy-button js-only" type="button" data-copy="guide-code-2"><span class="en">Copy</span><span class="zh">复制</span></button></div><pre id="guide-code-2"><code>mkdir -p ~/.claude/skills
+ln -s "$(pwd)/skills/virtuoso"  ~/.claude/skills/virtuoso
+ln -s "$(pwd)/skills/spectre"   ~/.claude/skills/spectre
+ln -s "$(pwd)/skills/netlist"   ~/.claude/skills/netlist
+ln -s "$(pwd)/skills/optimizer" ~/.claude/skills/optimizer</code></pre></div>
+<div class="code"><div class="code-head"><span>Windows PowerShell (Developer Mode or elevated)</span><button class="copy-button js-only" type="button" data-copy="guide-code-3"><span class="en">Copy</span><span class="zh">复制</span></button></div><pre id="guide-code-3"><code>New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\skills" | Out-Null
+New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.claude\skills\virtuoso"  -Target "$PWD\skills\virtuoso"
+New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.claude\skills\spectre"   -Target "$PWD\skills\spectre"
+New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.claude\skills\netlist"   -Target "$PWD\skills\netlist"
+New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.claude\skills\optimizer" -Target "$PWD\skills\optimizer"</code></pre></div>
+<p><span class="en">Cursor and other agents that load skills from a user-level directory work the same way: point their skills path at <code>skills/</code> in this repository.</span><span class="zh">Cursor 等从用户级目录加载技能的智能体同理：把技能路径指向本仓库的 <code>skills/</code>。</span></p>
+</section>
+<section class="block" id="architecture">
+<h2><span class="en">Architecture</span><span class="zh">架构</span></h2>
+<figure class="figure"><img src="/assets/arch.png?v=20261012-guide" width="1800" height="756" loading="lazy" alt="Architecture: VirtuosoClient sends SKILL over TCP to the bridge daemon inside Virtuoso; SSHClient manages tunnels and files; SpectreSimulator runs Spectre separately." /></figure>
+<ul class="bullets"><li><span class="en"><strong>VirtuosoClient</strong>: a plain TCP SKILL client. Sends SKILL as JSON and gets results; it knows nothing about SSH.</span><span class="zh"><strong>VirtuosoClient</strong>：纯 TCP 的 SKILL 客户端，以 JSON 发送 SKILL 并取回结果，不关心 SSH。</span></li><li><span class="en"><strong>SpectreSimulator</strong>: runs standalone Spectre locally or over SSH and parses PSF ASCII results into Python data.</span><span class="zh"><strong>SpectreSimulator</strong>：在本机或经 SSH 运行独立 Spectre，把 PSF ASCII 结果解析成 Python 数据。</span></li><li><span class="en"><strong>SSHClient</strong>: resolves the GUI, deployment, daemon and Spectre host roles, keeps a standalone port forward to the daemon host, and runs role-specific commands and transfers over OpenSSH or Paramiko. Skipped in local mode.</span><span class="zh"><strong>SSHClient</strong>：解析 GUI、部署、daemon、Spectre 各主机角色，维持到 daemon 主机的独立端口转发，并通过 OpenSSH 或 Paramiko 执行各角色的命令与文件传输。本机模式下不使用。</span></li></ul>
+<p><span class="en">VirtuosoClient works with any TCP endpoint (SSH tunnel, VPN, LAN or local), and each profile manages its own tunnel to a separate server. To see the raw mechanism, start with <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/src/virtuoso_bridge/virtuoso/basic/resources/ramic_bridge.il">ramic_bridge.il</a> and <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/src/virtuoso_bridge/virtuoso/basic/bridge.py">bridge.py</a>.</span><span class="zh">VirtuosoClient 可连接任何 TCP 端点（SSH 隧道、VPN、局域网或本机），每个配置各自管理到一台服务器的隧道。想看底层机制，从 <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/src/virtuoso_bridge/virtuoso/basic/resources/ramic_bridge.il">ramic_bridge.il</a> 和 <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/src/virtuoso_bridge/virtuoso/basic/bridge.py">bridge.py</a> 读起。</span></p>
+</section>
+<section class="block" id="cite">
+<h2><span class="en">Citation</span><span class="zh">引用</span></h2>
+<p><span class="en">If you use Virtuoso Bridge in academic work, please cite:</span><span class="zh">如果在学术工作中使用了 Virtuoso Bridge，请引用：</span></p>
+<div class="code"><div class="code-head"><span>BibTeX</span><button class="copy-button js-only" type="button" data-copy="guide-code-4"><span class="en">Copy</span><span class="zh">复制</span></button></div><pre id="guide-code-4"><code>@article{zhang2025virtuosobridge,
+  title   = {Virtuoso-Bridge: An Agent-Native Bridge for Remote Analog and Mixed-Signal Design Automation},
+  author  = {Zhang, Zhishuai and Li, Xintian and Sun, Nan and Jie, Lu},
+  year    = {2025}
+}</code></pre></div>
+<p><span class="en">Authors: Zhishuai Zhang, Xintian Li, Nan Sun and Lu Jie, Tsinghua University.</span><span class="zh">作者：Zhishuai Zhang、Xintian Li、Nan Sun、Lu Jie（清华大学）。</span></p>
+</section>
+    </main>
+    <footer class="site-footer">
+      <div class="wrap">
+        <div class="footer-row">
+          <p class="footer-copyright">
+            © 2026 Virtuoso Bridge <span aria-hidden="true">·</span> MIT
+          </p>
+          <nav class="footer-links" aria-label="Footer">
+            <a href="/guide/#cite" data-internal
+              ><span class="en">Cite</span><span class="zh">引用</span></a
+            >
+            <a href="https://www.tokenzhang.com/"
+              ><span class="en">Homepage ↗</span
+              ><span class="zh">个人主页 ↗</span></a
+            >
+            <a href="/privacy/" data-internal
+              ><span class="en">Privacy</span><span class="zh">隐私</span></a
+            >
+            <a
+              class="footer-analytics"
+              href="/analytics/"
+              title="Visitor analytics / 访问统计"
+              ><strong data-visitors>—</strong> <span class="en">visitors</span
+              ><span class="zh">访客</span> · <strong data-views>—</strong>
+              <span class="en">views</span><span class="zh">浏览</span></a
+            >
+          </nav>
+        </div>
+        <p class="footer-notice">
+          <span class="en"
+            >Independent open-source project. Cadence, Virtuoso and Spectre are
+            trademarks of Cadence Design Systems.</span
+          ><span class="zh"
+            >独立开源项目。Cadence、Virtuoso 和 Spectre 为 Cadence Design
+            Systems 的商标。</span
+          >
+        </p>
+      </div>
+    </footer>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   </body>
 </html>

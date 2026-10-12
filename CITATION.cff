@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use virtuoso-bridge in academic work, please cite it as below."
+title: virtuoso-bridge
+type: software
+license: MIT
+repository-code: "https://github.com/Arcadia-1/virtuoso-bridge-lite"
+url: "https://virtuoso-bridge.tokenzhang.com"
+authors:
+  - family-names: Zhang
+    given-names: Zhishuai
+    affiliation: Tsinghua University
+  - family-names: Li
+    given-names: Xintian
+    affiliation: Tsinghua University
+  - family-names: Sun
+    given-names: Nan
+    affiliation: Tsinghua University
+  - family-names: Jie
+    given-names: Lu
+    affiliation: Tsinghua University
+preferred-citation:
+  type: article
+  title: "Virtuoso-Bridge: An Agent-Native Bridge for Remote Analog and Mixed-Signal Design Automation"
+  year: 2025
+  authors:
+    - family-names: Zhang
+      given-names: Zhishuai
+    - family-names: Li
+      given-names: Xintian
+    - family-names: Sun
+      given-names: Nan
+    - family-names: Jie
+      given-names: Lu
