@@ -255,3 +255,22 @@ def test_library_ops_methods_delegate_to_owner() -> None:
 
     assert ops.get_technology_library("demoLib") == "gpdk045"
     assert client.skill == library_get_skill("demoLib")
+
+
+def test_library_create_checks_the_parent_directory_before_ddcreatelib() -> None:
+    # ddCreateLib only returns nil for a missing or read-only parent; the
+    # reason would otherwise be in CDS.log only.
+    skill = library_create_skill("demoLib", "/work/libs/demoLib/")
+
+    assert skill.index('isDir("/work/libs")') < skill.index("ddCreateLib(")
+    assert skill.index('isWritable("/work/libs")') < skill.index("ddCreateLib(")
+    assert 'isDir(".")' in library_create_skill("demoLib", "demoLib")
+
+
+@pytest.mark.parametrize(("code", "message"), [
+    ("parentDirectoryMissing", "parent directory '/work/libs' does not exist on the Virtuoso host"),
+    ("parentDirectoryNotWritable", "parent directory '/work/libs' is not writable on the Virtuoso host"),
+])
+def test_library_create_names_the_parent_directory_problem(code: str, message: str) -> None:
+    with pytest.raises(RuntimeError, match=message):
+        create_library(_Client(f'("error" "{code}")'), "demoLib", "/work/libs/demoLib")
