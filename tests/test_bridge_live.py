@@ -39,10 +39,14 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.skipif(
-    os.getenv("VB_RUN_LIVE_TESTS") != "1",
-    reason="set VB_RUN_LIVE_TESTS=1 to run against a live Virtuoso session",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        os.getenv("VB_RUN_LIVE_TESTS") != "1",
+        reason="set VB_RUN_LIVE_TESTS=1 to run against a live Virtuoso session",
+    ),
+    # Transfers must use the client's real local tar (e.g. macOS bsdtar options).
+    pytest.mark.usefixtures("real_tar_detection"),
+]
 
 if os.getenv("VB_RUN_LIVE_TESTS") == "1" and os.getenv("VB_TEST_ENV_FILE"):
     from virtuoso_bridge.env import set_runtime_env_file
@@ -346,7 +350,15 @@ def test_pdk_finger_count_reaches_netlist_through_callbacks(client, lib, tmp_pat
         sch.add(inst(pdk_lib, nmos, "symbol", "M0", 0.0, 0.0, "R0"))
         sch.add_net_label_to_transistor("M0", drain_net="D", gate_net="G", source_net="gnd!", body_net="gnd!")
     _ok(client.open_window(lib, cell))
-    set_instance_params(client, "M0", nf="2", param_filters=None)
+    # Kits whose w is the total width (e.g. a TotalWidth dimension mode) keep
+    # nf=1 when two fingers would drop below the minimum finger width, as the
+    # GUI does; doubling the default width is harmless where w is per finger.
+    width = client.execute_skill(
+        'car(setof(x geGetEditCellView()~>instances x~>name == "M0"))~>w'
+    ).output.strip().strip('"')
+    doubled = re.fullmatch(r"(\d+(?:\.\d+)?)([a-zA-Z]*)", width)
+    extra = {"w": f"{2 * float(doubled[1]):g}{doubled[2]}"} if doubled else {}
+    set_instance_params(client, "M0", nf="2", param_filters=None, **extra)
     client.schematic.check_and_save(lib, cell)
     client.schematic.export_netlist(lib, cell, tmp_path / "nl")
     line = next(l for l in (tmp_path / "nl" / "input.scs").read_text().splitlines() if l.startswith("M0 "))

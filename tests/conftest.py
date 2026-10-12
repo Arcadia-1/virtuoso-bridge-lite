@@ -18,7 +18,8 @@ def _portable_local_tar_commands(request, monkeypatch):
 
     On macOS the bridge probes ``tar --version`` and adds bsdtar AppleDouble
     options. That probe would also reach tests' fake ``Popen`` and change the
-    argv they assert. Tests of the probe request ``real_tar_detection``.
+    argv they assert. Tests of the probe and live tests request
+    ``real_tar_detection``.
     """
     if "real_tar_detection" in request.fixturenames:
         return
