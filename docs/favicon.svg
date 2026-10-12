@@ -1,13 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
-  <rect x=".75" y=".75" width="46.5" height="46.5" rx="8" fill="#fff" stroke="#d9dde3"/>
-  <g stroke="#000" stroke-width="2.2" fill="none" stroke-linejoin="miter">
-    <path d="M5 24h7L24 9l12 15h7M12 24l12 15 12-15M24 4v5M24 39v5"/>
-  </g>
-  <g fill="#000">
-    <rect x="15.3" y="11.5" width="5.4" height="10" transform="rotate(38.66 18 16.5)"/>
-    <rect x="27.3" y="11.5" width="5.4" height="10" transform="rotate(-38.66 30 16.5)"/>
-    <rect x="15.3" y="26.5" width="5.4" height="10" transform="rotate(-38.66 18 31.5)"/>
-    <rect x="27.3" y="26.5" width="5.4" height="10" transform="rotate(38.66 30 31.5)"/>
-    <circle cx="12" cy="24" r="2"/><circle cx="36" cy="24" r="2"/>
-  </g>
+  <rect
+    x=".75"
+    y=".75"
+    width="46.5"
+    height="46.5"
+    rx="8"
+    fill="#fff"
+    stroke="#d9dde3"
+  />
+  <path d="M10 14h28v20h-6v-5a8 8 0 0 0-16 0v5h-6Z" fill="#000" />
+  <path d="M5 19h5m28 0h5" fill="none" stroke="#000" stroke-width="2.2" />
+  <circle cx="5" cy="19" r="2.2" fill="#000" />
+  <circle cx="43" cy="19" r="2.2" fill="#000" />
 </svg>

@@ -67,7 +67,6 @@ export function startAnalytics(update: (stats: VisitStats) => void): void {
   )
     return;
   const path = location.pathname;
-  if (/^\/(analytics|privacy)\/?$/.test(path)) return;
   void fetch("/api/stats", { cache: "no-store" })
     .then(async (response) =>
       response.ok ? (response.json() as Promise<VisitStats>) : null,
@@ -76,6 +75,8 @@ export function startAnalytics(update: (stats: VisitStats) => void): void {
       if (stats) update(stats);
     })
     .catch(() => {});
+  // Shared footer counts are public reads; privacy and dashboard pages never track.
+  if (/^\/(analytics|privacy)\/?$/.test(path)) return;
   if (
     navigator.doNotTrack === "1" ||
     (navigator as Navigator & { globalPrivacyControl?: boolean })

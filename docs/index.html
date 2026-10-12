@@ -2,9 +2,12 @@
 <html lang="en" data-lang="en">
   <head>
     <meta charset="utf-8" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20261012" />
+    <link
+      rel="apple-touch-icon"
+      href="/apple-touch-icon.png?v=20261012-light"
+    />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#080a10" />
+    <meta name="theme-color" content="#f7f8fa" />
     <title>Virtuoso Bridge — Your agent. Inside Virtuoso.</title>
     <meta
       name="description"
@@ -30,11 +33,15 @@
     <meta property="og:url" content="https://virtuoso-bridge.tokenzhang.com/" />
     <meta
       property="og:image"
-      content="https://virtuoso-bridge.tokenzhang.com/assets/social-card.png"
+      content="https://virtuoso-bridge.tokenzhang.com/assets/social-card.png?v=20261012-light"
     />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="canonical" href="https://virtuoso-bridge.tokenzhang.com/" />
-    <link rel="icon" href="/favicon.svg?v=20261012" type="image/svg+xml" />
+    <link
+      rel="icon"
+      href="/favicon.svg?v=20261012-light"
+      type="image/svg+xml"
+    />
     <script>
       document.documentElement.classList.add("js");
       try {
@@ -46,9 +53,9 @@
         document.documentElement.lang = l === "zh" ? "zh-CN" : "en";
       } catch (e) {}
     </script>
-    <link rel="stylesheet" href="/site.css?v=20261012" />
-    <script src="/site.js?v=20261012" defer></script>
-    <script type="module" src="/analytics/track.js?v=20261012"></script>
+    <link rel="stylesheet" href="/site.css?v=20261012-light" />
+    <script src="/site.js?v=20261012-light" defer></script>
+    <script type="module" src="/analytics/track.js?v=20261012-light"></script>
   </head>
   <body>
     <a class="skip-link" href="#main"
@@ -57,35 +64,152 @@
     >
     <header class="site-header">
       <div class="wrap header-inner">
-        <a
-          class="brand"
-          href="/"
-          data-internal
-          aria-label="Virtuoso Bridge home"
-          ><img
-            src="/favicon.svg?v=20261012"
-            width="32"
-            height="32"
-            alt=""
-          /><span>Virtuoso <span>Bridge</span></span></a
-        >
+        <div class="brand-cluster">
+          <a
+            class="brand"
+            href="/"
+            data-internal
+            aria-label="Virtuoso Bridge home"
+            ><img
+              src="/favicon.svg?v=20261012-light"
+              width="24"
+              height="24"
+              alt=""
+            /><span>Virtuoso Bridge</span></a
+          >
+          <details class="site-switcher">
+            <summary
+              aria-label="Related projects / 相关项目"
+              title="Related projects / 相关项目"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                aria-hidden="true"
+              >
+                <rect x="3" y="3" width="7" height="7" rx="1.5" />
+                <rect x="14" y="3" width="7" height="7" rx="1.5" />
+                <rect x="3" y="14" width="7" height="7" rx="1.5" />
+                <rect x="14" y="14" width="7" height="7" rx="1.5" />
+              </svg>
+              <span class="en">Projects</span><span class="zh">项目</span>
+              <svg
+                class="menu-chevron"
+                width="12"
+                height="12"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                aria-hidden="true"
+              >
+                <path d="m4 6 4 4 4-4" />
+              </svg>
+            </summary>
+            <nav class="site-menu" aria-label="Related sites">
+              <a href="https://analog-canvas.tokenzhang.com/"
+                ><img
+                  src="/assets/analog-canvas.svg"
+                  width="20"
+                  height="20"
+                  alt=""
+                /><span>Analog Canvas</span
+                ><span aria-hidden="true">↗</span></a
+              >
+              <a href="https://chip-arena.com/"
+                ><img
+                  src="/assets/chip-arena.svg"
+                  width="20"
+                  height="20"
+                  alt=""
+                /><span>Chip Arena</span><span aria-hidden="true">↗</span></a
+              >
+              <a href="https://circuits-and-systems.tokenzhang.com/"
+                ><img
+                  src="/assets/classroom.svg"
+                  width="20"
+                  height="20"
+                  alt=""
+                /><span>CAS Classroom</span
+                ><span aria-hidden="true">↗</span></a
+              >
+              <a class="site-menu-home" href="https://www.tokenzhang.com/"
+                ><svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  aria-hidden="true"
+                >
+                  <circle cx="12" cy="8" r="3.5" />
+                  <path d="M5 21v-2a7 7 0 0 1 14 0v2" /></svg
+                ><span
+                  ><span class="en">Zhishuai Zhang</span
+                  ><span class="zh">张智帅 · 个人主页</span></span
+                ><span aria-hidden="true">↗</span></a
+              >
+            </nav>
+          </details>
+        </div>
         <nav class="header-nav" aria-label="Main navigation">
-          <a class="desktop-nav" href="#workflows"
-            ><span class="en">Workflows</span><span class="zh">工作流</span></a
+          <a class="nav-guide" href="/guide/" data-internal
+            ><svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path
+                d="M12 5c-3-2-6-2-9-1v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-3-1-6-1-9 1Zm0 0v15"
+              /></svg
+            ><span class="en">Docs</span><span class="zh">使用文档</span></a
           >
-          <a class="desktop-nav" href="#capabilities"
-            ><span class="en">Capabilities</span
-            ><span class="zh">核心能力</span></a
-          >
-          <a class="desktop-nav" href="/guide/" data-internal
-            ><span class="en">Documentation ↗</span
-            ><span class="zh">使用文档 ↗</span></a
+        </nav>
+        <div class="header-actions">
+          <a
+            class="report-link"
+            href="https://github.com/Arcadia-1/virtuoso-bridge-lite/issues"
+            title="Report an issue / 反馈问题"
+            ><svg
+              width="15"
+              height="15"
+              viewBox="0 0 20 20"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.3"
+              aria-hidden="true"
+            >
+              <circle cx="10" cy="10" r="7.5" />
+              <path d="M10 5.5v5M10 13v1" /></svg
+            ><span class="en">Report issue</span
+            ><span class="zh">反馈问题</span></a
           >
           <a
             class="nav-source"
             href="https://github.com/Arcadia-1/virtuoso-bridge-lite"
-            >GitHub ↗</a
-          >
+            aria-label="GitHub repository"
+            title="GitHub"
+            ><svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path
+                d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.87c-2.78.6-3.37-1.18-3.37-1.18-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.61.07-.61 1 .07 1.53 1.03 1.53 1.03.9 1.53 2.35 1.09 2.92.83.09-.65.35-1.09.64-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02A9.6 9.6 0 0 1 12 6.82a9.6 9.6 0 0 1 2.5.34c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.56 4.93.36.31.68.92.68 1.85v2.77c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"
+              /></svg
+          ></a>
           <div
             class="lang-switch js-only"
             role="group"
@@ -97,35 +221,8 @@
               中文
             </button>
           </div>
-        </nav>
+        </div>
       </div>
-      <nav class="wrap related-nav" aria-label="Related sites">
-        <a href="https://www.tokenzhang.com/"
-          ><span class="en">Zhishuai Zhang</span
-          ><span class="zh">张智帅 · 个人主页</span
-          ><span aria-hidden="true">↗</span></a
-        >
-        <a href="https://analog-canvas.tokenzhang.com/"
-          ><img
-            src="/assets/analog-canvas.svg"
-            width="18"
-            height="18"
-            alt=""
-          />Analog Canvas <span aria-hidden="true">↗</span></a
-        >
-        <a href="https://chip-arena.com/"
-          ><img
-            src="/assets/chip-arena.svg"
-            width="18"
-            height="18"
-            alt=""
-          />Chip Arena <span aria-hidden="true">↗</span></a
-        >
-        <a href="https://circuits-and-systems.tokenzhang.com/"
-          ><img src="/assets/classroom.svg" width="18" height="18" alt="" />CAS
-          Classroom <span aria-hidden="true">↗</span></a
-        >
-      </nav>
     </header>
     <main id="main">
       <section class="hero" id="overview">
@@ -202,23 +299,23 @@
                     <path
                       d="M26 0H0V26"
                       fill="none"
-                      stroke="#a6a1d1"
+                      stroke="#8b96ad"
                       stroke-opacity=".075"
                       stroke-width=".7"
                     />
                   </pattern>
                   <radialGradient id="core-glow">
-                    <stop stop-color="#9867ff" stop-opacity=".23" />
-                    <stop offset="1" stop-color="#9867ff" stop-opacity="0" />
+                    <stop stop-color="#7561af" stop-opacity=".23" />
+                    <stop offset="1" stop-color="#7561af" stop-opacity="0" />
                   </radialGradient>
                   <linearGradient id="chip-face" x2=".8" y2="1">
-                    <stop stop-color="#35205a" />
-                    <stop offset="1" stop-color="#161b34" />
+                    <stop stop-color="#f7f4fc" />
+                    <stop offset="1" stop-color="#f0f4f9" />
                   </linearGradient>
                   <linearGradient id="trace" x2="1" y2=".3">
-                    <stop stop-color="#9066e3" />
-                    <stop offset=".55" stop-color="#bca5ff" />
-                    <stop offset="1" stop-color="#72e7d3" />
+                    <stop stop-color="#8067b1" />
+                    <stop offset=".55" stop-color="#8369b2" />
+                    <stop offset="1" stop-color="#237d79" />
                   </linearGradient>
                   <filter id="trace-glow">
                     <feGaussianBlur stdDeviation="3" />
@@ -232,7 +329,7 @@
                   ry="206"
                   fill="url(#core-glow)"
                 />
-                <g fill="none" stroke="#a78ade" stroke-opacity=".09">
+                <g fill="none" stroke="#9b8bc2" stroke-opacity=".09">
                   <circle cx="310" cy="252" r="187" />
                   <circle cx="310" cy="252" r="156" />
                   <path d="M310 38V67M310 437V464M97 252H123M497 252H525" />
@@ -240,13 +337,13 @@
                 <g
                   font-family="monospace"
                   font-size="9"
-                  fill="#68738e"
+                  fill="#5d6f87"
                   letter-spacing="1.5"
                 >
                   <text x="32" y="57">01 / AGENT → EDA</text>
                   <text x="410" y="451">LOCAL / REMOTE</text>
                 </g>
-                <g stroke="#675688" stroke-width="1.5" fill="none">
+                <g stroke="#ad9cc8" stroke-width="1.5" fill="none">
                   <path d="M155 252H246" />
                   <path d="M374 226H405L427 151H465" />
                   <path d="M374 252H465" />
@@ -269,7 +366,7 @@
                     d="M374 278H405L427 353H465"
                   />
                 </g>
-                <g fill="#b99bee">
+                <g fill="#8166b1">
                   <circle cx="182" cy="252" r="3" />
                   <circle cx="405" cy="226" r="3" />
                   <circle cx="405" cy="278" r="3" />
@@ -279,26 +376,26 @@
                     width="132"
                     height="82"
                     rx="11"
-                    fill="#121421"
-                    stroke="#61527b"
+                    fill="#ffffff"
+                    stroke="#b8aecf"
                     stroke-opacity=".6"
                   />
                   <path
                     d="M23 23L31 30L23 37M37 37H47"
-                    stroke="#c9b5ff"
+                    stroke="#7561af"
                     stroke-width="2"
                     fill="none"
                   />
                   <text
                     x="20"
                     y="61"
-                    fill="#e1def0"
+                    fill="#35435b"
                     font-size="12"
                     font-family="monospace"
                   >
                     Your AI agent
                   </text>
-                  <circle cx="112" cy="26" r="3" fill="#ac92dd" />
+                  <circle cx="112" cy="26" r="3" fill="#7561af" />
                 </g>
                 <rect
                   class="core-halo"
@@ -308,7 +405,7 @@
                   height="162"
                   rx="31"
                   fill="none"
-                  stroke="#9867ff"
+                  stroke="#7561af"
                   stroke-opacity=".18"
                 />
                 <rect
@@ -317,19 +414,19 @@
                   width="134"
                   height="134"
                   rx="23"
-                  fill="#7653b5"
+                  fill="#e1d9ef"
                   fill-opacity=".14"
-                  stroke="#9066dc"
+                  stroke="#b8a4d5"
                   stroke-opacity=".28"
                 />
                 <image
-                  href="/favicon.svg?v=20261012"
+                  href="/favicon.svg?v=20261012-light"
                   x="251"
                   y="193"
                   width="118"
                   height="118"
                 />
-                <g stroke="#8a6abb" stroke-opacity=".65">
+                <g stroke="#a995c5" stroke-opacity=".65">
                   <path
                     d="M280 184V174M300 184V174M320 184V174M340 184V174M280 320V330M300 320V330M320 320V330M340 320V330"
                   />
@@ -340,19 +437,19 @@
                       width="139"
                       height="69"
                       rx="9"
-                      fill="#111a21"
-                      stroke="#72e7d3"
+                      fill="#f1f8f5"
+                      stroke="#237d79"
                       stroke-opacity=".25"
                     />
                     <path
                       d="M16 22H28M22 16V28"
-                      stroke="#72e7d3"
+                      stroke="#237d79"
                       stroke-width="1.5"
                     />
-                    <text x="37" y="26" font-size="12" fill="#d2ede6">
+                    <text x="37" y="26" font-size="12" fill="#276c60">
                       Virtuoso
                     </text>
-                    <text x="16" y="49" font-size="8" fill="#79998f">
+                    <text x="16" y="49" font-size="8" fill="#50736b">
                       SCHEMATIC · LAYOUT
                     </text>
                   </g>
@@ -361,19 +458,19 @@
                       width="139"
                       height="69"
                       rx="9"
-                      fill="#171522"
-                      stroke="#ac8cdd"
+                      fill="#f6f2fa"
+                      stroke="#9a81bb"
                       stroke-opacity=".32"
                     />
                     <path
                       d="M16 25L22 18L29 25L22 32Z"
-                      stroke="#b69ae9"
+                      stroke="#8362ad"
                       fill="none"
                     />
-                    <text x="37" y="27" font-size="12" fill="#e2d7f2">
+                    <text x="37" y="27" font-size="12" fill="#665084">
                       Maestro
                     </text>
-                    <text x="16" y="50" font-size="8" fill="#9586ab">
+                    <text x="16" y="50" font-size="8" fill="#76618e">
                       SESSIONS · HISTORY
                     </text>
                   </g>
@@ -382,31 +479,31 @@
                       width="139"
                       height="69"
                       rx="9"
-                      fill="#111a21"
-                      stroke="#72e7d3"
+                      fill="#f1f8f5"
+                      stroke="#237d79"
                       stroke-opacity=".25"
                     />
                     <path
                       d="M15 26L19 26L23 17L27 31L31 26"
-                      stroke="#72e7d3"
+                      stroke="#237d79"
                       fill="none"
                       stroke-width="1.5"
                     />
-                    <text x="39" y="27" font-size="12" fill="#d2ede6">
+                    <text x="39" y="27" font-size="12" fill="#276c60">
                       Spectre
                     </text>
-                    <text x="16" y="50" font-size="8" fill="#79998f">
+                    <text x="16" y="50" font-size="8" fill="#50736b">
                       NETLIST → PSF
                     </text>
                   </g>
                 </g>
-                <g font-family="monospace" font-size="8" fill="#8d7ba9">
+                <g font-family="monospace" font-size="8" fill="#6e5a88">
                   <text x="187" y="237">PYTHON</text>
                   <text x="273" y="352">SKILL / CLI</text>
                 </g>
                 <path
                   d="M87 313V402H452"
-                  stroke="#56756e"
+                  stroke="#88a39a"
                   stroke-opacity=".4"
                   fill="none"
                   stroke-dasharray="3 5"
@@ -416,7 +513,7 @@
                   y="421"
                   font-family="monospace"
                   font-size="8"
-                  fill="#697e79"
+                  fill="#577168"
                 >
                   STANDALONE SPECTRE · NO VIRTUOSO DAEMON
                 </text>
@@ -539,28 +636,28 @@ client = VirtuosoClient.from_env()
                     role="img"
                     aria-label="Illustrative RC network with resistor R0 and capacitor C0"
                   >
-                    <g fill="none" stroke="#72e7d3" stroke-width="2">
+                    <g fill="none" stroke="#237d79" stroke-width="2">
                       <path
                         d="M54 85H119L125 75L137 95L149 75L161 95L173 75L185 95L191 85H314V135M314 151V189"
                       />
                       <path d="M291 135H337M291 151H337" />
-                      <circle cx="54" cy="85" r="4" fill="#111820" />
-                      <circle cx="314" cy="189" r="4" fill="#111820" />
-                      <circle cx="314" cy="85" r="4" fill="#72e7d3" />
+                      <circle cx="54" cy="85" r="4" fill="#ffffff" />
+                      <circle cx="314" cy="189" r="4" fill="#ffffff" />
+                      <circle cx="314" cy="85" r="4" fill="#237d79" />
                       <path d="M314 85H405" stroke-dasharray="4 5" />
-                      <circle cx="405" cy="85" r="4" fill="#111820" />
+                      <circle cx="405" cy="85" r="4" fill="#ffffff" />
                     </g>
                     <g font-family="monospace" font-size="12">
-                      <text x="143" y="55" fill="#ccb8f4">R0</text>
-                      <text x="350" y="148" fill="#ccb8f4">C0</text>
-                      <text x="33" y="117" fill="#637d8b" font-size="9">
+                      <text x="143" y="55" fill="#73559f">R0</text>
+                      <text x="350" y="148" fill="#73559f">C0</text>
+                      <text x="33" y="117" fill="#596e7b" font-size="9">
                         R0.PLUS
                       </text>
-                      <text x="337" y="64" fill="#819aab" font-size="9">
+                      <text x="337" y="64" fill="#627c8e" font-size="9">
                         R0.MINUS → C0.PLUS
                       </text>
                     </g>
-                    <g fill="#b195e5" font-family="monospace" font-size="9">
+                    <g fill="#70569d" font-family="monospace" font-size="9">
                       <text x="65" y="229">PLACE</text>
                       <text x="198" y="229">CONNECT</text>
                       <text x="342" y="229">CHECK / SAVE</text>
@@ -641,30 +738,30 @@ vout = vector(ac, <span class="str">"VOUT"</span>)
                     role="img"
                     aria-label="Illustration of a Spectre simulation producing PSF data, not measured results"
                   >
-                    <g stroke="#b1bce0" stroke-opacity=".13">
+                    <g stroke="#92a3bc" stroke-opacity=".13">
                       <path
                         d="M40 43V181H444M40 77H444M40 112H444M40 147H444M120 43V181M201 43V181M282 43V181M363 43V181"
                       />
                     </g>
                     <path
                       d="M40 73C120 73 157 73 196 76S245 97 276 128S340 171 444 177"
-                      stroke="#72e7d3"
+                      stroke="#237d79"
                       stroke-width="2.5"
                       fill="none"
                     />
                     <path
                       d="M40 160C120 160 154 153 201 143S276 77 310 67S375 53 444 53"
-                      stroke="#aa8cff"
+                      stroke="#6f55ad"
                       stroke-width="1.5"
                       stroke-dasharray="4 5"
                       fill="none"
                     />
-                    <g font-family="monospace" font-size="10" fill="#8596b3">
+                    <g font-family="monospace" font-size="10" fill="#657a93">
                       <text x="40" y="24">
                         ILLUSTRATIVE RESPONSE · NO MEASURED VALUES
                       </text>
-                      <text x="40" y="216" fill="#bcace0">tb.scs</text>
-                      <text x="180" y="216" fill="#72e7d3">
+                      <text x="40" y="216" fill="#71598d">tb.scs</text>
+                      <text x="180" y="216" fill="#237d79">
                         Spectre / APS / X
                       </text>
                       <text x="392" y="216">PSF</text>
@@ -849,7 +946,7 @@ status = jobs.status(restored)
                   aria-hidden="true"
                 >
                   <path d="M3 4h7v7H3zM14 13h7v7h-7zM6 11v6h8M10 7h8v6" />
-                  <circle cx="18" cy="7" r="2" fill="#10131e" />
+                  <circle cx="18" cy="7" r="2" fill="#ffffff" />
                 </svg>
               </div>
               <p class="kicker">EXACT SCHEMATIC IMPORT</p>
@@ -885,9 +982,9 @@ status = jobs.status(restored)
                   aria-hidden="true"
                 >
                   <path d="M5 3v18M12 3v18M19 3v18" />
-                  <rect x="3" y="6" width="4" height="4" fill="#10131e" />
-                  <rect x="10" y="14" width="4" height="4" fill="#10131e" />
-                  <rect x="17" y="8" width="4" height="4" fill="#10131e" />
+                  <rect x="3" y="6" width="4" height="4" fill="#ffffff" />
+                  <rect x="10" y="14" width="4" height="4" fill="#ffffff" />
+                  <rect x="17" y="8" width="4" height="4" fill="#ffffff" />
                 </svg>
               </div>
               <p class="kicker">PDK / CDF CALLBACKS</p>
@@ -1141,61 +1238,42 @@ virtuoso-bridge start</code></pre>
         </div>
       </section>
     </main>
-    <footer class="footer">
+    <footer class="site-footer">
       <div class="wrap">
-        <div class="footer-top">
-          <div class="footer-brand">
-            <a class="brand" href="/" data-internal
-              ><img
-                src="/favicon.svg?v=20261012"
-                width="32"
-                height="32"
-                alt=""
-              /><span>Virtuoso <span>Bridge</span></span></a
-            >
-            <p>
-              <span class="en"
-                >An open bridge to the next era of circuit design.</span
-              ><span class="zh">连接电路设计的下一个时代。</span>
-            </p>
-          </div>
+        <div class="footer-row">
+          <p class="footer-copyright">
+            © 2026 Virtuoso Bridge <span aria-hidden="true">·</span> MIT
+          </p>
           <nav class="footer-links" aria-label="Footer">
-            <a href="/guide/" data-internal
-              ><span class="en">Documentation</span
-              ><span class="zh">文档</span></a
-            ><a href="https://github.com/Arcadia-1/virtuoso-bridge-lite"
-              >GitHub ↗</a
-            ><a href="/guide/#citation" data-internal
-              ><span class="en">Cite this project</span
-              ><span class="zh">引用项目</span></a
-            ><a href="https://www.tokenzhang.com/"
-              ><span class="en">Zhishuai Zhang ↗</span
-              ><span class="zh">张智帅 · 个人主页 ↗</span></a
+            <a href="/guide/#citation" data-internal
+              ><span class="en">Cite</span><span class="zh">引用</span></a
+            >
+            <a href="https://www.tokenzhang.com/"
+              ><span class="en">Homepage ↗</span
+              ><span class="zh">个人主页 ↗</span></a
+            >
+            <a href="/privacy/" data-internal
+              ><span class="en">Privacy</span><span class="zh">隐私</span></a
+            >
+            <a
+              class="footer-analytics"
+              href="/analytics/"
+              title="Visitor analytics / 访问统计"
+              ><strong data-visitors>—</strong> <span class="en">visitors</span
+              ><span class="zh">访客</span> · <strong data-views>—</strong>
+              <span class="en">views</span><span class="zh">浏览</span></a
             >
           </nav>
         </div>
-        <div class="site-stats">
-          <a href="/analytics/"
-            ><span class="en">Visitors</span><span class="zh">访客</span>
-            <strong data-visitors>—</strong
-            ><span class="stats-separator">/</span><span class="en">Views</span
-            ><span class="zh">浏览</span> <strong data-views>—</strong> ↗</a
-          >
-          <a href="/privacy/" data-internal
-            ><span class="en">Privacy &amp; counting preferences</span
-            ><span class="zh">隐私与统计偏好</span></a
-          >
-        </div>
-        <div class="footer-bottom">
-          <span>MIT © Virtuoso Bridge contributors</span
-          ><span class="en"
+        <p class="footer-notice">
+          <span class="en"
             >Independent open-source project. Cadence, Virtuoso and Spectre are
             trademarks of Cadence Design Systems.</span
           ><span class="zh"
             >独立开源项目。Cadence、Virtuoso 和 Spectre 为 Cadence Design
             Systems 的商标。</span
           >
-        </div>
+        </p>
       </div>
     </footer>
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>

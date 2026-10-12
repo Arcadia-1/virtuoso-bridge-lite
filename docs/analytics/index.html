@@ -1,18 +1,25 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="light">
   <head>
     <meta charset="utf-8" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20261012" />
+    <link
+      rel="apple-touch-icon"
+      href="/apple-touch-icon.png?v=20261012-light"
+    />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex, follow" />
-    <meta name="theme-color" content="#10161f" />
+    <meta name="theme-color" content="#ffffff" />
     <title>Analytics — Virtuoso Bridge</title>
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20261012" />
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="/favicon.svg?v=20261012-light"
+    />
     <script>
       try {
         document.documentElement.classList.toggle(
           "light",
-          localStorage.getItem("theme") === "light",
+          localStorage.getItem("theme") !== "dark",
         );
       } catch (e) {}
     </script>
@@ -44,8 +51,11 @@
         outline-offset: 4px;
       }
     </style>
-    <link rel="stylesheet" href="/analytics/dashboard.css?v=20261012" />
-    <script type="module" src="/analytics/dashboard.js?v=20261012"></script>
+    <link rel="stylesheet" href="/analytics/dashboard.css?v=20261012-light" />
+    <script
+      type="module"
+      src="/analytics/dashboard.js?v=20261012-light"
+    ></script>
   </head>
   <body class="analytics-body">
     <div id="root"><div class="analytics-loading">Loading analytics…</div></div>

@@ -5,6 +5,12 @@ The landing page, guide, privacy page and SVG identity live in `../docs/`.
 website package. `npm run preview` serves the full site with local Cloudflare
 Durable Object storage. It does not connect to Cadence.
 
+Public pages use a light palette, a compact 48px product header and a quiet
+footer, aligned with Analog Canvas and Analog Design Bench. The shared chrome
+is checked across the landing, guide and privacy pages by `chrome.test.ts`.
+`docs/favicon.svg` is the circuit-bridge mark; the PNG icons and social preview
+are derived assets and must be regenerated when the mark changes.
+
 ## Analytics provenance and identity
 
 The dashboard, styles, map, HTTP routes, SQL backend and regression tests are

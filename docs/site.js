@@ -4,6 +4,20 @@
   const languageButtons = [...document.querySelectorAll("[data-language]")];
   let toastTimer;
 
+  const siteSwitcher = document.querySelector(".site-switcher");
+  document.addEventListener("click", (event) => {
+    if (siteSwitcher && !siteSwitcher.contains(event.target))
+      siteSwitcher.open = false;
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && siteSwitcher?.open) {
+      siteSwitcher.open = false;
+      siteSwitcher.querySelector("summary").focus();
+    }
+  });
+  if (location.pathname.replace(/\/$/, "") === "/guide")
+    document.querySelector(".nav-guide")?.setAttribute("aria-current", "page");
+
   function setLanguage(language, persist = false) {
     const lang = language === "zh" ? "zh" : "en";
     root.dataset.lang = lang;

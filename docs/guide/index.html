@@ -2,9 +2,12 @@
 <html lang="en" data-lang="en">
   <head>
     <meta charset="utf-8" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20261012" />
+    <link
+      rel="apple-touch-icon"
+      href="/apple-touch-icon.png?v=20261012-light"
+    />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#080a10" />
+    <meta name="theme-color" content="#f7f8fa" />
     <title>Getting started — Virtuoso Bridge</title>
     <meta
       name="description"
@@ -16,13 +19,17 @@
     <meta property="og:type" content="website" />
     <meta
       property="og:image"
-      content="https://virtuoso-bridge.tokenzhang.com/assets/social-card.png"
+      content="https://virtuoso-bridge.tokenzhang.com/assets/social-card.png?v=20261012-light"
     />
     <link
       rel="canonical"
       href="https://virtuoso-bridge.tokenzhang.com/guide/"
     />
-    <link rel="icon" href="/favicon.svg?v=20261012" type="image/svg+xml" />
+    <link
+      rel="icon"
+      href="/favicon.svg?v=20261012-light"
+      type="image/svg+xml"
+    />
     <script>
       document.documentElement.classList.add("js");
       try {
@@ -34,9 +41,9 @@
         document.documentElement.lang = l === "zh" ? "zh-CN" : "en";
       } catch (e) {}
     </script>
-    <link rel="stylesheet" href="/site.css?v=20261012" />
-    <script src="/site.js?v=20261012" defer></script>
-    <script type="module" src="/analytics/track.js?v=20261012"></script>
+    <link rel="stylesheet" href="/site.css?v=20261012-light" />
+    <script src="/site.js?v=20261012-light" defer></script>
+    <script type="module" src="/analytics/track.js?v=20261012-light"></script>
   </head>
   <body>
     <a class="skip-link" href="#main"
@@ -45,64 +52,165 @@
     >
     <header class="site-header">
       <div class="wrap header-inner">
-        <a
-          class="brand"
-          href="/"
-          data-internal
-          aria-label="Virtuoso Bridge home"
-          ><img
-            src="/favicon.svg?v=20261012"
-            width="32"
-            height="32"
-            alt=""
-          /><span>Virtuoso <span>Bridge</span></span></a
-        >
+        <div class="brand-cluster">
+          <a
+            class="brand"
+            href="/"
+            data-internal
+            aria-label="Virtuoso Bridge home"
+            ><img
+              src="/favicon.svg?v=20261012-light"
+              width="24"
+              height="24"
+              alt=""
+            /><span>Virtuoso Bridge</span></a
+          >
+          <details class="site-switcher">
+            <summary
+              aria-label="Related projects / 相关项目"
+              title="Related projects / 相关项目"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                aria-hidden="true"
+              >
+                <rect x="3" y="3" width="7" height="7" rx="1.5" />
+                <rect x="14" y="3" width="7" height="7" rx="1.5" />
+                <rect x="3" y="14" width="7" height="7" rx="1.5" />
+                <rect x="14" y="14" width="7" height="7" rx="1.5" />
+              </svg>
+              <span class="en">Projects</span><span class="zh">项目</span>
+              <svg
+                class="menu-chevron"
+                width="12"
+                height="12"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                aria-hidden="true"
+              >
+                <path d="m4 6 4 4 4-4" />
+              </svg>
+            </summary>
+            <nav class="site-menu" aria-label="Related sites">
+              <a href="https://analog-canvas.tokenzhang.com/"
+                ><img
+                  src="/assets/analog-canvas.svg"
+                  width="20"
+                  height="20"
+                  alt=""
+                /><span>Analog Canvas</span
+                ><span aria-hidden="true">↗</span></a
+              >
+              <a href="https://chip-arena.com/"
+                ><img
+                  src="/assets/chip-arena.svg"
+                  width="20"
+                  height="20"
+                  alt=""
+                /><span>Chip Arena</span><span aria-hidden="true">↗</span></a
+              >
+              <a href="https://circuits-and-systems.tokenzhang.com/"
+                ><img
+                  src="/assets/classroom.svg"
+                  width="20"
+                  height="20"
+                  alt=""
+                /><span>CAS Classroom</span
+                ><span aria-hidden="true">↗</span></a
+              >
+              <a class="site-menu-home" href="https://www.tokenzhang.com/"
+                ><svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  aria-hidden="true"
+                >
+                  <circle cx="12" cy="8" r="3.5" />
+                  <path d="M5 21v-2a7 7 0 0 1 14 0v2" /></svg
+                ><span
+                  ><span class="en">Zhishuai Zhang</span
+                  ><span class="zh">张智帅 · 个人主页</span></span
+                ><span aria-hidden="true">↗</span></a
+              >
+            </nav>
+          </details>
+        </div>
         <nav class="header-nav" aria-label="Main navigation">
-          <a class="desktop-nav" href="/" data-internal
-            ><span class="en">← Project home</span
-            ><span class="zh">← 项目首页</span></a
-          ><a
+          <a class="nav-guide" href="/guide/" data-internal
+            ><svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path
+                d="M12 5c-3-2-6-2-9-1v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-3-1-6-1-9 1Zm0 0v15"
+              /></svg
+            ><span class="en">Docs</span><span class="zh">使用文档</span></a
+          >
+        </nav>
+        <div class="header-actions">
+          <a
+            class="report-link"
+            href="https://github.com/Arcadia-1/virtuoso-bridge-lite/issues"
+            title="Report an issue / 反馈问题"
+            ><svg
+              width="15"
+              height="15"
+              viewBox="0 0 20 20"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.3"
+              aria-hidden="true"
+            >
+              <circle cx="10" cy="10" r="7.5" />
+              <path d="M10 5.5v5M10 13v1" /></svg
+            ><span class="en">Report issue</span
+            ><span class="zh">反馈问题</span></a
+          >
+          <a
             class="nav-source"
             href="https://github.com/Arcadia-1/virtuoso-bridge-lite"
-            >GitHub ↗</a
-          >
+            aria-label="GitHub repository"
+            title="GitHub"
+            ><svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path
+                d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.87c-2.78.6-3.37-1.18-3.37-1.18-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.61.07-.61 1 .07 1.53 1.03 1.53 1.03.9 1.53 2.35 1.09 2.92.83.09-.65.35-1.09.64-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02A9.6 9.6 0 0 1 12 6.82a9.6 9.6 0 0 1 2.5.34c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.56 4.93.36.31.68.92.68 1.85v2.77c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"
+              /></svg
+          ></a>
           <div
             class="lang-switch js-only"
             role="group"
             aria-label="Language / 语言"
           >
-            <button data-language="en" aria-pressed="true">EN</button
-            ><button data-language="zh" aria-pressed="false">中文</button>
+            <button type="button" data-language="en" aria-pressed="true">
+              EN</button
+            ><button type="button" data-language="zh" aria-pressed="false">
+              中文
+            </button>
           </div>
-        </nav>
+        </div>
       </div>
-      <nav class="wrap related-nav" aria-label="Related sites">
-        <a href="https://www.tokenzhang.com/"
-          ><span class="en">Zhishuai Zhang</span
-          ><span class="zh">张智帅 · 个人主页</span
-          ><span aria-hidden="true">↗</span></a
-        >
-        <a href="https://analog-canvas.tokenzhang.com/"
-          ><img
-            src="/assets/analog-canvas.svg"
-            width="18"
-            height="18"
-            alt=""
-          />Analog Canvas <span aria-hidden="true">↗</span></a
-        >
-        <a href="https://chip-arena.com/"
-          ><img
-            src="/assets/chip-arena.svg"
-            width="18"
-            height="18"
-            alt=""
-          />Chip Arena <span aria-hidden="true">↗</span></a
-        >
-        <a href="https://circuits-and-systems.tokenzhang.com/"
-          ><img src="/assets/classroom.svg" width="18" height="18" alt="" />CAS
-          Classroom <span aria-hidden="true">↗</span></a
-        >
-      </nav>
     </header>
     <main id="main">
       <div class="guide-hero">
@@ -789,51 +897,42 @@ virtuoso-bridge screenshot</code></pre>
         </div>
       </div>
     </main>
-    <footer class="footer">
+    <footer class="site-footer">
       <div class="wrap">
-        <div class="footer-top">
-          <a class="brand" href="/" data-internal
-            ><img
-              src="/favicon.svg?v=20261012"
-              width="32"
-              height="32"
-              alt=""
-            /><span>Virtuoso <span>Bridge</span></span></a
-          >
+        <div class="footer-row">
+          <p class="footer-copyright">
+            © 2026 Virtuoso Bridge <span aria-hidden="true">·</span> MIT
+          </p>
           <nav class="footer-links" aria-label="Footer">
-            <a href="/" data-internal
-              ><span class="en">Project home</span
-              ><span class="zh">项目首页</span></a
-            ><a href="https://github.com/Arcadia-1/virtuoso-bridge-lite"
-              >GitHub ↗</a
-            ><a href="https://www.tokenzhang.com/"
-              ><span class="en">Zhishuai Zhang ↗</span
-              ><span class="zh">张智帅 · 个人主页 ↗</span></a
+            <a href="/guide/#citation" data-internal
+              ><span class="en">Cite</span><span class="zh">引用</span></a
+            >
+            <a href="https://www.tokenzhang.com/"
+              ><span class="en">Homepage ↗</span
+              ><span class="zh">个人主页 ↗</span></a
+            >
+            <a href="/privacy/" data-internal
+              ><span class="en">Privacy</span><span class="zh">隐私</span></a
+            >
+            <a
+              class="footer-analytics"
+              href="/analytics/"
+              title="Visitor analytics / 访问统计"
+              ><strong data-visitors>—</strong> <span class="en">visitors</span
+              ><span class="zh">访客</span> · <strong data-views>—</strong>
+              <span class="en">views</span><span class="zh">浏览</span></a
             >
           </nav>
         </div>
-        <div class="site-stats">
-          <a href="/analytics/"
-            ><span class="en">Visitors</span><span class="zh">访客</span>
-            <strong data-visitors>—</strong
-            ><span class="stats-separator">/</span><span class="en">Views</span
-            ><span class="zh">浏览</span> <strong data-views>—</strong> ↗</a
-          >
-          <a href="/privacy/" data-internal
-            ><span class="en">Privacy &amp; counting preferences</span
-            ><span class="zh">隐私与统计偏好</span></a
-          >
-        </div>
-        <div class="footer-bottom">
-          <span>MIT © Virtuoso Bridge contributors</span
-          ><span class="en"
+        <p class="footer-notice">
+          <span class="en"
             >Independent open-source project. Cadence, Virtuoso and Spectre are
             trademarks of Cadence Design Systems.</span
           ><span class="zh"
             >独立开源项目。Cadence、Virtuoso 和 Spectre 为 Cadence Design
             Systems 的商标。</span
           >
-        </div>
+        </p>
       </div>
     </footer>
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
