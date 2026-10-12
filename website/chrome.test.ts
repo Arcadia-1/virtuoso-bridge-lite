@@ -53,13 +53,18 @@ describe("shared light website chrome", () => {
     );
   });
 
-  it("shares the new circuit-bridge mark with the social preview", () => {
-    const logo = read("favicon.svg");
-    const social = read("assets/social-card.svg");
-    expect(logo).toContain('fill="#fff"');
-    expect(logo).not.toContain("rotate(");
-    for (const match of logo.matchAll(/<path\s+d="([^"]+)"/g))
-      expect(social).toContain(match[1]);
+  it("uses one frameless VB mark for the favicon, header and social preview", () => {
+    const paths = (svg: string) =>
+      [...svg.matchAll(/\sd="([^"]+)"/g)].map((match) => match[1]);
+    const [mark] = paths(read("assets/mark.svg"));
+    const favicon = read("favicon.svg");
+    expect(mark).toBeTruthy();
+    expect(paths(favicon)).toEqual([mark]);
+    expect(favicon).not.toContain("<rect");
+    expect(favicon).toContain("prefers-color-scheme: dark");
+    expect(read("assets/social-card.svg")).toContain(`d="${mark}"`);
+    for (const page of pages)
+      expect(page).toContain('src="/assets/mark.svg?v=20261012-vb"');
   });
 
   it("uses a single borderless text language switch on every public page", () => {
@@ -85,6 +90,17 @@ describe("shared light website chrome", () => {
     expect(landing).toMatch(/virtuoso-bridge status\s+<span class="comment"># prints the load/);
     expect(landing).not.toMatch(/load\([^)]*\)[^<]*(printed by|输出的)[^<]*start/);
     expect(landing).not.toContain("/guide/");
+  });
+
+  it("compares with skillbridge in one labelled table", () => {
+    const table = pages[0].match(/<table class="compare">[\s\S]*?<\/table>/)?.[0];
+    expect(table).toBeTruthy();
+    expect(table).toContain('href="https://github.com/unihd-cag/skillbridge"');
+    // Phones stack each row and show these labels instead of the header row.
+    const rows = table!.match(/<tr>[\s\S]*?<\/tr>/g)!.slice(1);
+    expect(rows.length).toBeGreaterThan(3);
+    for (const row of rows)
+      expect(row.match(/data-label="(Virtuoso Bridge|skillbridge)"/g)).toHaveLength(2);
   });
 
   it("redirects the retired guide to the README and keeps it out of search", () => {

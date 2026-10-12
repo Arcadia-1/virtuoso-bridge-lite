@@ -14,12 +14,12 @@
     <meta property="og:url" content="https://virtuoso-bridge.tokenzhang.com/" />
     <meta
       property="og:image"
-      content="https://virtuoso-bridge.tokenzhang.com/assets/social-card.png?v=20261012-light"
+      content="https://virtuoso-bridge.tokenzhang.com/assets/social-card.png?v=20261012-vb"
     />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="canonical" href="https://virtuoso-bridge.tokenzhang.com/" />
-    <link rel="icon" href="/favicon.svg?v=20261012-light" type="image/svg+xml" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20261012-light" />
+    <link rel="icon" href="/favicon.svg?v=20261012-vb" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20261012-vb" />
     <script>
       document.documentElement.classList.add("js");
       try {
@@ -31,8 +31,8 @@
         document.documentElement.lang = l === "zh" ? "zh-CN" : "en";
       } catch (e) {}
     </script>
-    <link rel="stylesheet" href="/site.css?v=20261012-simple" />
-    <script src="/site.js?v=20261012-simple" defer></script>
+    <link rel="stylesheet" href="/site.css?v=20261012-compare" />
+    <script src="/site.js?v=20261012-compare" defer></script>
     <script type="module" src="/analytics/track.js?v=20261012-light"></script>
   </head>
   <body>
@@ -49,7 +49,7 @@
             data-internal
             aria-label="Virtuoso Bridge home"
             ><img
-              src="/favicon.svg?v=20261012-light"
+              src="/assets/mark.svg?v=20261012-vb"
               width="24"
               height="24"
               alt=""
@@ -207,9 +207,6 @@
         <p class="lead">
           <span class="en">Let AI agents drive Cadence Virtuoso and Spectre — from Python, SKILL or the command line.</span><span class="zh">让 AI 智能体通过 Python、SKILL 或命令行，直接操作 Cadence Virtuoso 与 Spectre。</span>
         </p>
-        <p class="sub">
-          <span class="en">Schematics, layout, Maestro and standalone Spectre, on the Cadence installation and PDK you already use.</span><span class="zh">原理图、版图、Maestro 和独立 Spectre 仿真，运行在你现有的 Cadence 环境和 PDK 上。</span>
-        </p>
         <div class="actions">
           <a class="button primary" href="https://github.com/Arcadia-1/virtuoso-bridge-lite"><span class="en">View on GitHub</span><span class="zh">在 GitHub 查看</span> ↗</a>
           <a class="button" href="#start"><span class="en">Quick start</span><span class="zh">快速开始</span></a>
@@ -217,45 +214,56 @@
         <p class="meta">Open source · MIT · Python ≥ 3.9</p>
       </section>
 
-      <section class="block" id="covers">
-        <h2><span class="en">What it covers</span><span class="zh">能做什么</span></h2>
-        <ul class="caps">
-          <li>
-            <strong><span class="en">Schematic &amp; symbol</span><span class="zh">原理图与符号</span></strong>
-            <p><span class="en">Create, read and edit cellviews; refresh PDK CDF callbacks.</span><span class="zh">创建、读取、修改 cellview；刷新 PDK 的 CDF 回调。</span></p>
-            <a class="card-link" href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/examples/01_virtuoso/schematic">examples ↗</a>
-          </li>
-          <li>
-            <strong><span class="en">Layout &amp; GDS</span><span class="zh">版图与 GDS</span></strong>
-            <p><span class="en">Shapes, vias, PDK cells and mosaics; XStream GDS export.</span><span class="zh">图形、通孔、PDK 器件与阵列；XStream 导出 GDS。</span></p>
-            <a class="card-link" href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/examples/01_virtuoso/layout">examples ↗</a>
-          </li>
-          <li>
-            <strong><span class="en">Maestro</span><span class="zh">Maestro</span></strong>
-            <p><span class="en">Open sessions, run simulations, read results and histories.</span><span class="zh">打开会话、运行仿真、读取结果与历史记录。</span></p>
-            <a class="card-link" href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/examples/01_virtuoso/maestro">examples ↗</a>
-          </li>
-          <li>
-            <strong><span class="en">Spectre</span><span class="zh">Spectre</span></strong>
-            <p><span class="en">Run netlists and parse PSF without a running Virtuoso.</span><span class="zh">直接运行网表并解析 PSF，不需要启动 Virtuoso。</span></p>
-            <a class="card-link" href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/examples/02_spectre">examples ↗</a>
-          </li>
-          <li>
-            <strong><span class="en">Raw SKILL</span><span class="zh">直接执行 SKILL</span></strong>
-            <p><span class="en"><code>eval</code>, <code>load</code> or <code>execute_skill</code> for everything else.</span><span class="zh">其他操作用 <code>eval</code>、<code>load</code> 或 <code>execute_skill</code>。</span></p>
-            <a class="card-link" href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/skills/virtuoso/references/client-basics.md">client basics ↗</a>
-          </li>
-          <li>
-            <strong><span class="en">Shared CIW</span><span class="zh">共享 CIW</span></strong>
-            <p><span class="en">Read-only dialog inspection and recoverable requests for sessions people also use.</span><span class="zh">只读的弹窗检查与可恢复请求，适用于有人同时在用的会话。</span></p>
-            <a class="card-link" href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/skills/virtuoso/references/shared-ciw-dialogs.md">shared-ciw-dialogs ↗</a>
-          </li>
-        </ul>
+      <section class="block" id="skillbridge">
+        <h2><span class="en">How it differs from skillbridge</span><span class="zh">与 skillbridge 的区别</span></h2>
+        <p><span class="en">Both run SKILL through the same Virtuoso IPC core (<code>ipcBeginProcess</code> + <code>evalstring</code>). The difference is what sits on top.</span><span class="zh">两者底层相同，都通过 Virtuoso 的 IPC 机制（<code>ipcBeginProcess</code> + <code>evalstring</code>）执行 SKILL，区别在上层。</span></p>
+        <table class="compare">
+          <thead>
+            <tr><td></td><th scope="col">Virtuoso Bridge</th><th scope="col"><a href="https://github.com/unihd-cag/skillbridge">skillbridge</a></th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row"><span class="en">Where Virtuoso runs</span><span class="zh">Virtuoso 在哪</span></th>
+              <td data-label="Virtuoso Bridge"><span class="en">This machine, or a remote server over SSH (jump hosts too)</span><span class="zh">本机，或通过 SSH 连接远程服务器（支持跳板机）</span></td>
+              <td data-label="skillbridge"><span class="en">Same machine only: Unix socket or localhost TCP</span><span class="zh">仅限本机：Unix socket 或 localhost TCP</span></td>
+            </tr>
+            <tr>
+              <th scope="row"><span class="en">Schematic, layout, Maestro</span><span class="zh">原理图、版图、Maestro</span></th>
+              <td data-label="Virtuoso Bridge"><span class="en"><code>create()</code> / <code>modify()</code> editors, CDF parameters with callbacks, Maestro runs and results</span><span class="zh"><code>create()</code> / <code>modify()</code> 编辑接口、带回调的 CDF 参数设置、Maestro 运行与结果读取</span></td>
+              <td data-label="skillbridge"><span class="en">Call the SKILL functions yourself</span><span class="zh">自己调用 SKILL 函数</span></td>
+            </tr>
+            <tr>
+              <th scope="row">Spectre</th>
+              <td data-label="Virtuoso Bridge"><span class="en">Runs netlists locally or over SSH and parses PSF ASCII, no Virtuoso needed</span><span class="zh">本机或经 SSH 跑网表并解析 PSF ASCII，不需要 Virtuoso</span></td>
+              <td data-label="skillbridge"><span class="en">Not included</span><span class="zh">不包含</span></td>
+            </tr>
+            <tr>
+              <th scope="row"><span class="en">Safety</span><span class="zh">安全与超时</span></th>
+              <td data-label="Virtuoso Bridge"><span class="en">Token-signed requests, one at a time, 30 s default timeout; after a timeout it refuses new work instead of mixing up replies</span><span class="zh">请求用令牌签名，一次只跑一个，默认 30 秒超时；超时后拒绝新请求，不会串回复</span></td>
+              <td data-label="skillbridge"><span class="en">No token (relies on local socket access); waits forever by default; after a timeout, replies can fall out of step until restart</span><span class="zh">无令牌（靠本机 socket 权限）；默认无限等待；超时后回复可能错位，需重启</span></td>
+            </tr>
+            <tr>
+              <th scope="row"><span class="en">Built for</span><span class="zh">面向谁</span></th>
+              <td data-label="Virtuoso Bridge"><span class="en">AI agents: CLI, agent skills, <code>AGENTS.md</code></span><span class="zh">AI 智能体：命令行、智能体技能、<code>AGENTS.md</code></span></td>
+              <td data-label="skillbridge"><span class="en">People in Python: Jupyter tab completion, IDE stubs</span><span class="zh">写 Python 的人：Jupyter 补全、IDE 类型存根</span></td>
+            </tr>
+            <tr>
+              <th scope="row"><span class="en">Calling SKILL</span><span class="zh">调用方式</span></th>
+              <td data-label="Virtuoso Bridge"><span class="en">SKILL text: <code>execute_skill()</code>, <code>load_il()</code>, <code>virtuoso-bridge eval</code></span><span class="zh">SKILL 文本：<code>execute_skill()</code>、<code>load_il()</code>、<code>virtuoso-bridge eval</code></span></td>
+              <td data-label="skillbridge"><span class="en">Python style: <code>ws.db.open_cell_view_by_type()</code>, objects mapped both ways</span><span class="zh">Python 风格：<code>ws.db.open_cell_view_by_type()</code>，对象双向映射</span></td>
+            </tr>
+            <tr>
+              <th scope="row"><span class="en">License</span><span class="zh">许可证</span></th>
+              <td data-label="Virtuoso Bridge">MIT</td>
+              <td data-label="skillbridge">LGPL-3.0</td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="note"><span class="en">skillbridge details checked against its source and docs, version 1.8.0.</span><span class="zh">skillbridge 的信息对照其 1.8.0 版源码和文档核实。</span></p>
       </section>
 
       <section class="block" id="start">
         <h2><span class="en">Quick start</span><span class="zh">快速开始</span></h2>
-        <p><span class="en">Install from source on your machine, then connect to the host that runs Virtuoso.</span><span class="zh">在本机从源码安装，然后连接运行 Virtuoso 的主机。</span></p>
         <div class="code">
           <div class="code-head"><span>macOS · Linux</span><button class="copy-button js-only" type="button" data-copy="quickstart-code"><span class="en">Copy</span><span class="zh">复制</span></button></div>
           <pre id="quickstart-code"><code>git clone https://github.com/Arcadia-1/virtuoso-bridge-lite.git
@@ -269,46 +277,16 @@ virtuoso-bridge status           <span class="comment"># prints the load("...") 
 virtuoso-bridge eval '1+2'       <span class="comment"># after loading it: 3</span></code></pre>
         </div>
         <p class="note">
-          <span class="en">Paste the <code>load("...")</code> line shown by <code>status</code> into the Virtuoso CIW you want to drive. Windows, local mode, split hosts and standalone Spectre are covered in the <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite#quick-start">README</a>.</span><span class="zh">把 <code>status</code> 显示的 <code>load("...")</code> 命令粘贴到要控制的 Virtuoso CIW。Windows、本机模式、GUI 与 daemon 分机部署、独立 Spectre 的配置见 <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite#quick-start">README</a>。</span>
-        </p>
-      </section>
-
-      <section class="block" id="python">
-        <h2><span class="en">From Python</span><span class="zh">Python 示例</span></h2>
-        <p><span class="en">Build an RC network in a new schematic cellview.</span><span class="zh">在新的原理图 cellview 中搭一个 RC 网络。</span></p>
-        <div class="code">
-          <div class="code-head"><span>create_rc.py</span><button class="copy-button js-only" type="button" data-copy="python-code"><span class="en">Copy</span><span class="zh">复制</span></button></div>
-          <pre id="python-code"><code>from virtuoso_bridge import VirtuosoClient
-from virtuoso_bridge.virtuoso.schematic.ops import (
-    schematic_create_inst_by_master_name as inst,
-    schematic_create_wire_between_instance_terms as wire,
-)
-
-client = VirtuosoClient.from_env()
-with client.schematic.create("my_lib", "rc_demo") as sch:
-    sch.add(inst("analogLib", "res", "symbol", "R0", 0.5, 0.0, "R90"))
-    sch.add(inst("analogLib", "cap", "symbol", "C0", 1.5, -0.5, "R0"))
-    sch.add(wire("R0", "MINUS", "C0", "PLUS"))
-<span class="comment"># Leaving the block runs schCheck and saves the cellview.</span></code></pre>
-        </div>
-        <p class="note">
-          <span class="en">Full version with pins and a generated symbol: <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/examples/01_virtuoso/symbol">examples/01_virtuoso/symbol</a>.</span><span class="zh">带引脚和自动生成符号的完整版本：<a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/examples/01_virtuoso/symbol">examples/01_virtuoso/symbol</a>。</span>
-        </p>
-      </section>
-
-      <section class="block" id="agents">
-        <h2><span class="en">For coding agents</span><span class="zh">给编程智能体</span></h2>
-        <p>
-          <span class="en">Point your agent at <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/AGENTS.md">AGENTS.md</a> and link the <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/skills">skills</a> (virtuoso, spectre, netlist, optimizer) into its skills directory.</span><span class="zh">让智能体先读 <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/AGENTS.md">AGENTS.md</a>，再把 <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/skills">skills</a>（virtuoso、spectre、netlist、optimizer）链接到它的技能目录。</span>
+          <span class="en">Paste the <code>load("...")</code> line into the Virtuoso CIW you want to drive. Windows, local mode and standalone Spectre: see the <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite#quick-start">README</a>.</span><span class="zh">把 <code>load("...")</code> 这行粘贴到要控制的 Virtuoso CIW。Windows、本机模式、独立 Spectre 见 <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite#quick-start">README</a>。</span>
         </p>
       </section>
 
       <section class="block" id="docs">
-        <h2><span class="en">Everything else is in the repo</span><span class="zh">其余内容都在仓库里</span></h2>
+        <h2><span class="en">More in the repo</span><span class="zh">更多内容在仓库里</span></h2>
         <ul class="links">
-          <li><a href="https://github.com/Arcadia-1/virtuoso-bridge-lite#readme">README</a><span><span class="en">setup, CLI reference, architecture</span><span class="zh">安装、CLI 参考、架构</span></span></li>
+          <li><a href="https://github.com/Arcadia-1/virtuoso-bridge-lite#readme">README</a><span><span class="en">setup, CLI, architecture</span><span class="zh">安装、命令行、架构</span></span></li>
           <li><a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/examples">examples/</a><span><span class="en">runnable workflows</span><span class="zh">可运行的工作流</span></span></li>
-          <li><a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/skills/virtuoso/references">skills/virtuoso/references</a><span><span class="en">API references</span><span class="zh">API 参考</span></span></li>
+          <li><a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/AGENTS.md">AGENTS.md</a><span><span class="en">start here for coding agents, then link <code>skills/</code></span><span class="zh">编程智能体从这里读起，再链接 <code>skills/</code></span></span></li>
           <li><a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/issues"><span class="en">Issues</span><span class="zh">问题反馈</span></a><span><span class="en">bugs and requests</span><span class="zh">缺陷与需求</span></span></li>
           <li><a href="https://github.com/Arcadia-1/virtuoso-bridge-lite#citation"><span class="en">Citation</span><span class="zh">引用</span></a><span>BibTeX</span></li>
         </ul>

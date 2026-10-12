@@ -10,7 +10,8 @@ Durable Object storage. It does not connect to Cadence.
 Public pages use a light palette, a compact 48px product header and a quiet
 footer, aligned with Analog Canvas and Analog Design Bench. The shared chrome
 is checked across the landing and privacy pages by `chrome.test.ts`.
-`docs/favicon.svg` is the circuit-bridge mark; the PNG icons and social preview
+`docs/favicon.svg` and `docs/assets/mark.svg` hold the italic VB mark (the favicon
+turns white in dark browser tabs); the PNG icons and social preview
 are derived assets and must be regenerated when the mark changes.
 
 ## Analytics provenance and identity
