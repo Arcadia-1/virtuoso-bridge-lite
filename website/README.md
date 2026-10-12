@@ -1,13 +1,15 @@
 # Virtuoso Bridge website
 
-The landing page, guide, privacy page and SVG identity live in `../docs/`.
+The landing page, privacy page and SVG identity live in `../docs/`. The landing
+page is a short front door: setup and reference material stay in the repository
+README, and `/guide/` only redirects there so old links keep working.
 `npm ci && npm run check && npm test && npm run build` builds this isolated
 website package. `npm run preview` serves the full site with local Cloudflare
 Durable Object storage. It does not connect to Cadence.
 
 Public pages use a light palette, a compact 48px product header and a quiet
 footer, aligned with Analog Canvas and Analog Design Bench. The shared chrome
-is checked across the landing, guide and privacy pages by `chrome.test.ts`.
+is checked across the landing and privacy pages by `chrome.test.ts`.
 `docs/favicon.svg` is the circuit-bridge mark; the PNG icons and social preview
 are derived assets and must be regenerated when the mark changes.
 

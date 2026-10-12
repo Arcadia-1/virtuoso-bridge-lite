@@ -2,28 +2,24 @@
 <html lang="en" data-lang="en">
   <head>
     <meta charset="utf-8" />
-    <link
-      rel="apple-touch-icon"
-      href="/apple-touch-icon.png?v=20261012-light"
-    />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#f7f8fa" />
     <title>Privacy — Virtuoso Bridge</title>
-    <meta
-      name="description"
-      content="How Virtuoso Bridge counts visits, protects visitor privacy, and lets you opt out of audience measurement."
-    />
+    <meta name="description" content="How the Virtuoso Bridge website counts visits with first-party analytics, and how to opt out." />
     <meta name="site-title-en" content="Privacy — Virtuoso Bridge" />
     <meta name="site-title-zh" content="隐私与统计偏好 — Virtuoso Bridge" />
-    <link
-      rel="icon"
-      href="/favicon.svg?v=20261012-light"
-      type="image/svg+xml"
+    <meta property="og:title" content="Privacy — Virtuoso Bridge" />
+    <meta property="og:description" content="How the Virtuoso Bridge website counts visits with first-party analytics, and how to opt out." />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://virtuoso-bridge.tokenzhang.com/privacy/" />
+    <meta
+      property="og:image"
+      content="https://virtuoso-bridge.tokenzhang.com/assets/social-card.png?v=20261012-light"
     />
-    <link
-      rel="canonical"
-      href="https://virtuoso-bridge.tokenzhang.com/privacy/"
-    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="canonical" href="https://virtuoso-bridge.tokenzhang.com/privacy/" />
+    <link rel="icon" href="/favicon.svg?v=20261012-light" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20261012-light" />
     <script>
       document.documentElement.classList.add("js");
       try {
@@ -35,8 +31,8 @@
         document.documentElement.lang = l === "zh" ? "zh-CN" : "en";
       } catch (e) {}
     </script>
-    <link rel="stylesheet" href="/site.css?v=20261012-refined" />
-    <script src="/site.js?v=20261012-refined" defer></script>
+    <link rel="stylesheet" href="/site.css?v=20261012-simple" />
+    <script src="/site.js?v=20261012-simple" defer></script>
     <script type="module" src="/analytics/track.js?v=20261012-light"></script>
     <script src="/privacy/privacy.js?v=20261012-light" defer></script>
   </head>
@@ -141,7 +137,7 @@
           </details>
         </div>
         <nav class="header-nav" aria-label="Main navigation">
-          <a class="nav-guide" href="/guide/" data-internal
+          <a class="nav-guide" href="https://github.com/Arcadia-1/virtuoso-bridge-lite#readme"
             ><svg
               width="16"
               height="16"
@@ -206,19 +202,10 @@
         </div>
       </div>
     </header>
-    <main id="main">
-      <div class="guide-hero">
-        <div class="wrap">
-          <div class="eyebrow">
-            <span class="en">Privacy / First-party analytics</span
-            ><span class="zh">隐私 / 第一方访问统计</span>
-          </div>
-          <h1>
-            <span class="en">Count visits.<br />Respect visitors.</span
-            ><span class="zh">了解访问。<br />尊重访客。</span>
-          </h1>
-          <p>
-            <span class="en"
+    <main id="main" class="page doc">
+      <h1><span class="en">Privacy</span><span class="zh">隐私</span></h1>
+      <p class="lead">
+        <span class="en"
               >Virtuoso Bridge uses the same first-party analytics
               implementation as Analog Canvas, in its own independent database.
               We do not embed a third-party analytics tracker.</span
@@ -226,27 +213,8 @@
               >Virtuoso Bridge 复用 Analog Canvas
               的第一方统计实现，使用自己的独立数据库，不嵌入第三方访问追踪器。</span
             >
-          </p>
-        </div>
-      </div>
-      <div class="wrap guide-layout">
-        <nav class="guide-nav" aria-label="Privacy sections">
-          <a href="#counting"
-            ><span class="en">What we count</span
-            ><span class="zh">统计哪些信息</span></a
-          ><a href="#storage"
-            ><span class="en">Storage &amp; retention</span
-            ><span class="zh">存储与保留期限</span></a
-          ><a href="#choice"
-            ><span class="en">Your choice</span
-            ><span class="zh">你的选择</span></a
-          ><a href="/" data-internal
-            ><span class="en">← Project home</span
-            ><span class="zh">← 项目首页</span></a
-          >
-        </nav>
-        <div class="guide-content">
-          <section class="guide-section" id="counting">
+      </p>
+      <section id="counting">
             <h2>
               <span class="en">What is counted?</span
               ><span class="zh">统计哪些信息？</span>
@@ -300,7 +268,7 @@
               >
             </p>
           </section>
-          <section class="guide-section" id="storage">
+      <section id="storage">
             <h2>
               <span class="en">How long is it retained?</span
               ><span class="zh">保存多久？</span>
@@ -338,7 +306,7 @@
               </li>
             </ul>
           </section>
-          <section class="guide-section" id="choice">
+      <section id="choice">
             <h2>
               <span class="en">Choose not to be counted.</span
               ><span class="zh">你可以选择不被计数。</span>
@@ -375,8 +343,7 @@
               </p></noscript
             >
           </section>
-        </div>
-      </div>
+      <p class="note"><a href="/" data-internal><span class="en">← Project home</span><span class="zh">← 项目首页</span></a></p>
     </main>
     <footer class="site-footer">
       <div class="wrap">
@@ -385,7 +352,7 @@
             © 2026 Virtuoso Bridge <span aria-hidden="true">·</span> MIT
           </p>
           <nav class="footer-links" aria-label="Footer">
-            <a href="/guide/#citation" data-internal
+            <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite#citation"
               ><span class="en">Cite</span><span class="zh">引用</span></a
             >
             <a href="https://www.tokenzhang.com/"
@@ -416,6 +383,6 @@
         </p>
       </div>
     </footer>
-    <div id="toast" class="toast" role="status" hidden></div>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   </body>
 </html>
