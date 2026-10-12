@@ -254,3 +254,5 @@ For format and `spiceIn` limitations, see [netlist.md](netlist.md).
 `add_wire_between_instance_terms` and `add_net_label_to_instance_term` resolve pin positions from the database — no need to guess coordinates.
 
 `add_net_label_to_transistor` is MOS-aware: it knows drain/source go up/down (flipped for PMOS), gate goes left, body goes right. The stub direction adapts to the transistor orientation.
+
+Terminal names are matched case-insensitively (`D` or `d`). The body is labelled on a `B`, `BULK`, `BODY` or `SUB` terminal and skipped on a symbol without one, such as a 3-terminal device whose body comes from its model. For other names pass `terminal_names={"B": "sx"}`. `schematic_label_instance_term` matches names the same way and its error lists the master's terminals.

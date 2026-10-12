@@ -104,3 +104,50 @@ def test_schematic_label_instance_term_wire_binding(
     assert f'schCreateWire({wire_cv} "route" "full"' in skill
     assert f'schCreateWireLabel({cv_expr} {label_wire} rbMid "OUT"' in skill
     assert ("rbWireObj" in skill) is bind
+
+
+def test_label_instance_term_matches_terminal_case_insensitively() -> None:
+    # One PDK names MOS terminals D/G/S/B, another d/g/s.
+    skill = schematic_label_instance_term("M0", "D", "OUT")
+
+    exact = 'rbFound = car(setof(x rbTerms x~>name == "D"))'
+    fallback = 'foreach(rbAlias list("D") unless(rbFound rbFound = car(setof(x rbTerms upperCase(x~>name) == rbAlias))))'
+    assert exact in skill and fallback in skill
+    assert skill.index(exact) < skill.index(fallback)
+    assert 'error("terminal %s not found on %s/%s; its terminals: %L" "D" ' in skill
+
+
+def test_label_instance_term_tries_aliases_and_can_skip_a_missing_terminal() -> None:
+    skill = schematic_label_instance_term("M0", "B", "VSS", aliases=("BULK", "b"), missing_ok=True)
+
+    assert 'list("B" "BULK")' in skill
+    assert "not found on" not in skill
+    # Every later step is guarded, so a nil terminal draws nothing.
+    assert "rbPin = when(rbTerm car(rbTerm~>pins))" in skill
+    assert "when(rbMid schCreateWireLabel(" in skill
+
+
+def _mos_label_commands(**kwargs) -> list[str]:
+    from virtuoso_bridge.virtuoso.schematic.editor import SchematicEditor
+
+    editor = SchematicEditor(client=None, lib="L", cell="C")
+    editor.add_net_label_to_transistor("M0", **kwargs)
+    return editor.commands
+
+
+def test_mos_labels_require_d_g_s_and_skip_an_absent_body() -> None:
+    drain, gate, source, body = _mos_label_commands(
+        drain_net="OUT", gate_net="IN", source_net="VSS", body_net="VSS"
+    )
+
+    for command, role in ((drain, "D"), (gate, "G"), (source, "S")):
+        assert f'error("terminal %s not found on %s/%s; its terminals: %L" "{role}" ' in command
+    assert 'list("B" "BULK" "BODY" "SUB")' in body
+    assert "not found on" not in body
+
+
+def test_mos_labels_use_the_terminal_names_given_for_a_role() -> None:
+    (body,) = _mos_label_commands(body_net="VSS", terminal_names={"b": "sx"})
+
+    assert 'x~>name == "sx"' in body and 'list("SX")' in body
+    assert 'error("terminal %s not found on %s/%s; its terminals: %L" "sx" ' in body
