@@ -338,7 +338,7 @@ def schematic_label_instance_term(
         f'rbWire = when(rbCtr && rbStubEnd schCreateWire({cv_expr} "route" "full" list(rbCtr rbStubEnd) 0 0 0 nil nil)) '
         "rbWireObj = if(listp(rbWire) car(rbWire) rbWire) "
         if bind_label_to_wire
-        else 'when(rbCtr && rbStubEnd schCreateWire(cv "route" "full" list(rbCtr rbStubEnd) 0 0 0 nil nil)) '
+        else f'when(rbCtr && rbStubEnd schCreateWire({cv_expr} "route" "full" list(rbCtr rbStubEnd) 0 0 0 nil nil)) '
     )
     label_wire_expr = "rbWireObj" if bind_label_to_wire else "nil"
     label_guard_expr = "rbWireObj && rbMid" if bind_label_to_wire else "rbMid"

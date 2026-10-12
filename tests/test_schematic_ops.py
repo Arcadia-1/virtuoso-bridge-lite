@@ -81,12 +81,8 @@ def test_schematic_create_net_stub_rejects_invalid_geometry(kwargs, message: str
     ("bind", "cv_expr", "wire_cv", "label_wire"),
     [
         (False, "cv", "cv", "nil"),
-        pytest.param(
-            False, "targetCv", "targetCv", "nil",
-            marks=pytest.mark.xfail(strict=True, reason=(
-                "open bug: unbound labels draw the stub wire in hard-coded `cv` while the "
-                "terminal lookup and label use cv_expr, so the wire lands in another cellview")),
-        ),
+        # The stub wire, terminal lookup and label share one cellview.
+        (False, "targetCv", "targetCv", "nil"),
         (True, "cv", "cv", "rbWireObj"),
         (True, "targetCv", "targetCv", "rbWireObj"),
     ],
