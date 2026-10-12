@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal, TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -232,17 +233,18 @@ class DialogOps:
             )
         else:
             deadline = time.monotonic() + timeout
-            report = self.inspect(timeout=timeout)
-            if report.status == "clear":
-                try:
-                    caps = self._owner._ensure_daemon_capabilities(deadline, refresh=True)
-                    if caps.get("auth") != "on" or caps.get("virtuoso_pid") != self._target.pid:
-                        raise ValueError("daemon identity no longer matches the guarded CIW")
-                except Exception as exc:
-                    report = DialogInspection(
-                        status="indeterminate", target=self._target,
-                        diagnostics=[f"Cannot verify guarded endpoint: {exc}"],
-                    )
+            # Both checks are read-only and both must pass before SKILL is
+            # sent, so the X11 inspection (SSH) and the fresh identity
+            # handshake (tunnel) run side by side instead of one after the other.
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                identity = pool.submit(self._identity_error, deadline)
+                report = self.inspect(timeout=timeout)
+                identity_error = identity.result()
+            if report.status == "clear" and identity_error:
+                report = DialogInspection(
+                    status="indeterminate", target=self._target,
+                    diagnostics=[f"Cannot verify guarded endpoint: {identity_error}"],
+                )
         if report.status == "clear":
             return None
         return VirtuosoResult(
@@ -251,6 +253,16 @@ class DialogOps:
             metadata={"dialog_guard": report.model_dump(), "request_sent": False,
                       "outcome": "not_started"},
         )
+
+    def _identity_error(self, deadline: float) -> str | None:
+        """None if the daemon still proves the guarded CIW's PID, else why not."""
+        try:
+            caps = self._owner._ensure_daemon_capabilities(deadline, refresh=True)
+            if caps.get("auth") != "on" or caps.get("virtuoso_pid") != self._target.pid:
+                raise ValueError("daemon identity no longer matches the guarded CIW")
+        except Exception as exc:
+            return str(exc) or type(exc).__name__
+        return None
 
     def annotate_failure(self, result: VirtuosoResult, timeout: float) -> VirtuosoResult:
         """Inspect out-of-band once; never replay an uncertain operation."""
