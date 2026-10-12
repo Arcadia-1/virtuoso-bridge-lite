@@ -377,7 +377,7 @@ def test_client_rejects_cross_user_before_any_skill_execution(
         ("Socket timeout after 5s", "indeterminate"),
         ("Socket error: boom", "indeterminate"),
         ("BusyError: IPC lane is busy", "busy"),
-        ("BusyError: IPC lane is poisoned: legacy watchdog fired", "busy"),
+        ("BusyError: IPC lane is poisoned: SKILL did not answer within the request timeout", "busy"),
     ],
 )
 def test_classify_daemon_query_failure(error: str, expected: str) -> None:
@@ -414,7 +414,7 @@ def test_busy_lane_is_reported_without_suggesting_the_override(monkeypatch) -> N
     monkeypatch.delenv(OVERRIDE_ENV, raising=False)
     monkeypatch.setenv("VB_REMOTE_USER", "user1")
     check = check_daemon_user(
-        FakeClient(error="BusyError: IPC lane is poisoned: legacy watchdog fired"), profile=None,
+        FakeClient(error="BusyError: IPC lane is poisoned: SKILL did not answer within the request timeout"), profile=None,
     )
     assert not check.ok and check.busy
     monkeypatch.setattr("virtuoso_bridge.daemon_guard.check_daemon_user", lambda *_a, **_k: check)

@@ -171,8 +171,15 @@ Finished receipts are retained for one hour with a maximum of 4096 entries,
 space for a worst-case response before accepting another execution and refuses
 at capacity, rather than evicting young receipts. A pending request never
 expires or releases the IPC lane merely because its client stops waiting.
-Malformed/partial responses, EOF or legacy timeout poison the lane: later
-execution is refused because a delayed frame could otherwise be misattributed.
+Malformed/partial responses or a legacy timeout poison the lane: later
+execution is refused (`BusyError: IPC lane is poisoned …`) because a delayed
+frame could otherwise be misattributed. The daemon then sends a resync probe
+and discards everything Virtuoso writes until the probe's own reply arrives;
+because the CIW evaluates requests in order, that reply proves earlier frames
+are consumed, and the lane is usable again without reloading the bridge. The
+lane stays poisoned while the CIW is still blocked, and permanently if the pipe
+closes. `virtuoso-bridge status` shows the lane state (`busy`, `resyncing`,
+`poisoned`) from the handshake, which does not use the CIW.
 
 Request IDs contain a millisecond creation timestamp and random suffix. New
 submissions must be no more than five minutes old or thirty seconds in the
@@ -291,10 +298,11 @@ dismissal while its shared guard is enabled. Existing explicitly selected
   each call, but an individual synchronous call can outlive the helper's budget.
   X server I/O loss can terminate the helper. Failed/malformed inspection is
   indeterminate, not clear; invisible input grabs are not detected.
-- Legacy execution, including preflight-only mode, still uses the process-level
-  SIGINT watchdog. Only explicit recoverable execution avoids it. Human actions,
-  another daemon in the same Virtuoso process, or external tools may still
-  interrupt the operation; this is not a process-wide safety guarantee.
+- Neither legacy nor recoverable execution signals Virtuoso: a legacy request
+  that outlives its timeout keeps running, its client gets a timeout, and the
+  lane resynchronizes once Virtuoso answers. Human actions, another daemon in
+  the same Virtuoso process, or external tools may still interrupt the
+  operation; this is not a process-wide safety guarantee.
 - Existing client factory identity checks, and other clients using the same
   CIW, are not protected before this guard is enabled.
 - No background polling, automatic saving, notification scheduler, or generic

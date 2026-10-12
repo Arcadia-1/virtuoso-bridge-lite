@@ -25,6 +25,7 @@ try:
         RecoverableRequestManager,
         RequestNotStarted,
         read_response_frame,
+        resynchronize,
         valid_request_id,
     )
 except ImportError:
@@ -33,6 +34,7 @@ except ImportError:
         RecoverableRequestManager,
         RequestNotStarted,
         read_response_frame,
+        resynchronize,
         valid_request_id,
     )
 
@@ -335,6 +337,7 @@ def _capabilities_body():
             "recoverable_requests": 1 if BRIDGE_TOKEN else 0,
             "daemon_instance": _RECOVERY.instance_id,
             "server_time_ms": int(time.time() * 1000),
+            "lane": _RECOVERY.lane_state(),
         }
     )
 
@@ -459,16 +462,14 @@ def _safe_close_connection(conn):
 
 def watchdog_callback(expired, finished, completion_lock):
     # Timer.cancel() cannot stop a callback that already started. Keep the
-    # decision and signal inside the same lock used before releasing the lane.
+    # decision inside the same lock used before releasing the lane. The
+    # request is not interrupted: SIGINT cannot dismiss a modal dialog and
+    # only made the lane unusable. The reader gives up instead, the lane is
+    # poisoned and resynchronized once Virtuoso answers again.
     with completion_lock:
         if finished.is_set() or expired.is_set():
             return
         expired.set()
-        try:
-            if _owner is not None:
-                _owner.interrupt()
-        except Exception:
-            pass
 
 def read_until_delimiter(start_ok=0x02, start_err=0x15, end=0x1e):
     """Read one framed response, distinguishing would-block, EOF and timeout."""
@@ -607,7 +608,7 @@ def _transmit_and_read(skill_code, watchdog_seconds=None):
         def read_one():
             if expired is not None and expired.is_set():
                 raise ExecutionUncertain(
-                    "legacy watchdog fired; IPC lane is poisoned"
+                    "SKILL did not answer within the request timeout"
                 )
             return sys.stdin.buffer.read(1)
 
@@ -617,7 +618,7 @@ def _transmit_and_read(skill_code, watchdog_seconds=None):
                 finished.set()
                 if expired.is_set():
                     raise ExecutionUncertain(
-                        "legacy watchdog fired; late response attribution is unsafe"
+                        "SKILL answered just as the request timed out"
                     )
         return response
     finally:
@@ -631,6 +632,19 @@ def _transmit_and_read(skill_code, watchdog_seconds=None):
                 os.unlink(tmp_il_path)
             except OSError:
                 pass
+
+
+def _send_resync_probe(probe):
+    send_bytes, _tmp_il_path = _prepare_skill(probe)
+    sys.stdout.buffer.write(send_bytes)
+    sys.stdout.buffer.flush()
+
+
+def _resync_lane():
+    return resynchronize(_send_resync_probe, lambda: sys.stdin.buffer.read(1))
+
+
+_RECOVERY.set_resync(_resync_lane)
 
 
 def _execute_recoverable(skill_code):
