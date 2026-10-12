@@ -48,6 +48,7 @@ import sys
 from datetime import datetime
 
 from virtuoso_bridge import VirtuosoClient
+from virtuoso_bridge.virtuoso.schematic.params import set_instance_params
 from virtuoso_bridge.virtuoso.schematic.ops import (
     schematic_create_inst_by_master_name as inst,
     schematic_create_pin,
@@ -137,12 +138,10 @@ def _create(client: VirtuosoClient, lib: str, cell: str) -> None:
         sch.add(schematic_create_pin("IN",  1.5, 0.75, "R0", direction="input"))
         sch.add(schematic_create_pin("OUT", 4.5, 0.75, "R0", direction="output"))
 
-    # Set VDC = 1.0 V
-    client.execute_skill(
-        'schHiReplace(?replaceAll t ?propName "cellName" ?condOp "==" '
-        '?propValue "vdc" ?newPropName "vdc" ?newPropValue "1.0")')
-
+    # Open the new cell first, then set V0 on it. (A global schHiReplace acts
+    # on whichever schematic window is current, i.e. possibly another cell.)
     client.open_window(lib, cell, view="schematic")
+    set_instance_params(client, "V0", vdc="1.0")
     print(f"Created {lib}/{cell}/schematic")
     print("Wires drawn by schCreateWire; nets bound by clean labels;")
     print("OUT also has a branch-tip SCOPE label demonstrating the off-wire pattern.")

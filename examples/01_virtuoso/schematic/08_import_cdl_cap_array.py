@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Import a 4-bit binary-weighted capacitor array into Virtuoso via spiceIn.
+"""Import a 4-bit binary-weighted capacitor array into Virtuoso from CDL.
 
-Generates a CDL netlist locally, uploads it, and runs Cadence spiceIn
-over SSH to create the schematic automatically (with wiring).
+Writes a CDL netlist and a device map locally and imports the hierarchy with
+``client.schematic.import_netlist`` (Cadence spiceIn run in a private
+directory whose cds.lib includes the CIW's, so technology bindings resolve).
 
 Circuit:
     cap_unit:     single 10fF capacitor (TOP, BOT)
@@ -19,25 +20,21 @@ Usage::
 
 Prerequisites:
 - virtuoso-bridge tunnel running
-- spiceIn on remote (auto-detected from Cadence install)
+- spiceIn available in the Cadence installation
 
 Note:
-    spiceIn must run via SSH, never via SKILL system() — it starts an
-    internal Virtuoso process and will deadlock the CIW.
+    Do not run spiceIn by hand from the library's parent directory: without
+    the CIW's cds.lib it cannot resolve the library's technology and writes an
+    empty tech.db into the library, which breaks later XStream exports.
 """
 
-import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from virtuoso_bridge import VirtuosoClient
-from virtuoso_bridge.transport.remote_paths import (
-    default_virtuoso_bridge_dir,
-    resolve_client_id,
-    resolve_remote_username,
-)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -74,147 +71,55 @@ devselect := inductor ind
 """
 
 
-# ---------------------------------------------------------------------------
-# SSH command builder (for running spiceIn over SSH)
-# ---------------------------------------------------------------------------
-
-def _ssh_cmd(client: VirtuosoClient) -> list[str]:
-    t = client._tunnel
-    h, u = t._remote_host, t._remote_user
-    jh, ju = getattr(t, "_jump_host", None), getattr(t, "_jump_user", None)
-    cmd = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
-           "-o", "ConnectTimeout=30"]
-    if jh:
-        cmd += ["-J", f"{ju}@{jh}"]
-    cmd.append(f"{u}@{h}")
-    return cmd
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main() -> int:
-    # ------------------------------------------------------------------
-    # Argument check
-    # ------------------------------------------------------------------
     if len(sys.argv) < 2:
-        print("=" * 60, file=sys.stderr)
-        print(" ERROR: missing required argument <LIB>", file=sys.stderr)
-        print()
-        print(
-            f" Usage: python {Path(__file__).name} <LIB>\n"
-            " Example: python 08_import_cdl_cap_array.py lifangshi\n",
-            file=sys.stderr,
-        )
-        print(
-            " NOTE: Running this script from VSCode (Ctrl+F5 / F5) will NOT\n"
-            "       work — VSCode does not pass command-line arguments by default.\n",
-            file=sys.stderr,
-        )
-        print("=" * 60, file=sys.stderr)
+        print(f"Usage: python {Path(__file__).name} <LIB>", file=sys.stderr)
         return 1
-
     lib = sys.argv[1]
-
     client = VirtuosoClient.from_env()
 
-    # Discover paths from running Virtuoso
-    env = {}
-    for var in ["LM_LICENSE_FILE", "CDS_LIC_FILE", "LD_LIBRARY_PATH"]:
-        r = client.execute_skill(f'getShellEnvVar("{var}")')
-        val = r.output.strip('"') if r.output and r.output.strip() != "nil" else ""
-        if val:
-            env[var] = val
-
-    r = client.execute_skill('cdsGetInstPath()')
-    cds_inst = r.output.strip('"')
-    spicein = f"{cds_inst}/bin/spiceIn"
-
-    r = client.execute_skill(f'ddGetObj("{lib}")~>writePath')
-    work_dir = str(Path(r.output.strip('"')).parent)
-
-    username = resolve_remote_username(
-        configured_user=client._tunnel._remote_user,
-        runner=client._tunnel._ssh_runner,
-    )
-    remote_tmp = default_virtuoso_bridge_dir(
-        username,
-        "cap_array",
-        resolve_client_id(getattr(client._tunnel, "_profile", None)) if client._tunnel else None,
-    )
-
-    # 1. Write CDL and devmap locally, upload via bridge
-    cdl_path = f"{remote_tmp}/cap_array_4b.cdl"
-    devmap_path = f"{remote_tmp}/devmap.txt"
-
-    client._tunnel.upload_text(CDL, cdl_path)
-    client._tunnel.upload_text(DEVMAP, devmap_path)
-    print(f"[cdl]\n{CDL}")
-    print("[upload] Done")
-
-    # 2. Run spiceIn via SSH (not via SKILL — would deadlock CIW)
-    script = f"""#!/bin/bash
-export HOSTNAME=$(hostname 2>/dev/null || echo localhost)
-export LM_LICENSE_FILE="{env.get('LM_LICENSE_FILE', '')}"
-export CDS_LIC_FILE="{env.get('CDS_LIC_FILE', '')}"
-export CDS_INST_DIR={cds_inst}
-export IC_HOME=$CDS_INST_DIR
-export PATH=$CDS_INST_DIR/bin:$CDS_INST_DIR/tools/bin:$PATH
-export LD_LIBRARY_PATH="{env.get('LD_LIBRARY_PATH', '')}"
-cd {work_dir}
-{spicein} -language SPICE -netlistFile {cdl_path} \\
-  -outputLib {lib} -reflibList "analogLib basic" \\
-  -devmapFile {devmap_path}
-"""
-    script_path = f"{remote_tmp}/run.sh"
-    client._tunnel.upload_text(script, script_path)
-
-    print("[spiceIn] Running...")
-    result = subprocess.run(
-        _ssh_cmd(client) + [f"bash {script_path}"],
-        capture_output=True, text=True, timeout=120,
-    )
-    output = result.stdout + result.stderr
-    if "successfully imported" not in output:
-        print(output)
-        print("[spiceIn] FAILED")
+    existing = [
+        cell for cell in ("cap_unit", "cap_array_4b")
+        if client.execute_skill(f'ddGetObj("{lib}" "{cell}")').output not in (None, "", "nil")
+    ]
+    if existing:
+        print(f"{lib} already contains {existing}; delete them or choose another library.")
         return 1
+
+    with tempfile.TemporaryDirectory(prefix="vb-cap-array-") as tmp:
+        cdl_path = Path(tmp) / "cap_array_4b.cdl"
+        devmap_path = Path(tmp) / "devmap.txt"
+        cdl_path.write_text(CDL, encoding="utf-8")
+        devmap_path.write_text(DEVMAP, encoding="utf-8")
+        print(f"[cdl]\n{CDL}")
+
+        # Each call converts one subcircuit (the cell argument) to a schematic;
+        # import the leaf first so the array instantiates its schematic cell.
+        for cell in ("cap_unit", "cap_array_4b"):
+            result = client.schematic.import_netlist(
+                lib, cell, cdl_path, language="SPICE", dev_map_file=devmap_path,
+            )
+            if getattr(result, "status", None) is not None and result.status.value != "success":
+                print(f"[spiceIn] FAILED for {cell}: {result.errors}")
+                return 1
     print("[spiceIn] OK")
 
-    # ------------------------------------------------------------------
-    # Verify both expected cells actually landed in the DB.  spiceIn's
-    # stdout prints "successfully imported" per recognised subckt, so
-    # "in output" only proves that AT LEAST ONE imported -- a CDL with
-    # bus ports like `.SUBCKT cap_array_4b TOP BOT<3:0>` can silently
-    # be skipped while cap_unit succeeds, leaving the message intact
-    # and the array cell missing.  Ask the DB directly.
-    # ------------------------------------------------------------------
-    client.execute_skill("ddUpdateLibList()")
-    expected = ("cap_unit", "cap_array_4b")
-    missing: list[str] = []
-    for cell in expected:
-        r = client.execute_skill(f'ddGetObj("{lib}" "{cell}")~>views~>name')
-        present = r.output and r.output.strip() not in ("nil", "", '""')
-        print(f"[verify] {cell}: {r.output}")
-        if not present:
-            missing.append(cell)
+    # spiceIn can report success while silently skipping a subckt (for
+    # example one with bus ports), so check the database directly.
+    missing = [
+        cell for cell in ("cap_unit", "cap_array_4b")
+        if client.execute_skill(f'ddGetObj("{lib}" "{cell}" "schematic")').output in (None, "", "nil")
+    ]
     if missing:
-        print()
         print(f"[spiceIn] FAILED: expected cells not created: {missing}")
-        print("--- spiceIn output ---")
-        print(output)
         return 1
 
-    # 3. Generate symbol for cap_unit
-    client.symbol.generate_from_schematic(lib, "cap_unit", overwrite=True)
-    r = client.execute_skill(f'ddGetObj("{lib}" "cap_unit")~>views~>name')
-    print(f"[symbol] cap_unit: {r.output}")
+    # spiceIn also creates the symbol of every subcircuit it instantiates.
+    ports = client.symbol.read_ports(lib, "cap_unit")
+    print(f"[symbol] cap_unit pins: {[term['name'] for term in ports['terms']]}")
 
-    # 4. Open
     client.open_window(lib, "cap_array_4b", view="schematic")
     print("[done] Opened cap_array_4b")
-
     return 0
 
 

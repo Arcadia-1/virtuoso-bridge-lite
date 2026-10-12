@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from _timing import format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
+from virtuoso_bridge.virtuoso.schematic.params import set_instance_params
 from virtuoso_bridge.virtuoso.schematic.ops import (
     schematic_create_inst_by_master_name as inst,
     schematic_label_instance_term as label_term,
@@ -82,12 +83,10 @@ def _create(client: VirtuosoClient, lib: str, cell: str) -> None:
         sch.add(label_term("C0", "MINUS", "GND"))
         # schCheck + dbSave happen on context exit
 
-    # Set VDC = 0.8 V via schHiReplace (analogLib CDF param)
-    client.execute_skill(
-        'schHiReplace(?replaceAll t ?propName "cellName" ?condOp "==" '
-        '?propValue "vdc" ?newPropName "vdc" ?newPropValue "800m")')
-
+    # Open the new cell first, then set V0 on it. (A global schHiReplace acts
+    # on whichever schematic window is current, i.e. possibly another cell.)
     client.open_window(lib, cell, view="schematic")
+    set_instance_params(client, "V0", vdc="800m")
     print(f"Created {lib}/{cell}/schematic")
 
 

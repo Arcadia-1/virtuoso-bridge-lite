@@ -108,7 +108,7 @@ def main() -> int:
                  session=session)
     client.maestro.add_output("Vout", "AC", output_type="net", signal_name="/OUT", session=session)
     client.maestro.add_output("BW", "AC", output_type="point",
-               expr=r'bandwidth(mag(VF(\"/OUT\")) 3 \"low\")', session=session)
+               expr='bandwidth(mag(VF("/OUT")) 3 "low")', session=session)
     client.maestro.set_spec("BW", "AC", gt="1G", session=session)
     client.maestro.set_var("c_val", "1p,100f", session=session)
 
