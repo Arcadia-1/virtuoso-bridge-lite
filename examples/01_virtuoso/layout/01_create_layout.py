@@ -17,18 +17,21 @@ Prerequisites:
   - virtuoso-bridge service running (virtuoso-bridge start)
   - PDK library and layers below must match your PDK definition
 
-Customize the PDK_*, LAYER_* and FONT constants below to match your
-environment before running.
+Customize the PDK_*, LAYER_* and FONT constants below, or pass --pdk-lib,
+--pdk-cells and --layer-map, to match your environment; missing layers or
+masters are reported before anything is created.
 """
 
 from __future__ import annotations
 
+import argparse
 import sys
 from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from _pdk import add_layer_map_argument, parse_layer_map, rename_layer, require_cell, require_layers
 from _timing import format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
 from virtuoso_bridge.virtuoso.layout.ops import (
@@ -44,6 +47,7 @@ from virtuoso_bridge.virtuoso.layout.ops import (
 # PDK library that contains your device masters (e.g. nch, pch, cap, res...)
 # Verify this library exists in your Virtuoso library manager before running.
 PDK_LIB = "tsmcN28"
+PDK_CELLS = ("nch_ulvt_mac", "pch_ulvt_mac", "cfmom_2t")
 
 # Layer/purpose names for shapes — must be defined in your PDK techfile.
 # Common examples: M1/drawing, Metal1/drawing, poly/drawing, etc.
@@ -60,65 +64,54 @@ FONT = "roman"
 
 
 def main() -> int:
-    # ------------------------------------------------------------------
-    # Argument check — this script MUST be run with a library argument.
-    # Clicking "Run" in VSCode without passing <LIB> will silently do
-    # nothing in Virtuoso, so we abort with a clear message instead.
-    # ------------------------------------------------------------------
-    if len(sys.argv) < 2:
-        print("=" * 60, file=sys.stderr)
-        print(" ERROR: missing required argument <LIB>", file=sys.stderr)
-        print()
-        print(
-            f" Usage: python {Path(__file__).name} <LIB>\n"
-            " Example: python 01_create_layout.py lifangshi\n",
-            file=sys.stderr,
-        )
-        print(
-            " NOTE: Running this script from VSCode (Ctrl+F5 / F5) will NOT\n"
-            "       work — VSCode does not pass command-line arguments by default.\n"
-            "       Either run from a terminal, configure a launch.json, or\n"
-            "       edit the PDK values in this file directly.\n",
-            file=sys.stderr,
-        )
-        print(
-            " If Virtuoso shows a blank cell after running, check that:\n"
-            "   1. <LIB> is a library that exists in your Virtuoso setup\n"
-            "   2. PDK_LIB points to a library with device masters\n"
-            "   3. LAYER_* names match your PDK techfile layers\n",
-            file=sys.stderr,
-        )
-        print("=" * 60, file=sys.stderr)
-        return 1
+    parser = argparse.ArgumentParser(
+        description="Create a demo layout with shapes and PDK instances.",
+        epilog="Example for tsmc18: --pdk-lib tsmc18 --pdk-cells nmos2v,pmos2v "
+               "--layer-map M1=METAL1,M2=METAL2",
+    )
+    parser.add_argument("lib", help="existing library where the layout cell is created")
+    parser.add_argument("--pdk-lib", default=PDK_LIB, help="library of the device masters")
+    parser.add_argument("--pdk-cells", default=",".join(PDK_CELLS),
+                        help="up to three layout masters to place, comma separated")
+    parser.add_argument("--skip-instances", action="store_true", help="draw shapes only")
+    add_layer_map_argument(parser)
+    args = parser.parse_args()
+    mapping = parse_layer_map(args.layer_map)
+    layer_rect, layer_path, layer_label = (
+        rename_layer(layer, mapping) for layer in (LAYER_RECT, LAYER_PATH, LAYER_LABEL)
+    )
+    pdk_cells = [] if args.skip_instances else [c for c in args.pdk_cells.split(",") if c][:3]
 
-    lib_name = sys.argv[1]
+    lib_name = args.lib
     cell_name = f"layout_demo_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     client = VirtuosoClient.from_env()
+    require_layers(client, lib_name, [(layer_rect, "drawing"), (layer_path, "drawing"), (layer_label, "pin")])
+    for pdk_cell in pdk_cells:
+        require_cell(client, args.pdk_lib, pdk_cell)
 
     # Quick sanity check: print what we are about to do so the user can
     # verify the values before the layout is created.
     print(f"Target Library  : {lib_name}")
     print(f"Target Cell    : {cell_name}")
-    print(f"PDK Library    : {PDK_LIB}")
-    print(f"Layer (rect)   : {LAYER_RECT}/drawing")
-    print(f"Layer (path)   : {LAYER_PATH}/drawing")
-    print(f"Layer (label)  : {LAYER_LABEL}/pin")
+    print(f"PDK masters    : {', '.join(f'{args.pdk_lib}/{c}' for c in pdk_cells) or '(none)'}")
+    print(f"Layer (rect)   : {layer_rect}/drawing")
+    print(f"Layer (path)   : {layer_path}/drawing")
+    print(f"Layer (label)  : {layer_label}/pin")
     print(f"Font           : {FONT}")
     print()
 
     def build_layout() -> None:
         with client.layout.create(lib_name, cell_name) as layout:
-            # --- instances (device masters from PDK_LIB) ---
-            layout.add(inst(PDK_LIB, "nch_ulvt_mac", "layout", "M0", 0.0, 0.0, "R0"))
-            layout.add(inst(PDK_LIB, "pch_ulvt_mac", "layout", "M1", 2.0, 0.0, "R0"))
-            layout.add(inst(PDK_LIB, "cfmom_2t",     "layout", "C0", 4.0, 0.0, "R0"))
+            # --- instances (device masters from --pdk-lib) ---
+            for index, pdk_cell in enumerate(pdk_cells):
+                layout.add(inst(args.pdk_lib, pdk_cell, "layout", f"I{index}", 2.0 * index, 0.0, "R0"))
 
             # --- shapes (adjust LAYER_* constants above) ---
-            layout.add(rect(LAYER_RECT,  "drawing", 1.0, 0.0, 2.0, 0.5))
-            layout.add(rect(LAYER_RECT,  "drawing", 1.5, 1.0, 2.5, 1.5))
-            layout.add(path(LAYER_PATH, "drawing", [(1.0, 0.25), (3.0, 0.25)], width=0.1))
-            layout.add(label(LAYER_LABEL, "pin",  1.1, 0.5, "IN", "centerLeft", "R0", FONT, 0.1))
+            layout.add(rect(layer_rect,  "drawing", 1.0, 0.0, 2.0, 0.5))
+            layout.add(rect(layer_rect,  "drawing", 1.5, 1.0, 2.5, 1.5))
+            layout.add(path(layer_path, "drawing", [(1.0, 0.25), (3.0, 0.25)], width=0.1))
+            layout.add(label(layer_label, "pin",  1.1, 0.5, "IN", "centerLeft", "R0", FONT, 0.1))
 
     elapsed, _ = timed_call(build_layout)
     print(f"[edit_layout]  [{format_elapsed(elapsed)}]")
@@ -126,7 +119,6 @@ def main() -> int:
     open_elapsed, _ = timed_call(lambda: client.open_window(lib_name, cell_name, view="layout"))
     print(f"[open_window] [{format_elapsed(open_elapsed)}]")
     print("[Done] Layout created — check the Virtuoso window.")
-    print("       If the cell is blank, verify PDK_LIB and LAYER_* values above.")
     return 0
 
 
