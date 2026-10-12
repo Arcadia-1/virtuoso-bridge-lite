@@ -310,24 +310,33 @@ def layout_select_box(
     view_type: str | None = None,
     mode: str = "a",
 ) -> str:
-    """Build SKILL to select figures in a bounding box."""
+    """Build SKILL to select the figures enclosed by a bounding box.
+
+    Selection is a window operation: the box is applied in the window that
+    shows the current layout cellview. ``replace`` clears the selection
+    first, ``add`` extends it and ``sub`` removes the enclosed figures.
+    """
     cv_expr = _layout_get_edit_cv_expr(view=view, view_type=view_type, mode=mode)
     bbox_skill = _bbox_expr(bbox)
     normalized = mode_name.strip().lower()
+    # geSelectArea/geDeselectArea take (window points); passing the box as the
+    # first argument fails with "argument #2 should be a window type".
     if normalized == "replace":
-        selection_expr = f"progn(geDeselectAllFig(cv) geSelectArea({bbox_skill}))"
+        selection_expr = f"geDeselectAllFig(cv) geSelectArea(win {bbox_skill})"
     elif normalized == "add":
-        selection_expr = f"geAddSelectBox(nil {bbox_skill})"
+        selection_expr = f"geSelectArea(win {bbox_skill})"
     elif normalized in {"sub", "subtract", "remove"}:
-        selection_expr = f"geDeselectArea({bbox_skill})"
+        selection_expr = f"geDeselectArea(win {bbox_skill})"
     else:
         raise ValueError(f"Unsupported selection mode: {mode_name}")
     return (
-        "prog((cv) "
+        "prog((cv win) "
         f"cv = {cv_expr} "
-        'unless(cv return("ERROR: no layout window open")) '
+        'unless(cv error("no layout window open")) '
+        "win = car(setof(w hiGetWindowList() car(errset(geGetWindowCellView(w))) == cv)) "
+        'unless(win error("no window shows the layout cellview")) '
         f"{selection_expr} "
-        'return(sprintf(nil "selected %d figure(s)" geGetSelSetCount())))'
+        'return(sprintf(nil "selected %d figure(s)" length(geGetSelSet(cv)))))'
     )
 
 def layout_delete_selected(
