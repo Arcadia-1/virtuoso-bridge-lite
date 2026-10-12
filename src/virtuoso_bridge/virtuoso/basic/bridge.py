@@ -1983,7 +1983,9 @@ let((result winName ciwNum)
     def _parse_response(raw: str, elapsed: float) -> VirtuosoResult:
         if not raw:
             return VirtuosoResult(status=ExecutionStatus.ERROR, errors=["Empty response from daemon"], execution_time=elapsed)
-        if "TimeoutError" in raw:
+        # The daemon reports a timeout only as NAK + "TimeoutError"; the same
+        # word inside a successful result or a SKILL error is just text.
+        if raw.startswith(_NAK + "TimeoutError"):
             return VirtuosoResult(status=ExecutionStatus.ERROR, errors=["SKILL execution timeout in Virtuoso"], execution_time=elapsed)
         if raw.startswith(_STX):
             return VirtuosoResult(status=ExecutionStatus.SUCCESS, output=raw[1:], execution_time=elapsed)
