@@ -41,6 +41,16 @@ _STX = "\x02"
 _NAK = "\x15"
 _RECV_BUF_SIZE = 1024 * 1024
 _TUNNEL_CONNECT_RETRY_DELAY = 0.2
+# The daemon refuses these before transmitting anything, so resending is
+# safe: another request holds the single IPC lane, or too many clients are
+# connected. A poisoned/resyncing lane means the CIW is stuck and is not
+# retried; waiting would only use up the caller's timeout.
+_RETRYABLE_BUSY_ERRORS = (
+    "BusyError: IPC lane is busy",
+    "BusyError: daemon connection limit reached",
+)
+_BUSY_RETRY_FIRST_DELAY = 0.1
+_BUSY_RETRY_MAX_DELAY = 1.0
 _TUNNEL_CONNECT_GRACE_SECONDS = 3.0
 
 
@@ -581,6 +591,8 @@ class VirtuosoClient(VirtuosoInterface):
         logger.debug("execute_skill %s:%d timeout=%g skill=%s",
                       self._host, self._port, effective_timeout, skill_code[:120])
 
+        busy_retries = 0
+        busy_delay = _BUSY_RETRY_FIRST_DELAY
         try:
             while True:
                 if time.monotonic() >= deadline:
@@ -593,6 +605,18 @@ class VirtuosoClient(VirtuosoInterface):
                     )
                     elapsed = time.monotonic() - start_time
                     result = self._parse_response(raw_response, elapsed)
+                    if (
+                        result.status == ExecutionStatus.ERROR
+                        and result.errors
+                        and result.errors[0] in _RETRYABLE_BUSY_ERRORS
+                        and time.monotonic() + busy_delay < deadline
+                    ):
+                        busy_retries += 1
+                        time.sleep(busy_delay)
+                        busy_delay = min(busy_delay * 2, _BUSY_RETRY_MAX_DELAY)
+                        continue
+                    if busy_retries:
+                        result.metadata["busy_retries"] = busy_retries
                     logger.debug("execute_skill OK (%.3fs)", elapsed)
                     return result
                 except ConnectionRefusedError:
