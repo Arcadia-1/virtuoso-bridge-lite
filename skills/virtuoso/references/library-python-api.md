@@ -61,7 +61,11 @@ client.library.delete("MY_RENAMED_LIB")
 Rename uses `ccpRename` with overwrite disabled. Delete uses `ddDeleteObj`.
 There is no `force` option and no Python-side filesystem fallback. Both
 operations raise `RuntimeError` when Cadence rejects the operation or the
-post-operation state does not match.
+post-operation state does not match. `ccpRename` can fail after creating the
+new library (IC6.1.8 does so for a library with no cells and no technology);
+the bridge then removes that new library if it holds no cells, so the original
+keeps its name. If both libraries remain, the error says so and nothing is
+removed.
 
 ## Manage top-level categories
 
