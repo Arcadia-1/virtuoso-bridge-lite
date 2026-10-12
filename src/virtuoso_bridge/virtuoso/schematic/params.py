@@ -3,9 +3,8 @@
 Usage:
     from virtuoso_bridge.virtuoso.schematic.params import set_instance_params
 
-    # MOS transistors (shorthand params)
+    # MOS transistors (shorthands resolved against the instance's CDF)
     set_instance_params(client, "MP0", w="500n", l="30n", nf="4", m="2")
-    set_instance_params(client, "MN0", wf="250n", nf="8")
 
     # Any component via **kwargs
     set_instance_params(client, "I0", idc="100u")           # current source
@@ -17,6 +16,13 @@ Usage:
     set_instance_params(client, "L0", l="500p", r="0", strict=True)
 
 Note:
+    Names are checked against the instance's CDF before anything is changed;
+    an unknown name raises ``ValueError``. MOS shorthands map to the first
+    candidate CDF parameter that exists and is editable: ``nf`` -> ``nf`` or
+    ``fingers``, ``m`` -> ``m`` or ``simM``, ``wf`` (finger width) -> ``Wfg``.
+    ``w`` and ``l`` are the PDK's own ``w``/``l``: some kits define ``w`` as
+    total width, others as width per finger, so read the CDF prompt.
+
     By default ``param_filters`` points at ``cdf_param_filters.yaml`` and
     params outside the per-cell allowlist are dropped with a warning
     (or raise ``ValueError`` under ``strict=True``).  Pass
@@ -34,10 +40,19 @@ import yaml
 
 from virtuoso_bridge import VirtuosoClient, decode_skill_output
 from virtuoso_bridge.virtuoso.ops import escape_skill_string
+from virtuoso_bridge.virtuoso.skill_output import parse_sexpr
 
-# nf is read-only in TSMC PDK, must use "fingers"
-# wf maps to "Wfg" (finger width); w is total width = Wfg × fingers
-_PARAM_MAP = {"nf": "fingers", "wf": "Wfg"}
+# MOS shorthands -> candidate CDF names, first existing editable one wins.
+# Kits differ: TSMC keeps nf read-only and edits "fingers", some kits expose
+# the multiplier as "simM", and "wf" is the finger width only where the kit
+# calls it "Wfg" (elsewhere a parameter named "wf" can be the *total* width).
+_SHORTHAND_CANDIDATES = {
+    "w": ("w",),
+    "wf": ("Wfg",),
+    "l": ("l",),
+    "nf": ("nf", "fingers"),
+    "m": ("m", "simM"),
+}
 _DEFAULT_FILTERS_PATH = Path(__file__).parent / "cdf_param_filters.yaml"
 
 _RUN_CALLBACKS_ON_CV = '''
@@ -123,6 +138,66 @@ def _resolve_instance_master(
     return tuple(out.split("|", 1))  # type: ignore[return-value]
 
 
+def _read_instance_cdf(
+    client: VirtuosoClient,
+    schematic_lib: str,
+    schematic_cell: str,
+    inst_name: str,
+) -> dict[str, tuple[str, bool]]:
+    """Return {parameter: (prompt, editable)} from the instance's CDF."""
+    skill = (
+        "let((cv inst cdf) "
+        f'cv = dbOpenCellViewByType("{escape_skill_string(schematic_lib)}" "{escape_skill_string(schematic_cell)}" "schematic" "schematic" "r") '
+        f'inst = car(setof(x cv~>instances x~>name == "{escape_skill_string(inst_name)}")) '
+        "cdf = when(inst cdfGetInstCDF(inst)) "
+        "when(cdf mapcar(lambda((p) list(p~>name p~>prompt p~>editable)) cdf~>parameters)))"
+    )
+    result = client.execute_skill(skill)
+    if result.errors:
+        raise RuntimeError(f"read CDF failed for {inst_name}: {result.errors[0]}")
+    parsed = parse_sexpr(result.output or "")
+    if not isinstance(parsed, list):
+        raise ValueError(f"instance has no CDF parameters: {inst_name}")
+    params: dict[str, tuple[str, bool]] = {}
+    for entry in parsed:
+        if isinstance(entry, list) and entry and isinstance(entry[0], str):
+            prompt = entry[1] if len(entry) > 1 and isinstance(entry[1], str) else ""
+            # Unset (nil) means editable, as in analogLib; kits that lock a
+            # parameter set the expression string "nil" (e.g. TSMC's nf).
+            editable = entry[2] if len(entry) > 2 else None
+            params[entry[0]] = (prompt, editable != "nil")
+    return params
+
+
+def _resolve_names(
+    requested: dict[str, str],
+    shorthands: dict[str, str],
+    cdf: dict[str, tuple[str, bool]],
+    inst_lib: str,
+    inst_cell: str,
+) -> dict[str, str]:
+    """Map shorthands and kwargs to CDF names, refusing anything absent."""
+    resolved: dict[str, str] = {}
+    for short, value in shorthands.items():
+        candidates = _SHORTHAND_CANDIDATES[short]
+        name = next((c for c in candidates if c in cdf and cdf[c][1]), None)
+        if name is None:
+            widths = ", ".join(
+                f"{n} ({cdf[n][0]!r})" for n in sorted(cdf) if n in ("w", "wf", "Wfg", "W", "wt", "wr")
+            )
+            hint = f"; width parameters: {widths}" if widths else ""
+            raise ValueError(
+                f"{inst_lib}/{inst_cell} has no editable CDF parameter for {short}= "
+                f"(tried {', '.join(candidates)}){hint}. Pass the CDF name explicitly."
+            )
+        resolved[name] = value
+    unknown = sorted(name for name in requested if name not in cdf)
+    if unknown:
+        raise ValueError(f"{inst_lib}/{inst_cell} has no CDF parameter(s): {unknown}")
+    resolved.update(requested)
+    return resolved
+
+
 def _run_batched_param_update(
     client: VirtuosoClient,
     schematic_lib: str,
@@ -173,43 +248,40 @@ def set_instance_params(
 ) -> dict[str, str]:
     """Set CDF parameters on any instance, then trigger CDF callbacks.
 
-    MOS shorthand args (w, wf, l, nf, m) are mapped to PDK CDF names.
-    Any other parameter can be passed via kwargs.
+    MOS shorthand args (w, wf, l, nf, m) are resolved against the instance's
+    CDF; any other parameter can be passed via kwargs. Every name must exist
+    in the CDF, otherwise ``ValueError`` is raised before anything changes.
 
     Args:
-        w: Total width (e.g. "2u"). w = wf × nf.
-        wf: Finger width (e.g. "500n"). Maps to CDF param "Wfg".
+        w: The PDK's CDF ``w``. Total width on some kits, width per finger on
+            others (check the CDF prompt).
+        wf: Finger width; requires a ``Wfg`` CDF parameter.
         l: Channel length (e.g. "30n").
-        nf: Number of fingers (e.g. "4"). Maps to CDF param "fingers".
-        m: Multiplier (e.g. "2").
+        nf: Number of fingers; sets ``nf`` if editable, else ``fingers``.
+        m: Multiplier; sets ``m`` if editable, else ``simM``.
         param_filters: path to YAML allowlist rules. Set to None to disable filtering.
         strict: if True, reject filtered-out parameters with ValueError.
         **kwargs: Any CDF parameter name=value, e.g. idc="100u", vdc="1.8",
                   r="10k", c="1p", freq="1G", etc.
 
     Returns:
-        The parameters that were applied.
+        The parameters that were applied, keyed by CDF name.
     """
     if w is not None and wf is not None:
-        raise ValueError("Specify w (total width) or wf (finger width), not both")
+        raise ValueError("Specify w or wf (finger width), not both")
 
-    params: dict[str, str] = {}
-    if w is not None:
-        params["w"] = w
-    if wf is not None:
-        params[_PARAM_MAP["wf"]] = wf
-    if l is not None:
-        params["l"] = l
-    if nf is not None:
-        params[_PARAM_MAP["nf"]] = nf
-    if m is not None:
-        params["m"] = m
-    params.update(kwargs)
-    if not params:
+    shorthands = {
+        name: value
+        for name, value in (("w", w), ("wf", wf), ("l", l), ("nf", nf), ("m", m))
+        if value is not None
+    }
+    if not shorthands and not kwargs:
         return {}
 
     schematic_lib, schematic_cell = _resolve_active_schematic_lib_cell(client)
     inst_lib, inst_cell = _resolve_instance_master(client, schematic_lib, schematic_cell, inst_name)
+    cdf = _read_instance_cdf(client, schematic_lib, schematic_cell, inst_name)
+    params = _resolve_names(dict(kwargs), shorthands, cdf, inst_lib, inst_cell)
 
     allowed: list[str] | None = None
     if param_filters is not None:
