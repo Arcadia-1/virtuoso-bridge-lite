@@ -33,7 +33,7 @@ is optional, never a prerequisite for the normal one-host workflow.
 
 **1. Deep Virtuoso Integration** — Control across Schematic, Layout, Maestro, and Spectre.
 - **Flexible programming**: execute inline SKILL, load `.il` files, or use Python APIs
-- **Four design domains**: schematic editing, layout generation, simulation setup (Maestro), and standalone Spectre with PSF parsing
+- **Four design domains**: schematic editing, layout generation, simulation setup (Maestro), and standalone Spectre with PSF ASCII parsing
 - **Deterministic schematic planning**: explicit connectivity plus hard/soft grid, polarity-row, differential-pair, pin-column, and output-stage constraints
 - **Exact schematic recreation**: import routed source geometry through explicit PDK maps, live symbol-pin audits, readback verification, and batch GUI screenshots
 - **Optional SOS cellview control**: explicit status/checkout/cancel-checkout/checkin/initial registration with dry-run, post-state verification, and unknown-result safety
@@ -41,7 +41,7 @@ is optional, never a prerequisite for the normal one-host workflow.
 **2. Optional Scale-out** — Multi-server and multi-session support for users who explicitly need it; the one-host setup stays sufficient.
 - Multi-profile SSH: connect to N design servers, each with independent tunnel
 - Run parallel simulations across servers and accounts
-- Verified across macOS, Windows, and Linux
+- Client on macOS, Windows and Linux (CI covers Linux and Windows); the Virtuoso side runs on Linux
 
 **3. AI-Native Design** — Built for coding agents (Claude Code, Cursor, etc.) to drive Virtuoso.
 - CLI-first lifecycle and diagnostics: `virtuoso-bridge start/status/restart`
@@ -424,11 +424,11 @@ Fully decoupled: VirtuosoClient works with any TCP endpoint — SSH tunnel, VPN,
 |---|---|---|
 | **Core mechanism** | `ipcBeginProcess` + `evalstring` | `ipcBeginProcess` + `evalstring` |
 | **Local mode** | Yes | Yes |
-| **Remote execution** | SSH tunnel, jump host, auto-reconnect | Not supported |
+| **Remote execution** | SSH tunnel, jump host, split hosts; `ensure_ready()` reopens a dropped tunnel | Local only: Unix socket or localhost TCP |
 | **Calling style** | String-based: `execute_skill("dbOpenCellViewByType(...)")` | Pythonic mapping: `ws.db.open_cell_view_by_type(...)` |
-| **Load .il files** | `client.load_il()` | Not supported |
+| **Load .il files** | `client.load_il()` uploads a local file, then loads it | `ws['load'](path)` with a path on the Virtuoso host |
 | **Layout / schematic API** | `client.layout.create()` / `modify()` context managers | Raw SKILL only |
-| **Spectre simulation** | Built-in runner + PSF parser | Not supported |
+| **Spectre simulation** | Built-in runner + PSF ASCII parser | Not supported |
 | **AI agent support** | Skill files, CLI-first, command logging | Not designed for agents |
 | **Python ↔ SKILL types** | String-based | Auto bidirectional mapping |
 | **IDE tab completion** | No (not needed by agents) | Yes (Jupyter, PyCharm stubs) |
