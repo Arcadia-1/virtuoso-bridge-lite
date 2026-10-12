@@ -264,7 +264,7 @@
             </tr>
             <tr>
               <th scope="row"><span class="en">Safety</span><span class="zh">安全与超时</span></th>
-              <td data-label="Virtuoso Bridge"><span class="en">Token-signed requests, one at a time, 30 s default timeout; after a timeout it refuses new work instead of mixing up replies</span><span class="zh">请求用令牌签名，一次只跑一个，默认 30 秒超时；超时后拒绝新请求，不会串回复</span></td>
+              <td data-label="Virtuoso Bridge"><span class="en">Token-signed requests, one at a time, 30 s default timeout; after a timeout it holds new work until replies are back in step, then resumes by itself, no restart</span><span class="zh">请求用令牌签名，一次只跑一个，默认 30 秒超时；超时后先暂停新请求，等回复重新对齐后自动恢复，无需重启</span></td>
               <td data-label="skillbridge"><span class="en">No token (relies on local socket access); waits forever by default; after a timeout, replies can fall out of step until restart</span><span class="zh">无令牌（靠本机 socket 权限）；默认无限等待；超时后回复可能错位，需重启</span></td>
             </tr>
             <tr>
