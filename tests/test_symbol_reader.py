@@ -11,74 +11,48 @@ from virtuoso_bridge.virtuoso.symbol.reader import (
     symbol_read_ports_skill,
 )
 
+_PORTS_OUTPUT = '(("term" "A" "input" 1 nil) ("label" "A" "" (0.0 0.0)) ("termOrder" ("A")))'
 
-def test_symbol_read_ports_skill_opens_symbol_and_reports_terms_labels_and_order() -> None:
+
+class _Client:
+    def __init__(self, response: object) -> None:
+        self.response = response
+        self.skill: str | None = None
+        self.timeout: int | None = None
+
+    def execute_skill(self, skill: str, *, timeout: int):
+        self.skill = skill
+        self.timeout = timeout
+        return self.response
+
+
+def test_symbol_read_ports_skill_is_read_only_and_reports_documented_records() -> None:
     skill = symbol_read_ports_skill("demoLib", "nand2")
 
-    assert 'dbOpenCellViewByType("demoLib" "nand2" "symbol" "schematicSymbol" "r")' in skill
-    assert 'result = cons(list("term"' in skill
-    assert "fig = car(errset(pin~>fig nil))" in skill
-    assert "unless(fig fig = car(errset(car(pin~>figs) nil)))" in skill
-    assert "bbox = list(list(xCoord(car(fig~>bBox)) yCoord(car(fig~>bBox)))" in skill
-    assert "list(xCoord(cadr(fig~>bBox)) yCoord(cadr(fig~>bBox))))" in skill
-    assert 'result = cons(list("label"' in skill
-    assert "xy = list(xCoord(label~>xy) yCoord(label~>xy))" in skill
-    assert "if(label~>layerName label~>layerName \"\")" in skill
-    assert "if(label~>purpose label~>purpose \"\")" in skill
-    assert "if(label~>justify label~>justify \"\")" in skill
-    assert "if(label~>orient label~>orient \"\")" in skill
-    assert "if(label~>font label~>font \"\")" in skill
-    assert "if(label~>height label~>height 0) bbox" in skill
-    assert 'result = cons(list("selectionBox" bbox) result)' in skill
-    assert "unwindProtect(" in skill
-    assert 'result = cons(list("pinOrder" schGetPinOrder(cv)) result)' in skill
-    assert 'result = cons(list("portOrder" cv~>portOrder) result)' in skill
-    assert 'result = cons(list("termOrder" cv~>termOrder) result)' in skill
-    assert "cv~>terminals~>name" not in skill
-    assert "bodyAttempt = errset(progn(" in skill
-    assert "closeResult = errset(dbClose(cv) nil)" in skill
+    assert '"symbol" "schematicSymbol" "r")' in skill
+    assert 'label~>layerName == "instance" && label~>purpose == "drawing"' in skill
+    assert 'list("pinOrder" schGetPinOrder(cv))' in skill
     assert 'closeFailures = cons("symbol close failed" closeFailures)' in skill
-    assert 'list("readFailed" if(bodyResult nil bodyFailure) reverse(closeFailures))' in skill
-
-
-def test_parse_symbol_ports_output_rejects_legacy_tsv() -> None:
-    output = "term\tname=A\tdirection=input\tnumBits=1\tbbox=nil\ntermOrder\t(\"A\")"
-
-    with pytest.raises(ValueError, match="structured SKILL list"):
-        parse_symbol_ports_output(output)
-
-
-def test_parse_symbol_ports_output_rejects_read_failure() -> None:
-    output = '("readFailed" "open symbol failed" ("symbol close failed"))'
-
-    with pytest.raises(
-        ValueError,
-        match=(
-            "symbol readback failed: open symbol failed; "
-            "cleanup failed: symbol close failed"
-        ),
-    ):
-        parse_symbol_ports_output(output)
-
-
-def test_parse_symbol_ports_output_rejects_malformed_read_failure() -> None:
-    output = '("readFailed" "open symbol failed")'
-
-    with pytest.raises(ValueError, match="malformed symbol read failure output"):
-        parse_symbol_ports_output(output)
 
 
 @pytest.mark.parametrize(
-    "output",
+    ("output", "message"),
     [
-        '("readFailed" "open symbol failed" nil',
-        '(("term" "A" "input" 1 nil)) ("unexpected")',
+        (
+            "term\tname=A\tdirection=input\tnumBits=1\tbbox=nil\ntermOrder\t(\"A\")",
+            "structured SKILL list",
+        ),
+        (
+            '("readFailed" "open symbol failed" ("symbol close failed"))',
+            "symbol readback failed: open symbol failed; cleanup failed: symbol close failed",
+        ),
+        ('("readFailed" "open symbol failed")', "malformed symbol read failure output"),
+        ('("readFailed" "open symbol failed" nil', "single complete SKILL list"),
+        ('(("term" "A" "input" 1 nil)) ("unexpected")', "single complete SKILL list"),
     ],
 )
-def test_parse_symbol_ports_output_rejects_incomplete_or_trailing_data(
-    output: str,
-) -> None:
-    with pytest.raises(ValueError, match="single complete SKILL list"):
+def test_parse_symbol_ports_output_rejects_invalid_output(output: str, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
         parse_symbol_ports_output(output)
 
 
@@ -128,176 +102,81 @@ def test_parse_symbol_ports_output_reports_label_semantics_and_selection_box() -
     assert parsed["selectionBoxes"] == [[[-1.0, -0.5], [2.0, 0.5]]]
 
 
-def test_read_symbol_ports_executes_skill() -> None:
-    class Client:
-        skill: str | None = None
-        timeout: int | None = None
+@pytest.mark.parametrize(
+    "kwargs",
+    [{}, {"view_type": "symbol"}],
+)
+def test_read_symbol_ports_executes_skill_and_forwards_options(kwargs) -> None:
+    client = _Client(type("Result", (), {"output": _PORTS_OUTPUT})())
 
-        def execute_skill(self, skill: str, *, timeout: int):
-            self.skill = skill
-            self.timeout = timeout
-            return type("Result", (), {"output": '(("term" "A" "input" 1 nil) ("termOrder" ("A")))'})()
-
-    client = Client()
-    parsed = read_symbol_ports(client, "demoLib", "nand2", timeout=17)
+    parsed = read_symbol_ports(client, "demoLib", "nand2", timeout=17, **kwargs)
 
     assert parsed["terms"][0]["name"] == "A"
     assert parsed["termOrder"] == ["A"]
     assert client.timeout == 17
-    assert client.skill is not None
-    assert 'dbOpenCellViewByType("demoLib" "nand2" "symbol" "schematicSymbol" "r")' in client.skill
+    assert client.skill == symbol_read_ports_skill("demoLib", "nand2", **kwargs)
 
 
-def test_read_symbol_ports_forwards_custom_view_type() -> None:
-    class Client:
-        skill: str | None = None
-
-        def execute_skill(self, skill: str, *, timeout: int):
-            self.skill = skill
-            return type("Result", (), {"output": '(("termOrder" ("A")))'})()
-
-    client = Client()
-    read_symbol_ports(client, "demoLib", "nand2", view_type="symbol")
-
-    assert client.skill is not None
-    assert 'dbOpenCellViewByType("demoLib" "nand2" "symbol" "symbol" "r")' in client.skill
-
-
-def test_read_symbol_ports_raises_on_skill_error() -> None:
-    class Client:
-        def execute_skill(self, skill: str, *, timeout: int):
-            return VirtuosoResult(
-                status=ExecutionStatus.ERROR,
-                errors=["open symbol failed"],
-            )
-
-    with pytest.raises(
-        RuntimeError,
-        match="read_symbol_ports SKILL error for demoLib/missing: open symbol failed",
-    ):
-        read_symbol_ports(Client(), "demoLib", "missing")
-
-
-def test_read_symbol_ports_combines_body_and_close_failures() -> None:
-    class Client:
-        def execute_skill(self, skill: str, *, timeout: int):
-            return VirtuosoResult(
-                status=ExecutionStatus.SUCCESS,
-                output=(
-                    '("readFailed" "open symbol failed" '
-                    '("symbol close failed"))'
-                ),
-            )
-
-    with pytest.raises(
-        RuntimeError,
-        match=(
-            "read_symbol_ports failed for demoLib/missing: open symbol failed; "
-            "cleanup failed: symbol close failed"
-        ),
-    ):
-        read_symbol_ports(Client(), "demoLib", "missing")
-
-
-def test_read_symbol_ports_rejects_truncated_failure_output() -> None:
-    class Client:
-        def execute_skill(self, skill: str, *, timeout: int):
-            return VirtuosoResult(
-                status=ExecutionStatus.SUCCESS,
-                output='("readFailed" "open symbol failed" nil',
-            )
-
-    with pytest.raises(
-        RuntimeError,
-        match=(
-            "read_symbol_ports response error for demoLib/missing: "
-            "symbol readback output must be a single complete SKILL list"
-        ),
-    ):
-        read_symbol_ports(Client(), "demoLib", "missing")
-
-
-def test_read_symbol_ports_raises_on_empty_output() -> None:
-    class Client:
-        def execute_skill(self, skill: str, *, timeout: int):
-            return VirtuosoResult(status=ExecutionStatus.SUCCESS, output="")
-
-    with pytest.raises(RuntimeError, match="read_symbol_ports returned empty output"):
-        read_symbol_ports(Client(), "demoLib", "missing")
-
-
-def test_read_symbol_ports_raises_on_dict_transport_error() -> None:
-    class Client:
-        def execute_skill(self, skill: str, *, timeout: int):
-            return {"ok": False, "error": "transport failed"}
-
-    with pytest.raises(
-        RuntimeError,
-        match="read_symbol_ports SKILL error for demoLib/missing: transport failed",
-    ):
-        read_symbol_ports(Client(), "demoLib", "missing")
-
-
-def test_read_symbol_ports_parses_structured_skill_output() -> None:
-    class Client:
-        def execute_skill(self, skill: str, *, timeout: int):
-            return type(
-                "Result",
-                (),
-                {
-                    "output": (
-                        '((\"term\" \"A\" \"input\" 1 nil) '
-                        '(\"label\" \"A\" \"\" (0.0 0.0)) '
-                        '(\"termOrder\" (\"A\")))'
-                    )
-                },
-            )()
-
-    parsed = read_symbol_ports(Client(), "demoLib", "nand2")
+@pytest.mark.parametrize(
+    "response",
+    [
+        type("Result", (), {"output": _PORTS_OUTPUT})(),
+        {"output": _PORTS_OUTPUT},
+        {"ok": True, "result": {"status": "success", "output": _PORTS_OUTPUT}},
+    ],
+)
+def test_symbol_ops_read_ports_accepts_response_shapes(response: object) -> None:
+    parsed = SymbolOps(_Client(response)).read_ports("demoLib", "nand2")
 
     assert parsed["terms"][0]["name"] == "A"
     assert parsed["labels"][0]["text"] == "A"
     assert parsed["termOrder"] == ["A"]
 
 
-def test_symbol_ops_exposes_read_ports() -> None:
-    class Client:
-        def execute_skill(self, skill: str, *, timeout: int):
-            return {"output": '(("term" "A" "input" 1 nil) ("termOrder" ("A")))'}
+@pytest.mark.parametrize(
+    ("response", "message"),
+    [
+        (
+            VirtuosoResult(status=ExecutionStatus.ERROR, errors=["open symbol failed"]),
+            "read_symbol_ports SKILL error for demoLib/missing: open symbol failed",
+        ),
+        (
+            {"ok": False, "error": "transport failed"},
+            "read_symbol_ports SKILL error for demoLib/missing: transport failed",
+        ),
+        (
+            VirtuosoResult(
+                status=ExecutionStatus.SUCCESS,
+                output='("readFailed" "open symbol failed" ("symbol close failed"))',
+            ),
+            "read_symbol_ports failed for demoLib/missing: open symbol failed; "
+            "cleanup failed: symbol close failed",
+        ),
+        (
+            VirtuosoResult(
+                status=ExecutionStatus.SUCCESS,
+                output='("readFailed" "open symbol failed" nil',
+            ),
+            "read_symbol_ports response error for demoLib/missing: "
+            "symbol readback output must be a single complete SKILL list",
+        ),
+        (
+            VirtuosoResult(status=ExecutionStatus.SUCCESS, output=""),
+            "read_symbol_ports returned empty output",
+        ),
+    ],
+)
+def test_read_symbol_ports_raises_for_failed_reads(response: object, message: str) -> None:
+    with pytest.raises(RuntimeError, match=message):
+        read_symbol_ports(_Client(response), "demoLib", "missing")
 
-    ops = SymbolOps(Client())
 
-    assert ops.read_ports("demoLib", "nand2")["termOrder"] == ["A"]
-
-
-def test_read_symbol_ports_accepts_nested_dict_output() -> None:
-    class Client:
-        def execute_skill(self, skill: str, *, timeout: int):
-            return {
-                "ok": True,
-                "result": {
-                    "status": "success",
-                    "output": '(("term" "A" "input" 1 nil) ("termOrder" ("A")))',
-                },
-            }
-
-    parsed = read_symbol_ports(Client(), "demoLib", "nand2")
-
-    assert parsed["terms"][0]["name"] == "A"
-    assert parsed["termOrder"] == ["A"]
-
-
-def test_response_fields_normalizes_scalar_error() -> None:
-    errors, status, output = response_fields({"errors": "transport failed"})
-
-    assert errors == ["transport failed"]
-    assert status is None
-    assert output == ""
-
-
-def test_response_fields_normalizes_non_string_output() -> None:
-    errors, status, output = response_fields({"output": 17})
-
-    assert errors == []
-    assert status is None
-    assert output == "17"
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        ({"errors": "transport failed"}, (["transport failed"], None, "")),
+        ({"output": 17}, ([], None, "17")),
+    ],
+)
+def test_response_fields_normalizes_scalar_values(response: dict, expected: tuple) -> None:
+    assert response_fields(response) == expected

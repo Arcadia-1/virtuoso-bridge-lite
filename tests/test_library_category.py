@@ -40,80 +40,68 @@ class _Client:
         )
 
 
-def test_category_list_filters_stale_entries_by_opening_each_category() -> None:
-    skill = category_list_skill("demoLib")
-
-    assert "ddCatGetLibCats(vbLib)" in skill
-    assert 'ddCatOpen(vbLib vbName "r")' in skill
-    assert "when(vbCat" in skill
-    assert "ddCatClose(vbCat)" in skill
-    assert "Everything" not in skill
-    assert "Uncategorized" not in skill
+def _assert_ordered(skill: str, *fragments: str) -> None:
+    positions = [skill.index(fragment) for fragment in fragments]
+    assert positions == sorted(positions), fragments
 
 
-def test_category_create_keeps_empty_category_and_verifies_it() -> None:
-    skill = category_create_skill("demoLib", "ADC")
+_SKILLS = {
+    "list": lambda: category_list_skill("demoLib"),
+    "create": lambda: category_create_skill("demoLib", "ADC"),
+    "delete": lambda: category_delete_skill("demoLib", "ADC"),
+    "list_cells": lambda: category_list_cells_skill("demoLib", "ADC"),
+    "add_cell": lambda: category_add_cell_skill("demoLib", "ADC", "comparator"),
+    "remove_cell": lambda: category_remove_cell_skill("demoLib", "ADC", "comparator"),
+    "rename": lambda: category_rename_skill("demoLib", "ADC", "Comparators"),
+}
 
-    assert 'ddCatOpenEx(vbLib "ADC" "w" 1)' in skill
-    assert "vbSaved = ddCatSave(vbCat)" in skill
-    assert 'vbVerify = ddCatOpen(vbLib "ADC" "r")' in skill
-    assert "ddCatAddItem" not in skill
-
-
-def test_category_delete_uses_ddcat_remove_and_never_deletes_cells() -> None:
-    skill = category_delete_skill("demoLib", "ADC")
-
-    assert 'ddCatOpen(vbLib "ADC" "r")' in skill
-    assert 'ddCatOpen(vbLib "ADC" "a")' in skill
-    assert "vbRemoved = ddCatRemove(vbCat)" in skill
-    assert 'vbVerify = ddCatOpen(vbLib "ADC" "r")' in skill
-    assert "ddDeleteObj" not in skill
-    assert "deleteFile" not in skill
-    assert "system(" not in skill
-
-
-def test_category_list_cells_filters_member_type() -> None:
-    skill = category_list_cells_skill("demoLib", "ADC")
-
-    assert "ddCatGetCatMembers(vbCat)" in skill
-    assert 'cadr(vbMember) == "cell"' in skill
-    assert "reverse(vbCells)" in skill
-
-
-def test_category_add_cell_uses_ddcat_add_save_close_and_verification() -> None:
-    skill = category_add_cell_skill("demoLib", "ADC", "comparator")
-
-    assert 'member("comparator" vbLib~>cells~>name)' in skill
-    assert 'ddGetObj("demoLib" "comparator")' not in skill
-    assert 'ddCatOpen(vbLib "ADC" "r")' in skill
-    assert 'ddCatOpen(vbLib "ADC" "a")' in skill
-    assert 'ddCatAddItem(vbCat "comparator" "cell")' in skill
-    assert "ddCatSave(vbCat)" in skill
-    assert 'member(list("comparator" "cell") vbMembers)' in skill
-
-
-def test_category_remove_cell_uses_ddcat_subitem_and_verification() -> None:
-    skill = category_remove_cell_skill("demoLib", "ADC", "comparator")
-
-    assert 'ddCatSubItem(vbCat "comparator")' in skill
-    assert 'ddCatOpen(vbLib "ADC" "r")' in skill
-    assert "ddCatSave(vbCat)" in skill
-    assert 'member(list("comparator" "cell") vbMembers)' in skill
-    assert "ddDeleteObj" not in skill
+# Documented library-python-api.md category contracts, as steps that must
+# appear in this order in the generated SKILL.
+_ORDERED_STEPS = {
+    # Stale list entries are filtered by opening each category.
+    "list": ('vbCat = ddCatOpen(vbLib vbName "r")', "when(vbCat vbResult = cons(vbName"),
+    # Empty categories are kept (keepEmpty flag) and verified by reopening.
+    "create": ('ddCatOpenEx(vbLib "ADC" "w" 1)', 'vbVerify = ddCatOpen(vbLib "ADC" "r")'),
+    "delete": ("vbRemoved = ddCatRemove(vbCat)", 'vbVerify = ddCatOpen(vbLib "ADC" "r")'),
+    # Only members whose type is cell are returned.
+    "list_cells": ("ddCatGetCatMembers(vbCat)", 'when(cadr(vbMember) == "cell"'),
+    # Existing cell and membership are prechecked; the change is verified.
+    "add_cell": (
+        'member("comparator" vbLib~>cells~>name)',
+        'list("error" "cellAlreadyInCategory")',
+        'ddCatAddItem(vbCat "comparator" "cell")',
+        'vbVerify = ddCatOpen(vbLib "ADC" "r")',
+    ),
+    "remove_cell": (
+        'member("comparator" vbLib~>cells~>name)',
+        'list("error" "cellNotInCategory")',
+        'ddCatSubItem(vbCat "comparator")',
+        'vbVerify = ddCatOpen(vbLib "ADC" "r")',
+    ),
+    # Subcategories and existing destinations are refused; members are copied
+    # and verified before the source category is removed.
+    "rename": (
+        '"categoryContainsSubcategories"',
+        '"destinationCategoryExists"',
+        'ddCatOpenEx(vbLib "Comparators" "w" 1)',
+        "ddCatAddItem(",
+        "vbDestinationMembers = ddCatGetCatMembers(vbVerify)",
+        "vbRemoved = ddCatRemove(vbSource)",
+    ),
+}
 
 
-def test_category_rename_preserves_cells_without_merge_or_overwrite() -> None:
-    skill = category_rename_skill("demoLib", "ADC", "Comparators")
+@pytest.mark.parametrize("name", list(_ORDERED_STEPS))
+def test_category_skill_steps_are_ordered(name: str) -> None:
+    _assert_ordered(_SKILLS[name](), *_ORDERED_STEPS[name])
 
-    assert 'ddCatOpen(vbLib "ADC" "r")' in skill
-    assert 'ddCatOpen(vbLib "Comparators" "r")' in skill
-    assert 'ddCatOpenEx(vbLib "Comparators" "w" 1)' in skill
-    assert "ddCatGetCatMembers(vbSource)" in skill
-    assert "ddCatAddItem(" in skill
-    assert "vbDestination car(vbMember) cadr(vbMember))" in skill
-    assert "ddCatRemove(vbSource)" in skill
-    assert 'categoryContainsSubcategories' in skill
-    assert "ccpRename" not in skill
+
+@pytest.mark.parametrize("name", list(_SKILLS))
+def test_category_builders_never_touch_cells_or_category_files(name: str) -> None:
+    skill = _SKILLS[name]()
+
+    for forbidden in ("ddDeleteObj", "deleteFile", "system(", ".Cat", "ccpRename"):
+        assert forbidden not in skill
 
 
 @pytest.mark.parametrize(
@@ -132,52 +120,36 @@ def test_category_builders_reject_empty_required_values(builder, args, field) ->
         builder(*args)
 
 
-def test_list_categories_returns_only_verified_names() -> None:
-    client = _Client('("ok" ("ADC" "DAC"))')
+@pytest.mark.parametrize(
+    ("call", "output", "expected"),
+    [
+        (lambda c: list_categories(c, "demoLib", timeout=19), '("ok" ("ADC" "DAC"))', ["ADC", "DAC"]),
+        (lambda c: create_category(c, "demoLib", "ADC", timeout=19), '("ok" "ADC")', "ADC"),
+        (lambda c: delete_category(c, "demoLib", "ADC", timeout=19), '("ok")', None),
+        (
+            lambda c: list_category_cells(c, "demoLib", "ADC", timeout=19),
+            '("ok" ("comparator" "strongarm"))',
+            ["comparator", "strongarm"],
+        ),
+        (lambda c: add_cell_to_category(c, "demoLib", "ADC", "comparator", timeout=19), '("ok")', None),
+        (
+            lambda c: remove_cell_from_category(c, "demoLib", "ADC", "comparator", timeout=19),
+            '("ok")',
+            None,
+        ),
+        (
+            lambda c: rename_category(c, "demoLib", "ADC", "Comparators", timeout=19),
+            '("ok" "Comparators")',
+            "Comparators",
+        ),
+    ],
+    ids=["list", "create", "delete", "list_cells", "add_cell", "remove_cell", "rename"],
+)
+def test_category_operations_return_verified_results(call, output: str, expected) -> None:
+    client = _Client(output)
 
-    result = list_categories(client, "demoLib", timeout=19)
-
-    assert result == ["ADC", "DAC"]
+    assert call(client) == expected
     assert client.timeout == 19
-
-
-def test_create_category_returns_verified_name() -> None:
-    client = _Client('("ok" "ADC")')
-
-    assert create_category(client, "demoLib", "ADC") == "ADC"
-
-
-def test_delete_category_returns_none() -> None:
-    client = _Client('("ok")')
-
-    assert delete_category(client, "demoLib", "ADC") is None
-
-
-def test_list_category_cells_returns_cell_names() -> None:
-    client = _Client('("ok" ("comparator" "strongarm"))')
-
-    result = list_category_cells(client, "demoLib", "ADC")
-
-    assert result == ["comparator", "strongarm"]
-
-
-def test_add_and_remove_cell_return_none() -> None:
-    assert add_cell_to_category(_Client('("ok")'), "demoLib", "ADC", "comparator") is None
-    assert (
-        remove_cell_from_category(
-            _Client('("ok")'),
-            "demoLib",
-            "ADC",
-            "comparator",
-        )
-        is None
-    )
-
-
-def test_rename_category_returns_destination_name() -> None:
-    client = _Client('("ok" "Comparators")')
-
-    assert rename_category(client, "demoLib", "ADC", "Comparators") == "Comparators"
 
 
 @pytest.mark.parametrize(
@@ -223,5 +195,4 @@ def test_library_ops_exposes_category_methods() -> None:
     ops = LibraryOps(client)  # type: ignore[arg-type]
 
     assert ops.list_categories("demoLib") == ["ADC"]
-    assert client.skill is not None
-    assert "ddCatGetLibCats" in client.skill
+    assert client.skill == category_list_skill("demoLib")

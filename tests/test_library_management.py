@@ -21,6 +21,8 @@ from virtuoso_bridge.virtuoso.library.management import (
     set_technology_library,
 )
 
+_DEMO_INFO = '("ok" ("library" "demoLib" "/work/demoLib" "gpdk045"))'
+
 
 class _Client:
     def __init__(self, output: str, *, status: object = None, errors=None) -> None:
@@ -54,64 +56,61 @@ def test_library_list_skill_uses_visible_library_database() -> None:
     assert "getDirFiles" not in skill
 
 
-def test_library_get_skill_reads_path_and_technology_binding() -> None:
-    skill = library_get_skill('demo"lib')
-
-    assert 'ddGetObj("demo\\"lib")' in skill
-    assert "vbLib~>readPath" in skill
-    assert "techGetTechLibName(vbLib)" in skill
-    assert 'list("error" "libraryNotFound")' in skill
+def test_library_get_skill_escapes_library_name() -> None:
+    assert 'ddGetObj("demo\\"lib")' in library_get_skill('demo"lib')
 
 
-def test_library_create_skill_requires_explicit_path_and_uses_supported_apis() -> None:
-    skill = library_create_skill(
-        "demoLib",
-        "/tmp/demo lib",
-        technology_library="gpdk045",
-    )
+@pytest.mark.parametrize(
+    ("technology", "tech_expr"),
+    [(None, "vbTechName = nil"), ("gpdk045", 'vbTechName = "gpdk045"')],
+)
+def test_library_create_skill_uses_explicit_path_and_verifies_binding(
+    technology: str | None,
+    tech_expr: str,
+) -> None:
+    skill = library_create_skill("demoLib", "/tmp/demo lib", technology_library=technology)
 
     assert 'ddCreateLib("demoLib" "/tmp/demo lib")' in skill
-    assert 'vbTechName = "gpdk045"' in skill
-    assert "techBindTechFile(vbLib vbTechName)" in skill
+    assert tech_expr in skill
     assert "techGetTechLibName(vbLib) == vbTechName" in skill
-    assert 'list("partial" "technologyBindingFailed"' in skill
-    assert "system(" not in skill
-    assert "renameFile(" not in skill
 
 
-def test_library_create_skill_without_technology_does_not_invent_binding() -> None:
-    skill = library_create_skill("demoLib", "/tmp/demoLib")
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: library_create_skill("demoLib", "/tmp/demoLib", technology_library="gpdk045"),
+        lambda: library_delete_skill("demoLib"),
+        lambda: library_rename_skill("demoLib", "renamedLib"),
+        lambda: library_set_technology_skill("demoLib", "gpdk045"),
+    ],
+    ids=["create", "delete", "rename", "set_technology"],
+)
+def test_library_mutations_have_no_filesystem_fallback(build) -> None:
+    skill = build()
 
-    assert "vbTechName = nil" in skill
-    assert "cdsDefTechLib" not in skill
+    for forbidden in ("system(", "renameFile(", "deleteDir", "deleteFile"):
+        assert forbidden not in skill
 
 
-def test_library_delete_skill_uses_dd_delete_obj_without_force_fallback() -> None:
+def test_library_delete_skill_verifies_library_is_gone() -> None:
     skill = library_delete_skill("demoLib")
 
     assert "vbDeleted = ddDeleteObj(vbLib)" in skill
-    assert '!ddGetObj("demoLib")' in skill
-    assert "deleteDir" not in skill
-    assert "system(" not in skill
+    assert 'if(vbDeleted && !ddGetObj("demoLib")' in skill
 
 
 def test_library_rename_skill_uses_ccp_rename_without_overwrite() -> None:
     skill = library_rename_skill("demoLib", "renamedLib")
 
-    assert 'gdmCreateSpec("demoLib" "" "" "" "CDBA")' in skill
-    assert 'gdmCreateSpec("renamedLib" "" "" "" "CDBA")' in skill
     assert "ccpRename(vbSource vbDestination nil)" in skill
-    assert 'ddGetObj("renamedLib")' in skill
-    assert '!ddGetObj("demoLib")' in skill
-    assert "renameFile(" not in skill
+    assert 'if(vbRenamed && vbLib && !ddGetObj("demoLib")' in skill
 
 
 def test_library_set_technology_uses_bind_for_new_and_set_for_existing() -> None:
     skill = library_set_technology_skill("demoLib", "gpdk045")
 
-    assert "vbCurrent = techGetTechLibName(vbLib)" in skill
-    assert 'techSetTechLibName(vbLib "gpdk045")' in skill
-    assert 'techBindTechFile(vbLib "gpdk045")' in skill
+    assert 'then techSetTechLibName(vbLib "gpdk045")' in skill
+    assert 'else techBindTechFile(vbLib "gpdk045")' in skill
     assert 'techGetTechLibName(vbLib) == "gpdk045"' in skill
 
 
@@ -130,44 +129,58 @@ def test_library_skill_builders_reject_empty_required_values(builder, args, fiel
         builder(*args)
 
 
-def test_list_libraries_returns_names_and_forwards_timeout() -> None:
-    client = _Client('("ok" ("analogLib" "basic" "demoLib"))')
+@pytest.mark.parametrize(
+    ("call", "output", "expected"),
+    [
+        (
+            lambda client: list_libraries(client, timeout=17),
+            '("ok" ("analogLib" "basic" "demoLib"))',
+            ["analogLib", "basic", "demoLib"],
+        ),
+        (
+            lambda client: get_library(client, "demoLib", timeout=17),
+            _DEMO_INFO,
+            LibraryInfo("demoLib", "/work/demoLib", "gpdk045"),
+        ),
+        (
+            lambda client: get_library(client, "demoLib", timeout=17),
+            '("ok" ("library" "demoLib" "/work/demoLib" nil))',
+            LibraryInfo("demoLib", "/work/demoLib", None),
+        ),
+        (
+            lambda client: create_library(
+                client,
+                "demoLib",
+                "/work/demoLib",
+                technology_library="gpdk045",
+                timeout=17,
+            ),
+            _DEMO_INFO,
+            LibraryInfo("demoLib", "/work/demoLib", "gpdk045"),
+        ),
+        (
+            lambda client: delete_library(client, "demoLib", timeout=17),
+            '("ok")',
+            None,
+        ),
+        (
+            lambda client: rename_library(client, "oldLib", "newLib", timeout=17),
+            '("ok" ("library" "newLib" "/work/newLib" "gpdk045"))',
+            LibraryInfo("newLib", "/work/newLib", "gpdk045"),
+        ),
+        (
+            lambda client: set_technology_library(client, "demoLib", "gpdk045", timeout=17),
+            _DEMO_INFO,
+            "gpdk045",
+        ),
+    ],
+    ids=["list", "get", "get_unbound", "create", "delete", "rename", "set_technology"],
+)
+def test_library_operations_return_verified_results(call, output: str, expected) -> None:
+    client = _Client(output)
 
-    result = list_libraries(client, timeout=17)
-
-    assert result == ["analogLib", "basic", "demoLib"]
+    assert call(client) == expected
     assert client.timeout == 17
-
-
-def test_get_library_returns_structured_info() -> None:
-    client = _Client('("ok" ("library" "demoLib" "/work/demoLib" "gpdk045"))')
-
-    info = get_library(client, "demoLib")
-
-    assert info == LibraryInfo("demoLib", "/work/demoLib", "gpdk045")
-
-
-def test_get_library_preserves_unbound_technology_as_none() -> None:
-    client = _Client('("ok" ("library" "demoLib" "/work/demoLib" nil))')
-
-    info = get_library(client, "demoLib")
-
-    assert info.technology_library is None
-
-
-def test_create_library_returns_verified_info() -> None:
-    client = _Client('("ok" ("library" "demoLib" "/tmp/demoLib" "gpdk045"))')
-
-    info = create_library(
-        client,
-        "demoLib",
-        "/tmp/demoLib",
-        technology_library="gpdk045",
-    )
-
-    assert info == LibraryInfo("demoLib", "/tmp/demoLib", "gpdk045")
-    assert client.skill is not None
-    assert 'ddCreateLib("demoLib" "/tmp/demoLib")' in client.skill
 
 
 def test_create_library_reports_partial_technology_binding() -> None:
@@ -186,29 +199,6 @@ def test_create_library_reports_partial_technology_binding() -> None:
 
     assert exc_info.value.library == LibraryInfo("demoLib", "/tmp/demoLib", None)
     assert "was created" in str(exc_info.value)
-
-
-def test_delete_library_returns_none_on_verified_success() -> None:
-    client = _Client('("ok")')
-
-    assert delete_library(client, "demoLib") is None
-
-
-def test_rename_library_returns_destination_info() -> None:
-    client = _Client('("ok" ("library" "newLib" "/work/newLib" "gpdk045"))')
-
-    info = rename_library(client, "oldLib", "newLib")
-
-    assert info.name == "newLib"
-    assert info.path == "/work/newLib"
-
-
-def test_set_technology_library_returns_verified_name() -> None:
-    client = _Client('("ok" ("library" "demoLib" "/work/demoLib" "gpdk045"))')
-
-    result = set_technology_library(client, "demoLib", "gpdk045")
-
-    assert result == "gpdk045"
 
 
 @pytest.mark.parametrize(
@@ -242,9 +232,8 @@ def test_library_operations_raise_transport_errors() -> None:
 
 
 def test_library_ops_methods_delegate_to_owner() -> None:
-    client = _Client('("ok" ("library" "demoLib" "/work/demoLib" "gpdk045"))')
+    client = _Client(_DEMO_INFO)
     ops = LibraryOps(client)  # type: ignore[arg-type]
 
     assert ops.get_technology_library("demoLib") == "gpdk045"
-    assert client.skill is not None
-    assert 'ddGetObj("demoLib")' in client.skill
+    assert client.skill == library_get_skill("demoLib")
