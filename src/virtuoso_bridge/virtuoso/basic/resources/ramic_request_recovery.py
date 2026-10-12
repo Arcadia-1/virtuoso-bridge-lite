@@ -26,6 +26,8 @@ DEFAULT_MAX_FRAME_BYTES = 8 * 1024 * 1024
 DEFAULT_MAX_CACHE_BYTES = 32 * 1024 * 1024
 SUBMIT_MAX_PAST_MS = 300000
 SUBMIT_MAX_FUTURE_MS = 30000
+# Longest a submit reply waits for its request to finish (client asks wait_ms).
+MAX_SUBMIT_WAIT_SECONDS = 2.0
 _LOWER_HEX = set("0123456789abcdef")
 
 
@@ -167,6 +169,8 @@ class RecoverableRequestManager(object):
         self._clock = clock or time.time
         self._thread_factory = thread_factory or threading.Thread
         self._lock = threading.RLock()
+        # Notified whenever a running request finishes (see wait()).
+        self._finished = threading.Condition(self._lock)
         self._entries = {}
         self._cached_bytes = 0
         self._lane_owner = None
@@ -425,6 +429,31 @@ class RecoverableRequestManager(object):
                 self._poison_locked(poison)
             if self._lane_owner == request_id:
                 self._lane_owner = None
+            self._finished.notify_all()
+
+    def wait(self, request_id, seconds):
+        """Wait up to *seconds* (capped) for a running request to finish.
+
+        Lets a submit reply carry the result of a quick request instead of
+        "running", which saves the client a receipt round trip. Returns the
+        receipt either way; a request still running stays queryable.
+        """
+        try:
+            seconds = float(seconds)
+        except (TypeError, ValueError):
+            seconds = 0.0
+        seconds = max(0.0, min(seconds, MAX_SUBMIT_WAIT_SECONDS))
+        deadline = time.time() + seconds
+        with self._lock:
+            while True:
+                entry = self._entries.get(request_id)
+                if entry is None or entry["state"] != "running":
+                    break
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                self._finished.wait(remaining)
+        return self.receipt(request_id)
 
     def receipt(self, request_id):
         with self._lock:

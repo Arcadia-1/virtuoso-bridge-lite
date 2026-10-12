@@ -405,3 +405,44 @@ def test_x11_command_failure_never_becomes_clear(monkeypatch, stdout, returncode
 def test_low_level_bulk_default_does_not_run(monkeypatch):
     monkeypatch.setattr(x11, "_run", lambda *a, **k: pytest.fail("no injection"))
     assert "error" in x11.dismiss_dialogs(None, "user")[0]
+
+
+def test_preflight_runs_the_inspection_and_the_identity_handshake_side_by_side(monkeypatch):
+    # Sequentially they cost the sum of an SSH and a tunnel round trip.
+    import threading
+
+    client = _client(monkeypatch)
+    client.dialogs.enable_guard()
+    inspecting, handshaking = threading.Event(), threading.Event()
+
+    def inspect(*args, **kwargs):
+        inspecting.set()
+        assert handshaking.wait(2), "handshake did not run during the inspection"
+        return _payload()
+
+    def handshake(deadline, **kwargs):
+        handshaking.set()
+        assert inspecting.wait(2), "inspection did not run during the handshake"
+        return client._daemon_caps
+
+    monkeypatch.setattr(x11, "inspect_dialogs", inspect)
+    monkeypatch.setattr(client, "_ensure_daemon_capabilities", handshake)
+    assert client.dialogs.preflight(timeout=5) is None
+
+
+@pytest.mark.parametrize("inspection, caps, expected", [
+    ("blocked", {"auth": "on", "virtuoso_pid": 42}, "blocked"),
+    ("clear", {"auth": "on", "virtuoso_pid": 7}, "indeterminate"),
+    ("clear", {"auth": "off", "virtuoso_pid": 42}, "indeterminate"),
+])
+def test_parallel_preflight_still_needs_both_checks_to_pass(monkeypatch, inspection, caps, expected):
+    client = _client(monkeypatch)
+    client.dialogs.enable_guard()
+    monkeypatch.setattr(x11, "inspect_dialogs", lambda *a, **k: _payload(inspection))
+    monkeypatch.setattr(client, "_ensure_daemon_capabilities", lambda deadline, **k: caps)
+    monkeypatch.setattr(client, "_execute_skill_unguarded", lambda *a, **k: pytest.fail("SKILL was sent"))
+
+    result = client.execute_skill("1+2", timeout=5)
+
+    assert result.metadata["request_sent"] is False
+    assert result.metadata["dialog_guard"]["status"] == expected

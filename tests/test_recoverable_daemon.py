@@ -815,3 +815,47 @@ def test_multiline_file_is_deleted_at_once_when_answered_or_never_sent(
     loaded = re.search(r'load\("([^"]+)"\)', written[0].decode()).group(1)
     assert not os.path.exists(loaded)
     assert module._DEFERRED_TMP_FILES == []
+
+
+def test_submit_with_wait_ms_returns_a_quick_result_in_the_reply(monkeypatch, tmp_path) -> None:
+    module = _import_daemon(monkeypatch, tmp_path)
+    monkeypatch.setattr(module, "_execute_recoverable", lambda _skill: "\x02quick")
+    request_id = _request_id()
+    submit = _payload(module, "submit", request_id, skill="x")
+    submit["wait_ms"] = 1000
+    reply = _decode_reply(_exchange(module, submit), submit["nonce"])
+    assert reply["state"] == "completed" and reply["response"] == "\x02quick"
+
+
+def test_submit_wait_is_bounded_and_a_slow_request_stays_queryable(monkeypatch, tmp_path) -> None:
+    module = _import_daemon(monkeypatch, tmp_path)
+    release = threading.Event()
+
+    def execute(_skill):
+        release.wait(2)
+        return "\x02late"
+
+    monkeypatch.setattr(module, "_execute_recoverable", execute)
+    request_id = _request_id()
+    submit = _payload(module, "submit", request_id, skill="x")
+    submit["wait_ms"] = 60
+    started = time.monotonic()
+    reply = _decode_reply(_exchange(module, submit), submit["nonce"])
+    assert reply["state"] == "running" and time.monotonic() - started < 1
+    release.set()
+    _wait_receipt(module._RECOVERY, request_id)
+
+
+def test_recovery_wait_is_capped(monkeypatch) -> None:
+    from virtuoso_bridge.virtuoso.basic.resources import ramic_request_recovery as recovery
+
+    manager = recovery.RecoverableRequestManager()
+    release = threading.Event()
+    request_id = _request_id()
+    manager.submit(request_id, "x", lambda _skill: (release.wait(2), "\x02late")[1])
+    monkeypatch.setattr(recovery, "MAX_SUBMIT_WAIT_SECONDS", 0.05)
+    started = time.monotonic()
+    assert manager.wait(request_id, 30)["state"] == "running"
+    assert time.monotonic() - started < 1
+    release.set()
+    assert manager.wait(request_id, 2)["state"] == "completed"

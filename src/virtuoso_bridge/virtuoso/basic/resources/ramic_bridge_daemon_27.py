@@ -813,6 +813,11 @@ def handle_external_connection(conn, addr):
                 reply = _RECOVERY.submit(
                     request_id, request_data["skill"], _execute_recoverable
                 )
+                # A client may let the reply wait briefly for a quick result.
+                wait_ms = request_data.get("wait_ms")
+                if (reply.get("state") == "running" and isinstance(wait_ms, int)
+                        and not isinstance(wait_ms, bool) and wait_ms > 0):
+                    reply = _RECOVERY.wait(request_id, wait_ms / 1000.0)
             _send_recovery_reply(conn, request_nonce, reply)
             return
 

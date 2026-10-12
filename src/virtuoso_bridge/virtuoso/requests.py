@@ -46,6 +46,11 @@ class _Receipt(BaseModel):
     diagnostic: str | None = Field(default=None, strict=True)
 
 
+# How long a submit asks the daemon to wait for a quick result before
+# replying "running"; half the remaining budget at most.
+_SUBMIT_WAIT_SECONDS = 1.0
+
+
 def _budget(timeout: float) -> float:
     if isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("timeout must be positive and finite")
@@ -75,6 +80,7 @@ class RequestOps:
 
     def _exchange(
         self, op: str, handle: RequestHandle, deadline: float, skill: str = "",
+        wait_ms: int = 0,
     ) -> _Receipt:
         token = self._owner._daemon_token
         if token is None:
@@ -86,6 +92,11 @@ class RequestOps:
         }
         if op == "submit":
             payload["skill"] = skill
+            if wait_ms > 0:
+                # Daemons that know it reply with the result of a request that
+                # finishes within wait_ms (capped server-side); others ignore it.
+                # Only latency depends on it, so it is not part of the MAC.
+                payload["wait_ms"] = wait_ms
         payload["mac"] = daemon_auth.recoverable_mac(
             token, nonce=nonce, op=op, request_id=handle.request_id,
             daemon_instance=handle.daemon_instance, skill=skill,
@@ -176,8 +187,9 @@ class RequestOps:
                                   metadata={"request_sent": False, "outcome": "not_started"})
 
         # A lost submit acknowledgement is uncertain, not permission to submit again.
+        wait_ms = int(1000 * min(_SUBMIT_WAIT_SECONDS, max(0.0, (deadline - time.monotonic()) / 2)))
         try:
-            receipt = self._exchange("submit", handle, deadline, skill)
+            receipt = self._exchange("submit", handle, deadline, skill, wait_ms=wait_ms)
         except Exception as exc:
             return self._unknown(handle, f"Submission acknowledgement unavailable: {exc}", phase="submit")
         if receipt.state != "running":

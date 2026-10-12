@@ -71,7 +71,11 @@ For a genuinely local GUI with no SSH runner, explicitly pass `local_gui=True`.
 A loopback TCP endpoint alone is not local-GUI evidence: it can be an SSH tunnel.
 
 Every guarded SKILL request receives a read-only preflight and fresh authenticated
-PID handshake, so a tunnel redirected to another CIW is refused. A non-clear
+PID handshake, so a tunnel redirected to another CIW is refused. Both checks run
+side by side and both must pass before anything is sent. With
+`protect_inflight=True`, a daemon loaded from this version replies to a quick
+request with its result instead of "running", saving the receipt round trip;
+an older daemon still works and is polled as before. A non-clear
 report returns the existing `VirtuosoResult(status=ERROR)` shape with
 `metadata.request_sent=False`, `outcome="not_started"`, and `dialog_guard`.
 No SKILL is sent. Protection is per client, not a desktop lock or process-wide

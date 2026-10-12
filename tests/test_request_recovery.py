@@ -437,3 +437,13 @@ def test_malformed_server_timestamp_never_sends_skill(monkeypatch, server_time):
     client._daemon_caps["server_time_ms"] = server_time
     result = client.execute_skill("save()", timeout=5)
     assert result.metadata["outcome"] == "not_started" and wire == []
+
+
+def test_submit_lets_the_daemon_reply_with_a_quick_result(monkeypatch):
+    # A daemon that honours wait_ms answers a quick request in the submit
+    # reply, saving the receipt round trip; the MAC is unchanged.
+    client, wire, reports, _ = setup_client(monkeypatch, ["completed"])
+    result = client.execute_skill("1+2", timeout=5)
+    assert result.ok and result.output == "3"
+    assert [p["op"] for p in wire] == ["submit"]
+    assert 0 < wire[0]["wait_ms"] <= 1000
