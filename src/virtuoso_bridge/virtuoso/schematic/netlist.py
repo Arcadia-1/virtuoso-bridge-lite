@@ -287,10 +287,15 @@ def schematic_import_netlist_skill(
             f'"{escaped_spicein_log}"))'
         )
 
+    # Failures are recorded in vbFailure and raised only after cleanup: an
+    # error raised inside unwindProtect reaches the bridge as "nil" once the
+    # cleanup's own errset has reset errset.errset.
     return (
-        "let((vbSchematicObj vbNetlistObj vbTempObj vbTempCv vbConnOk vbCopyOk vbDestViewName) "
+        "let((vbSchematicObj vbNetlistObj vbTempObj vbTempCv vbConnOk vbCopyOk vbDestViewName "
+        "vbFailure) "
         f'when("{escaped_netlist_view}" == "{escaped_schematic_view}" '
         'error("netlist and schematic views must differ")) '
+        f"{_target_open_check_skill(lib, cell, schematic_view)} "
         f'vbSchematicObj = ddGetObj("{escaped_lib}" "{escaped_cell}" "{escaped_schematic_view}") '
         "when(vbSchematicObj "
         "ddReleaseObj(vbSchematicObj)) "
@@ -300,24 +305,46 @@ def schematic_import_netlist_skill(
         f'vbNetlistObj = ddGetObj("{escaped_lib}" "{escaped_cell}" "{escaped_netlist_view}") '
         'unless(vbNetlistObj error("source netlist view not found")) '
         "unless(isCallable('conn2Sch) error(\"conn2Sch API unavailable\")) "
-        "unwindProtect("
-        "progn("
+        "unless(isCallable('dbCopyCellView) error(\"dbCopyCellView API unavailable\")) "
         f'vbConnOk = errset(conn2Sch("{escaped_lib}" "{escaped_cell}" "{escaped_netlist_view}" '
         f'?destLibName "{escaped_lib}" ?destCellName "{escaped_cell}" '
         '?destViewName vbDestViewName ?block t) nil) '
-        'unless(vbConnOk && car(vbConnOk) error("conn2Sch failed")) '
-        "unless(isCallable('dbCopyCellView) error(\"dbCopyCellView API unavailable\")) "
-        f'vbTempCv = dbOpenCellViewByType("{escaped_lib}" "{escaped_cell}" vbDestViewName "schematic" "r") '
-        'unless(vbTempCv error("temporary schematic open failed")) '
-        f'vbCopyOk = dbCopyCellView(vbTempCv "{escaped_lib}" "{escaped_cell}" "{escaped_schematic_view}" nil nil t) '
-        'unless(vbCopyOk error("target schematic copy failed")) '
-        ") "
-        "progn("
+        'unless(vbConnOk && car(vbConnOk) vbFailure = "conn2Sch failed") '
+        "unless(vbFailure "
+        f'vbTempCv = car(errset(dbOpenCellViewByType("{escaped_lib}" "{escaped_cell}" vbDestViewName '
+        '"schematic" "r") nil)) '
+        'unless(vbTempCv vbFailure = "temporary schematic open failed")) '
+        "unless(vbFailure "
+        f'vbCopyOk = car(errset(dbCopyCellView(vbTempCv "{escaped_lib}" "{escaped_cell}" '
+        f'"{escaped_schematic_view}" nil nil t) nil)) '
+        'unless(vbCopyOk vbFailure = "target schematic copy failed")) '
         "when(vbTempCv when(isCallable('dbClose) dbClose(vbTempCv)) vbTempCv = nil) "
         f'vbTempObj = ddGetObj("{escaped_lib}" "{escaped_cell}" vbDestViewName) '
-        "when(vbTempObj errset(ddDeleteObj(vbTempObj) nil)))) "
+        "when(vbTempObj errset(ddDeleteObj(vbTempObj) nil)) "
+        "when(vbFailure error(vbFailure)) "
         f'list("imported" "{escaped_lib}" "{escaped_cell}" "{escaped_param_file}" '
         f'"{escaped_spicein_log}"))'
+    )
+
+
+def _target_open_check_skill(lib: str, cell: str, view: str) -> str:
+    """SKILL that refuses to overwrite a cellview open for editing.
+
+    dbCopyCellView cannot replace a cellview open in edit mode: it returns
+    nil, after spiceIn has already rewritten the netlist view. Read-only
+    opens do not block the copy.
+    """
+    escaped_lib = escape_skill_string(lib)
+    escaped_cell = escape_skill_string(cell)
+    escaped_view = escape_skill_string(view)
+    message = escape_skill_string(
+        f"target {lib}/{cell}/{view} is open for editing in Virtuoso; close it before overwriting"
+    )
+    return (
+        "when(setof(vbOpenCv dbGetOpenCellViews() "
+        f'vbOpenCv~>libName == "{escaped_lib}" && vbOpenCv~>cellName == "{escaped_cell}" '
+        f'&& vbOpenCv~>viewName == "{escaped_view}" && vbOpenCv~>mode != "r") '
+        f'error("{message}"))'
     )
 
 
@@ -499,6 +526,7 @@ def _schematic_import_preflight_skill(
         "let((vbSchematicObj vbNetlistObj) "
         f'when("{escaped_netlist_view}" == "{escaped_schematic_view}" '
         'error("netlist and schematic views must differ")) '
+        f"{_target_open_check_skill(lib, cell, schematic_view) if overwrite else ''} "
         f'vbSchematicObj = ddGetObj("{escaped_lib}" "{escaped_cell}" "{escaped_schematic_view}") '
         "when(vbSchematicObj "
         f'if({_skill_bool(overwrite)} then ddReleaseObj(vbSchematicObj) '
