@@ -145,9 +145,8 @@ def main() -> int:
         args.gds = f"{pnr_dir}/{args.top}.route_tapeout.gds"
     # Probe the bridge for the verilog path or use later for sram detect.
     # Canonical signoff.tcl writes `${top}_import.v`; legacy projects use
-    # `${top}.ipg_import_elc.v`.  Use SKILL isFile()/isFileReadable() rather
-    # than shell test -s — run_shell_command returns the SKILL return value
-    # ("t"/"nil"), not stdout, so `test ... && echo OK` doesn't work.
+    # `${top}.ipg_import_elc.v`.  SKILL isFileReadable() answers directly,
+    # without a shell round trip.
     client = None
     if args.verilog is None:
         from virtuoso_bridge import VirtuosoClient
