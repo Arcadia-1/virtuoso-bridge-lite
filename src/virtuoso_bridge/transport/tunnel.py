@@ -40,6 +40,7 @@ from virtuoso_bridge.transport.ssh import (
     _pid_is_alive,
     ssh_backend_env_from_os,
     ssh_proxy_url_from_os,
+    verbose_from_env,
 )
 
 logger = logging.getLogger(__name__)
@@ -321,7 +322,7 @@ class SSHClient:
             "backend": ssh_backend,
             "max_sessions": ssh_max_sessions,
             "proxy_url": ssh_proxy_url,
-            "verbose": True,
+            "verbose": verbose_from_env(),
         }
         self._role_runners: dict[str, SSHRunner] = {}
 

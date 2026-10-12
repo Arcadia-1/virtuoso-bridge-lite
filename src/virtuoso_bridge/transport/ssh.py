@@ -39,6 +39,15 @@ from virtuoso_bridge.transport.transfer import (
 
 logger = logging.getLogger(__name__)
 
+def verbose_from_env() -> bool:
+    """Whether ``VB_VERBOSE`` asks for each SSH/scp command on stderr.
+
+    Commands are always written to the command log; the stderr echo is for
+    interactive diagnosis (``virtuoso-bridge <command> --verbose``).
+    """
+    return os.environ.get("VB_VERBOSE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _setup_command_log() -> None:
     """Add a file handler to the package root logger."""
     pkg_logger = logging.getLogger("virtuoso_bridge")
