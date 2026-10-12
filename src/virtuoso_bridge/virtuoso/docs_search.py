@@ -10,11 +10,12 @@ import os
 import re
 import shlex
 import sqlite3
+import contextlib
 import time
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Callable, Iterable, Mapping, Sequence
 
 
 DIRECT_DOC_ROOT_ENV_VARS = ("CADENCE_DOC_ROOT", "CADENCE_DOC_ROOTS")
@@ -197,10 +198,17 @@ def search_docs(
     limit: int = 10,
     cache_root: str | Path | None = None,
     rebuild: bool = False,
+    progress: Callable[[str], None] | None = None,
 ) -> list[dict[str, object]]:
-    """Search Cadence documentation roots for a query."""
+    """Search Cadence documentation roots for a query.
+
+    *progress* receives a line before and after an index is built, which
+    the first search of a documentation root does (about a minute).
+    """
     if cache_root is not None:
-        return _search_docs_cached(query, doc_roots, cache_root=cache_root, limit=limit, rebuild=rebuild)
+        return _search_docs_cached(
+            query, doc_roots, cache_root=cache_root, limit=limit, rebuild=rebuild, progress=progress,
+        )
 
     roots = [Path(root).expanduser().resolve() for root in doc_roots]
     terms = _query_terms(query)
@@ -741,6 +749,7 @@ def _search_docs_cached(
     cache_root: str | Path,
     limit: int = 10,
     rebuild: bool = False,
+    progress: Callable[[str], None] | None = None,
 ) -> list[dict[str, object]]:
     """Search documentation roots using a persistent SQLite cache."""
     terms = _query_terms(query)
@@ -756,7 +765,8 @@ def _search_docs_cached(
         db_path = index_dir / "index.sqlite"
         manifest_path = index_dir / "manifest.json"
         if rebuild or not _index_is_usable(db_path, manifest_path, root):
-            _build_index(root, db_path, manifest_path)
+            with _reporting_index_build(progress, str(root)):
+                _build_index(root, db_path, manifest_path)
         results.extend(_search_index(db_path, query, terms))
 
     return _finalize_index_results(results, limit)
@@ -770,6 +780,7 @@ def search_remote_docs(
     cache_root: str | Path,
     limit: int = 10,
     rebuild: bool = False,
+    progress: Callable[[str], None] | None = None,
 ) -> list[dict[str, object]]:
     """Search remote documentation roots using a local SQLite cache."""
     terms = _query_terms(query)
@@ -786,10 +797,23 @@ def search_remote_docs(
         db_path = index_dir / "index.sqlite"
         manifest_path = index_dir / "manifest.json"
         if rebuild or not _index_is_usable(db_path, manifest_path, root):
-            _build_remote_index(runner, root_text, db_path, manifest_path)
+            with _reporting_index_build(progress, root_text):
+                _build_remote_index(runner, root_text, db_path, manifest_path)
         results.extend(_search_index(db_path, query, terms))
 
     return _finalize_index_results(results, limit)
+
+
+@contextlib.contextmanager
+def _reporting_index_build(progress: Callable[[str], None] | None, root: str):
+    """Tell the user an index build is running and when it finished."""
+    if progress is None:
+        yield
+        return
+    progress(f"Indexing Cadence documentation under {root}; the first search takes about a minute...")
+    started = time.monotonic()
+    yield
+    progress(f"Indexed in {time.monotonic() - started:.0f}s; later searches use the cache.")
 
 
 def _index_dir_for_root(cache_root: Path, doc_root: Path) -> Path:

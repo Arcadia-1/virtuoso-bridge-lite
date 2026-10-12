@@ -1513,6 +1513,7 @@ def cli_doc_search(
                     cache_root=local_cache_root,
                     limit=max(limit, 0),
                     rebuild=rebuild_index,
+                    progress=_progress_to_stderr,
                 ),
             }
     else:
@@ -1534,6 +1535,7 @@ def cli_doc_search(
                 limit=max(limit, 0),
                 rebuild_index=rebuild_index,
                 cache_dir=cache_dir,
+                progress=_progress_to_stderr,
             )
             payload = {
                 "ok": True,
@@ -1986,10 +1988,34 @@ def cli_sos(*, action: str, lib: str, cell: str, view: str,
     return 1
 
 
+# What each SOS outcome means for the user; the JSON values stay unchanged.
+_SOS_OUTCOME_MEANING = {
+    "success": "done",
+    "noop": "already in the requested state; nothing was changed",
+    "dry_run": "checks passed; nothing was changed",
+    "blocked": "refused before any change; see the reason below",
+    "failed": "the SOS command failed; it was not retried",
+    "unknown": "the result is not known; check status before retrying",
+}
+
+
+def _progress_to_stderr(message: str) -> None:
+    """Progress lines go to stderr so --json stdout stays parseable."""
+    import sys
+
+    print(message, file=sys.stderr, flush=True)
+
+
 def _print_sos_result(payload: dict, *, fallback: tuple[str, str, str] = ("", "", "")) -> None:
     target = payload.get("target") or {}
     lib, cell, view = fallback
-    print(f"{payload.get('action', 'sos')}: {payload.get('outcome', 'unknown')}")
+    action = payload.get("action", "sos")
+    outcome = payload.get("outcome", "unknown")
+    meaning = _SOS_OUTCOME_MEANING.get(outcome)
+    if action == "status" and outcome == "blocked":
+        # A read-only query refuses nothing: say that no status was read.
+        meaning = "no SOS status was read for this target; see the reason below"
+    print(f"{action}: {outcome}" + (f" ({meaning})" if meaning else ""))
     print(f"target: {target.get('lib', lib)}/{target.get('cell', cell)}/{target.get('view', view)}")
     if target.get("workarea"):
         print(f"workarea: {target['workarea']}")
@@ -2017,8 +2043,9 @@ def _print_sos_result(payload: dict, *, fallback: tuple[str, str, str] = ("", ""
         )
     for check in payload.get("checks") or []:
         print(f"check: {check.get('name')}: {'ok' if check.get('ok') else 'blocked'}: {check.get('detail')}")
+    label = "reason" if outcome == "blocked" else "diagnostic"
     for diagnostic in payload.get("diagnostics") or []:
-        print(f"diagnostic: {diagnostic}")
+        print(f"{label}: {diagnostic}")
 
 
 _print_result = _print_sos_result

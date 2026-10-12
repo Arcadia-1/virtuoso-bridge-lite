@@ -1773,6 +1773,7 @@ let((result winName ciwNum)
         doc_roots: list[str | Path] | None = None,
         cache_dir: str | Path | None = None,
         rebuild_index: bool = False,
+        progress: Callable[[str], None] | None = None,
     ) -> dict[str, object]:
         """Search installed Cadence documentation.
 
@@ -1807,6 +1808,7 @@ let((result winName ciwNum)
                     cache_root=cache_root / self._skill_finder_cache_host(),
                     limit=safe_limit,
                     rebuild=rebuild_index,
+                    progress=progress,
                 ),
             }
 
@@ -1830,6 +1832,7 @@ let((result winName ciwNum)
                         cache_root=cache_root / self._skill_finder_cache_host(),
                         limit=safe_limit,
                         rebuild=rebuild_index,
+                    progress=progress,
                     ),
                 }
             except Exception as exc:
@@ -1860,6 +1863,7 @@ let((result winName ciwNum)
                 cache_root=cache_root / self._skill_finder_cache_host(),
                 limit=safe_limit,
                 rebuild=rebuild_index,
+                    progress=progress,
             ),
         }
 

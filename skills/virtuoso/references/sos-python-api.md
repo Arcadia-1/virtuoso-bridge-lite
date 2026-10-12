@@ -77,7 +77,10 @@ the one-shot command. Success additionally requires the same revision to be
 checked in and clean afterward.
 
 Results contain `target`, `before`, `after`, `outcome`, and `diagnostics`.
-`success`, `noop`, and `dry_run` set `ok=True`. A timeout or lost response after
+`success`, `noop`, and `dry_run` set `ok=True`. `blocked` means the request was
+refused before any change, for a reason in `diagnostics` (for example a library
+SOS does not manage, unsaved changes, or a lock in another workarea); for
+`status` it means no SOS status was read. A timeout or lost response after
 dispatch is `unknown`: Bridge queries fresh SOS state but never resends the
 mutation and never claims that a matching state proves which request completed.
 Use `reconcile_cellview(..., receipt=previous_result)` for a read-only follow-up.
