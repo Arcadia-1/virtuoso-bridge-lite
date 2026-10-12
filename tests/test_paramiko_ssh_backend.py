@@ -1625,6 +1625,60 @@ def test_paramiko_tar_download_installs_only_completed_archive(tmp_path: Path) -
     assert not list(tmp_path.glob(".vbbak-*"))
 
 
+def test_paramiko_tar_download_keeps_appledouble_named_files_on_macos(
+    macos_bsdtar: str,
+    tmp_path: Path,
+) -> None:
+    files = {
+        "netlist/.__master.optionFile": b"o" * 481,
+        "netlist/designInfo": b"designInfo\n",
+    }
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w:gz") as archive:
+        directory = tarfile.TarInfo("netlist")
+        directory.type = tarfile.DIRTYPE
+        directory.mode = 0o755
+        archive.addfile(directory)
+        for name, contents in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(contents)
+            archive.addfile(info, io.BytesIO(contents))
+    local_path = tmp_path / "netlist"
+    plan = build_tar_download_plan(macos_bsdtar, "/remote/sim/netlist", local_path)
+
+    result = _tar_backend(_TarChannel(payload.getvalue())).download_tar(
+        plan,
+        timeout=5,
+    )
+
+    assert result == (0, "", "")
+    for name, contents in files.items():
+        assert (tmp_path / name).read_bytes() == contents
+
+
+def test_paramiko_tar_upload_omits_appledouble_members_on_macos(
+    macos_bsdtar: str,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "tree"
+    source.mkdir()
+    nested = source / "input.scs"
+    nested.write_text("simulator lang=spectre\n", encoding="utf-8")
+    for path in (source, nested):
+        subprocess.run(
+            ["xattr", "-w", "com.example.test", "1", str(path)],
+            check=True,
+        )
+    plan = build_tar_upload_plans(macos_bsdtar, [(source, "/remote/tree")])[0]
+    channel = _TarChannel(wait_for_input=True)
+
+    result = _tar_backend(channel).upload_tar(plan, timeout=5)
+
+    assert result == (0, "", "")
+    with tarfile.open(fileobj=io.BytesIO(channel.received), mode="r:") as archive:
+        assert sorted(archive.getnames()) == ["tree", "tree/input.scs"]
+
+
 def test_inactive_transport_is_closed_after_operation_error() -> None:
     tracker = _SessionTracker()
     transport = _FakeTransport(tracker)

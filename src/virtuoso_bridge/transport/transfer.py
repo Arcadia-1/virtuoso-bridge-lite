@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import logging
 import os
 import posixpath
 import shlex
 import shutil
+import subprocess
+import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +19,46 @@ from typing import Iterable
 
 
 logger = logging.getLogger(__name__)
+
+# macOS bsdtar reads every ``._name`` member as AppleDouble metadata for the
+# entry that follows (the tar reader's ``mac-ext`` option, on by default on
+# macOS): the member is never written as a file, and applying it can fail with
+# "Failed to restore metadata".  Cadence writes real files with such names,
+# e.g. ``netlist/.__master.optionFile``, so extraction turns the option off.
+_MACOS_BSDTAR_EXTRACT_OPTIONS = ("--options", "!mac-ext")
+# When creating an archive, the same bsdtar adds a ``._name`` member for every
+# path that carries extended attributes (macOS sets ``com.apple.provenance``
+# widely).  GNU tar on the remote host would install those as files, and it
+# warns about each xattr record ("Ignoring unknown extended header keyword").
+_MACOS_BSDTAR_CREATE_OPTIONS = ("--no-mac-metadata", "--no-xattrs")
+# These options precede the mode, which therefore takes its dashed form
+# (``-cf``/``-xzf``): bsdtar accepts undashed mode letters only first.
+
+
+def _is_macos_bsdtar(tar_command: str) -> bool:
+    """Return whether the local tar is macOS bsdtar (libarchive).
+
+    GNU tar, e.g. from Homebrew through ``VB_TAR_CMD``, rejects the bsdtar
+    options and needs none of them.  Other platforms keep the portable argv.
+    """
+    return sys.platform == "darwin" and _tar_reports_bsdtar(tar_command)
+
+
+@functools.lru_cache(maxsize=None)
+def _tar_reports_bsdtar(tar_command: str) -> bool:
+    """Probe ``<tar> --version`` once per tar command."""
+    try:
+        completed = subprocess.run(
+            [tar_command, "--version"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug("Could not identify local tar %s: %s", tar_command, exc)
+        return False
+    return b"bsdtar" in completed.stdout + completed.stderr
 
 
 def _remote_bash_command(script: str) -> str:
@@ -284,10 +327,13 @@ def build_tar_upload_plans(
             (remote_dir, local_parent, partition) for partition in partitions
         )
 
+    if _is_macos_bsdtar(tar_command):
+        create_prefix = [tar_command, *_MACOS_BSDTAR_CREATE_OPTIONS, "-cf"]
+    else:
+        create_prefix = [tar_command, "cf"]
     for remote_dir, local_parent, entries in upload_groups:
         local_command = [
-            tar_command,
-            "cf",
+            *create_prefix,
             "-",
             "-C",
             str(local_parent).replace("\\", "/"),
@@ -326,10 +372,19 @@ def build_tar_download_plan(
         'd=$(dirname "$p"); b=$(basename "$p"); '
         'cd "$d" && tar czf - -- "$b"'
     )
+    if _is_macos_bsdtar(tar_command):
+        local_command = (
+            tar_command,
+            *_MACOS_BSDTAR_EXTRACT_OPTIONS,
+            "-xzf",
+            "-",
+        )
+    else:
+        local_command = (tar_command, "xzf", "-")
     stage_path = local_path.parent / f".vbtmp-{uuid.uuid4().hex}"
     return TarDownloadPlan(
         remote_command=_remote_bash_command(inner_command),
-        local_command=(tar_command, "xzf", "-"),
+        local_command=local_command,
         remote_path=remote_path,
         local_path=local_path,
         stage_path=stage_path,

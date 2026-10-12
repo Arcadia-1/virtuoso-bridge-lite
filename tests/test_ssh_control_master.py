@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import io
 import os
 import re
 import shlex
 import subprocess
+import tarfile
 import threading
 from pathlib import Path
 from typing import Callable
@@ -482,6 +484,88 @@ def test_recursive_download_extracts_into_requested_directory(monkeypatch, tmp_p
     assert extract_dir.parent == tmp_path
     assert extract_dir.name.startswith(".vbtmp-")
     assert (local_path / "input.scs").read_text(encoding="utf-8") == "new netlist\n"
+
+
+def _local_openssh_runner(monkeypatch, tar_command: str, ssh_base: list[str]) -> SSHRunner:
+    """Run the OpenSSH tar pipelines against a local command instead of ssh."""
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh._setup_command_log", lambda: None)
+    runner = SSHRunner(
+        host="eda-host",
+        user="designer",
+        ssh_cmd="ssh",
+        timeout=30,
+        backend="openssh",
+    )
+    runner._tar_cmd = tar_command
+    # The remote command is appended as an ignored trailing argument.
+    monkeypatch.setattr(runner, "_build_ssh_base", lambda: list(ssh_base))
+    return runner
+
+
+def test_openssh_recursive_download_keeps_appledouble_named_files_on_macos(
+    monkeypatch,
+    macos_bsdtar: str,
+    tmp_path: Path,
+) -> None:
+    files = {
+        "netlist/.__master.optionFile": b"o" * 481,
+        "netlist/designInfo": b"designInfo\n",
+        "netlist/.__master.termorder": b"termorder\n",
+    }
+    archive_path = tmp_path / "remote.tgz"
+    with tarfile.open(archive_path, mode="w:gz") as archive:
+        directory = tarfile.TarInfo("netlist")
+        directory.type = tarfile.DIRTYPE
+        directory.mode = 0o755
+        archive.addfile(directory)
+        for name, contents in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(contents)
+            archive.addfile(info, io.BytesIO(contents))
+    runner = _local_openssh_runner(
+        monkeypatch,
+        macos_bsdtar,
+        ["/bin/sh", "-c", 'cat -- "$1"', "sh", str(archive_path)],
+    )
+    local_path = tmp_path / "downloads" / "netlist"
+
+    result = runner.download("/remote/sim/netlist", local_path, recursive=True)
+
+    assert result.returncode == 0, result.stderr
+    assert sorted(path.name for path in local_path.iterdir()) == sorted(
+        name.split("/", 1)[1] for name in files
+    )
+    for name, contents in files.items():
+        assert (local_path / name.split("/", 1)[1]).read_bytes() == contents
+
+
+def test_openssh_upload_omits_appledouble_members_on_macos(
+    monkeypatch,
+    macos_bsdtar: str,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "tree"
+    source.mkdir()
+    nested = source / "input.scs"
+    nested.write_text("simulator lang=spectre\n", encoding="utf-8")
+    for path in (source, nested):
+        subprocess.run(
+            ["xattr", "-w", "com.example.test", "1", str(path)],
+            check=True,
+        )
+    received = tmp_path / "received.tar"
+    runner = _local_openssh_runner(
+        monkeypatch,
+        macos_bsdtar,
+        ["/bin/sh", "-c", 'cat > "$1"', "sh", str(received)],
+    )
+
+    result = runner.upload(source, "/remote/tree", recursive=True)
+
+    assert result.returncode == 0, result.stderr
+    with tarfile.open(received, mode="r:") as archive:
+        assert sorted(archive.getnames()) == ["tree", "tree/input.scs"]
 
 
 def test_recursive_download_preserves_existing_target_when_tar_fails(monkeypatch, tmp_path) -> None:
