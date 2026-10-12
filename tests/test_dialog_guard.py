@@ -244,7 +244,7 @@ def test_maestro_nil_does_not_close_forms_probe_or_retry(monkeypatch):
         ssh_runner = None
         def execute_skill(self, expression, **kwargs):
             calls.append(expression)
-            return SimpleNamespace(output="nil" if expression.startswith("maeRunSimulation") else "t", errors=[])
+            return SimpleNamespace(output="nil" if "maeRunSimulation(" in expression else "t", errors=[])
         def dismiss_dialog(self):
             pytest.fail("must not dismiss user dialog")
     monkeypatch.setattr(writer, "_remove_marker", lambda *a: None)
@@ -252,7 +252,7 @@ def test_maestro_nil_does_not_close_forms_probe_or_retry(monkeypatch):
     with pytest.raises(RuntimeError, match="not retried"):
         writer.run_and_wait(Client(), session="s1")
     assert len(calls) == 2
-    assert sum(x.startswith("maeRunSimulation") for x in calls) == 1
+    assert sum("maeRunSimulation(" in x for x in calls) == 1
     assert all("hiFormDone" not in x and "hiGetCurrentForm" not in x for x in calls)
 
 
@@ -262,7 +262,7 @@ def test_guarded_maestro_nil_reports_new_dialog_and_completion_evidence(monkeypa
     calls = []
     def execute(expression, *a, **kw):
         calls.append(expression)
-        if expression.startswith("maeRunSimulation"):
+        if "maeRunSimulation(" in expression:
             monkeypatch.setattr(x11, "inspect_dialogs", lambda *a, **k: _payload("blocked"))
             return VirtuosoResult(status=ExecutionStatus.SUCCESS, output="nil")
         return VirtuosoResult(status=ExecutionStatus.SUCCESS, output="t")

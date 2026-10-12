@@ -13,6 +13,7 @@ from virtuoso_bridge.virtuoso.maestro import (
 )
 from virtuoso_bridge.virtuoso.maestro import MaestroOps
 from virtuoso_bridge.virtuoso.maestro import writer
+from virtuoso_bridge.virtuoso.maestro.writer import _without_history_name_form
 
 
 class _RecordingClient:
@@ -70,7 +71,9 @@ def test_run_simulation_forwards_timeout_to_skill_request() -> None:
     run_simulation(client, session='session"\\3', callback='done"\\callback', timeout=90)
 
     assert client.expressions == [
-        'maeRunSimulation(?session "session\\"\\\\3" ?callback "done\\"\\\\callback")'
+        _without_history_name_form(
+            'maeRunSimulation(?session "session\\"\\\\3" ?callback "done\\"\\\\callback")'
+        )
     ]
     assert client.skill_kwargs == [{"timeout": 90}]
 
@@ -86,8 +89,10 @@ def test_run_simulation_passes_explicit_run_mode() -> None:
     )
 
     assert client.expressions == [
-        'maeRunSimulation(?session "session4" ?callback "done" '
-        '?runMode "Monte Carlo \\"Sampling\\"")'
+        _without_history_name_form(
+            'maeRunSimulation(?session "session4" ?callback "done" '
+            '?runMode "Monte Carlo \\"Sampling\\"")'
+        )
     ]
 
 
@@ -188,3 +193,19 @@ def test_maestro_ops_passes_explicit_session_to_corner_netlist_export() -> None:
         'maeCreateNetlistForCorner("tran_test" "tt" "/tmp/tran_tt" '
         '?session "session3")'
     ]
+
+
+def test_run_turns_off_the_history_name_form_for_that_call_only() -> None:
+    # A site setting can open a modal "Specify History Name" form before
+    # every run; nothing answers it for a programmatic run.
+    skill = _without_history_name_form("maeRunSimulation()")
+    tool_var = '"adexl.historyNamePrefix" "showNameHistoryForm"'
+
+    probe = f"isCallable('envIsVal) && envIsVal({tool_var} t) && envGetVal({tool_var})"
+    off = f"when(vbFormOn envSetVal({tool_var} 'boolean nil))"
+    run = "vbRun = errset(maeRunSimulation() t)"
+    restore = f"when(vbFormOn envSetVal({tool_var} 'boolean t))"
+    assert probe in skill
+    # Restored after the call whether or not it failed, before any error.
+    assert skill.index(off) < skill.index(run) < skill.index(restore) < skill.index("error(")
+    assert skill.endswith("car(vbRun))")
