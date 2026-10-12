@@ -23,13 +23,13 @@
 
 **1. 深度 Virtuoso 集成** — 覆盖原理图、版图、Maestro 和 Spectre 的控制能力。
 - **灵活编程**：执行内联 SKILL、加载 `.il` 文件，或使用 Python API
-- **四个设计领域**：原理图编辑、版图生成、仿真设置（Maestro）以及带 PSF 解析的独立 Spectre
+- **四个设计领域**：原理图编辑、版图生成、仿真设置（Maestro）以及带 PSF ASCII 解析的独立 Spectre
 - **确定性原理图规划**：显式连接关系，以及网格、器件极性行、差分对、引脚列和输出级的软/硬约束
 
 **2. 可扩展架构** — 面向分布式设计集群，支持多服务器、多会话。
 - 多配置 SSH：连接 N 台设计服务器，每台都有独立隧道
 - 跨服务器和账户运行并行仿真
-- 已在 macOS、Windows 和 Linux 上验证
+- 客户端支持 macOS、Windows 和 Linux（CI 覆盖 Linux 与 Windows）；Virtuoso 端运行在 Linux 上
 
 **3. AI 原生设计** — 专为通过编码智能体（Claude Code、Cursor 等）驱动 Virtuoso 而构建。
 - CLI 优先的生命周期和诊断：`virtuoso-bridge start/status/restart`
@@ -298,11 +298,11 @@ Cursor 以及其他从用户级目录加载 skills 的智能体也遵循相同�
 |---|---|---|
 | **核心机制** | `ipcBeginProcess` + `evalstring` | `ipcBeginProcess` + `evalstring` |
 | **本地模式** | 支持 | 支持 |
-| **远程执行** | SSH 隧道、跳板机、自动重连 | 不支持 |
+| **远程执行** | SSH 隧道、跳板机、分机部署；`ensure_ready()` 可重新打开断开的隧道 | 仅限本机：Unix socket 或 localhost TCP |
 | **调用方式** | 基于字符串：`execute_skill("dbOpenCellViewByType(...)")` | Python 式映射：`ws.db.open_cell_view_by_type(...)` |
-| **加载 .il 文件** | `client.load_il()` | 不支持 |
+| **加载 .il 文件** | `client.load_il()` 先上传本地文件再加载 | `ws['load'](path)`，路径须在 Virtuoso 主机上 |
 | **版图 / 原理图 API** | `client.layout.create()` / `modify()` 上下文管理器 | 仅支持原始 SKILL |
-| **Spectre 仿真** | 内置运行器 + PSF 解析器 | 不支持 |
+| **Spectre 仿真** | 内置运行器 + PSF ASCII 解析器 | 不支持 |
 | **AI 智能体支持** | Skill 文件、CLI 优先、命令日志 | 并非为智能体设计 |
 | **Python ↔ SKILL 类型** | 基于字符串 | 自动双向映射 |
 | **IDE 代码补全** | 无（智能体不需要） | 有（Jupyter、PyCharm 存根） |

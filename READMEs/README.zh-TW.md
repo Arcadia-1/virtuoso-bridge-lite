@@ -23,13 +23,13 @@
 
 **1. 深度 Virtuoso 整合** — 涵蓋原理圖、版圖、Maestro 和 Spectre 的控制能力。
 - **彈性程式設計**：執行內嵌 SKILL、載入 `.il` 檔案，或使用 Python API
-- **四個設計領域**：原理圖編輯、版圖產生、模擬設定（Maestro）以及具備 PSF 剖析功能的獨立 Spectre
+- **四個設計領域**：原理圖編輯、版圖產生、模擬設定（Maestro）以及具備 PSF ASCII 剖析功能的獨立 Spectre
 - **確定性原理圖規劃**：明確連線關係，以及網格、元件極性列、差動對、接腳欄和輸出級的軟／硬限制條件
 
 **2. 可擴充架構** — 面向分散式設計叢集，支援多伺服器、多工作階段。
 - 多設定 SSH：連線至 N 台設計伺服器，每台都有獨立通道
 - 跨伺服器與帳戶執行平行模擬
-- 已在 macOS、Windows 和 Linux 上驗證
+- 用戶端支援 macOS、Windows 和 Linux（CI 涵蓋 Linux 與 Windows）；Virtuoso 端執行於 Linux
 
 **3. AI 原生設計** — 專為透過編碼代理（Claude Code、Cursor 等）驅動 Virtuoso 而建構。
 - CLI 優先的生命週期與診斷：`virtuoso-bridge start/status/restart`
@@ -298,11 +298,11 @@ Cursor 以及其他從使用者層級目錄載入 skills 的代理也遵循相�
 |---|---|---|
 | **核心機制** | `ipcBeginProcess` + `evalstring` | `ipcBeginProcess` + `evalstring` |
 | **本機模式** | 支援 | 支援 |
-| **遠端執行** | SSH 通道、跳板機、自動重新連線 | 不支援 |
+| **遠端執行** | SSH 通道、跳板機、分機部署；`ensure_ready()` 可重新開啟中斷的通道 | 僅限本機：Unix socket 或 localhost TCP |
 | **呼叫方式** | 以字串為基礎：`execute_skill("dbOpenCellViewByType(...)")` | Python 式對映：`ws.db.open_cell_view_by_type(...)` |
-| **載入 .il 檔案** | `client.load_il()` | 不支援 |
+| **載入 .il 檔案** | `client.load_il()` 先上傳本機檔案再載入 | `ws['load'](path)`，路徑須位於 Virtuoso 主機上 |
 | **版圖 / 原理圖 API** | `client.layout.create()` / `modify()` 內容管理器 | 僅支援原始 SKILL |
-| **Spectre 模擬** | 內建執行器 + PSF 剖析器 | 不支援 |
+| **Spectre 模擬** | 內建執行器 + PSF ASCII 剖析器 | 不支援 |
 | **AI 代理支援** | Skill 檔案、CLI 優先、命令日誌 | 並非為 AI 代理設計 |
 | **Python ↔ SKILL 型別** | 以字串為基礎 | 自動雙向對映 |
 | **IDE 程式碼補全** | 無（代理不需要） | 有（Jupyter、PyCharm 存根） |
