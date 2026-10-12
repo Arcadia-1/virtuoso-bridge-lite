@@ -418,6 +418,7 @@ def _parse_xprop_inspection(output):
         "client_leader": None,
         "client_machine": None,
         "modal": False,
+        "window_types": [],
         "title": "",
         "class": [],
     }
@@ -441,6 +442,8 @@ def _parse_xprop_inspection(output):
             metadata["client_machine"] = values[0]
         elif line.startswith("_NET_WM_STATE("):
             metadata["modal"] = "_NET_WM_STATE_MODAL" in line
+        elif line.startswith("_NET_WM_WINDOW_TYPE("):
+            metadata["window_types"] = re.findall(r"_NET_WM_WINDOW_TYPE_[A-Z_]+", line)
         elif line.startswith("WM_NAME(") and values:
             titles["wm"] = values[0]
         elif line.startswith("_NET_WM_NAME(") and values:
@@ -789,6 +792,7 @@ def _inspect_window_inventory(
                 "pid", "transient_for", "client_leader", "client_machine", "modal"
             ):
                 record[key] = metadata[key]
+            record["window_types"] = metadata.get("window_types") or []
             record["title"] = metadata.get("title") or ""
             record["class"] = metadata.get("class") or []
             record["client_shell"] = bool(
@@ -1006,7 +1010,12 @@ def _inspection_classification(record):
         "mapped": bool(record.get("mapped")),
     }
     classified = classify_windows([window])[0]
-    if record.get("modal") and classified.get("kind") not in ("ciw", "known_modal"):
+    # Without a window manager (Xvfb) toolkits never set _NET_WM_STATE_MODAL,
+    # and blocking forms can be taller than the size heuristic allows (a PDK
+    # information form is 670x708). The window type the client declares is
+    # the reliable signal.
+    is_dialog_type = "_NET_WM_WINDOW_TYPE_DIALOG" in (record.get("window_types") or [])
+    if (record.get("modal") or is_dialog_type) and classified.get("kind") not in ("ciw", "known_modal"):
         classified["kind"] = "dialog_candidate"
         classified["suggested_action"] = "enter"
     classified["modal"] = bool(record.get("modal"))

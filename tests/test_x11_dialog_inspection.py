@@ -794,6 +794,7 @@ def test_xprop_parser_reads_pid_relations_modal_state_and_client_host(helper):
             'WM_CLIENT_LEADER(WINDOW): window id # 0x101',
             'WM_CLIENT_MACHINE(STRING) = "eda-remote.example"',
             '_NET_WM_STATE(ATOM) = _NET_WM_STATE_ABOVE, _NET_WM_STATE_MODAL',
+            '_NET_WM_WINDOW_TYPE(ATOM) = _NET_WM_WINDOW_TYPE_DIALOG, _NET_WM_WINDOW_TYPE_NORMAL',
             '_NET_WM_NAME(UTF8_STRING) = "Warning"',
             'WM_CLASS(STRING) = "virtuoso", "Virtuoso"',
         ])
@@ -805,6 +806,7 @@ def test_xprop_parser_reads_pid_relations_modal_state_and_client_host(helper):
         "client_leader": "0x101",
         "client_machine": "eda-remote.example",
         "modal": True,
+        "window_types": ["_NET_WM_WINDOW_TYPE_DIALOG", "_NET_WM_WINDOW_TYPE_NORMAL"],
         "title": "Warning",
         "class": ["virtuoso", "Virtuoso"],
     }
