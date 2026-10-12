@@ -256,13 +256,10 @@ def test_xstream_renderer_captures_mutates_translates_then_restores() -> None:
         "unless(and(isCallable('xstGetField) isCallable('xstSetField) "
         "isCallable('xstOutDoTranslate))"
     )
-    fields_with_dialog = (
-        *((xstream_field, old) for _, xstream_field, old in _XSTREAM_FIELDS),
-        ("showCompletionMsgBox", "vbOldShowCompletionMsgBox"),
-    )
+    restored_fields = tuple((xstream_field, old) for _, xstream_field, old in _XSTREAM_FIELDS)
     captures = [
         skill.index(f'{old} = xstGetField("{field}")')
-        for field, old in fields_with_dialog
+        for field, old in restored_fields
     ]
     setters = [
         skill.index(f'xstSetField("{xstream_field}" "{getattr(request, name)}")')
@@ -273,27 +270,18 @@ def test_xstream_renderer_captures_mutates_translates_then_restores() -> None:
     assert skill.index(api_check) < min(captures)
     assert max(captures) < min(setters)
     assert max(setters) < translate
-    assert skill.count("vbCleanup = errset(xstSetField(") == len(fields_with_dialog)
-    for field, old in fields_with_dialog:
+    assert skill.count("vbCleanup = errset(xstSetField(") == len(restored_fields)
+    for field, old in restored_fields:
         restore = f'vbCleanup = errset(xstSetField("{field}" {old}) nil)'
         assert skill.count(restore) == 1
         assert translate < skill.index(restore)
         assert f"failed to restore XStream field {field}" in skill
 
-    # IC6.1.8 raises the modal completion box from this environment variable,
-    # read when xstOutDoTranslate() launches; it must be off for the launch and
-    # restored afterwards.
-    env_capture = skill.index(
-        'vbOldShowCompletionEnv = envGetVal("xstream" "xstShowCompletionMsgBox")'
-    )
-    env_off = skill.index("""envSetVal("xstream" "xstShowCompletionMsgBox" 'boolean nil)""")
-    env_restore = (
-        """vbCleanup = errset(envSetVal("xstream" "xstShowCompletionMsgBox" """
-        """'boolean vbOldShowCompletionEnv) nil)"""
-    )
-    assert env_capture < min(setters) <= env_off < translate < skill.index(env_restore)
-    assert skill.count(env_restore) == 1
-    assert "failed to restore xstream environment variable xstShowCompletionMsgBox" in skill
+    # IC6.1.8 reads showCompletionMsgBox when the non-blocking translation
+    # finishes, after this SKILL has returned; restoring it here raised the
+    # modal completion box, so it stays off.
+    assert skill.count("showCompletionMsgBox") == 1
+    assert "xstShowCompletionMsgBox" not in skill
 
 
 def test_xstream_renderer_reports_wire_state_from_errset_results() -> None:
