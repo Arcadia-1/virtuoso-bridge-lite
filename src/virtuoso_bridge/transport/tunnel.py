@@ -285,6 +285,7 @@ class SSHClient:
         self._remote_identity_path: str | None = None
         self._daemon_endpoint_hostname: str | None = None
         self._daemon_token: str | None = None
+        self._daemon_token_from_cache = False
 
     def _new_role_runner(
         self,
@@ -497,6 +498,34 @@ class SSHClient:
             f"unauthenticated legacy mode."
         )
 
+    def remote_cache_path(self) -> Path | None:
+        """Local cache of this daemon's token and verified identity (remote only)."""
+        if self._ssh_runner is None:
+            return None
+        return daemon_auth.remote_cache_path(self._daemon_host, self._remote_user)
+
+    @property
+    def daemon_token_from_cache(self) -> bool:
+        """Whether the current token came from the local cache, not over SSH."""
+        return self._daemon_token_from_cache
+
+    def refresh_daemon_token(self) -> str | None:
+        """Drop the cached token and identity, then fetch the token over SSH."""
+        cache = self.remote_cache_path()
+        if cache is not None:
+            daemon_auth.update_remote_cache(cache, token=None, verified=None)
+        self._daemon_token = None
+        self._daemon_token_from_cache = False
+        return self.ensure_daemon_token()
+
+    def _adopt_fetched_token(self, token: str) -> str:
+        self._daemon_token = token
+        self._daemon_token_from_cache = False
+        cache = self.remote_cache_path()
+        if cache is not None:
+            daemon_auth.update_remote_cache(cache, token=token)
+        return token
+
     def ensure_daemon_token(self) -> str | None:
         """Fetch (or create over SSH) the bridge daemon auth token.
 
@@ -514,6 +543,14 @@ class SSHClient:
         if self._ssh_runner is None:
             self._daemon_token = daemon_auth.local_token_or_raise()
             return self._daemon_token
+        # A cached copy saves the SSH round trip; a client whose handshake
+        # rejects it calls refresh_daemon_token().
+        cache = self.remote_cache_path()
+        cached = daemon_auth.read_remote_cache(cache).get("token") if cache else None
+        if isinstance(cached, str) and daemon_auth.is_valid_token(cached):
+            self._daemon_token = cached.lower()
+            self._daemon_token_from_cache = True
+            return self._daemon_token
         runner = self._ssh_runner
         try:
             result = runner.run_command(
@@ -521,8 +558,7 @@ class SSHClient:
             )
             existing = (result.stdout or "").strip()
             if result.returncode == 0 and daemon_auth.is_valid_token(existing):
-                self._daemon_token = existing.lower()
-                return self._daemon_token
+                return self._adopt_fetched_token(existing.lower())
             # Provision a fresh token through the SSH channel.  Stage a
             # complete 0600 file, then hard-link it into place only if the
             # target is still absent.  Every concurrent starter reads back
@@ -571,9 +607,8 @@ class SSHClient:
                     f"{detail}"
                 )
                 return None
-            self._daemon_token = disk_token.lower()
             logger.info("Provisioned bridge daemon token at %s", token_path)
-            return self._daemon_token
+            return self._adopt_fetched_token(disk_token.lower())
         except daemon_auth.DaemonTokenError:
             raise
         except Exception as exc:
