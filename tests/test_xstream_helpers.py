@@ -280,6 +280,21 @@ def test_xstream_renderer_captures_mutates_translates_then_restores() -> None:
         assert translate < skill.index(restore)
         assert f"failed to restore XStream field {field}" in skill
 
+    # IC6.1.8 raises the modal completion box from this environment variable,
+    # read when xstOutDoTranslate() launches; it must be off for the launch and
+    # restored afterwards.
+    env_capture = skill.index(
+        'vbOldShowCompletionEnv = envGetVal("xstream" "xstShowCompletionMsgBox")'
+    )
+    env_off = skill.index("""envSetVal("xstream" "xstShowCompletionMsgBox" 'boolean nil)""")
+    env_restore = (
+        """vbCleanup = errset(envSetVal("xstream" "xstShowCompletionMsgBox" """
+        """'boolean vbOldShowCompletionEnv) nil)"""
+    )
+    assert env_capture < min(setters) <= env_off < translate < skill.index(env_restore)
+    assert skill.count(env_restore) == 1
+    assert "failed to restore xstream environment variable xstShowCompletionMsgBox" in skill
+
 
 def test_xstream_renderer_reports_wire_state_from_errset_results() -> None:
     skill = xstream_export_gds_skill(_request())

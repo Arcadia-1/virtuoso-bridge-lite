@@ -25,6 +25,11 @@ _XSTREAM_FIELDS = (
 )
 _COMPLETION_MESSAGE_FIELD = "showCompletionMsgBox"
 _COMPLETION_MESSAGE_OLD_VARIABLE = "vbOldShowCompletionMsgBox"
+# IC6.1.8 decides whether xstOutDoTranslate() raises its modal "translation
+# complete" box from this xstream environment variable (read at launch), not
+# from the form field above. Left at its default t, every export blocks the CIW.
+_COMPLETION_ENV = ("xstream", "xstShowCompletionMsgBox")
+_COMPLETION_ENV_OLD_VARIABLE = "vbOldShowCompletionEnv"
 _PRODUCT_ANCHOR_RE = re.compile(
     r"^Product[ \t]*:[ \t]*Virtuoso\(R\)[ \t]+XStream[ \t]+Out",
     re.MULTILINE,
@@ -132,21 +137,25 @@ def xstream_export_gds_skill(request: XStreamExportRequest) -> str:
         (
             *(old_variable for _, _, old_variable in _XSTREAM_FIELDS),
             _COMPLETION_MESSAGE_OLD_VARIABLE,
+            _COMPLETION_ENV_OLD_VARIABLE,
         )
     )
     captures = "".join(
         f'{old_variable} = xstGetField("{xstream_field}") '
         for _request_field, xstream_field, old_variable in _XSTREAM_FIELDS
     )
+    env_tool, env_var = _COMPLETION_ENV
     captures += (
         f'{_COMPLETION_MESSAGE_OLD_VARIABLE} = '
         f'xstGetField("{_COMPLETION_MESSAGE_FIELD}") '
+        f'{_COMPLETION_ENV_OLD_VARIABLE} = envGetVal("{env_tool}" "{env_var}") '
     )
     setters = "".join(
         f'xstSetField("{xstream_field}" "{escaped_values[request_field]}") '
         for request_field, xstream_field, _old_variable in _XSTREAM_FIELDS
     )
     setters += f'xstSetField("{_COMPLETION_MESSAGE_FIELD}" "false") '
+    setters += f"envSetVal(\"{env_tool}\" \"{env_var}\" 'boolean nil) "
     restored_fields = tuple(
         (xstream_field, old_variable)
         for _request_field, xstream_field, old_variable in _XSTREAM_FIELDS
@@ -165,6 +174,13 @@ def xstream_export_gds_skill(request: XStreamExportRequest) -> str:
             f'{xstream_field}" vbCleanupFailures)) '
         )
         for xstream_field, old_variable in restored_fields
+    )
+    restorations += (
+        f"vbCleanup = errset(envSetVal(\"{env_tool}\" \"{env_var}\" 'boolean "
+        f"{_COMPLETION_ENV_OLD_VARIABLE}) nil) "
+        "unless(vbCleanup "
+        f'vbCleanupFailures = cons("failed to restore {env_tool} environment variable '
+        f'{env_var}" vbCleanupFailures)) '
     )
 
     return (
