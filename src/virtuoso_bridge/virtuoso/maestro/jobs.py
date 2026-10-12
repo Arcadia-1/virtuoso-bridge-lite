@@ -33,6 +33,7 @@ from virtuoso_bridge.transport.ssh import (
     SSHRunner,
     ssh_backend_env_from_os,
     ssh_proxy_url_from_os,
+    verbose_from_env,
 )
 from virtuoso_bridge.virtuoso.ops import escape_skill_string
 from virtuoso_bridge.virtuoso.requests import RequestHandle
@@ -288,7 +289,7 @@ class MaestroJobManager:
             backend=backend.backend,
             max_sessions=backend.max_sessions,
             proxy_url=ssh_proxy_url_from_os(profile),
-            verbose=True,
+            verbose=verbose_from_env(),
         )
         username = resolve_remote_username(
             configured_user=roles.remote_user or runner.user,

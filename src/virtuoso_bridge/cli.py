@@ -2405,6 +2405,21 @@ def build_parser() -> argparse.ArgumentParser:
     sp_visio.add_argument("--env", default=None,
                           help="Explicit .env file path (highest priority)")
 
+    # Every command accepts --verbose after its name too; SUPPRESS keeps a
+    # subcommand's default from overwriting a top-level --verbose.
+    verbose_help = "Print each SSH/scp command on stderr (also VB_VERBOSE=1)"
+    parser.add_argument("-v", "--verbose", action="store_true", help=verbose_help)
+    pending = list(subparsers.choices.values())
+    seen: set[int] = set()
+    while pending:
+        sub = pending.pop()
+        if id(sub) in seen:
+            continue
+        seen.add(id(sub))
+        sub.add_argument("-v", "--verbose", action="store_true", default=argparse.SUPPRESS, help=verbose_help)
+        for action in sub._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                pending.extend(action.choices.values())
     return parser
 
 
@@ -2458,6 +2473,8 @@ def _report_command_error(exc: Exception) -> int:
 
 def _run_command(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     _CLI_PROFILE[0] = None
+    if getattr(args, "verbose", False):
+        os.environ["VB_VERBOSE"] = "1"
     if args.command == "sos" and getattr(args, "json", False):
         import sys
         from contextlib import redirect_stdout

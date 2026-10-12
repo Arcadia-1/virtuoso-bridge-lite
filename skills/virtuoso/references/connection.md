@@ -51,6 +51,10 @@ If the daemon is not loaded, have the user paste the exact generated
 selected CIW and user authorization; check command availability before using it.
 Do not reload/stop a busy shared daemon just to switch profiles.
 
+Commands no longer echo each SSH/scp call; add `--verbose` (or set
+`VB_VERBOSE=1`) to see them while diagnosing a connection. They are always
+recorded in the command log.
+
 Verify SKILL with a harmless expression on the confirmed endpoint:
 
 ```bash
