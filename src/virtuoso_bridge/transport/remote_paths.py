@@ -117,6 +117,72 @@ def default_virtuoso_bridge_dir(
         return f"{root}/virtuoso_bridge_{safe}/{safe_client}/{leaf_norm}"
     return f"{root}/virtuoso_bridge_{safe}/{leaf_norm}"
 
+def private_dir_shell_prelude(label: str) -> str:
+    """POSIX sh functions that create or verify directories private to the user.
+
+    ``vb_ensure_dir DIR`` creates DIR with mode 700, or accepts an existing
+    DIR only if it is a real directory (not a symlink) owned by the current
+    user; a different owner fails, other modes are tightened to 700. On a
+    shared /tmp this stops another user from pre-creating the path.
+    """
+    return rf"""umask 077
+vb_uid=$(id -u) || exit $?
+vb_read_meta() {{
+    vb_meta=$(stat -c '%u %a' "$1" 2>/dev/null) ||
+        vb_meta=$(stat -f '%u %Lp' "$1" 2>/dev/null) || return 74
+    set -- $vb_meta
+    vb_owner=$1
+    vb_mode=$2
+}}
+vb_verify_dir() {{
+    vb_path=$1
+    if [ -L "$vb_path" ] || [ ! -d "$vb_path" ]; then
+        printf 'unsafe remote {label} directory: %s\n' "$vb_path" >&2
+        return 73
+    fi
+    vb_read_meta "$vb_path" || return $?
+    if [ "$vb_owner" != "$vb_uid" ]; then
+        printf 'remote {label} directory has wrong owner: %s\n' "$vb_path" >&2
+        return 75
+    fi
+    if [ "$vb_mode" != 700 ]; then
+        chmod 700 "$vb_path" || return $?
+        if [ -L "$vb_path" ] || [ ! -d "$vb_path" ]; then
+            printf 'unsafe remote {label} directory after chmod: %s\n' "$vb_path" >&2
+            return 73
+        fi
+        vb_read_meta "$vb_path" || return $?
+        if [ "$vb_owner" != "$vb_uid" ] || [ "$vb_mode" != 700 ]; then
+            printf 'remote {label} directory is not private: %s\n' "$vb_path" >&2
+            return 76
+        fi
+    fi
+}}
+vb_ensure_dir() {{
+    vb_path=$1
+    if [ -L "$vb_path" ]; then
+        printf 'remote {label} directory is a symlink: %s\n' "$vb_path" >&2
+        return 73
+    fi
+    if [ ! -e "$vb_path" ]; then
+        mkdir -m 700 "$vb_path" || return $?
+    fi
+    vb_verify_dir "$vb_path"
+}}
+"""
+
+
+def private_dirs_below(root: str, path: str) -> list[str]:
+    """Each directory from just below *root* down to *path*, outermost first."""
+    root = root.rstrip("/") or "/"
+    path = path.rstrip("/")
+    prefix = root if root.endswith("/") else root + "/"
+    if not path.startswith(prefix):
+        raise ValueError(f"{path!r} is not below {root!r}")
+    parts = [part for part in path[len(prefix):].split("/") if part]
+    return [prefix + "/".join(parts[: index + 1]) for index in range(len(parts))]
+
+
 REMOTE_SPECTRE_LEAF = "virtuoso_bridge_spectre"
 
 
