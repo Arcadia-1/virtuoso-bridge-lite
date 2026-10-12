@@ -467,11 +467,25 @@ def test_recovery_auth_replay_tamper_and_instance_rejection(monkeypatch, tmp_pat
     assert "mismatch" in result["diagnostic"]
 
 
-def test_legacy_watchdog_poison_blocks_recoverable_without_consuming_late_frame(
+def test_timed_out_legacy_request_poisons_until_the_resync_probe_answers(
     monkeypatch, tmp_path
 ) -> None:
     module = _import_daemon(monkeypatch, tmp_path)
-    chunks = iter([b"\x02", b"l", b"a", b"t", b"e", b"\x1e"])
+    late = [b"\x02", b"l", b"a", b"t", b"e", b"\x1e"]
+    written = []
+    reply_allowed = threading.Event()
+    pending = list(late)
+
+    def read(n=1):
+        if pending:
+            return pending.pop(0)
+        probe = next((w for w in written if b"vb-resync-" in w), None)
+        if probe is None or not reply_allowed.is_set():
+            return None  # would block: Virtuoso has not answered yet
+        start = probe.index(b'"vb-resync-')
+        pending.extend(bytes([c]) for c in b"\x02" + probe[start:probe.index(b'"', start + 1) + 1] + b"\x1e")
+        written.clear()
+        return pending.pop(0)
 
     class _Timer:
         daemon = True
@@ -487,30 +501,60 @@ def test_legacy_watchdog_poison_blocks_recoverable_without_consuming_late_frame(
             pass
 
     fake_stdout = types.SimpleNamespace(
-        buffer=types.SimpleNamespace(write=lambda data: len(data), flush=lambda: None)
-    )
-    fake_stdin = types.SimpleNamespace(
-        buffer=types.SimpleNamespace(read=lambda n=1: next(chunks))
+        buffer=types.SimpleNamespace(write=lambda data: written.append(bytes(data)) or len(data),
+                                     flush=lambda: None)
     )
     monkeypatch.setattr(module, "threading", types.SimpleNamespace(
         Event=threading.Event, Timer=_Timer, Lock=threading.Lock
     ))
     monkeypatch.setattr(module.sys, "stdout", fake_stdout)
-    monkeypatch.setattr(module.sys, "stdin", fake_stdin)
-    monkeypatch.setattr(module.os, "kill", lambda *args: None)
-    acquired, _ = module._RECOVERY.try_begin_legacy()
-    assert acquired
-    with pytest.raises(ExecutionUncertain, match="watchdog fired") as caught:
+    monkeypatch.setattr(module.sys, "stdin", types.SimpleNamespace(buffer=types.SimpleNamespace(read=read)))
+    monkeypatch.setattr(module.os, "kill", lambda *args: pytest.fail("the request was signalled"))
+    assert module._RECOVERY.try_begin_legacy()[0]
+    with pytest.raises(ExecutionUncertain, match="did not answer within the request timeout") as caught:
         module._transmit_and_read("1+1", 0.01)
+    # The request path never reads the late frame itself.
+    assert pending == late
     module._RECOVERY.finish_legacy(str(caught.value))
 
     called = []
     rejected = module._RECOVERY.submit(
         _request_id(), "2+2", lambda skill: called.append(skill) or "\x02new"
     )
-    assert rejected["state"] == "rejected"
+    assert rejected["state"] == "rejected" and "resync probe" in rejected["diagnostic"]
     assert called == []
-    assert list(chunks) == [b"\x02", b"l", b"a", b"t", b"e", b"\x1e"]
+    assert module._RECOVERY.lane_state()["state"] == "resyncing"
+
+    reply_allowed.set()
+    deadline = time.monotonic() + 2
+    while module._RECOVERY.poisoned and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert module._RECOVERY.poisoned is None
+    assert module._RECOVERY.lane_state() == {"state": "idle"}
+    assert pending == []  # the late frame and the probe reply were both consumed
+    request_id = _request_id()
+    module._RECOVERY.submit(request_id, "3+3", lambda skill: called.append(skill) or "\x02new")
+    assert _wait_receipt(module._RECOVERY, request_id)["response"] == "\x02new"
+    assert called == ["3+3"]
+
+
+def test_resync_skips_a_half_read_frame_and_fails_on_a_closed_pipe() -> None:
+    from virtuoso_bridge.virtuoso.basic.resources.ramic_request_recovery import resynchronize
+
+    sent = []
+    # What follows a timed-out read: the rest of a half-read frame, then
+    # another late frame; Virtuoso answers the probe last.
+    queued = list(b'ate"\x1e\x15err\x1e')
+
+    def read_one():
+        if not queued:
+            queued.extend(b"\x02" + sent[-1].encode("ascii") + b"\x1e")
+        return bytes([queued.pop(0)])
+
+    assert resynchronize(sent.append, read_one) is True
+    assert len(sent) == 1 and sent[0].startswith('"vb-resync-') and sent[0].endswith('"')
+    assert queued == []
+    assert resynchronize(lambda probe: None, lambda: b"") is False
 
 
 def test_python2_sources_are_ascii_and_optional_runtime_compiles() -> None:
@@ -529,7 +573,7 @@ def test_python2_sources_are_ascii_and_optional_runtime_compiles() -> None:
 
 
 def test_legacy_lane_stays_owned_until_watchdog_decision_finishes(monkeypatch, tmp_path):
-    """A timer paused before its decision must not signal the next request."""
+    """A timer paused before its decision must not release the lane early."""
     module = _import_daemon(monkeypatch, tmp_path)
     callback_entered = threading.Event()
     allow_callback = threading.Event()
@@ -608,7 +652,8 @@ def test_legacy_lane_stays_owned_until_watchdog_decision_finishes(monkeypatch, t
         for timer in timers:
             timer.worker.join(2)
     assert not caller.is_alive()
-    assert len(signals) == 1 and module._RECOVERY.poisoned
+    # The lane stays owned until the watchdog decided, and nothing is signalled.
+    assert signals == [] and module._RECOVERY.poisoned
 
 
 @pytest.mark.parametrize("daemon_name", ["ramic_bridge_daemon_3.py", "ramic_bridge_daemon_27.py"])
@@ -665,3 +710,23 @@ def test_finished_legacy_call_ignores_already_started_timer(daemon_name, read_fa
     # Simulate a callback that Timer.cancel() could not prevent from running.
     timers[0].callback(*timers[0].args)
     assert signals == []
+
+
+def test_handshake_reports_the_lane_state(monkeypatch, tmp_path) -> None:
+    module = _import_daemon(monkeypatch, tmp_path)
+    assert json.loads(module._capabilities_body())["lane"] == {"state": "idle"}
+    assert module._RECOVERY.try_begin_legacy()[0]
+    lane = json.loads(module._capabilities_body())["lane"]
+    assert lane["state"] == "busy" and lane["detail"] == "legacy" and lane["since_ms"] > 0
+    module._RECOVERY.finish_legacy()
+
+
+@pytest.mark.parametrize("daemon_name", ["ramic_bridge_daemon_3.py", "ramic_bridge_daemon_27.py"])
+def test_both_daemons_resync_instead_of_signalling(daemon_name) -> None:
+    tree = ast.parse((_resources() / daemon_name).read_text(encoding="ascii"))
+    watchdog = next(node for node in tree.body
+                    if isinstance(node, ast.FunctionDef) and node.name == "watchdog_callback")
+    assert "interrupt" not in ast.dump(watchdog)
+    registrations = [node for node in tree.body if isinstance(node, ast.Expr)
+                     and "set_resync" in ast.dump(node) and "_resync_lane" in ast.dump(node)]
+    assert len(registrations) == 1

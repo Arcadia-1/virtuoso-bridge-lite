@@ -473,6 +473,20 @@ def _state_or_local_daemon_token(state: dict | None, profile: str | None) -> str
     return daemon_auth.read_local_token()
 
 
+def _describe_lane(caps: dict | None) -> str:
+    """The daemon's IPC lane state from its handshake, unless it is idle."""
+    lane = (caps or {}).get("lane")
+    if not isinstance(lane, dict) or lane.get("state") in (None, "idle"):
+        return ""
+    text = str(lane.get("state"))
+    since_ms, now_ms = lane.get("since_ms"), (caps or {}).get("server_time_ms")
+    if isinstance(since_ms, int) and isinstance(now_ms, int) and now_ms >= since_ms:
+        text += f" for {(now_ms - since_ms) // 1000} s"
+    if lane.get("detail"):
+        text += f" ({lane['detail']})"
+    return text
+
+
 def _print_load_hint(setup_path: str) -> None:
     """Print CIW load command and .cdsinit auto-load suggestion."""
     print("\n  Load in Virtuoso CIW:")
@@ -614,12 +628,18 @@ def _print_status() -> int:
             vc.daemon_token = _state_or_local_daemon_token(state, profile)
             probe = vc.execute_skill("1+1", timeout=5)
             ok = probe.status == ExecutionStatus.SUCCESS
+            busy = not ok and any("BusyError" in err for err in probe.errors or [])
             if not ok and any(
                 "authentication" in err.lower() for err in probe.errors or []
             ):
                 print(f"\n[daemon] AUTH FAILED - {probe.errors[0]}")
+            elif busy:
+                print(f"\n[daemon] BUSY - {probe.errors[0]}")
             else:
                 print(f"\n[daemon] {'OK - connected to Virtuoso CIW' if ok else 'NO RESPONSE'}")
+            lane_text = _describe_lane(getattr(vc, "_daemon_caps", None))
+            if lane_text:
+                print(f"  lane      : {lane_text}")
             if ok:
                 from virtuoso_bridge.daemon_guard import check_daemon_user
 
@@ -667,7 +687,7 @@ def _print_status() -> int:
                     r'printf("\n  [virtuoso-bridge] Status check at %s - connection OK.\n\n" getCurrentTime())',
                     timeout=5,
                 )
-            if not ok and setup_path:
+            if not ok and not busy and setup_path:
                 _print_load_hint(setup_path)
                 _print_stale_daemon_hint()
         except Exception as e:

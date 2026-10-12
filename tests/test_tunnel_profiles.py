@@ -868,3 +868,16 @@ def test_restart_exits_nonzero_when_the_daemon_restart_fails(monkeypatch) -> Non
     )
 
     assert cli._restart_one() == 1
+
+
+@pytest.mark.parametrize("caps, text", [
+    ({"lane": {"state": "idle"}}, ""),
+    (None, ""),
+    ({"server_time_ms": 50_000, "lane": {"state": "busy", "detail": "legacy", "since_ms": 20_000}},
+     "busy for 30 s (legacy)"),
+    ({"server_time_ms": 9_000, "lane": {"state": "resyncing", "since_ms": 2_000,
+                                        "detail": "SKILL did not answer within the request timeout"}},
+     "resyncing for 7 s (SKILL did not answer within the request timeout)"),
+])
+def test_status_describes_a_non_idle_lane(caps, text) -> None:
+    assert cli._describe_lane(caps) == text

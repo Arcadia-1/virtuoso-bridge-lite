@@ -94,7 +94,7 @@ can come from the human sharing the CIW; do not automatically close or cancel
 it. CIW screenshots and form queries can use the blocked SKILL channel, so
 they are unsuitable as the first diagnostic. See
 [Shared CIW Dialog Protection](shared-ciw-dialogs.md) for the opt-in guard,
-structured outcomes, and watchdog limitations.
+structured outcomes, and how a poisoned lane resynchronizes.
 
 ### ASSEMBLER-8127: cellview already open in edit mode
 `maeMakeEditable()` fails with a modal dialog when the same cellview is already open in editable mode in another session (e.g. `fnxSession21` has it open while you try from `fnxSession0`). This dialog **completely blocks** the SKILL channel — even `hiFormDone` cannot reach it.
