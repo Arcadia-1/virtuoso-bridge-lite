@@ -8,13 +8,16 @@ login user.
 
 Verification layers (first non-empty answer wins):
 
-1. ``getShellEnvVar("USER")`` in the daemon's Virtuoso process.
-2. ``getShellEnvVar("LOGNAME")`` — Virtuoso launched from a stripped
+1. The Virtuoso PID from the daemon's signed capability handshake, then
+   ``stat -c %U /proc/<pid>`` (fallback ``ps -o user=``) over SSH. The
+   handshake does not go through the CIW, so this works while a request runs
+   or a dialog blocks the CIW, and the process owner is authoritative.
+2. ``getShellEnvVar("USER")`` in the daemon's Virtuoso process (daemons
+   without a signed PID, or no SSH runner).
+3. ``getShellEnvVar("LOGNAME")`` — Virtuoso launched from a stripped
    environment often has neither, so an empty answer means *indeterminate*,
    never *match*.
-3. ``ipcGetPid()`` in Virtuoso, then ``stat -c %U /proc/<pid>`` (fallback
-   ``ps -o user=``) over SSH — the process owner is authoritative and does
-   not depend on the process environment at all.
+4. ``ipcGetPid()`` in Virtuoso, then the same process-owner lookup.
 
 The expected user comes from ``VB_REMOTE_USER[_<profile>]`` and, when unset,
 from SSH ``whoami`` on the tunnel — so ssh-config-only setups are checked too.
@@ -58,6 +61,10 @@ class DaemonUserCheck:
     # True when the check did not run because no daemon answered (fresh
     # setup, CIW load pending).  Callers may proceed; re-verified later.
     skipped: bool = False
+    # True when the daemon answered but its IPC lane was busy or poisoned,
+    # so it could not identify itself through the CIW. Retrying later is the
+    # remedy, not the cross-user override.
+    busy: bool = False
 
 
 @dataclass(frozen=True)
@@ -144,15 +151,18 @@ def classify_daemon_query_failure(error_text: str) -> str:
     """Classify a failed identity query.
 
     Returns ``"not_loaded"`` when the failure pattern means no daemon is
-    listening behind the tunnel (normal pre-``load()`` state), or
+    listening behind the tunnel (normal pre-``load()`` state), ``"busy"``
+    when an authenticated daemon reported its IPC lane busy or poisoned, or
     ``"indeterminate"`` when the TCP endpoint answered but the daemon could
-    not identify itself — e.g. a busy foreign daemon — which callers should
-    treat as a hard failure, not a pass.
+    not identify itself, which callers should treat as a hard failure, not a
+    pass.
     """
     text = error_text or ""
     for marker in _DAEMON_NOT_LOADED_MARKERS:
         if marker in text:
             return "not_loaded"
+    if "BusyError" in text or "IPC lane is busy" in text or "IPC lane is poisoned" in text:
+        return "busy"
     return "indeterminate"
 
 
@@ -161,6 +171,31 @@ def _run_skill(client: Any, expr: str, timeout: int) -> str:
     if result.status != ExecutionStatus.SUCCESS:
         raise RuntimeError("; ".join(result.errors) or f"daemon query failed: {expr}")
     return clean_skill_output(result.output)
+
+
+def _signed_virtuoso_pid(client: Any, timeout: int) -> int | None:
+    """Virtuoso PID from the daemon's signed handshake, without using the CIW."""
+    handshake = getattr(client, "handshake_virtuoso_pid", None)
+    if handshake is None:
+        return None
+    try:
+        return handshake(timeout=timeout)
+    except Exception:
+        return None
+
+
+def _process_owner(runner: Any, pid: int | str) -> str:
+    for cmd in (f"stat -c %U /proc/{pid} 2>/dev/null", f"ps -o user= -p {pid} 2>/dev/null"):
+        try:
+            result = runner.run_command(cmd)
+        except Exception:
+            continue
+        if result.returncode == 0:
+            owner = (result.stdout or "").strip().splitlines()
+            owner = owner[-1].strip() if owner else ""
+            if owner:
+                return owner
+    return ""
 
 
 def _daemon_user_from_process(client: Any, runner: Any, timeout: int) -> str:
@@ -185,17 +220,7 @@ def _daemon_user_from_process(client: Any, runner: Any, timeout: int) -> str:
         client._remote_virtuoso_pid = int(pid)
     except Exception:
         pass
-    for cmd in (f"stat -c %U /proc/{pid} 2>/dev/null", f"ps -o user= -p {pid} 2>/dev/null"):
-        try:
-            result = runner.run_command(cmd)
-        except Exception:
-            continue
-        if result.returncode == 0:
-            owner = (result.stdout or "").strip().splitlines()
-            owner = owner[-1].strip() if owner else ""
-            if owner:
-                return owner
-    return ""
+    return _process_owner(runner, pid)
 
 
 def query_daemon_user(client: Any, *, timeout: int = 5, runner: Any = None) -> str:
@@ -206,6 +231,12 @@ def query_daemon_user(client: Any, *, timeout: int = 5, runner: Any = None) -> s
     """
     if runner is None:
         runner = getattr(client, "ssh_runner", None)
+    if runner is not None:
+        pid = _signed_virtuoso_pid(client, timeout)
+        if pid:
+            owner = _process_owner(runner, pid)
+            if owner:
+                return owner
     for expr in ('getShellEnvVar("USER")', 'getShellEnvVar("LOGNAME")'):
         user = _run_skill(client, expr, timeout)
         if user:
@@ -240,8 +271,16 @@ def check_daemon_user(
     try:
         daemon_user = query_daemon_user(client, timeout=timeout, runner=runner)
     except Exception as exc:
-        if classify_daemon_query_failure(str(exc)) == "not_loaded":
+        failure = classify_daemon_query_failure(str(exc))
+        if failure == "not_loaded":
             return DaemonUserCheck(ok=True, expected_user=expected, skipped=True)
+        if failure == "busy":
+            return DaemonUserCheck(
+                ok=False,
+                expected_user=expected,
+                busy=True,
+                error=f"the daemon's IPC lane is busy and could not identify the daemon ({exc})",
+            )
         return DaemonUserCheck(
             ok=False,
             expected_user=expected,

@@ -183,7 +183,7 @@ def test_restart_daemon_loads_current_setup_and_accepts_disconnect(monkeypatch, 
         lambda client, profile, timeout=5: type("Check", (), {"ok": True, "error": ""})(),
     )
 
-    cli._restart_daemon_one("t28_io")
+    assert cli._restart_daemon_one("t28_io") is True
 
     out = capsys.readouterr().out
     client = _FakeVirtuosoClient.instances[0]
@@ -219,7 +219,7 @@ def test_restart_daemon_refuses_cross_user_daemon(monkeypatch, capsys) -> None:
         )(),
     )
 
-    cli._restart_daemon_one(None)
+    assert cli._restart_daemon_one(None) is False
 
     out = capsys.readouterr().out
     assert "Refusing to restart daemon" in out
@@ -857,3 +857,14 @@ def test_start_warns_when_it_replaced_a_setup_for_another_port(monkeypatch, caps
     out = capsys.readouterr().out
     assert "[warning] This replaced /tmp/virtuoso_bridge_designer/virtuoso_bridge/virtuoso_setup.il" in out
     assert "port 65158" in out and "now uses port 65177" in out
+
+
+def test_restart_exits_nonzero_when_the_daemon_restart_fails(monkeypatch) -> None:
+    monkeypatch.setattr(cli, "_start_one", lambda: 0)
+    monkeypatch.setattr(cli, "_restart_daemon_one", lambda profile: False)
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.tunnel.SSHClient",
+        SimpleNamespace(is_running=lambda profile=None: False),
+    )
+
+    assert cli._restart_one() == 1
