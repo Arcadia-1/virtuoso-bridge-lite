@@ -216,3 +216,24 @@ def test_cli_session_restart_requires_confirmation_and_routes_force(monkeypatch,
     assert calls == [(('lib', 'cell', 'schematic'), {
         'dry_run': True, 'force_cadence_disconnect': True, 'timeout': 60,
     })]
+
+
+@pytest.mark.parametrize("action, expected", [
+    # A read-only status query refuses nothing; it read no status.
+    ("status", "status: blocked (no SOS status was read for this target; see the reason below)"),
+    ("co", "co: blocked (refused before any change; see the reason below)"),
+])
+def test_human_output_explains_a_blocked_outcome(capsys, action, expected):
+    cli._print_result({"action": action, "outcome": "blocked",
+                       "target": {"lib": "LIB", "cell": "CELL", "view": "schematic"},
+                       "diagnostics": ["Library is not managed by SOS."]})
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == expected
+    assert "reason: Library is not managed by SOS." in lines
+
+
+def test_human_output_keeps_the_outcome_token_first(capsys):
+    cli._print_result({"action": "ci", "outcome": "unknown", "diagnostics": ["response lost"]})
+    first, *rest = capsys.readouterr().out.splitlines()
+    assert first.startswith("ci: unknown (") and "check status before retrying" in first
+    assert "diagnostic: response lost" in rest
