@@ -881,3 +881,17 @@ def test_restart_exits_nonzero_when_the_daemon_restart_fails(monkeypatch) -> Non
 ])
 def test_status_describes_a_non_idle_lane(caps, text) -> None:
     assert cli._describe_lane(caps) == text
+
+
+def test_a_daemon_launched_moments_ago_is_not_killed_as_a_zombie() -> None:
+    """.cdsinit and -restore can load the bridge back to back, before the CIW
+    has read the first daemon's banner; that daemon is still starting."""
+    from virtuoso_bridge.transport.tunnel import _find_ramic_bridge_il
+
+    il = _find_ramic_bridge_il().read_text(encoding="utf-8")
+    start = il[il.index("procedure(RBStart()"):il.index("procedure(RBStop()")]
+    assert "unless(boundp('RBLaunchedAt) RBLaunchedAt = nil)" in il
+    zombie = start[start.index("when(boundp('RBIpc)"):start.index("zombie detected")]
+    assert "compareTime(getCurrentTime() RBLaunchedAt) < RBStartGraceSeconds" in zombie
+    assert start.index("] already starting (launched at") < start.index("running_bind=%s] already running")
+    assert start.index("RBLaunchedAt = getCurrentTime()") < start.index("ipcBeginProcess(")
