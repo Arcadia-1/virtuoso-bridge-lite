@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const read = (path: string) =>
   readFileSync(new URL(`../docs/${path}`, import.meta.url), "utf8");
-const pages = ["index.html", "guide/index.html", "privacy/index.html"].map(
+const pages = ["index.html", "privacy/index.html"].map(
   read,
 );
 
@@ -26,7 +26,8 @@ describe("shared light website chrome", () => {
         "https://chip-arena.com/",
         "https://circuits-and-systems.tokenzhang.com/",
         "https://www.tokenzhang.com/",
-        'href="/guide/"',
+        'href="https://github.com/Arcadia-1/virtuoso-bridge-lite#readme"',
+        'href="https://github.com/Arcadia-1/virtuoso-bridge-lite#citation"',
         'href="/privacy/"',
         'href="/analytics/"',
         "Analog Canvas",
@@ -61,15 +62,6 @@ describe("shared light website chrome", () => {
       expect(social).toContain(match[1]);
   });
 
-  it("keeps the simulation grid unfilled, so open paths cannot become black triangles", () => {
-    const plot = pages[0].match(
-      /<svg\s[^>]*aria-label="Illustration of a Spectre simulation[^>]*>[\s\S]*?<\/svg>/,
-    )?.[0];
-    expect(plot).toBeTruthy();
-    expect(plot?.match(/^<svg[^>]*>/)?.[0]).toContain('fill="none"');
-    expect(plot).not.toContain('fill="#000"');
-  });
-
   it("uses a single borderless text language switch on every public page", () => {
     for (const page of pages) {
       const switches = [
@@ -84,5 +76,23 @@ describe("shared light website chrome", () => {
       expect(switches[0][0]).toContain('<span class="zh" lang="en">EN</span>');
       expect(page).not.toContain('data-language="');
     }
+  });
+
+  it("keeps the landing page a short front door with a correct quick start", () => {
+    const landing = pages[0];
+    expect(landing.split("\n").length).toBeLessThan(450);
+    // `start` opens the tunnel; the CIW load(...) line is printed by `status`.
+    expect(landing).toMatch(/virtuoso-bridge status\s+<span class="comment"># prints the load/);
+    expect(landing).not.toMatch(/load\([^)]*\)[^<]*(printed by|输出的)[^<]*start/);
+    expect(landing).not.toContain("/guide/");
+  });
+
+  it("redirects the retired guide to the README and keeps it out of search", () => {
+    const guide = read("guide/index.html");
+    expect(guide).toContain(
+      'content="0; url=https://github.com/Arcadia-1/virtuoso-bridge-lite#readme"',
+    );
+    expect(guide).toContain('<meta name="robots" content="noindex" />');
+    expect(read("sitemap.xml")).not.toContain("/guide/");
   });
 });

@@ -15,8 +15,6 @@
       siteSwitcher.querySelector("summary").focus();
     }
   });
-  if (location.pathname.replace(/\/$/, "") === "/guide")
-    document.querySelector(".nav-guide")?.setAttribute("aria-current", "page");
 
   function setLanguage(language, persist = false) {
     const lang = language === "zh" ? "zh" : "en";
@@ -60,39 +58,6 @@
       });
   });
   setLanguage(root.dataset.lang || "en");
-
-  document.querySelectorAll('[role="tablist"]').forEach((tablist) => {
-    const tabs = [...tablist.querySelectorAll('[role="tab"]')];
-    function activate(tab, focus) {
-      tabs.forEach((item) => {
-        const selected = item === tab;
-        item.setAttribute("aria-selected", String(selected));
-        item.tabIndex = selected ? 0 : -1;
-        document.getElementById(item.getAttribute("aria-controls")).hidden =
-          !selected;
-      });
-      if (focus) tab.focus();
-    }
-    tabs.forEach((tab) => {
-      tab.addEventListener("click", () => activate(tab, false));
-      tab.addEventListener("keydown", (event) => {
-        let index = tabs.indexOf(tab);
-        if (event.key === "ArrowRight") index = (index + 1) % tabs.length;
-        else if (event.key === "ArrowLeft")
-          index = (index + tabs.length - 1) % tabs.length;
-        else if (event.key === "Home") index = 0;
-        else if (event.key === "End") index = tabs.length - 1;
-        else return;
-        event.preventDefault();
-        activate(tabs[index], true);
-      });
-    });
-    activate(
-      tabs.find((tab) => tab.getAttribute("aria-selected") === "true") ||
-        tabs[0],
-      false,
-    );
-  });
 
   const toast = document.getElementById("toast");
   document.querySelectorAll("[data-copy]").forEach((button) =>
