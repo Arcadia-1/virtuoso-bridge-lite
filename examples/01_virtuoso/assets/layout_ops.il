@@ -29,8 +29,8 @@ procedure(LayoutReadLayout(libName cellName)
   prog((cv buf)
     cv = dbOpenCellViewByType(libName cellName "layout" "maskLayout" "r")
     unless(cv return(sprintf(nil "ERROR: cannot open %s/%s/layout" libName cellName)))
-    buf = sprintf(nil "Layout: %s/%s/layout  (%d shapes  %d instances)\n"
-                  libName cellName length(cv~>shapes) length(cv~>instances))
+    buf = sprintf(nil "Layout: %s/%s/layout  (%d shapes  %d vias  %d instances)\n"
+                  libName cellName length(cv~>shapes) length(cv~>vias) length(cv~>instances))
     foreach(shape cv~>shapes
       buf = strcat(buf sprintf(nil "  %s [%s %s]"
                    shape~>objType car(shape~>lpp) cadr(shape~>lpp)))
@@ -41,6 +41,10 @@ procedure(LayoutReadLayout(libName cellName)
                        xCoord(car(bb)) yCoord(car(bb))
                        xCoord(cadr(bb)) yCoord(cadr(bb))))))
       buf = strcat(buf "\n"))
+    foreach(via cv~>vias
+      buf = strcat(buf sprintf(nil "  via: %s [%s]  @ (%.3f %.3f)\n"
+                   via~>viaHeader~>viaDefName via~>objType
+                   xCoord(via~>origin) yCoord(via~>origin))))
     foreach(inst cv~>instances
       buf = strcat(buf sprintf(nil "  inst: %s  [%s/%s]  @ (%.3f %.3f)\n"
                    inst~>name inst~>libName inst~>cellName

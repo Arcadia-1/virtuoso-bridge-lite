@@ -186,8 +186,8 @@ def main() -> int:
         f"     progn( "
         f"       cv=dbOpenCellViewByType({_q(args.target_lib)} {_q(cell)} \"layout\" nil \"r\") "
         f"       if(cv "
-        f"          sprintf(nil \"instances=%d shapes=%d bbox=%L\" "
-        f"                  length(cv~>instances) length(cv~>shapes) cv~>bBox) "
+        f"          sprintf(nil \"instances=%d shapes=%d vias=%d bbox=%L\" "
+        f"                  length(cv~>instances) length(cv~>shapes) length(cv~>vias) cv~>bBox) "
         f"          nil)) "
         f"     nil)) "
     )

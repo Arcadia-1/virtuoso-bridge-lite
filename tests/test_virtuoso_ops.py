@@ -55,3 +55,24 @@ def test_layout_read_summary_returns_after_instance_loop() -> None:
     # Return the accumulated text even with zero instances, and only after
     # every instance has been appended.
     assert skill.endswith("yCoord(inst~>xy)))) return(buf))")
+
+
+def test_layout_reads_report_vias_as_their_own_objects() -> None:
+    """Vias are neither shapes nor instances in OpenAccess (cv~>vias)."""
+    from virtuoso_bridge.virtuoso.layout.ops import layout_read_geometry
+    from virtuoso_bridge.virtuoso.layout.reader import parse_layout_geometry_output
+
+    summary = layout_read_summary("demoLib", "top")
+    assert "%d vias" in summary and "length(cv~>vias)" in summary
+    assert "foreach(via cv~>vias" in summary and "via~>viaHeader~>viaDefName" in summary
+    geometry = layout_read_geometry("demoLib", "top")
+    assert "foreach(via cv~>vias" in geometry and "via~>origin" in geometry
+
+    # As IC6.1.8 prints one M2_M1 via.
+    parsed = parse_layout_geometry_output(
+        '"via\\tobjType=stdVia\\tvia=M2_M1\\txy=(1.0 1.0)\\torient=\\"R0\\"\\tbbox=((0.81 0.81) (1.19 1.19))\\n"'
+    )
+    assert parsed == [{
+        "kind": "via", "objType": "stdVia", "via": "M2_M1", "xy": (1.0, 1.0),
+        "orient": '"R0"', "bbox": [(0.81, 0.81), (1.19, 1.19)],
+    }]
