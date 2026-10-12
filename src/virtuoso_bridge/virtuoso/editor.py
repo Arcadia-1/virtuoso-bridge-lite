@@ -34,11 +34,30 @@ def close_editor_cellview() -> str:
 
 
 def ensure_operation_response(response: Any, *, context: str) -> None:
-    """Raise a consistent error when an edit batch fails."""
+    """Raise a consistent error when an edit batch fails.
+
+    Under the shared-CIW guard, a failure carrying a request handle raises
+    :class:`RequestRecoveryError` (so the caller can query the original
+    request's receipt) and a dialog-blocked one :class:`DialogBlockedError`;
+    both are RuntimeErrors, like the plain error otherwise raised.
+    """
     if isinstance(response, VirtuosoResult):
         if response.status != ExecutionStatus.SUCCESS:
             errors = response.errors or ["unknown failure"]
-            raise RuntimeError(f"{context} failed: {errors[0]}")
+            message = f"{context} failed: {errors[0]}"
+            metadata = response.metadata or {}
+            if metadata.get("request_handle"):
+                from virtuoso_bridge.virtuoso.requests import RequestRecoveryError
+
+                error: RuntimeError = RequestRecoveryError(response)
+            elif metadata.get("dialog_guard"):
+                from virtuoso_bridge.virtuoso.dialogs import DialogBlockedError
+
+                error = DialogBlockedError(response)
+            else:
+                raise RuntimeError(message)
+            error.args = (message,)
+            raise error
         return
 
     if not response.get("ok", False):
