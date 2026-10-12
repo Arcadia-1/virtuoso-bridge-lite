@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from virtuoso_bridge.models import ExecutionStatus, VirtuosoResult
 from virtuoso_bridge.transport.ssh import CommandResult
 from virtuoso_bridge.transport.tunnel import (
@@ -721,6 +723,44 @@ def test_start_hint_uses_distinct_local_and_remote_ports(monkeypatch, capsys) ->
 
     assert rc == 1
     assert "-L 65061:127.0.0.1:65062" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("daemon_host", ["eda-host", "localhost"])
+def test_start_prints_the_ciw_load_line(monkeypatch, capsys, daemon_host) -> None:
+    setup_path = "/tmp/virtuoso_bridge_designer/virtuoso_bridge/virtuoso_setup.il"
+
+    class _FakeSSHClient:
+        port = 65061
+        remote_port = 65062
+
+        @staticmethod
+        def is_running(profile=None):
+            return False
+
+        @staticmethod
+        def read_state(profile=None):
+            return {"port": 65061, "setup_path": setup_path}
+
+        @classmethod
+        def from_env(cls, **_kwargs):
+            return cls()
+
+        def warm(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHClient", _FakeSSHClient)
+    monkeypatch.setattr(
+        cli,
+        "remote_host_roles_from_os",
+        lambda profile, load=False: SimpleNamespace(daemon_host=daemon_host),
+    )
+    monkeypatch.setattr(cli, "_wait_for_tunnel_running", lambda profile: True)
+
+    assert cli._start_one_profile(None) == 0
+    assert f'Load in Virtuoso CIW: load("{setup_path}")' in capsys.readouterr().out
 
 
 def test_wait_for_tunnel_running_retries_during_startup(monkeypatch) -> None:
