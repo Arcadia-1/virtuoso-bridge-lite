@@ -92,11 +92,11 @@ def _build_placeholder_schematic(
     """
     with client.schematic.create(lib, cell) as sch:
         for i, name in enumerate(inputs):
-            sch.add(schematic_create_pin(name, 0.0, -i * 1.0, direction="input"))
+            sch.add(schematic_create_pin(name, 0.0, -i * 1.0, "R0", direction="input"))
         for i, name in enumerate(outputs):
-            sch.add(schematic_create_pin(name, 4.0, -i * 1.0, direction="output"))
+            sch.add(schematic_create_pin(name, 4.0, -i * 1.0, "R0", direction="output"))
         for i, name in enumerate(inouts):
-            sch.add(schematic_create_pin(name, 2.0, -i * 1.0, direction="inputOutput"))
+            sch.add(schematic_create_pin(name, 2.0, -i * 1.0, "R0", direction="inputOutput"))
 
 
 def _generate_symbol(client: VirtuosoClient, lib: str, cell: str) -> None:
