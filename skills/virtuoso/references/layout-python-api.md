@@ -237,18 +237,20 @@ Use these with `lay.add(...)`:
 |----------|-------|-------------|
 | `layout_read_summary(lib, cell)` | Instance/shape count | Quick overview |
 | `layout_read_geometry(lib, cell)` | Full geometry dump | Tab-separated output |
-| `layout_list_shapes()` | Shape types and LPPs | From open window |
+| `layout_list_shapes()` | Shape types and LPPs | Edited cellview inside an editor, else current window |
 
 **Edit:**
 
 | Function | SKILL | Description |
 |----------|-------|-------------|
 | `clear_current_layout()` | Delete visible shapes | Clear current |
-| `layout_clear_routing()` | Delete all + save | Clear and save |
+| `layout_clear_routing()` | Delete all + save | Edited cellview inside an editor, else current window |
 | `layout_select_box(bbox)` | `geSelectBox` | Select in box |
 | `layout_delete_selected()` | `leDeleteAllSelect` | Delete selection |
-| `layout_delete_shapes_on_layer(layer, purpose)` | Iterate + delete | Delete by layer |
+| `layout_delete_shapes_on_layer(layer, purpose)` | Iterate + delete | Edited cellview inside an editor, else current window |
 | `layout_delete_cell(lib, cell)` | Close + `ddDeleteObj` | Delete cell |
+
+Inside `client.layout.create()`/`modify()`, `layout_list_shapes`, `layout_delete_shapes_on_layer` and `layout_clear_routing` act on the edited cellview; called standalone they act on the current layout window and raise when none is open. Pass `cv_expr=` to choose explicitly. Selection helpers (`layout_select_box`, `layout_delete_selected`) always use the current window.
 
 **Layer visibility:**
 

@@ -20,7 +20,9 @@ from virtuoso_bridge.virtuoso.ops import (
     open_cell_view,
     save_current_cellview,
 )
+from virtuoso_bridge.virtuoso.basic.composition import compose_skill_script
 from virtuoso_bridge.virtuoso.layout.ops import (
+    LAYOUT_EDIT_CV_MARKER,
     layout_bind_current_or_open_cell_view,
 )
 
@@ -58,6 +60,9 @@ class LayoutEditor:
                     self.lib, self.cell, view=self.view, mode=self.mode,
                 )
             )
+        # Lets content operations such as layout_delete_shapes_on_layer() target
+        # this cellview instead of the current window; cleared on exit below.
+        self.commands.append(f"{LAYOUT_EDIT_CV_MARKER} = cv")
         return self
 
     def add(self, skill_cmd: str) -> None:
@@ -71,5 +76,9 @@ class LayoutEditor:
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         if exc_type is None:
             self.commands.append(save_current_cellview())
-            response = self.client.execute_operations(self.commands, timeout=self.timeout)
+            batch = compose_skill_script(self.commands)
+            script = f"unwindProtect({batch} {LAYOUT_EDIT_CV_MARKER} = nil)"
+            response = self.client.execute_operations(
+                [script], timeout=self.timeout, wrap_in_progn=False,
+            )
             ensure_operation_response(response, context="layout edit")

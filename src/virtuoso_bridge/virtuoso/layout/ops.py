@@ -406,18 +406,45 @@ def layout_read_geometry(
         "return(out))"
     )
 
+# Set by LayoutEditor for the duration of a create()/modify() batch, so the
+# content operations below act on the edited cellview there rather than on
+# whatever layout window happens to be current.
+LAYOUT_EDIT_CV_MARKER = "vbLayoutEditCv"
+
+
+def _layout_target_cv_expr(
+    cv_expr: str | None,
+    *,
+    view: str,
+    view_type: str | None,
+    mode: str,
+) -> str:
+    """Explicit cellview, else the editor's cellview, else the current window."""
+    if cv_expr is not None:
+        return cv_expr
+    window = _layout_get_edit_cv_expr(view=view, view_type=view_type, mode=mode)
+    marker = LAYOUT_EDIT_CV_MARKER
+    return f"if(boundp('{marker}) && {marker} then {marker} else {window})"
+
+
+_NO_LAYOUT_ERROR = (
+    'unless(cv error("no layout cellview: open a layout window or run inside '
+    'client.layout.create()/modify()")) '
+)
+
 def layout_list_shapes(
     *,
     view: str = "layout",
     view_type: str | None = None,
     mode: str = "a",
+    cv_expr: str | None = None,
 ) -> str:
-    """Build SKILL to list shape type and LPP from the open layout."""
-    cv_expr = _layout_get_edit_cv_expr(view=view, view_type=view_type, mode=mode)
+    """Build SKILL to list shape type and LPP. Inside client.layout.create()/modify() it uses the edited cellview; standalone, the current layout window. Pass cv_expr to choose explicitly."""
+    target = _layout_target_cv_expr(cv_expr, view=view, view_type=view_type, mode=mode)
     return (
         "prog((cv out) "
-        f"cv = {cv_expr} "
-        'unless(cv return("ERROR: no layout window open")) '
+        f"cv = {target} "
+        f"{_NO_LAYOUT_ERROR}"
         'out = "" '
         'foreach(shape cv~>shapes '
         'out = strcat(out sprintf(nil "%s [%s %s]\\n" shape~>objType car(shape~>lpp) cadr(shape~>lpp)))) '
@@ -431,15 +458,16 @@ def layout_delete_shapes_on_layer(
     view: str = "layout",
     view_type: str | None = None,
     mode: str = "a",
+    cv_expr: str | None = None,
 ) -> str:
-    """Build SKILL to delete all shapes on a given layer/purpose from the open layout."""
-    cv_expr = _layout_get_edit_cv_expr(view=view, view_type=view_type, mode=mode)
+    """Build SKILL to delete all shapes on one layer/purpose. Inside client.layout.create()/modify() it uses the edited cellview; standalone, the current layout window. Pass cv_expr to choose explicitly."""
+    target = _layout_target_cv_expr(cv_expr, view=view, view_type=view_type, mode=mode)
     escaped_layer = escape_skill_string(layer)
     escaped_purpose = escape_skill_string(purpose)
     return (
         "prog((cv shapes count) "
-        f"cv = {cv_expr} "
-        'unless(cv return("ERROR: no layout window open")) '
+        f"cv = {target} "
+        f"{_NO_LAYOUT_ERROR}"
         "shapes = cv~>shapes "
         "count = 0 "
         'foreach(shape shapes when(car(shape~>lpp) == '
@@ -453,13 +481,14 @@ def layout_clear_routing(
     view: str = "layout",
     view_type: str | None = None,
     mode: str = "a",
+    cv_expr: str | None = None,
 ) -> str:
-    """Build SKILL to delete all shapes from the open layout and save it."""
-    cv_expr = _layout_get_edit_cv_expr(view=view, view_type=view_type, mode=mode)
+    """Build SKILL to delete all shapes (instances kept) and save. Inside client.layout.create()/modify() it uses the edited cellview; standalone, the current layout window. Pass cv_expr to choose explicitly."""
+    target = _layout_target_cv_expr(cv_expr, view=view, view_type=view_type, mode=mode)
     return (
         "prog((cv count) "
-        f"cv = {cv_expr} "
-        'unless(cv return("ERROR: no layout window open")) '
+        f"cv = {target} "
+        f"{_NO_LAYOUT_ERROR}"
         "count = length(cv~>shapes) "
         "foreach(shape cv~>shapes dbDeleteObject(shape)) "
         "dbSave(cv) "
