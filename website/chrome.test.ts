@@ -53,13 +53,18 @@ describe("shared light website chrome", () => {
     );
   });
 
-  it("shares the new circuit-bridge mark with the social preview", () => {
-    const logo = read("favicon.svg");
-    const social = read("assets/social-card.svg");
-    expect(logo).toContain('fill="#fff"');
-    expect(logo).not.toContain("rotate(");
-    for (const match of logo.matchAll(/<path\s+d="([^"]+)"/g))
-      expect(social).toContain(match[1]);
+  it("uses one frameless VB mark for the favicon, header and social preview", () => {
+    const paths = (svg: string) =>
+      [...svg.matchAll(/\sd="([^"]+)"/g)].map((match) => match[1]);
+    const [mark] = paths(read("assets/mark.svg"));
+    const favicon = read("favicon.svg");
+    expect(mark).toBeTruthy();
+    expect(paths(favicon)).toEqual([mark]);
+    expect(favicon).not.toContain("<rect");
+    expect(favicon).toContain("prefers-color-scheme: dark");
+    expect(read("assets/social-card.svg")).toContain(`d="${mark}"`);
+    for (const page of pages)
+      expect(page).toContain('src="/assets/mark.svg?v=20261012-vb"');
   });
 
   it("uses a single borderless text language switch on every public page", () => {

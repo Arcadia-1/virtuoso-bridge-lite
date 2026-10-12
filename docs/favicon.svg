@@ -1,23 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
-  <!-- One wire between two pins, hopping the gap: agent on one side, Virtuoso on the other. -->
-  <rect
-    x=".75"
-    y=".75"
-    width="46.5"
-    height="46.5"
-    rx="10"
-    fill="#fff"
-    stroke="#d9dde3"
-    stroke-width="1.5"
-  />
+  <!-- Italic VB: the V's right arm is the B's stem, one stroke shared by both sides. -->
+  <style>
+    path { fill: #000; }
+    @media (prefers-color-scheme: dark) {
+      path { fill: #fff; }
+    }
+  </style>
   <path
-    d="M9 29H14A10 10 0 0 1 34 29H39"
-    fill="none"
-    stroke="#000"
-    stroke-width="4.2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
+    d="M1 4.21L7.98 4.21L22.53 43.79L15.55 43.79ZM28.21 4.21L35.19 4.21L22.53 43.79L15.55 43.79ZM28.21 4.21L37.81 4.21C44.56 4.21 48.45 9.16 46.49 15.27C44.54 21.38 37.49 26.33 30.74 26.33L21.13 26.33ZM23.18 19.93L36.28 19.93C43.51 19.93 47.66 25.27 45.55 31.86C43.44 38.44 35.87 43.79 28.64 43.79L15.55 43.79ZM33.15 10.62L30.17 19.93L32.78 19.93C35.68 19.93 38.69 17.84 39.51 15.27C40.33 12.7 38.66 10.62 35.76 10.62ZM28.12 26.33L24.58 37.38L30.69 37.38C34.06 37.38 37.59 34.91 38.57 31.86C39.55 28.8 37.6 26.33 34.23 26.33Z"
   />
-  <circle cx="9" cy="29" r="4" fill="#000" />
-  <circle cx="39" cy="29" r="4" fill="#000" />
 </svg>
