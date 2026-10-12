@@ -348,6 +348,15 @@ def _target_open_check_skill(lib: str, cell: str, view: str) -> str:
     )
 
 
+# Used when the caller gives no device map: maps the plain Spectre/SPICE
+# primitives to analogLib, without which spiceIn stops with SPICEIN-24.
+DEFAULT_DEVICE_MAP = (
+    "devselect := resistor res\n"
+    "devselect := capacitor cap\n"
+    "devselect := inductor ind\n"
+)
+
+
 def import_netlist_schematic(
     client: Any,
     lib: str,
@@ -367,11 +376,27 @@ def import_netlist_schematic(
 ) -> Any:
     """Import a netlist into a schematic view through shell ``spiceIn`` + SKILL.
 
+    ``cell`` names the subcircuit to import (spiceIn's importSubList), so it
+    must match a ``subckt``/``.SUBCKT`` name in the netlist; import a
+    hierarchy leaf-first, one call per subcircuit. Without ``dev_map_file``,
+    :data:`DEFAULT_DEVICE_MAP` maps resistor/capacitor/inductor primitives to
+    analogLib; a given map replaces it.
+
     ``spiceIn`` is run outside the CIW SKILL channel, matching the project
     guidance for Cadence tools that may launch their own Virtuoso process.
     The live SKILL bridge is used for environment discovery, preflight checks,
     and the final ``conn2Sch`` database conversion.
     """
+    if dev_map_file is None:
+        with tempfile.TemporaryDirectory(prefix="vb-devmap-") as stage:
+            default_map = Path(stage) / "default.devmap"
+            default_map.write_text(DEFAULT_DEVICE_MAP, encoding="utf-8")
+            return import_netlist_schematic(
+                client, lib, cell, netlist_file,
+                language=language, sim_name=sim_name, output_sim_name=output_sim_name,
+                ref_libs=ref_libs, netlist_view=netlist_view, schematic_view=schematic_view,
+                overwrite=overwrite, dev_map_file=default_map, run_dir=run_dir, timeout=timeout,
+            )
     context = _netlist_import_context(client, timeout=timeout)
     resolved_run_dir = _resolve_import_run_dir(run_dir, lib, cell)
     preflight = client.execute_skill(
