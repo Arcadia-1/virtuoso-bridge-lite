@@ -302,3 +302,43 @@ def test_ssh_client_one_host_docs_keep_shared_runner_and_cache_key(monkeypatch) 
     assert client.docs_runner is ssh.ssh_runner
     assert client.docs_runner.host == "compute-b"
     assert client._skill_finder_cache_host() == "compute-b"
+
+
+def test_doc_commands_never_contact_a_running_daemon(monkeypatch, capsys) -> None:
+    """A busy or dialog-blocked CIW must not break documentation lookups."""
+    from virtuoso_bridge import cli
+    from virtuoso_bridge.virtuoso.basic import bridge
+
+    def _daemon(*_args, **_kwargs):
+        raise AssertionError("documentation command contacted the daemon")
+
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHRunner", _RecordingRunner)
+    monkeypatch.setattr(SSHClient, "is_running", classmethod(lambda cls, profile=None: True))
+    monkeypatch.setattr(SSHClient, "read_state", staticmethod(lambda profile=None: {"port": 65000}))
+    monkeypatch.setattr(
+        SSHClient,
+        "from_env",
+        classmethod(lambda cls, **_kw: SSHClient(remote_host="eda-host", remote_user="designer")),
+    )
+    monkeypatch.setattr(bridge, "_acquire_daemon_token", _daemon)
+    monkeypatch.setattr(VirtuosoClient, "execute_skill", _daemon)
+    monkeypatch.setattr(cli, "_load_cli_env", lambda: None)
+    hosts = []
+
+    def _more_info(self, func_name, **_kwargs):
+        hosts.append(self.docs_runner.host)
+        return {"func_name": func_name, "file_path": "f.html", "topic": None, "plain_text": "text"}
+
+    monkeypatch.setattr(VirtuosoClient, "get_skill_more_info", _more_info)
+    monkeypatch.setattr(VirtuosoClient, "find_skill", lambda self, query, **_kw: [])
+    monkeypatch.setattr(VirtuosoClient, "doc_info", lambda self: {"doc_roots": [GUI_DOC_ROOT]})
+    monkeypatch.setattr(
+        VirtuosoClient, "search_docs", lambda self, query, **_kw: {"doc_roots": [GUI_DOC_ROOT], "results": []}
+    )
+
+    assert cli.main(["skill-info", "ipcGetPid"]) == 0
+    assert hosts == ["eda-host"]
+    assert cli.main(["skill-find", "ipcGetPid", "--json"]) == 0
+    assert cli.main(["doc-info"]) == 0
+    assert cli.main(["doc-search", "ipcGetPid"]) == 0
+    capsys.readouterr()

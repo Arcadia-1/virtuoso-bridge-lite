@@ -1304,6 +1304,22 @@ _EXPORT_VISIO_OPTS: dict = {
 }
 
 
+def _docs_client():
+    """Client for documentation commands, which only use SSH to the docs host.
+
+    ``VirtuosoClient.from_env()`` also asks a running daemon to prove its
+    owner through the CIW, so documentation lookups failed whenever the CIW
+    was busy or blocked by a dialog.
+    """
+    from virtuoso_bridge import VirtuosoClient
+    from virtuoso_bridge.profile import resolve_profile
+    from virtuoso_bridge.transport.tunnel import SSHClient
+
+    profile = resolve_profile(_get_cli_profile())
+    ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
+    return VirtuosoClient(host="127.0.0.1", port=ssh.port, tunnel=ssh)
+
+
 def cli_find(*, query: str | None, mode: str, limit: int, include_desc: bool, json_output: bool) -> int:
     """Search SKILL API documentation from Cadence .fnd files.
 
@@ -1314,10 +1330,9 @@ def cli_find(*, query: str | None, mode: str, limit: int, include_desc: bool, js
     import sys
 
     _load_cli_env()
-    from virtuoso_bridge import VirtuosoClient
     from virtuoso_bridge.virtuoso.skill_finder import SKILLFinder
 
-    client = VirtuosoClient.from_env(profile=_get_cli_profile())
+    client = _docs_client()
 
     if not query:
         print("Error: query argument required for 'skill-find'", file=sys.stderr)
@@ -1345,9 +1360,7 @@ def cli_skill_info(*, func_name: str, json_output: bool) -> int:
     import json as _json
 
     _load_cli_env()
-    from virtuoso_bridge import VirtuosoClient
-
-    client = VirtuosoClient.from_env(profile=_get_cli_profile())
+    client = _docs_client()
     result = client.get_skill_more_info(func_name)
 
     if json_output:
@@ -1410,9 +1423,7 @@ def cli_doc_search(
             }
     else:
         _load_cli_env()
-        from virtuoso_bridge import VirtuosoClient
-
-        client = VirtuosoClient.from_env(profile=_get_cli_profile())
+        client = _docs_client()
         if list_roots:
             client_payload = client.search_docs("", limit=0, rebuild_index=rebuild_index)
             payload = {
@@ -1499,9 +1510,7 @@ def cli_doc_info(
             return 1
     else:
         _load_cli_env()
-        from virtuoso_bridge import VirtuosoClient
-
-        client = VirtuosoClient.from_env(profile=_get_cli_profile())
+        client = _docs_client()
         payload = client.doc_info()
         if not payload.get("doc_roots"):
             print(
