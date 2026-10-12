@@ -12,7 +12,7 @@ Verification layers (first non-empty answer wins):
 2. ``getShellEnvVar("LOGNAME")`` — Virtuoso launched from a stripped
    environment often has neither, so an empty answer means *indeterminate*,
    never *match*.
-3. ``getpid()`` in Virtuoso, then ``stat -c %U /proc/<pid>`` (fallback
+3. ``ipcGetPid()`` in Virtuoso, then ``stat -c %U /proc/<pid>`` (fallback
    ``ps -o user=``) over SSH — the process owner is authoritative and does
    not depend on the process environment at all.
 
@@ -164,7 +164,7 @@ def _run_skill(client: Any, expr: str, timeout: int) -> str:
 
 
 def _daemon_user_from_process(client: Any, runner: Any, timeout: int) -> str:
-    """Resolve the Virtuoso process owner over SSH via ``getpid()``.
+    """Resolve the Virtuoso process owner over SSH via ``ipcGetPid()``.
 
     Does not depend on the Virtuoso process environment at all, so it also
     identifies daemons whose ``USER``/``LOGNAME`` are unset.
@@ -172,7 +172,7 @@ def _daemon_user_from_process(client: Any, runner: Any, timeout: int) -> str:
     if runner is None:
         return ""
     try:
-        pid = _run_skill(client, "getpid()", timeout)
+        pid = _run_skill(client, "ipcGetPid()", timeout)
     except Exception:
         return ""
     pid = pid.strip()

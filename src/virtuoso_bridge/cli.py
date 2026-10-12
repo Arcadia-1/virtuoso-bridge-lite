@@ -626,7 +626,7 @@ def _print_status() -> int:
 
                 # Query Virtuoso environment info
                 for skill_expr, label in [
-                    ('getpid()', 'virtuoso pid'),
+                    ('ipcGetPid()', 'virtuoso pid'),
                     ('getHostName()', 'CIW host'),
                     ('getCurrentTime()', 'time'),
                     ('getVersion()', 'version'),

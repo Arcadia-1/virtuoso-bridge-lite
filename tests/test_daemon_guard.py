@@ -75,7 +75,7 @@ class FakeDaemon:
             self.executed.append(skill)
             if 'getShellEnvVar("USER")' in skill or 'getShellEnvVar("LOGNAME")' in skill:
                 body = f'"{self.user}"' if self.user else "nil"
-            elif skill.strip() == "getpid()":
+            elif skill.strip() == "ipcGetPid()":
                 body = self.virtuoso_pid
             else:
                 body = "nil"
@@ -202,7 +202,7 @@ def test_query_falls_back_to_logname() -> None:
 
 
 def test_query_falls_back_to_process_owner_over_ssh() -> None:
-    client = FakeClient({"getpid()": "424242"})
+    client = FakeClient({"ipcGetPid()": "424242"})
     runner = FakeRunner(owner="user2")
     assert query_daemon_user(client, runner=runner) == "user2"
     assert any(cmd.startswith("stat -c %U /proc/424242") for cmd in runner.commands)
@@ -359,7 +359,7 @@ def test_client_rejects_cross_user_before_any_skill_execution(
     with pytest.raises(RuntimeError, match="identity check failed"):
         client._reject_cross_user_daemon_if_reachable(profile=None, timeout=5)
     # Only identity probes may reach the foreign session — no user SKILL.
-    assert all("getShellEnvVar" in s or s.strip() == "getpid()" for s in foreign_daemon.executed)
+    assert all("getShellEnvVar" in s or s.strip() == "ipcGetPid()" for s in foreign_daemon.executed)
 
 
 # ---------------------------------------------------------------------------

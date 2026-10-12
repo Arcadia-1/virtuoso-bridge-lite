@@ -242,9 +242,7 @@ def test_job_with_recorded_cadence_marker_reports_completed(tmp_path, portable_l
 # SKILL functions that do not exist on the recorded release
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason=(
-    "open bug: isCallable('getpid) is nil on IC6.1.8 (the SKILL function is ipcGetPid); "
-    "bridge code still sends getpid()"))
+# isCallable('getpid) is nil on IC6.1.8; the SKILL function is ipcGetPid.
 def test_bridge_never_sends_nonexistent_getpid_skill():
     offenders = []
     for path in SRC.rglob("*.py"):
