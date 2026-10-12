@@ -474,11 +474,6 @@ pre .comment {
   font-size: 19px;
   line-height: 1.55;
 }
-.sub {
-  margin-top: 10px;
-  max-width: 660px;
-  font-size: 16px;
-}
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -534,7 +529,7 @@ pre .comment {
 .note {
   font-size: 14px;
 }
-.page a:not(.button):not(.card-link) {
+.page a:not(.button) {
   color: var(--cyan);
   text-decoration: underline;
   text-decoration-color: #9fcbc7;
@@ -548,39 +543,55 @@ pre .comment {
   color: var(--ink);
   font-size: 0.9em;
 }
-.caps {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1px;
-  margin: 20px 0 0;
-  padding: 0;
+.compare {
+  width: 100%;
+  margin-top: 20px;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--line);
-  list-style: none;
-}
-.caps li {
-  padding: 18px 20px;
+  border-collapse: separate;
+  border-spacing: 0;
   background: var(--surface);
-}
-.caps strong {
-  display: block;
-  font-size: 15px;
-}
-.caps p {
-  margin-top: 4px;
   font-size: 14px;
   line-height: 1.55;
 }
-.card-link {
-  display: inline-block;
-  margin-top: 8px;
-  color: var(--cyan);
-  font: 12px/1.5 var(--mono);
+.compare th,
+.compare td {
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
 }
-.card-link:hover {
-  text-decoration: underline;
+.compare thead th,
+.compare thead td {
+  border-top: 0;
+  background: #f1f3f6;
+  font-size: 14px;
+}
+.compare tbody th {
+  width: 24%;
+  color: var(--ink);
+  font-weight: 600;
+}
+.compare td {
+  width: 38%;
+  color: var(--muted);
+}
+.compare thead th:nth-child(2),
+.compare tbody td:nth-of-type(1) {
+  background: #f2f8f7;
+  color: var(--ink);
+}
+.compare thead th:nth-child(2) {
+  color: var(--cyan);
+}
+.compare code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: #eceff4;
+  color: var(--ink);
+  font-size: 0.88em;
+  white-space: nowrap;
 }
 .code {
   margin-top: 20px;
@@ -660,11 +671,42 @@ pre .comment {
   .lead {
     font-size: 17px;
   }
-  .caps {
-    grid-template-columns: 1fr;
-  }
   .block {
     margin-top: 48px;
+  }
+  /* Phones: each comparison row becomes a small card with labelled cells. */
+  .compare thead {
+    display: none;
+  }
+  .compare,
+  .compare tbody,
+  .compare tr,
+  .compare th,
+  .compare td {
+    display: block;
+    width: auto;
+  }
+  .compare tr + tr {
+    border-top: 1px solid var(--line);
+  }
+  .compare tbody th {
+    width: auto;
+    padding-bottom: 2px;
+    border-top: 0;
+  }
+  .compare td {
+    padding-top: 6px;
+    padding-bottom: 8px;
+    border-top: 0;
+  }
+  .compare td:last-child {
+    padding-bottom: 14px;
+  }
+  .compare td::before {
+    content: attr(data-label);
+    display: block;
+    color: var(--muted);
+    font: 600 11px/1.6 var(--mono);
   }
 }
 @media (prefers-reduced-motion: reduce) {

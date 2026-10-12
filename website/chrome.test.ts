@@ -92,6 +92,17 @@ describe("shared light website chrome", () => {
     expect(landing).not.toContain("/guide/");
   });
 
+  it("compares with skillbridge in one labelled table", () => {
+    const table = pages[0].match(/<table class="compare">[\s\S]*?<\/table>/)?.[0];
+    expect(table).toBeTruthy();
+    expect(table).toContain('href="https://github.com/unihd-cag/skillbridge"');
+    // Phones stack each row and show these labels instead of the header row.
+    const rows = table!.match(/<tr>[\s\S]*?<\/tr>/g)!.slice(1);
+    expect(rows.length).toBeGreaterThan(3);
+    for (const row of rows)
+      expect(row.match(/data-label="(Virtuoso Bridge|skillbridge)"/g)).toHaveLength(2);
+  });
+
   it("redirects the retired guide to the README and keeps it out of search", () => {
     const guide = read("guide/index.html");
     expect(guide).toContain(
