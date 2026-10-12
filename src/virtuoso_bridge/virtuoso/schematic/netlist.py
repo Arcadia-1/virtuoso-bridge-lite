@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shlex
@@ -15,8 +16,11 @@ from pathlib import Path, PurePosixPath
 from typing import Any, TypedDict
 
 from virtuoso_bridge.models import ExecutionStatus
+from virtuoso_bridge.transport.remote_paths import private_dir_shell_prelude
 from virtuoso_bridge.virtuoso.ops import escape_skill_string
 from virtuoso_bridge.virtuoso.skill_output import parse_sexpr
+
+logger = logging.getLogger(__name__)
 
 _SKILL_SYMBOL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -386,6 +390,13 @@ def import_netlist_schematic(
     guidance for Cadence tools that may launch their own Virtuoso process.
     The live SKILL bridge is used for environment discovery, preflight checks,
     and the final ``conn2Sch`` database conversion.
+
+    Without ``run_dir``, ``spiceIn`` runs in a new private (0700) directory
+    under ``/tmp`` that is removed after a successful import, so the
+    ``spiceIn`` paths in a successful result no longer exist. On failure it is
+    kept and its path is added to the error (logged as a warning for errors
+    other than ``RuntimeError``). Pass ``run_dir`` to keep the files; the
+    caller then owns that directory.
     """
     if dev_map_file is None:
         with tempfile.TemporaryDirectory(prefix="vb-devmap-") as stage:
@@ -412,52 +423,69 @@ def import_netlist_schematic(
     _require_result_ok(preflight, "netlist import preflight failed")
 
     runner = getattr(client, "ssh_runner", None)
-    if runner is None:
-        paths = _run_spicein_local(
-            context,
-            lib,
-            cell,
-            netlist_file,
-            language=language,
-            sim_name=sim_name,
-            output_sim_name=output_sim_name,
-            ref_libs=ref_libs,
-            netlist_view=netlist_view,
-            overwrite=overwrite,
-            dev_map_file=dev_map_file,
-            run_dir=resolved_run_dir,
-            timeout=timeout,
-        )
-    else:
-        paths = _run_spicein_remote(
-            client,
-            runner,
-            context,
-            lib,
-            cell,
-            netlist_file,
-            language=language,
-            sim_name=sim_name,
-            output_sim_name=output_sim_name,
-            ref_libs=ref_libs,
-            netlist_view=netlist_view,
-            overwrite=overwrite,
-            dev_map_file=dev_map_file,
-            run_dir=resolved_run_dir,
-            timeout=timeout,
-        )
+    # The import owns (creates privately, then removes) only the default run
+    # directory; a caller-given run_dir is the caller's to keep.
+    owned_run_dir = run_dir is None
+    _create_import_run_dir(runner, resolved_run_dir, owned=owned_run_dir, timeout=timeout)
+    try:
+        if runner is None:
+            paths = _run_spicein_local(
+                context,
+                lib,
+                cell,
+                netlist_file,
+                language=language,
+                sim_name=sim_name,
+                output_sim_name=output_sim_name,
+                ref_libs=ref_libs,
+                netlist_view=netlist_view,
+                overwrite=overwrite,
+                dev_map_file=dev_map_file,
+                run_dir=resolved_run_dir,
+                timeout=timeout,
+            )
+        else:
+            paths = _run_spicein_remote(
+                client,
+                runner,
+                context,
+                lib,
+                cell,
+                netlist_file,
+                language=language,
+                sim_name=sim_name,
+                output_sim_name=output_sim_name,
+                ref_libs=ref_libs,
+                netlist_view=netlist_view,
+                overwrite=overwrite,
+                dev_map_file=dev_map_file,
+                run_dir=resolved_run_dir,
+                timeout=timeout,
+            )
 
-    skill = schematic_import_netlist_skill(
-        lib,
-        cell,
-        netlist_view=netlist_view,
-        schematic_view=schematic_view,
-        overwrite=overwrite,
-        param_file=paths["param_file"],
-        spicein_log_file=paths["spicein_log_file"],
-    )
-    result = client.execute_skill(skill, timeout=timeout)
-    _require_result_ok(result, "netlist import conversion failed")
+        skill = schematic_import_netlist_skill(
+            lib,
+            cell,
+            netlist_view=netlist_view,
+            schematic_view=schematic_view,
+            overwrite=overwrite,
+            param_file=paths["param_file"],
+            spicein_log_file=paths["spicein_log_file"],
+        )
+        result = client.execute_skill(skill, timeout=timeout)
+        _require_result_ok(result, "netlist import conversion failed")
+    except BaseException as exc:
+        # Keep the files for diagnosis and say where they are. Only a plain
+        # RuntimeError is rewrapped; other types (TimeoutExpired, interrupts)
+        # are re-raised unchanged so callers can still match them.
+        note = f"netlist import files kept in {resolved_run_dir}"
+        if type(exc) is RuntimeError:
+            raise RuntimeError(f"{exc}\n{note}") from exc
+        logger.warning("%s", note)
+        raise
+
+    if owned_run_dir:
+        _remove_import_run_dir(runner, resolved_run_dir, timeout=timeout)
     return result
 
 
@@ -602,7 +630,6 @@ def _run_spicein_local(
     timeout: int,
 ) -> dict[str, str]:
     run_path = Path(run_dir).expanduser().resolve()
-    run_path.mkdir(parents=True, exist_ok=True)
     netlist_path = _local_input_path(netlist_file, run_path)
     dev_map_path = "" if dev_map_file is None else _local_input_path(dev_map_file, run_path)
     paths = _import_paths(str(run_path))
@@ -657,8 +684,6 @@ def _run_spicein_remote(
     timeout: int,
 ) -> dict[str, str]:
     run_dir_text = str(run_dir)
-    mkdir_result = runner.run_command(f"mkdir -p {shlex.quote(run_dir_text)}", timeout=timeout)
-    _require_command_ok(mkdir_result, "cannot create netlist import run directory")
     paths = _import_paths(run_dir_text)
     inputs_dir = _input_stage_dir(run_dir_text)
     mkdir_inputs_result = runner.run_command(f"mkdir -p {shlex.quote(inputs_dir)}", timeout=timeout)
@@ -730,6 +755,56 @@ def _resolve_import_run_dir(run_dir: str | Path | None, lib: str, cell: str) -> 
     return (
         f"/tmp/virtuoso_bridge_netlist_import_"
         f"{_safe_path_segment(lib)}_{_safe_path_segment(cell)}_{uuid.uuid4().hex}"
+    )
+
+
+def _create_import_run_dir(runner: Any, run_dir: str, *, owned: bool, timeout: int) -> None:
+    """Create the run directory before anything is staged in it.
+
+    An owned (default) directory must be new and private: on a shared /tmp
+    another user must not be able to pre-create, redirect or read it. A
+    caller-given directory may already exist.
+    """
+    if runner is None:
+        if owned:
+            os.mkdir(run_dir, 0o700)
+        else:
+            Path(run_dir).expanduser().resolve().mkdir(parents=True, exist_ok=True)
+        return
+    command = _remote_run_dir_create_command(run_dir) if owned else f"mkdir -p {shlex.quote(run_dir)}"
+    result = runner.run_command(command, timeout=timeout)
+    _require_command_ok(result, "cannot create netlist import run directory")
+
+
+def _remove_import_run_dir(runner: Any, run_dir: str, *, timeout: int) -> None:
+    """Remove an owned run directory; a failure only logs a warning."""
+    try:
+        if runner is None:
+            shutil.rmtree(run_dir)
+        else:
+            result = runner.run_command(_remote_run_dir_remove_command(run_dir), timeout=timeout)
+            _require_command_ok(result, "cannot remove netlist import run directory")
+    except Exception as exc:
+        logger.warning("netlist import run directory %s was not removed: %s", run_dir, exc)
+
+
+def _remote_run_dir_create_command(run_dir: str) -> str:
+    """Shell that creates *run_dir* mode 700; fails if the path already exists."""
+    quoted = shlex.quote(run_dir)
+    return (
+        f"{private_dir_shell_prelude('netlist import')}"
+        f"mkdir -m 700 {quoted} || exit $?\n"
+        f"vb_verify_dir {quoted} || exit $?\n"
+    )
+
+
+def _remote_run_dir_remove_command(run_dir: str) -> str:
+    """Shell that removes *run_dir* only if it is still the user's private directory."""
+    quoted = shlex.quote(run_dir)
+    return (
+        f"{private_dir_shell_prelude('netlist import')}"
+        f"vb_verify_dir {quoted} || exit $?\n"
+        f"rm -rf {quoted}\n"
     )
 
 

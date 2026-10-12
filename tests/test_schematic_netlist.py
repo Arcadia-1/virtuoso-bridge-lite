@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import logging
+import os
 import shlex
+import shutil
+import stat
 import re
 import subprocess
 from pathlib import Path
@@ -328,6 +332,105 @@ def test_import_netlist_schematic_uses_unique_default_run_dirs(local_import) -> 
     assert all(path.name.startswith("virtuoso_bridge_netlist_import_demoLib_nand2_") for path in run_dirs)
     tmp_root = Path("/tmp").resolve()
     assert all(path.resolve().is_relative_to(tmp_root) for path in run_dirs)
+    assert not any(path.exists() for path in run_dirs), "default run dirs are removed after success"
+
+
+def _spicein_sees_run_dir(monkeypatch, seen: dict, *, raises: BaseException | None = None) -> None:
+    def fake_run(*args, **kwargs):
+        run_path = Path(kwargs["cwd"])
+        seen["run_dir"] = run_path
+        seen["mode"] = stat.S_IMODE(os.lstat(run_path).st_mode)
+        if raises is not None:
+            raise raises
+        return subprocess.CompletedProcess(args[0], 0, stdout="spiceIn ok\n", stderr="")
+
+    monkeypatch.setattr(schematic_netlist_module.subprocess, "run", fake_run)
+
+
+def test_local_import_runs_in_a_private_default_run_dir_and_removes_it(local_import, monkeypatch) -> None:
+    work_dir, netlist_file, _ = local_import
+    seen: dict = {}
+    _spicein_sees_run_dir(monkeypatch, seen)
+
+    result = import_netlist_schematic(_ImportClient(work_dir), "demoLib", "nand2", netlist_file, timeout=30)
+
+    assert result == _IMPORTED
+    assert seen["run_dir"].name.startswith("virtuoso_bridge_netlist_import_demoLib_nand2_")
+    if os.name != "nt":
+        assert seen["mode"] == 0o700
+    assert not seen["run_dir"].exists()
+
+
+def test_local_import_keeps_the_default_run_dir_and_names_it_on_failure(local_import, monkeypatch) -> None:
+    work_dir, netlist_file, _ = local_import
+    seen: dict = {}
+    _spicein_sees_run_dir(monkeypatch, seen)
+    client = _ImportClient(work_dir)
+    client.responses[-1] = {"status": "error", "errors": ["conn2Sch failed"], "output": ""}
+
+    try:
+        with pytest.raises(RuntimeError, match="conn2Sch failed") as excinfo:
+            import_netlist_schematic(client, "demoLib", "nand2", netlist_file, timeout=30)
+
+        run_dir = seen["run_dir"]
+        assert str(excinfo.value).endswith(f"\nnetlist import files kept in /tmp/{run_dir.name}")
+        assert type(excinfo.value.__cause__) is RuntimeError
+        assert (run_dir / "spiceIn.il").is_file()
+    finally:
+        if "run_dir" in seen:
+            shutil.rmtree(seen["run_dir"], ignore_errors=True)
+
+
+def test_local_import_failure_of_another_type_is_reraised_unchanged(local_import, monkeypatch, caplog) -> None:
+    work_dir, netlist_file, _ = local_import
+    timeout_error = subprocess.TimeoutExpired(["spiceIn"], 30)
+    seen: dict = {}
+    _spicein_sees_run_dir(monkeypatch, seen, raises=timeout_error)
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=schematic_netlist_module.__name__):
+            with pytest.raises(subprocess.TimeoutExpired) as excinfo:
+                import_netlist_schematic(_ImportClient(work_dir), "demoLib", "nand2", netlist_file, timeout=30)
+
+        assert excinfo.value is timeout_error
+        assert f"netlist import files kept in /tmp/{seen['run_dir'].name}" in caplog.text
+        assert seen["run_dir"].is_dir()
+    finally:
+        if "run_dir" in seen:
+            shutil.rmtree(seen["run_dir"], ignore_errors=True)
+
+
+def test_local_import_cleanup_failure_only_warns(local_import, monkeypatch, caplog) -> None:
+    work_dir, netlist_file, subprocess_calls = local_import
+    original_rmtree = shutil.rmtree
+
+    def failing_rmtree(path, *args, **kwargs):
+        if Path(path).name.startswith("virtuoso_bridge_netlist_import_"):
+            raise OSError("busy")
+        return original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(schematic_netlist_module.shutil, "rmtree", failing_rmtree)
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=schematic_netlist_module.__name__):
+            result = import_netlist_schematic(
+                _ImportClient(work_dir), "demoLib", "nand2", netlist_file, timeout=30,
+            )
+
+        assert result == _IMPORTED
+        assert "was not removed: busy" in caplog.text
+    finally:
+        for _, kwargs in subprocess_calls:
+            original_rmtree(kwargs["cwd"], ignore_errors=True)
+
+
+def test_local_import_keeps_an_explicit_run_dir(local_import, tmp_path) -> None:
+    work_dir, netlist_file, _ = local_import
+    run_dir = tmp_path / "import-nand2"
+
+    import_netlist_schematic(_ImportClient(work_dir), "demoLib", "nand2", netlist_file, run_dir=run_dir)
+
+    assert (run_dir / "spiceIn.il").is_file()
 
 
 def test_import_netlist_schematic_uploads_inputs_and_runs_remote_shell(tmp_path) -> None:
@@ -354,7 +457,8 @@ def test_import_netlist_schematic_uploads_inputs_and_runs_remote_shell(tmp_path)
     assert ("spiceIn.il", "/remote/import-nand2/spiceIn.il", 120) in uploaded_names
     assert ("cds.lib", "/remote/import-nand2/cds.lib", 120) in uploaded_names
     commands = client.ssh_runner.commands
-    assert any(command.startswith("mkdir -p ") for command in commands)
+    assert commands[0] == "mkdir -p /remote/import-nand2"
+    assert not any("mkdir -m 700" in command or "rm -rf" in command for command in commands)
     spicein_commands = [command for command in commands if "spiceIn" in command]
     assert len(spicein_commands) == 1
     assert "bash -lc" in spicein_commands[0]
@@ -397,8 +501,180 @@ def test_import_netlist_schematic_checks_assumed_remote_inputs(
     assert f"mkdir -p {shlex.quote(run_dir)}" in commands
     assert f"test -f {shlex.quote(netlist_file)}" in commands
     assert f"test -f {shlex.quote(dev_map_file)}" in commands
+    assert not any("rm -rf" in command for command in commands)
     uploaded_names = [path.name for path, _, _ in client.uploads]
     assert sorted(uploaded_names) == ["cds.lib", "spiceIn.il"]
+
+
+class _FailingRunner(_Runner):
+    """Fails every command that contains *marker*."""
+
+    def __init__(self, marker: str) -> None:
+        super().__init__()
+        self.marker = marker
+
+    def run_command(self, command: str, timeout: int | None = None) -> CommandResult:
+        if self.marker in command:
+            self.commands.append(command)
+            return CommandResult(1, "", f"{self.marker} failed")
+        return super().run_command(command, timeout)
+
+
+def _default_remote_run_dir(commands: list[str]) -> str:
+    # The shared prelude itself mentions "mkdir -m 700"; match the top-level line.
+    created = [
+        match.group(1)
+        for command in commands
+        for match in re.finditer(r"^mkdir -m 700 (\S+) \|\| exit \$\?$", command, re.MULTILINE)
+    ]
+    assert len(created) == 1
+    assert created[0].startswith("/tmp/virtuoso_bridge_netlist_import_demoLib_nand2_")
+    return created[0]
+
+
+def test_remote_import_creates_a_private_default_run_dir_and_removes_it(tmp_path) -> None:
+    netlist_file = tmp_path / "nand2.scs"
+    netlist_file.write_text(_SPECTRE_TEXT, encoding="utf-8")
+    client = _ImportClient("/remote/work", ssh_runner=_Runner())
+
+    result = import_netlist_schematic(client, "demoLib", "nand2", netlist_file, timeout=120)
+
+    assert result == _IMPORTED
+    commands = client.ssh_runner.commands
+    run_dir = _default_remote_run_dir(commands)
+    assert commands[0] == schematic_netlist_module._remote_run_dir_create_command(run_dir)
+    assert f"\nvb_verify_dir {run_dir} || exit $?\n" in commands[0]
+    assert f"mkdir -p {run_dir}" not in commands
+    assert commands[-1] == schematic_netlist_module._remote_run_dir_remove_command(run_dir)
+    assert commands[-1].endswith(f"\nvb_verify_dir {run_dir} || exit $?\nrm -rf {run_dir}\n")
+    assert {remote for _, remote, _ in client.uploads} == {
+        f"{run_dir}/inputs/netlist_nand2.scs",
+        f"{run_dir}/inputs/devmap_default.devmap",
+        f"{run_dir}/spiceIn.il",
+        f"{run_dir}/cds.lib",
+    }
+
+
+def test_remote_import_keeps_the_default_run_dir_and_names_it_on_failure(tmp_path) -> None:
+    netlist_file = tmp_path / "nand2.scs"
+    netlist_file.write_text(_SPECTRE_TEXT, encoding="utf-8")
+    client = _ImportClient("/remote/work", ssh_runner=_FailingRunner("bash -lc"))
+
+    with pytest.raises(RuntimeError, match="spiceIn failed") as excinfo:
+        import_netlist_schematic(client, "demoLib", "nand2", netlist_file, timeout=120)
+
+    run_dir = _default_remote_run_dir(client.ssh_runner.commands)
+    assert str(excinfo.value).endswith(f"\nnetlist import files kept in {run_dir}")
+    assert not any("rm -rf" in command for command in client.ssh_runner.commands)
+
+
+def test_remote_import_cleanup_failure_only_warns(tmp_path, caplog) -> None:
+    netlist_file = tmp_path / "nand2.scs"
+    netlist_file.write_text(_SPECTRE_TEXT, encoding="utf-8")
+    client = _ImportClient("/remote/work", ssh_runner=_FailingRunner("rm -rf"))
+
+    with caplog.at_level(logging.WARNING, logger=schematic_netlist_module.__name__):
+        result = import_netlist_schematic(client, "demoLib", "nand2", netlist_file, timeout=120)
+
+    assert result == _IMPORTED
+    run_dir = _default_remote_run_dir(client.ssh_runner.commands)
+    assert f"netlist import run directory {run_dir} was not removed" in caplog.text
+
+
+def test_remote_import_does_not_stage_when_the_run_dir_cannot_be_created(tmp_path) -> None:
+    netlist_file = tmp_path / "nand2.scs"
+    netlist_file.write_text(_SPECTRE_TEXT, encoding="utf-8")
+    client = _ImportClient("/remote/work", ssh_runner=_FailingRunner("mkdir -m 700"))
+
+    with pytest.raises(RuntimeError, match="cannot create netlist import run directory") as excinfo:
+        import_netlist_schematic(client, "demoLib", "nand2", netlist_file, timeout=120)
+
+    assert "kept in" not in str(excinfo.value)
+    assert len(client.ssh_runner.commands) == 1
+    assert client.uploads == []
+
+
+_needs_posix_sh = pytest.mark.skipif(
+    os.name == "nt" or not shutil.which("sh"), reason="requires a POSIX shell"
+)
+
+
+def _run_sh(command: str) -> subprocess.CompletedProcess:
+    """Run a generated remote command with the local POSIX sh, as the SSH runner does."""
+    return subprocess.run(["sh", "-s"], input=command, capture_output=True, text=True, timeout=30)
+
+
+def _mode(path: Path) -> int:
+    return stat.S_IMODE(os.lstat(path).st_mode)
+
+
+@_needs_posix_sh
+@pytest.mark.parametrize("name", ["run", "run dir's"])
+def test_remote_run_dir_create_command_makes_a_private_directory(tmp_path, name) -> None:
+    run_dir = tmp_path / name
+
+    proc = _run_sh(schematic_netlist_module._remote_run_dir_create_command(str(run_dir)))
+
+    assert proc.returncode == 0, proc.stderr
+    assert run_dir.is_dir() and not run_dir.is_symlink()
+    assert _mode(run_dir) == 0o700
+
+
+@_needs_posix_sh
+@pytest.mark.parametrize("existing", ["directory", "symlink", "dangling_symlink"])
+def test_remote_run_dir_create_command_refuses_an_existing_path(tmp_path, existing) -> None:
+    run_dir = tmp_path / "run"
+    planted = tmp_path / "planted"
+    if existing == "directory":
+        run_dir.mkdir()
+        run_dir.chmod(0o755)
+    else:
+        if existing == "symlink":
+            planted.mkdir()
+            planted.chmod(0o755)
+        run_dir.symlink_to(planted)
+
+    proc = _run_sh(schematic_netlist_module._remote_run_dir_create_command(str(run_dir)))
+
+    assert proc.returncode != 0
+    if existing == "directory":
+        assert _mode(run_dir) == 0o755, "an existing directory is not adopted"
+    else:
+        assert run_dir.is_symlink()
+    if existing == "symlink":
+        assert _mode(planted) == 0o755 and list(planted.iterdir()) == []
+    if existing == "dangling_symlink":
+        assert not planted.exists()
+
+
+@_needs_posix_sh
+def test_remote_run_dir_remove_command_deletes_the_directory(tmp_path) -> None:
+    run_dir = tmp_path / "run dir's"
+    assert _run_sh(schematic_netlist_module._remote_run_dir_create_command(str(run_dir))).returncode == 0
+    (run_dir / "inputs").mkdir()
+    (run_dir / "inputs" / "netlist_nand2.scs").write_text(_SPECTRE_TEXT, encoding="utf-8")
+    (run_dir / "spiceIn.log").write_text("log\n", encoding="utf-8")
+
+    proc = _run_sh(schematic_netlist_module._remote_run_dir_remove_command(str(run_dir)))
+
+    assert proc.returncode == 0, proc.stderr
+    assert not run_dir.exists() and not run_dir.is_symlink()
+
+
+@_needs_posix_sh
+def test_remote_run_dir_remove_command_refuses_a_symlink(tmp_path) -> None:
+    target = tmp_path / "target"
+    target.mkdir(mode=0o700)
+    (target / "keep.txt").write_text("keep\n", encoding="utf-8")
+    run_dir = tmp_path / "run"
+    run_dir.symlink_to(target)
+
+    proc = _run_sh(schematic_netlist_module._remote_run_dir_remove_command(str(run_dir)))
+
+    assert proc.returncode != 0
+    assert "unsafe remote netlist import directory" in proc.stderr
+    assert run_dir.is_symlink()
+    assert (target / "keep.txt").read_text(encoding="utf-8") == "keep\n"
 
 
 @pytest.mark.parametrize(

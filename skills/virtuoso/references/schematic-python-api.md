@@ -225,6 +225,12 @@ With `overwrite=True` the import refuses a target schematic that is open for
 editing (for example in a window), before `spiceIn` runs: Virtuoso cannot copy
 over it. Close the window first; read-only opens do not block the import.
 
+By default `spiceIn` runs in a new private (0700) directory under `/tmp`,
+which is removed after a successful import, so the `spiceIn` paths in a
+successful result no longer exist. On failure the directory is kept and its
+path is in the error. Pass `run_dir=` to keep the files; the caller then owns
+that directory.
+
 For format and `spiceIn` limitations, see [netlist.md](netlist.md).
 
 ## Low-level SKILL builders
