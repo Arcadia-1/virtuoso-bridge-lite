@@ -198,9 +198,6 @@ def _tall_form_skill(tenths: int) -> str:
     return module.TALL_FORM_SKILL.format(tenths=tenths)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "open bug: a blocking form taller than 420 px is reported 'clear' because only "
-    "_NET_WM_STATE_MODAL and title/geometry heuristics are consulted"))
 def test_tall_blocking_form_is_reported_blocked(client):
     # The form cancels itself after 15 s, so the CIW recovers either way.
     guarded = VirtuosoClient.from_env(timeout=60)

@@ -68,6 +68,7 @@ def _record(x11, window_id, xprop, geometry, *, mapped=True):
               "mapped": mapped, "client_shell": True}
     for key in ("pid", "transient_for", "client_leader", "client_machine", "modal"):
         record[key] = metadata[key]
+    record["window_types"] = metadata.get("window_types") or []
     record["title"] = metadata.get("title") or ""
     record["class"] = metadata.get("class") or []
     return record
@@ -115,11 +116,6 @@ def test_recorded_tall_form_has_dialog_ownership(x11):
     assert WINDOWS["form"]["geometry"]["h"] > 420
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "open bug: windows taller than 420 px are classified main_window and modality is "
-    "only read from _NET_WM_STATE_MODAL (never set without a window manager); "
-    "_NET_WM_WINDOW_TYPE_DIALOG and WM_TRANSIENT_FOR are ignored, so a blocking "
-    "form such as a PDK information panel is reported 'clear'"))
 def test_tall_blocking_form_blocks_ciw(monkeypatch, x11):
     result = _inspect(monkeypatch, x11, [_tall_form(x11)])
     assert result["status"] == "blocked"
