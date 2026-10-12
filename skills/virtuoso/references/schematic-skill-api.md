@@ -71,7 +71,7 @@ for i in p["instances"]:
 
 ## Tips
 
-- Use `add_net_label_to_transistor` for MOS D/G/S/B — auto-detects stub direction
+- Use `add_net_label_to_transistor` for MOS D/G/S/B — auto-detects stub direction; names match case-insensitively and a missing body terminal is skipped
 - Use `schematic_label_instance_term` / `schematic_create_wire_between_instance_terms` instead of guessing coordinates
 - **Check & save before simulation**: `schCheck` + `dbSave` — otherwise netlisting fails with a blocking dialog
 - **Schematic should be open in GUI** for Maestro to reference it correctly

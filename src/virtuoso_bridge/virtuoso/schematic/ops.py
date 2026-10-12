@@ -197,13 +197,38 @@ def schematic_set_netset_property(
         f'"netSet" "{escape_skill_string(net_name)}"))'
     )
 
+def _schematic_find_term_expr(term_name: str, aliases: tuple[str, ...] = ()) -> str:
+    """SKILL evaluating to rbInst's master terminal named *term_name*, or nil.
+
+    An exact name wins; otherwise the name and then each alias are matched
+    case-insensitively, since PDKs differ (``D`` in one, ``d`` in another).
+    """
+    candidates = " ".join(
+        f'"{escape_skill_string(name)}"' for name in dict.fromkeys(n.upper() for n in (term_name, *aliases))
+    )
+    return (
+        "let((rbTerms rbFound) rbTerms = rbInst~>master~>terminals "
+        f'rbFound = car(setof(x rbTerms x~>name == "{escape_skill_string(term_name)}")) '
+        f"foreach(rbAlias list({candidates}) "
+        "unless(rbFound rbFound = car(setof(x rbTerms upperCase(x~>name) == rbAlias)))) "
+        "rbFound)"
+    )
+
+
+def _schematic_term_missing_error(term_name: str) -> str:
+    return (
+        f'error("terminal %s not found on %s/%s; its terminals: %L" "{escape_skill_string(term_name)}" '
+        "rbInst~>master~>libName rbInst~>master~>cellName rbInst~>master~>terminals~>name)"
+    )
+
+
 def _schematic_term_center_expr(instance_name: str, term_name: str, *, cv_expr: str = "cv") -> str:
     return (
         "let((rbInst rbTerm rbPin rbFig rbBBox rbCtr) "
         f'rbInst = car(setof(x {cv_expr}~>instances x~>name == "{escape_skill_string(instance_name)}")) '
         "unless(rbInst error(\"instance not found\")) "
-        f'rbTerm = car(setof(x rbInst~>master~>terminals x~>name == "{escape_skill_string(term_name)}")) '
-        "unless(rbTerm error(\"terminal not found\")) "
+        f"rbTerm = {_schematic_find_term_expr(term_name)} "
+        f"unless(rbTerm {_schematic_term_missing_error(term_name)}) "
         "rbPin = car(rbTerm~>pins) "
         "rbFig = when(rbPin car(rbPin~>figs)) "
         "rbBBox = when(rbFig dbTransformBBox(rbFig~>bBox rbInst~>transform)) "
@@ -218,14 +243,18 @@ def _schematic_bind_instance_and_term_expr(
     term_name: str,
     *,
     cv_expr: str = "cv",
+    aliases: tuple[str, ...] = (),
+    missing_ok: bool = False,
 ) -> str:
     escaped_instance = escape_skill_string(instance_name)
-    escaped_term = escape_skill_string(term_name)
+    # With missing_ok an absent terminal leaves rbTerm nil, and every later
+    # step of the caller is guarded by when(), so nothing is drawn.
+    missing = "" if missing_ok else f"unless(rbTerm {_schematic_term_missing_error(term_name)}) "
     return (
         f'rbInst = car(setof(x {cv_expr}~>instances x~>name == "{escaped_instance}")) '
         'unless(rbInst error("instance not found")) '
-        f'rbTerm = car(setof(x rbInst~>master~>terminals x~>name == "{escaped_term}")) '
-        'unless(rbTerm error("terminal not found")) '
+        f"rbTerm = {_schematic_find_term_expr(term_name, aliases)} "
+        f"{missing}"
         "rbPin = when(rbTerm car(rbTerm~>pins)) "
         "rbFig = when(rbPin car(rbPin~>figs)) "
     )
@@ -293,8 +322,15 @@ def schematic_label_instance_term(
     cosmetic: str = "default",
     auto_rotation: bool = False,
     bind_label_to_wire: bool = False,
+    aliases: tuple[str, ...] = (),
+    missing_ok: bool = False,
 ) -> str:
     """Build SKILL to place a labeled wire stub at an instance terminal.
+
+    ``term_name`` matches the master's terminal exactly, else
+    case-insensitively, then each of ``aliases`` case-insensitively. A
+    terminal that is still not found raises a SKILL error naming the
+    master's terminals, unless ``missing_ok`` is set: then nothing is drawn.
 
     Cosmetic presets (``cosmetic`` kwarg, opt-in via "clean"):
       - ``"default"`` (kept for back-compat): ``extension_length=0.25``,
@@ -346,7 +382,7 @@ def schematic_label_instance_term(
     return (
         f"let((rbInst rbTerm rbPin rbFig rbLocalBBox rbLocalCtr rbLocalEnd rbCtr rbStubEnd rbMid {wire_vars}"
         "rbInstBBox rbInstCtr rbDx rbDy rbMasterName rbTermName rbIsMos rbIsPmos rbOrigin rbLocalDir rbDirPt) "
-        f"{_schematic_bind_instance_and_term_expr(instance_name, term_name, cv_expr=cv_expr)}"
+        f"{_schematic_bind_instance_and_term_expr(instance_name, term_name, cv_expr=cv_expr, aliases=aliases, missing_ok=missing_ok)}"
         "rbLocalBBox = when(rbFig rbFig~>bBox) "
         "rbLocalCtr = when(rbLocalBBox "
         "list((xCoord(car(rbLocalBBox)) + xCoord(cadr(rbLocalBBox))) / 2.0 "
