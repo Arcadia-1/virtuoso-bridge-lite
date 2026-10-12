@@ -12,16 +12,20 @@ Prerequisites:
   - virtuoso-bridge service running (virtuoso-bridge start)
   - A layout cellview must be open in Virtuoso
 
-Customize LAYERS below to match your PDK techfile.
+Customize LAYERS below, or pass --layer-map (e.g. M3=METAL3,M4=METAL4), to
+match your PDK techfile; layers missing from it are reported before anything
+changes.
 """
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from _pdk import add_layer_map_argument, parse_layer_map, rename_layer, require_layers
 from _timing import decode_skill, format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
 from virtuoso_bridge.virtuoso.layout.ops import (
@@ -43,6 +47,11 @@ LAYERS = [
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    add_layer_map_argument(parser)
+    mapping = parse_layer_map(parser.parse_args().layer_map)
+    layers = [(rename_layer(layer, mapping), purpose) for layer, purpose in LAYERS]
+
     client = VirtuosoClient.from_env()
 
     elapsed, design = timed_call(client.get_current_design)
@@ -51,8 +60,9 @@ def main() -> int:
     if not lib or not cell or view != "layout":
         print("Open a layout cellview in Virtuoso first.")
         return 1
+    require_layers(client, lib, layers)
 
-    layer_names = ", ".join(f"{l}/{p}" for l, p in LAYERS)
+    layer_names = ", ".join(f"{l}/{p}" for l, p in layers)
     print(f"Target Library  : {lib}")
     print(f"Target Cell     : {cell}")
     print(f"Layers          : {layer_names}")
@@ -60,7 +70,7 @@ def main() -> int:
 
     # Step 1: hide
     hide_elapsed, hide_result = timed_call(
-        lambda: client.execute_skill(layout_hide_layers(LAYERS), timeout=15)
+        lambda: client.execute_skill(layout_hide_layers(layers), timeout=15)
     )
     print(f"[layout_hide_layers] [{format_elapsed(hide_elapsed)}]")
     print(decode_skill(hide_result.output or ""))
@@ -68,7 +78,7 @@ def main() -> int:
 
     # Step 2: restore
     show_elapsed, show_result = timed_call(
-        lambda: client.execute_skill(layout_show_layers(LAYERS), timeout=15)
+        lambda: client.execute_skill(layout_show_layers(layers), timeout=15)
     )
     print(f"[layout_show_layers] [{format_elapsed(show_elapsed)}]")
     print(decode_skill(show_result.output or ""))
@@ -76,7 +86,7 @@ def main() -> int:
 
     # Step 3: show only
     only_elapsed, only_result = timed_call(
-        lambda: client.execute_skill(layout_show_only_layers(LAYERS), timeout=15)
+        lambda: client.execute_skill(layout_show_only_layers(layers), timeout=15)
     )
     print(f"[layout_show_only_layers] [{format_elapsed(only_elapsed)}]")
     print(decode_skill(only_result.output or ""))

@@ -5,16 +5,20 @@ Prerequisites:
   - virtuoso-bridge service running (virtuoso-bridge start)
   - A layout cellview must be open in Virtuoso
 
-Customize LAYERS, LABEL_LAYER and FONT below to match your PDK techfile.
+Customize LAYERS, LABEL_LAYER and FONT below, or pass --layer-map (e.g.
+M4=METAL4), to match your PDK techfile; layers missing from it are reported
+before anything is drawn.
 """
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from _pdk import add_layer_map_argument, parse_layer_map, rename_layer, require_layers
 from _timing import format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
 from virtuoso_bridge.virtuoso.layout.ops import (
@@ -52,6 +56,12 @@ FONT = "roman"
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    add_layer_map_argument(parser)
+    mapping = parse_layer_map(parser.parse_args().layer_map)
+    layers = [rename_layer(layer, mapping) for layer in LAYERS]
+    label_layer = rename_layer(LABEL_LAYER, mapping)
+
     client = VirtuosoClient.from_env()
 
     elapsed, design = timed_call(client.get_current_design)
@@ -60,6 +70,7 @@ def main() -> int:
     if not lib or not cell or view != "layout":
         print("Open a layout cellview in Virtuoso first.")
         return 1
+    require_layers(client, lib, [(layer, "drawing") for layer in layers] + [(label_layer, "pin")])
 
     print(f"Target Library  : {lib}")
     print(f"Target Cell     : {cell}")
@@ -70,12 +81,12 @@ def main() -> int:
                 y = Y_BASE + bit * BUS_PITCH
 
                 # Multi-layer path on every layer at the same coordinate
-                for layer in LAYERS:
+                for layer in layers:
                     layout.add(path(layer, "drawing", [(X_START, y), (X_END, y)], width=PATH_WIDTH))
 
                 # Label at the left end
                 layout.add(label(
-                    LABEL_LAYER, "pin",
+                    label_layer, "pin",
                     X_START, y,
                     f"CODE<{bit}>",
                     "centerLeft", "R0", FONT,

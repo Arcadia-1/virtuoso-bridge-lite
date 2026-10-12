@@ -10,16 +10,20 @@ Prerequisites:
   - virtuoso-bridge service running (virtuoso-bridge start)
   - A layout cellview must be open in Virtuoso
 
-Customize MOSAIC_* and NET_NAME below to match your design.
+Customize MOSAIC_* and NET_NAME below, or pass --pdk-lib/--pdk-cell and
+--layer-map (e.g. M1=METAL1), to match your design; a missing master or layer is
+reported before anything is created.
 """
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from _pdk import add_layer_map_argument, parse_layer_map, rename_layer, require_cell, require_layers
 from _timing import decode_skill, format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
 from virtuoso_bridge.virtuoso.layout.ops import (
@@ -56,6 +60,13 @@ ACTIVE_PURPOSE = "drawing"
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--pdk-lib", default=MOSAIC_LIB, help="library of the cell to array")
+    parser.add_argument("--pdk-cell", default=MOSAIC_CELL, help="layout cell to array")
+    add_layer_map_argument(parser)
+    args = parser.parse_args()
+    active_layer = rename_layer(ACTIVE_LAYER, parse_layer_map(args.layer_map))
+
     client = VirtuosoClient.from_env()
 
     elapsed, design = timed_call(client.get_current_design)
@@ -64,10 +75,12 @@ def main() -> int:
     if not lib or not cell or view != "layout":
         print("Open a layout cellview in Virtuoso first.")
         return 1
+    require_cell(client, args.pdk_lib, args.pdk_cell)
+    require_layers(client, lib, [(active_layer, ACTIVE_PURPOSE)])
 
     print(f"Target Library  : {lib}")
     print(f"Target Cell     : {cell}")
-    print(f"Mosaic Master   : {MOSAIC_LIB}/{MOSAIC_CELL}")
+    print(f"Mosaic Master   : {args.pdk_lib}/{args.pdk_cell}")
     print(f"Array           : {ROWS}x{COLS}, pitch ({ROW_PITCH}, {COL_PITCH}) um")
     print(f"Net to highlight: {NET_NAME}")
     print()
@@ -76,8 +89,8 @@ def main() -> int:
     mosaic_elapsed, mosaic_result = timed_call(
         lambda: client.execute_skill(
             layout_create_simple_mosaic(
-                MOSAIC_LIB,
-                MOSAIC_CELL,
+                args.pdk_lib,
+                args.pdk_cell,
                 origin=ORIGIN,
                 orientation=ORIENT,
                 rows=ROWS,
@@ -106,7 +119,7 @@ def main() -> int:
     # Step 3: set active layer
     lpp_elapsed, lpp_result = timed_call(
         lambda: client.execute_skill(
-            layout_set_active_lpp(ACTIVE_LAYER, ACTIVE_PURPOSE), timeout=10
+            layout_set_active_lpp(active_layer, ACTIVE_PURPOSE), timeout=10
         )
     )
     print(f"[layout_set_active_lpp] [{format_elapsed(lpp_elapsed)}]")

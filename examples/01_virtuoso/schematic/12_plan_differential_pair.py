@@ -24,8 +24,14 @@ from virtuoso_bridge.virtuoso.schematic import (
 )
 
 
-TARGET_LIB = os.environ["VB_EXAMPLE_LIB"]
-PDK_LIB = os.environ["VB_PDK_LIB"]
+TARGET_LIB = os.environ.get("VB_EXAMPLE_LIB", "")
+PDK_LIB = os.environ.get("VB_PDK_LIB", "")
+if not TARGET_LIB or not PDK_LIB:
+    raise SystemExit(
+        "Set VB_EXAMPLE_LIB to an existing writable library and VB_PDK_LIB to the "
+        "library with the MOS symbols (VB_NCH_CELL/VB_PCH_CELL name the cells), e.g.\n"
+        "  VB_EXAMPLE_LIB=myLib VB_PDK_LIB=myPdk python 12_plan_differential_pair.py"
+    )
 NCH = os.environ.get("VB_NCH_CELL", "nch")
 PCH = os.environ.get("VB_PCH_CELL", "pch")
 TARGET_CELL = "vb_planned_diff_pair"
