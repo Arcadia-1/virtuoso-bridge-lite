@@ -7,6 +7,7 @@ import concurrent.futures
 import os
 import re
 import shlex
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -81,7 +82,7 @@ def _load_cli_env() -> Path | None:
     global _PRINTED_ENV_PATH
     env_path = load_vb_env()
     if env_path is not None and env_path != _PRINTED_ENV_PATH:
-        print(f"using .env: {env_path}")
+        print(f"using .env: {env_path}", file=sys.stderr)
         _PRINTED_ENV_PATH = env_path
     return env_path
 

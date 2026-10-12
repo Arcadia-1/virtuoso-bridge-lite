@@ -13,6 +13,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -509,7 +510,7 @@ class SSHRunner:
 
         logger.info("Starting SSH tunnel: %s", " ".join(cmd))
         if self._verbose:
-            print(f"[cmd] {' '.join(cmd)}", flush=True)
+            print(f"[cmd] {' '.join(cmd)}", file=sys.stderr, flush=True)
 
         if os.name == "nt":
             # Capture stderr so we can surface "banner exchange timeout"
@@ -732,7 +733,7 @@ class SSHRunner:
     def _print_cmd(self, cmd: list[str]) -> None:
         logger.info("[local] %s", " ".join(cmd))
         if self._verbose:
-            print(f"[cmd] {' '.join(cmd)}", flush=True)
+            print(f"[cmd] {' '.join(cmd)}", file=sys.stderr, flush=True)
 
     # Transport-level SSH error patterns that indicate a flaky cold
     # handshake rather than a server-side problem.  Seeing any of these
@@ -982,7 +983,7 @@ class SSHRunner:
             # picks up the no-mux config on the next try.
             cmd = self._build_ssh_base() + [plan.remote_command]
             if self._verbose:
-                print(f"[cmd] {' '.join(cmd)}  # upload -> {remote_path}", flush=True)
+                print(f"[cmd] {' '.join(cmd)}  # upload -> {remote_path}", file=sys.stderr, flush=True)
             r = subprocess.run(
                 cmd,
                 input=text_bytes,
@@ -1128,6 +1129,7 @@ class SSHRunner:
             if self._verbose:
                 print(
                     f"[cmd] {' '.join(local_command)} | {' '.join(ssh_command)}",
+                    file=sys.stderr,
                     flush=True,
                 )
             tar_process: subprocess.Popen[Any] | None = None
@@ -1217,6 +1219,7 @@ class SSHRunner:
             print(
                 f"[cmd] {' '.join(ssh_command)} | {' '.join(local_command)}"
                 f"  # download {plan.remote_path} -> {plan.local_path}",
+                file=sys.stderr,
                 flush=True,
             )
         logger.debug(
@@ -1532,7 +1535,7 @@ class SSHRunner:
                 # Trim heredoc payload: cat > path <<'TOKEN' → cat > path
                 if "<<'" in summary:
                     summary = summary.split("<<'")[0].rstrip()
-                print(f"[cmd] {self._host}: {summary}", flush=True)
+                print(f"[cmd] {self._host}: {summary}", file=sys.stderr, flush=True)
         token = uuid.uuid4().hex
         begin_marker = f"__vb_STDOUT_B64_BEGIN_{token}__"
         stderr_marker = f"__vb_STDERR_B64_BEGIN_{token}__"
