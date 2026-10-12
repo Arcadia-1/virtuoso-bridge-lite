@@ -209,6 +209,13 @@ def _format_ssh_failure(ssh_env) -> None:
     print("  For a local VM, use the VM's IP (run `ip addr` inside the VM).")
 
 
+def _print_start_load_line(state: dict | None) -> None:
+    """Print the CIW command that loads the deployed bridge setup."""
+    setup_path = (state or {}).get("setup_path")
+    if setup_path:
+        print(f"  Load in Virtuoso CIW: load(\"{setup_path}\")")
+
+
 def _start_one_profile(profile: str | None) -> int:
     """Start tunnel for a single profile (thread-safe, uses explicit profile)."""
     suffix = f"_{profile}" if profile else ""
@@ -258,12 +265,7 @@ def _start_one_profile(profile: str | None) -> int:
         print(f"tunnel.warm = {_fmt(elapsed)}")
 
         if is_local:
-            # For local mode, print setup_path for user to load in CIW
-            state = SSHClient.read_state(profile)
-            if state:
-                setup_path = state.get("setup_path")
-                if setup_path:
-                    print(f"  Load in Virtuoso CIW: load(\"{setup_path}\")")
+            _print_start_load_line(SSHClient.read_state(profile))
             return 0
 
         if not _wait_for_tunnel_running(profile):
@@ -284,6 +286,7 @@ def _start_one_profile(profile: str | None) -> int:
             print(f"  {manual_cmd}")
             return 1
 
+        _print_start_load_line(SSHClient.read_state(profile))
         return 0
     finally:
         ssh.close()
