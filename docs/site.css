@@ -770,6 +770,56 @@ pre .comment {
   color: var(--muted);
   font-size: 14px;
 }
+/* Ecosystem: external projects, full width under the hero. */
+.hero + .page > .ecosystem {
+  max-width: none;
+}
+.ecosystem > p {
+  max-width: 860px;
+}
+.ecosystem h3 {
+  margin-top: 30px;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+.ecosystem h3 .count {
+  margin-left: 6px;
+  color: var(--muted);
+  font: 12px/1 var(--mono);
+}
+.eco {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.eco li {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.page .eco a {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  font: 600 12.5px/1.5 var(--mono);
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.page .eco a:hover {
+  color: var(--cyan);
+}
+.eco li > span {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
 /* Guide: the full documentation page. */
 .page.guide {
   width: min(860px, calc(100% - 40px));

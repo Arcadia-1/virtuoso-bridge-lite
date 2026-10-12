@@ -99,6 +99,19 @@ describe("shared light website chrome", () => {
     expect(landing).not.toContain("virtuoso-bridge-lite#readme");
   });
 
+  it("lists external projects at the bottom of the home page", () => {
+    const landing = pages[0];
+    const section = landing.match(/<section class="block ecosystem" id="ecosystem">[\s\S]*?<\/section>/)?.[0];
+    expect(section).toBeTruthy();
+    const repos = [...section!.matchAll(/<li><a href="https:\/\/github\.com\/([^"]+)" title="\1">/g)].map((m) => m[1]);
+    expect(repos.length).toBeGreaterThan(40);
+    expect(new Set(repos).size).toBe(repos.length);
+    // Same-author projects stay out of the list.
+    for (const repo of repos) expect(repo).not.toMatch(/^(Arcadia-1|cascode-ai)\//);
+    // It is the last section on the page.
+    expect(landing.indexOf('id="ecosystem"')).toBeGreaterThan(landing.indexOf('id="docs"'));
+  });
+
   it("compares with skillbridge in one labelled table", () => {
     const table = pages[0].match(/<table class="compare">[\s\S]*?<\/table>/)?.[0];
     expect(table).toBeTruthy();
