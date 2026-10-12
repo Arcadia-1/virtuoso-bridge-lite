@@ -439,7 +439,7 @@ class VirtuosoClient(VirtuosoInterface):
     def get_virtuoso_pid(self, timeout: int | None = None) -> int | None:
         """PID of the Virtuoso process executing this client's SKILL.
 
-        Asked via ``getpid()`` through the token-authenticated channel, so
+        Asked via ``ipcGetPid()`` through the token-authenticated channel, so
         once authentication has succeeded the answer belongs to the daemon
         that proved it holds your bridge token — a squatted port cannot
         produce one.  The value is cached for the client's lifetime and is
@@ -447,7 +447,7 @@ class VirtuosoClient(VirtuosoInterface):
         """
         if self._remote_virtuoso_pid is not None:
             return self._remote_virtuoso_pid
-        result = self.execute_skill("getpid()", timeout=timeout if timeout is not None else 10)
+        result = self.execute_skill("ipcGetPid()", timeout=timeout if timeout is not None else 10)
         if result.status != ExecutionStatus.SUCCESS:
             return None
         raw = (result.output or "").strip().strip('"')

@@ -156,7 +156,7 @@ class _AuthDaemon:
 
             skill = req["skill"]
             self.executed.append(skill)
-            if skill.strip() == "getpid()":
+            if skill.strip() == "ipcGetPid()":
                 body = str(self.virtuoso_pid)
             else:
                 body = '"2"' if skill.strip() == "1+1" else "nil"
@@ -1159,12 +1159,12 @@ def test_handshake_carries_virtuoso_pid(authed_daemon) -> None:
     authed_daemon.virtuoso_pid = 424242
     client = VirtuosoClient(host="127.0.0.1", port=authed_daemon.port, daemon_token=TOKEN)
     assert client.remote_virtuoso_pid is None
-    # The signed capability payload pre-populates the PID: no getpid()
+    # The signed capability payload pre-populates the PID: no ipcGetPid()
     # round trip is needed at all.
     assert client.execute_skill("1+1", timeout=5).status is ExecutionStatus.SUCCESS
     assert client.remote_virtuoso_pid == 424242
     assert client.get_virtuoso_pid(timeout=5) == 424242
-    assert not [r for r in authed_daemon.requests if r.get("skill", "").strip() == "getpid()"]
+    assert not [r for r in authed_daemon.requests if r.get("skill", "").strip() == "ipcGetPid()"]
 
 
 def test_client_pid_query_unauthenticated_is_rejected(authed_daemon) -> None:
