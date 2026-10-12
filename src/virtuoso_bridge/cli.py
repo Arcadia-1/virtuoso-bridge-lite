@@ -216,6 +216,18 @@ def _print_start_load_line(state: dict | None) -> None:
         print(f"  Load in Virtuoso CIW: load(\"{setup_path}\")")
 
 
+def _print_replaced_setup_warning(ssh) -> None:
+    """Warn when start rewrote a setup file that another port was using."""
+    old_port = getattr(ssh, "replaced_setup_port", None)
+    if old_port is None:
+        return
+    print(
+        f"  [warning] This replaced {ssh.setup_path}, which started the daemon on port "
+        f"{old_port}; anything that loads it, such as .cdsinit, now uses port {ssh.remote_port}. "
+        "Give each configuration its own profile (-p) or VB_CLIENT_ID to keep both."
+    )
+
+
 def _start_one_profile(profile: str | None) -> int:
     """Start tunnel for a single profile (thread-safe, uses explicit profile)."""
     suffix = f"_{profile}" if profile else ""
@@ -266,6 +278,7 @@ def _start_one_profile(profile: str | None) -> int:
 
         if is_local:
             _print_start_load_line(SSHClient.read_state(profile))
+            _print_replaced_setup_warning(ssh)
             return 0
 
         if not _wait_for_tunnel_running(profile):
@@ -287,6 +300,7 @@ def _start_one_profile(profile: str | None) -> int:
             return 1
 
         _print_start_load_line(SSHClient.read_state(profile))
+        _print_replaced_setup_warning(ssh)
         return 0
     finally:
         ssh.close()

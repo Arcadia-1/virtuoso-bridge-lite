@@ -797,3 +797,63 @@ def test_daemon_listens_on_loopback_unless_listen_all_is_set(monkeypatch) -> Non
     assert SSHClient.from_env(profile="t28")._listen_all is False
     monkeypatch.setenv("VB_DAEMON_LISTEN_ALL_t28", "1")
     assert SSHClient.from_env(profile="t28")._listen_all is True
+
+
+@pytest.mark.parametrize("previous, replaced", [
+    ('setShellEnvVar("RB_PORT" "65158")\nload("/tmp/x/ramic_bridge.il")\n', 65158),
+    ('setShellEnvVar("RB_PORT" "65263")\n', None),
+    ("", None),
+])
+def test_deploy_reports_a_replaced_setup_that_used_another_port(monkeypatch, previous, replaced) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
+    monkeypatch.delenv("VB_REMOTE_SCRATCH_ROOT", raising=False)
+
+    class _Runner(_FakeRunner):
+        def run_command(self, command: str, timeout=None) -> CommandResult:
+            self.commands.append(command)
+            stdout = previous if command.startswith("cat ") else ""
+            return CommandResult(returncode=0, stdout=stdout, stderr="")
+
+    client = SSHClient(remote_host="eda-host", remote_user="designer", port=65263, profile="t28")
+    client._ssh_runner = _Runner()
+    monkeypatch.setattr(client, "_detect_remote_python", lambda: ("python3", 3, 11))
+
+    client.ensure_remote_setup()
+
+    assert client.replaced_setup_port == replaced
+
+
+def test_start_warns_when_it_replaced_a_setup_for_another_port(monkeypatch, capsys) -> None:
+    class _FakeSSHClient:
+        port = remote_port = 65177
+        setup_path = "/tmp/virtuoso_bridge_designer/virtuoso_bridge/virtuoso_setup.il"
+        replaced_setup_port = 65158
+
+        @staticmethod
+        def is_running(profile=None):
+            return False
+
+        @staticmethod
+        def read_state(profile=None):
+            return {"port": 65177, "setup_path": _FakeSSHClient.setup_path}
+
+        @classmethod
+        def from_env(cls, **_kwargs):
+            return cls()
+
+        def warm(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHClient", _FakeSSHClient)
+    monkeypatch.setattr(
+        cli, "remote_host_roles_from_os", lambda profile, load=False: SimpleNamespace(daemon_host="eda-host"),
+    )
+    monkeypatch.setattr(cli, "_wait_for_tunnel_running", lambda profile: True)
+
+    assert cli._start_one_profile(None) == 0
+    out = capsys.readouterr().out
+    assert "[warning] This replaced /tmp/virtuoso_bridge_designer/virtuoso_bridge/virtuoso_setup.il" in out
+    assert "port 65158" in out and "now uses port 65177" in out

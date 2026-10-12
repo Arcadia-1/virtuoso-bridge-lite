@@ -142,6 +142,15 @@ def _generate_virtuoso_setup_il(
     )
 
 
+_SETUP_PORT_RE = re.compile(r'^setShellEnvVar\("RB_PORT" "(\d+)"\)$', re.MULTILINE)
+
+
+def _setup_port(text: str) -> int | None:
+    """Daemon port that a generated virtuoso_setup.il starts, if any."""
+    match = _SETUP_PORT_RE.search(text or "")
+    return int(match.group(1)) if match else None
+
+
 def _update_env_file(key: str, value: str) -> bool:
     try:
         env_path = resolve_env_path()
@@ -272,6 +281,7 @@ class SSHClient:
         self._remote_setup_done = False
         self._remote_work_dir: str | None = None
         self._remote_virtuoso_setup_path: str | None = None
+        self._replaced_setup_port: int | None = None
         self._remote_identity_path: str | None = None
         self._daemon_endpoint_hostname: str | None = None
         self._daemon_token: str | None = None
@@ -457,6 +467,11 @@ class SSHClient:
     @property
     def setup_path(self) -> str | None:
         return self._remote_virtuoso_setup_path
+
+    @property
+    def replaced_setup_port(self) -> int | None:
+        """Port of the setup file this deployment replaced, when it differed."""
+        return self._replaced_setup_port
 
     @property
     def identity_path(self) -> str | None:
@@ -754,6 +769,8 @@ class SSHClient:
             identity_path=remote_identity,
             listen_all=self._listen_all,
         )
+        previous = runner.run_command(f"cat {shlex.quote(remote_setup)} 2>/dev/null || true")
+        self._note_replaced_setup(remote_setup, previous.stdout if previous.returncode == 0 else "")
         logger.info("Uploading setup script to %s", remote_setup)
         up = runner.upload_text(setup_content, remote_setup)
         if up.returncode != 0:
@@ -782,6 +799,17 @@ class SSHClient:
         self._remote_virtuoso_setup_path = remote_setup
         self._remote_identity_path = remote_identity
         logger.info("Remote setup complete; setup script at %s (using %s)", remote_setup, python_cmd)
+
+    def _note_replaced_setup(self, path: str, previous: str) -> None:
+        # Two configurations sharing a profile deploy to the same directory;
+        # a .cdsinit that loads this file follows whichever started last.
+        old_port = _setup_port(previous)
+        self._replaced_setup_port = old_port if old_port not in (None, self._port) else None
+        if self._replaced_setup_port is not None:
+            logger.warning(
+                "Replacing %s, which started the daemon on port %d, with port %d",
+                path, old_port, self._port,
+            )
 
     def ensure_local_setup(self) -> None:
         """Generate virtuoso_setup.il locally (no SSH needed)."""
@@ -825,6 +853,10 @@ class SSHClient:
             port=self._port,
             identity_path=str(local_identity),
             listen_all=self._listen_all,
+        )
+        self._note_replaced_setup(
+            str(local_setup),
+            local_setup.read_text(encoding="utf-8") if local_setup.is_file() else "",
         )
         local_setup.write_text(setup_content, encoding="utf-8")
         local_identity.unlink(missing_ok=True)
