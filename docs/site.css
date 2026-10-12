@@ -770,55 +770,75 @@ pre .comment {
   color: var(--muted);
   font-size: 14px;
 }
-/* Ecosystem: external projects, full width under the hero. */
+/* Ecosystem: external projects, five columns so the section fits one screen. */
 .hero + .page > .ecosystem {
   max-width: none;
+  padding-top: 16px;
 }
 .ecosystem > p {
-  max-width: 860px;
+  margin-top: 4px;
 }
-.ecosystem h3 {
-  margin-top: 30px;
-  font-size: 15px;
-  letter-spacing: -0.01em;
-}
-.ecosystem h3 .count {
-  margin-left: 6px;
+.block.ecosystem h3 {
+  margin-top: 20px;
   color: var(--muted);
-  font: 12px/1 var(--mono);
+  font: 600 11px/1.6 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.block.ecosystem h3 .count {
+  margin-left: 6px;
+  color: #9ba6b3;
 }
 .eco {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
-  gap: 8px;
-  margin: 12px 0 0;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 9px 24px;
+  margin: 6px 0 0;
   padding: 0;
   list-style: none;
 }
 .eco li {
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
+  min-width: 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--line);
 }
-.page .eco a {
+.eco li:hover {
+  border-left-color: var(--cyan);
+}
+.page .eco a,
+.eco li > span {
   display: block;
   overflow: hidden;
-  color: var(--ink);
-  font: 600 12.5px/1.5 var(--mono);
-  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.page .eco a {
+  color: var(--ink);
+  font: 600 12.5px/1.4 var(--mono);
+  text-decoration: none;
 }
 .page .eco a:hover {
   color: var(--cyan);
 }
 .eco li > span {
-  display: block;
-  margin-top: 2px;
   color: var(--muted);
   font-size: 13px;
-  line-height: 1.45;
+  line-height: 1.35;
+}
+@media (max-width: 1100px) {
+  .eco {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 760px) {
+  .eco {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 480px) {
+  .eco {
+    grid-template-columns: 1fr;
+  }
 }
 /* Guide: the full documentation page. */
 .page.guide {
