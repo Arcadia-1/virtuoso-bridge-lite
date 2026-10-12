@@ -1036,8 +1036,8 @@ def cli_eval(*, skill: str | None, stdin: bool, timeout: int = 60,
 
     # Wrap in progn(...) on its own lines so that:
     #   * multi-statement inputs (`printf(...) "ret"`) work without the
-    #     user adding progn themselves -- the daemon's single-line path
-    #     does `let(((__vb_r <code>)) ...)` which only takes one form;
+    #     user adding progn themselves, also against daemons started by
+    #     older releases, whose single-line path takes only one form;
     #   * trailing `; comment` doesn't swallow the closing paren --
     #     the wrapping newline before `)` terminates the line comment;
     #   * embedded newlines (heredoc / multi-line input) flow through

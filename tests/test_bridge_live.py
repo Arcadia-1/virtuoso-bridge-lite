@@ -157,10 +157,6 @@ def test_multiline_skill_error_reports_the_real_message(client):
     assert any("vbLiveNoSuchFunction" in error for error in result.errors), result.errors
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "open bug: a single-line request is wrapped as let(((__vb_r <code>)) ...), so two "
-    "top-level forms on one line fail with 'let: illegal binding form' while the same "
-    "code split across lines returns the last value"))
 def test_single_line_with_two_forms_returns_last_value(client):
     assert _ok(client.execute_skill("vbLiveTmp = 1 vbLiveTmp + 41")) == "42"
 

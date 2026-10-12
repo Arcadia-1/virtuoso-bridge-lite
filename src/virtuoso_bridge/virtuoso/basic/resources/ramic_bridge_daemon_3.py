@@ -561,7 +561,7 @@ def _prepare_skill(skill_code):
                 f"{_MULTILINE_RESULT}\n"
             )
         else:
-            send_code = f'let(((__vb_r {skill_code})) hiFlush() __vb_r)\n'
+            send_code = f'let(((__vb_r progn({skill_code}))) hiFlush() __vb_r)\n'
         return send_code.encode("utf-8"), tmp_il_path
     except Exception as exc:
         if tmp_il_path:
