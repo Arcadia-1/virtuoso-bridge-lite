@@ -60,4 +60,29 @@ describe("shared light website chrome", () => {
     for (const match of logo.matchAll(/<path\s+d="([^"]+)"/g))
       expect(social).toContain(match[1]);
   });
+
+  it("keeps the simulation grid unfilled, so open paths cannot become black triangles", () => {
+    const plot = pages[0].match(
+      /<svg\s[^>]*aria-label="Illustration of a Spectre simulation[^>]*>[\s\S]*?<\/svg>/,
+    )?.[0];
+    expect(plot).toBeTruthy();
+    expect(plot?.match(/^<svg[^>]*>/)?.[0]).toContain('fill="none"');
+    expect(plot).not.toContain('fill="#000"');
+  });
+
+  it("uses a single borderless text language switch on every public page", () => {
+    for (const page of pages) {
+      const switches = [
+        ...page.matchAll(
+          /<button\s[^>]*data-language-toggle[^>]*>[\s\S]*?<\/button>/g,
+        ),
+      ];
+      expect(switches).toHaveLength(1);
+      expect(switches[0][0]).toContain(
+        '<span class="en" lang="zh-CN">中文</span>',
+      );
+      expect(switches[0][0]).toContain('<span class="zh" lang="en">EN</span>');
+      expect(page).not.toContain('data-language="');
+    }
+  });
 });

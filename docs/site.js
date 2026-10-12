@@ -1,7 +1,7 @@
 (() => {
   "use strict";
   const root = document.documentElement;
-  const languageButtons = [...document.querySelectorAll("[data-language]")];
+  const languageToggle = document.querySelector("[data-language-toggle]");
   let toastTimer;
 
   const siteSwitcher = document.querySelector(".site-switcher");
@@ -22,12 +22,9 @@
     const lang = language === "zh" ? "zh" : "en";
     root.dataset.lang = lang;
     root.lang = lang === "zh" ? "zh-CN" : "en";
-    languageButtons.forEach((button) =>
-      button.setAttribute(
-        "aria-pressed",
-        String(button.dataset.language === lang),
-      ),
-    );
+    const languageLabel = lang === "zh" ? "Switch to English" : "切换到中文";
+    languageToggle?.setAttribute("aria-label", languageLabel);
+    languageToggle?.setAttribute("title", languageLabel);
     document.querySelectorAll("[data-internal]").forEach((link) => {
       const url = new URL(link.getAttribute("href"), location.href);
       url.searchParams.set("lang", lang);
@@ -48,22 +45,20 @@
       history.replaceState(null, "", url);
     }
   }
-  languageButtons.forEach((button) =>
-    button.addEventListener("click", () => {
-      // Preserve the visible section when translated paragraphs change height.
-      const sections = [...document.querySelectorAll("main section[id]")];
-      const anchor = sections
-        .filter((section) => section.getBoundingClientRect().top <= 120)
-        .pop();
-      const offset = anchor ? anchor.getBoundingClientRect().top : 0;
-      setLanguage(button.dataset.language, true);
-      if (anchor)
-        window.scrollBy({
-          top: anchor.getBoundingClientRect().top - offset,
-          behavior: "instant",
-        });
-    }),
-  );
+  languageToggle?.addEventListener("click", () => {
+    // Preserve the visible section when translated paragraphs change height.
+    const sections = [...document.querySelectorAll("main section[id]")];
+    const anchor = sections
+      .filter((section) => section.getBoundingClientRect().top <= 120)
+      .pop();
+    const offset = anchor ? anchor.getBoundingClientRect().top : 0;
+    setLanguage(root.dataset.lang === "zh" ? "en" : "zh", true);
+    if (anchor)
+      window.scrollBy({
+        top: anchor.getBoundingClientRect().top - offset,
+        behavior: "instant",
+      });
+  });
   setLanguage(root.dataset.lang || "en");
 
   document.querySelectorAll('[role="tablist"]').forEach((tablist) => {

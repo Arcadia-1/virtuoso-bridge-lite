@@ -69,6 +69,7 @@ p {
 h1,
 h2,
 h3 {
+  font-weight: 800;
   line-height: 1.13;
   letter-spacing: -0.045em;
 }
@@ -332,25 +333,28 @@ html[data-lang="zh"] h1 {
   color: var(--chrome-ink);
 }
 .lang-switch {
-  gap: 2px;
-  padding-left: 10px;
-  border-left: 1px solid var(--chrome-line);
-}
-.lang-switch button {
-  min-height: 28px;
-  padding: 0 6px;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0 8px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 0;
   background: transparent;
+  color: var(--chrome-ink);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  transition:
+    color 0.15s ease,
+    transform 0.15s ease;
+}
+.lang-switch:hover {
   color: var(--chrome-muted);
-  font-size: 11px;
+  transform: scale(1.06);
 }
-.lang-switch button:hover {
-  background: #f1f1ef;
-}
-.lang-switch button[aria-pressed="true"] {
-  background: var(--chrome-soft);
-  color: #1769b3;
+.lang-switch:active {
+  transform: scale(0.96);
 }
 .site-header :focus-visible,
 .site-footer :focus-visible {
@@ -382,9 +386,6 @@ html[data-lang="zh"] h1 {
   }
   .header-actions {
     gap: 4px;
-  }
-  .lang-switch {
-    padding-left: 4px;
   }
   .nav-guide {
     padding-inline: 10px;
@@ -421,7 +422,7 @@ html[data-lang="zh"] h1 {
 }
 .hero h1 {
   font-size: clamp(56px, 5.5vw, 78px);
-  font-weight: 600;
+  font-weight: 800;
   line-height: 1.06;
   margin: 24px 0;
 }
@@ -706,6 +707,33 @@ pre .comment {
   width: 100%;
   max-height: 225px;
   margin: 17px auto;
+}
+.response-panel {
+  background: #fff;
+}
+.response-legend {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-top: 24px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.response-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.response-legend > span::before {
+  content: "";
+  width: 18px;
+  border-top: 2px solid var(--cyan);
+}
+.response-legend .response-phase::before {
+  border-top: 2px dashed var(--violet);
+}
+.response-panel svg {
+  margin: 4px auto;
 }
 .result-caption {
   font: 11px/1.6 var(--mono);
