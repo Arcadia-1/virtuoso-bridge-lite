@@ -332,9 +332,6 @@ def test_netlist_import_through_api_keeps_library_technology(client, lib, tmp_pa
     assert _local_tech_db_size(client, lib) == before
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "open bug: CDS.log lines like '\\o Warning: Pin ... floating' are captured "
-    "but not classified into diagnostics"))
 def test_check_and_save_reports_schcheck_warning_text(client, lib):
     cell = _cell("floating")
     with client.schematic.create(lib, cell) as sch:

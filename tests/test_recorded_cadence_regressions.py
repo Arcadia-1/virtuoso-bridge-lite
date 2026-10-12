@@ -150,14 +150,11 @@ def test_recorded_schcheck_info_line_keeps_its_code():
     assert [(d.severity, d.code) for d in diagnostics] == [("info", "SCH-1170")]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "open bug: _SEVERITY_RE is anchored at line start, so CDS.log lines prefixed with "
-    "'\\o ' and using 'Warning:' are dropped and the result claims per-message text was absent"))
 def test_recorded_schcheck_warnings_become_diagnostics():
     diagnostics = _classify_log_lines(SCHCHECK_LINES, source="schCheck")
     warnings = [d.message for d in diagnostics if d.severity == "warning"]
     assert len(warnings) == SCHCHECK_COUNTS["check_warning_count"]
-    assert any('Pin "PLUS" on instance "R0"' in message for message in warnings)
+    assert any(message.startswith('Warning: Pin "PLUS" on instance "R0"') for message in warnings)
 
 
 # ---------------------------------------------------------------------------

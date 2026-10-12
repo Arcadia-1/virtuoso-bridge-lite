@@ -82,6 +82,9 @@ never classifies stale CIW history. This path is verified against IC6.1.8 and
 uses long-standing public APIs also present in newer Virtuoso releases. If log
 capture is unavailable or a PDK checker bypasses `CDS.log`, the counts remain
 authoritative and the report says that per-message text is unavailable.
+`check_log_lines`/`save_log_lines` keep the raw lines with CDS.log's stream
+tag (`\o `, `\w `, `\e `); diagnostic messages drop the tag, and `\w`/`\e`
+lines without a severity word count as warnings/errors.
 
 If a modal blocks the SKILL event loop, the call reports `blocked` and lists
 the modal through read-only X11 discovery. It does not dismiss the dialog.
