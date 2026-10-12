@@ -282,6 +282,22 @@ def discover_remote_doc_roots(runner, *, profile: str | None = None) -> list[str
     return roots
 
 
+def doc_roots_from_install_root(runner, install_root: str) -> list[str]:
+    """Remote doc roots for a Cadence install root reported by a running Virtuoso.
+
+    Fallback for :func:`discover_remote_doc_roots` when non-interactive shells
+    on the host cannot see the Cadence environment: *install_root* comes from
+    ``cdsGetInstPath()``. Returns ``[<install_root>/doc]`` only when that
+    directory exists on the remote host.
+    """
+    root = f"{install_root.rstrip('/')}/doc"
+    check = f"test -d {shlex.quote(root)} && echo VB_DOC_ROOT_OK"
+    result = runner.run_command(f"sh -c {shlex.quote(check)}", timeout=15)
+    if result.returncode == 0 and "VB_DOC_ROOT_OK" in (result.stdout or ""):
+        return [root]
+    return []
+
+
 def find_remote_doc_matches(
     runner,
     query: str,

@@ -15,7 +15,7 @@ import socket
 import hashlib
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from virtuoso_bridge.env import load_vb_env
 from virtuoso_bridge import daemon_auth
@@ -52,6 +52,10 @@ _RETRYABLE_BUSY_ERRORS = (
 _BUSY_RETRY_FIRST_DELAY = 0.1
 _BUSY_RETRY_MAX_DELAY = 1.0
 _TUNNEL_CONNECT_GRACE_SECONDS = 3.0
+# Documentation fallback: a running Virtuoso is asked for its install root
+# only when SSH discovery finds nothing, and never waits long for it.
+_INSTALL_ROOT_QUERY_TIMEOUT = 5.0
+_UNSET: Any = object()
 
 
 def _default_remote_port(
@@ -157,6 +161,22 @@ def _skill_error_text(payload: str) -> str:
     return f"{message} - {arguments}" if arguments else message
 
 
+def _install_root_from_skill_output(output: str | None) -> str | None:
+    """The absolute path printed for ``cdsGetInstPath()``, or None."""
+    from virtuoso_bridge.virtuoso.skill_output import parse_skill_str_list
+
+    try:
+        values = parse_skill_str_list(output or "")
+    except ValueError:
+        return None
+    if len(values) != 1:
+        return None
+    path = values[0].strip().rstrip("/")
+    if not path.startswith("/") or any(ch in path for ch in "\r\n\0"):
+        return None
+    return path
+
+
 def _skill_value_text(value: Any) -> str:
     if value is None:
         return "nil"
@@ -210,6 +230,10 @@ class VirtuosoClient(VirtuosoInterface):
 
         self.requests = RequestOps(self)
         self._il_upload_cache: dict[str, tuple[str, str]] = {}
+        # Documentation discovery fallback (see _fallback_install_root): a
+        # callable returning the Cadence install root of a running Virtuoso.
+        self._install_root_probe: Callable[[], str | None] | None = None
+        self._fallback_install_root_value: Any = _UNSET
         # For connect retry when jump host adds latency
         self._has_jump_host = (
             bool(os.getenv("VB_JUMP_HOST", "").strip())
@@ -1244,6 +1268,89 @@ let((result winName ciwNum)
             execution_time=time.perf_counter() - started,
         )
 
+    # -- Documentation discovery fallback ----------------------------------
+
+    def _query_install_root(self, timeout: float = _INSTALL_ROOT_QUERY_TIMEOUT) -> str | None:
+        """Cadence install root reported by the connected Virtuoso, or None.
+
+        Sends one read-only ``cdsGetInstPath()`` and never retries it. It is
+        not sent while the daemon's handshake reports a busy or stuck IPC
+        lane, so a documentation lookup does not queue behind a blocked CIW.
+        """
+        try:
+            caps = self._ensure_daemon_capabilities(time.monotonic() + timeout, refresh=True)
+        except (daemon_auth.DaemonAuthError, OSError):
+            return None
+        lane = caps.get("lane")
+        if isinstance(lane, dict) and lane.get("state") not in (None, "idle"):
+            return None
+        result = self.execute_skill("cdsGetInstPath()", timeout=timeout, retry_connect=False)
+        if result.status != ExecutionStatus.SUCCESS:
+            return None
+        return _install_root_from_skill_output(result.output)
+
+    def _fallback_install_root(self) -> str | None:
+        """Install root from a running Virtuoso when SSH discovery found nothing.
+
+        Uses the injected probe (the CLI's documentation client reuses an
+        already running tunnel), else this client's own daemon connection
+        when it already holds a daemon token. Nothing is started or deployed;
+        any failure means no fallback. The answer is kept for this client.
+        """
+        if self._fallback_install_root_value is not _UNSET:
+            return self._fallback_install_root_value
+        probe = self._install_root_probe
+        if probe is None and self._daemon_token:
+            probe = self._query_install_root
+        value: str | None = None
+        if probe is not None:
+            try:
+                value = probe()
+            except Exception as exc:  # noqa: BLE001 - a fallback must not fail the lookup
+                logger.debug("docs: running Virtuoso did not report its install root: %s", exc)
+                value = None
+        if value:
+            logger.info("docs: using install root %s reported by the running Virtuoso", value)
+        self._fallback_install_root_value = value or None
+        return self._fallback_install_root_value
+
+    def _discover_remote_finder_root(self, runner) -> Path | None:
+        """``doc/finder/SKILL`` on the documentation host, or None."""
+        from virtuoso_bridge.virtuoso.skill_finder import SKILLFinder
+
+        profile = getattr(self._tunnel, "_profile", None) if self._tunnel else None
+        finder_root = SKILLFinder().discover(remote_runner=runner, profile=profile)
+        if finder_root is not None:
+            return finder_root
+        install_root = self._fallback_install_root()
+        if install_root is None:
+            return None
+        try:
+            return SKILLFinder().discover_from_install_root(runner, install_root)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("docs: SKILL Finder lookup under %s failed: %s", install_root, exc)
+            return None
+
+    def _discover_remote_doc_roots(self, runner) -> list[str]:
+        """Cadence doc roots on the documentation host (empty when none)."""
+        from virtuoso_bridge.virtuoso.docs_search import (
+            discover_remote_doc_roots,
+            doc_roots_from_install_root,
+        )
+
+        profile = getattr(self._tunnel, "_profile", None) if self._tunnel else None
+        roots = discover_remote_doc_roots(runner, profile=profile)
+        if roots:
+            return roots
+        install_root = self._fallback_install_root()
+        if install_root is None:
+            return []
+        try:
+            return doc_roots_from_install_root(runner, install_root)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("docs: doc root check under %s failed: %s", install_root, exc)
+            return []
+
     # -- SKILL Finder -------------------------------------------------------
 
     def find_skill(
@@ -1255,13 +1362,17 @@ let((result winName ciwNum)
         include_desc: bool = False,
         source_dir: str | Path | None = None,
         cache_dir: str | Path | None = None,
+        missing_ok: bool = True,
     ) -> list[dict]:
         """Search SKILL API documentation by name.
 
         On first call (or when *source_dir* is not provided), discovers
         the SKILL Finder directory on the GUI/documentation host by walking
         up from
-        the ``virtuoso`` binary to ``doc/finder/SKILL``.  The directory is
+        the ``virtuoso`` binary to ``doc/finder/SKILL``.  When that finds
+        nothing and a bridge daemon is already reachable, the install root
+        the running Virtuoso reports (``cdsGetInstPath()``) is used instead.
+        The directory is
         cached locally in *cache_dir* (default:
         the user cache directory under ``skill_finder/<host>`` so subsequent
         calls are fast without additional network traffic.
@@ -1290,6 +1401,10 @@ let((result winName ciwNum)
         cache_dir : str | Path | None
             Local cache directory for downloaded .fnd files.  If None,
             defaults to the user cache directory under ``skill_finder/<host>``.
+        missing_ok : bool
+            When False, raise :class:`SKILLFinderNotFoundError` if no SKILL
+            Finder data can be located, instead of returning ``[]`` as for
+            a query without matches.
 
         Returns
         -------
@@ -1301,7 +1416,7 @@ let((result winName ciwNum)
         from virtuoso_bridge.runtime_paths import cache_dir as runtime_cache_dir
         from virtuoso_bridge.virtuoso.skill_finder import (
             SKILLFinder,
-            SearchMode,
+            SKILLFinderNotFoundError,
         )
 
         # Resolve cache directory
@@ -1319,14 +1434,17 @@ let((result winName ciwNum)
         elif runner is not None:
             from virtuoso_bridge.virtuoso.docs_search import to_remote_posix
 
-            profile = getattr(self._tunnel, "_profile", None) if self._tunnel else None
-            finder = SKILLFinder()
-            finder_root = finder.discover(remote_runner=runner, profile=profile)
+            finder_root = self._discover_remote_finder_root(runner)
             if finder_root is None:
                 logger.warning(
                     "find_skill: could not locate doc/finder/SKILL on %s",
                     self._skill_finder_cache_host(),
                 )
+                if not missing_ok:
+                    raise SKILLFinderNotFoundError(
+                        "no SKILL Finder data (doc/finder/SKILL) found on "
+                        f"{self._skill_finder_cache_host()}"
+                    )
                 return []
             # Remote paths must stay POSIX even on a Windows client, where
             # Path("/opt/cadence/...") would stringify with backslashes.
@@ -1375,6 +1493,10 @@ let((result winName ciwNum)
             finder_root = finder.discover(remote_runner=None)
             if finder_root is None:
                 logger.warning("find_skill: could not locate SKILL Finder locally")
+                if not missing_ok:
+                    raise SKILLFinderNotFoundError(
+                        "no SKILL Finder data (doc/finder/SKILL) found on this machine"
+                    )
                 return []
             doc_root = finder_root.parent.parent
 
@@ -1397,6 +1519,7 @@ let((result winName ciwNum)
         *,
         source_dir: str | Path | None = None,
         cache_dir: str | Path | None = None,
+        missing_ok: bool = True,
     ) -> dict | None:
         """Get More Info documentation for a specific SKILL function.
 
@@ -1416,6 +1539,10 @@ let((result winName ciwNum)
         cache_dir : str | Path | None
             Local cache directory.  If None, defaults to
             the user cache directory under ``skill_finder/<host>``.
+        missing_ok : bool
+            When False, raise :class:`SKILLFinderNotFoundError` if the doc
+            root cannot be located, instead of returning None as for a
+            function without a More Info entry.
 
         Returns
         -------
@@ -1426,7 +1553,10 @@ let((result winName ciwNum)
         """
         from pathlib import Path as _Path
         from virtuoso_bridge.runtime_paths import cache_dir as runtime_cache_dir
-        from virtuoso_bridge.virtuoso.skill_finder import SKILLFinder
+        from virtuoso_bridge.virtuoso.skill_finder import (
+            SKILLFinder,
+            SKILLFinderNotFoundError,
+        )
         from virtuoso_bridge.virtuoso.skill_finder.more_info import (
             html_to_plain_text,
             parse_tgf_index,
@@ -1449,14 +1579,17 @@ let((result winName ciwNum)
             if runner is not None:
                 remote_doc_root = to_remote_posix(doc_root)
         elif runner is not None:
-            profile = getattr(self._tunnel, "_profile", None) if self._tunnel else None
-            finder = SKILLFinder()
-            finder_root = finder.discover(remote_runner=runner, profile=profile)
+            finder_root = self._discover_remote_finder_root(runner)
             if finder_root is None:
                 logger.warning(
                     "get_skill_more_info: could not locate doc/finder/SKILL on %s",
                     self._skill_finder_cache_host(),
                 )
+                if not missing_ok:
+                    raise SKILLFinderNotFoundError(
+                        "no SKILL Finder data (doc/finder/SKILL) found on "
+                        f"{self._skill_finder_cache_host()}"
+                    )
                 return None
             doc_root = finder_root.parent.parent
             # Remote paths must stay POSIX even on a Windows client.
@@ -1466,6 +1599,10 @@ let((result winName ciwNum)
             finder_root = finder.discover(remote_runner=None)
             if finder_root is None:
                 logger.warning("get_skill_more_info: could not locate SKILL Finder locally")
+                if not missing_ok:
+                    raise SKILLFinderNotFoundError(
+                        "no SKILL Finder data (doc/finder/SKILL) found on this machine"
+                    )
                 return None
             doc_root = finder_root.parent.parent
 
@@ -1648,7 +1785,6 @@ let((result winName ciwNum)
         from virtuoso_bridge.runtime_paths import cache_dir as runtime_cache_dir
         from virtuoso_bridge.virtuoso.docs_search import (
             cache_remote_doc_matches,
-            discover_remote_doc_roots,
             find_remote_doc_matches,
             remap_results_to_remote,
             resolve_doc_roots,
@@ -1675,8 +1811,7 @@ let((result winName ciwNum)
             }
 
         if runner is not None:
-            profile = getattr(self._tunnel, "_profile", None) if self._tunnel else None
-            remote_roots = discover_remote_doc_roots(runner, profile=profile)
+            remote_roots = self._discover_remote_doc_roots(runner)
             if not remote_roots:
                 return {"doc_roots": [], "results": []}
 
@@ -1743,7 +1878,6 @@ let((result winName ciwNum)
         ``{"ok": bool, "doc_roots": [...]}``.
         """
         from virtuoso_bridge.virtuoso.docs_search import (
-            discover_remote_doc_roots,
             doc_root_info_local,
             doc_root_info_remote,
             resolve_doc_roots,
@@ -1759,8 +1893,7 @@ let((result winName ciwNum)
 
         runner = self.docs_runner
         if runner is not None:
-            profile = getattr(self._tunnel, "_profile", None) if self._tunnel else None
-            remote_roots = discover_remote_doc_roots(runner, profile=profile)
+            remote_roots = self._discover_remote_doc_roots(runner)
             if not remote_roots:
                 return {"ok": True, "doc_roots": []}
             return {
