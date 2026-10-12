@@ -169,3 +169,33 @@ def test_eval_trailing_line_comment_does_not_swallow_closing_paren(monkeypatch):
     assert rc == 0
     # The comment must be terminated by a newline before the closing `)`.
     assert fake.last_skill.endswith("\n)")
+
+
+def test_eval_stdout_is_only_json_while_env_and_ssh_echoes_go_to_stderr(
+    monkeypatch, capsys, tmp_path
+):
+    """``virtuoso-bridge eval ... | jq`` must parse: the .env banner and the
+    tunnel's ``[cmd]`` echoes are diagnostics and belong on stderr."""
+    from virtuoso_bridge import cli
+    from virtuoso_bridge.transport.ssh import SSHRunner
+
+    env_file = tmp_path / ".env"
+    fake = _FakeClient(VirtuosoResult(status=ExecutionStatus.SUCCESS, output="42"))
+
+    class _EchoingVirtuosoClient:
+        @classmethod
+        def from_env(cls, profile=None):
+            SSHRunner("eda-host", verbose=True)._print_cmd(["ssh", "eda-host", "cat", "token"])
+            return fake
+
+    monkeypatch.setattr(virtuoso_bridge, "VirtuosoClient", _EchoingVirtuosoClient)
+    monkeypatch.setattr(cli, "load_vb_env", lambda: env_file)
+    monkeypatch.setattr(cli, "_PRINTED_ENV_PATH", None)
+
+    rc = main(["eval", "x = 1 x + 41"])
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert json.loads(captured.out)["output"] == "42"
+    assert f"using .env: {env_file}" in captured.err
+    assert "[cmd] ssh eda-host cat token" in captured.err
