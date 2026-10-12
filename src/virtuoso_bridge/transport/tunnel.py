@@ -112,6 +112,7 @@ def _generate_virtuoso_setup_il(
     python_cmd: str = "python",
     port: int = 65432,
     identity_path: str | None = None,
+    listen_all: bool = False,
 ) -> str:
     identity_line = (
         f'setShellEnvVar("RB_IDENTITY_PATH" "{identity_path}")\n'
@@ -127,6 +128,7 @@ def _generate_virtuoso_setup_il(
         f'setShellEnvVar("RB_DAEMON_PATH" "{daemon_path}")\n'
         f'setShellEnvVar("RB_PYTHON_PATH" "{python_cmd}")\n'
         f'setShellEnvVar("RB_PORT" "{port}")\n'
+        f'setShellEnvVar("RB_LISTEN_ALL" "{1 if listen_all else 0}")\n'
         f"{identity_line}"
         "\n"
         "; Load RAMIC Bridge IL script\n"
@@ -216,8 +218,10 @@ class SSHClient:
         deploy_host: str | None = None,
         gui_host: str | None = None,
         spectre_host: str | None = None,
+        listen_all: bool = False,
     ) -> None:
         self._daemon_host = daemon_host or remote_host
+        self._listen_all = listen_all
         self._gui_host = gui_host or remote_host
         self._deploy_host = deploy_host or self._gui_host
         self._spectre_host = spectre_host or remote_host
@@ -366,6 +370,7 @@ class SSHClient:
             deploy_host=roles.deploy_host,
             gui_host=roles.gui_host,
             spectre_host=roles.spectre_host,
+            listen_all=os.getenv(f"VB_DAEMON_LISTEN_ALL{suffix}", "").strip() == "1",
         )
 
     # -- properties ---------------------------------------------------------
@@ -733,6 +738,7 @@ class SSHClient:
             python_cmd,
             port=self._port,
             identity_path=remote_identity,
+            listen_all=self._listen_all,
         )
         logger.info("Uploading setup script to %s", remote_setup)
         up = runner.upload_text(setup_content, remote_setup)
@@ -804,6 +810,7 @@ class SSHClient:
             python_cmd,
             port=self._port,
             identity_path=str(local_identity),
+            listen_all=self._listen_all,
         )
         local_setup.write_text(setup_content, encoding="utf-8")
         local_identity.unlink(missing_ok=True)

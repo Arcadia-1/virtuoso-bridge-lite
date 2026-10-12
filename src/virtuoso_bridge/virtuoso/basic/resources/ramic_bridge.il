@@ -25,7 +25,10 @@ RBIdentityPath = if(getShellEnvVar("RB_IDENTITY_PATH") then
             else
                 ""
             )
-RBLocal = nil                                                                      ; Local-only connections (127.0.0.1 vs 0.0.0.0)
+; Listen on 127.0.0.1: SSH tunnels and local mode both reach the daemon
+; through loopback. RB_LISTEN_ALL=1 (VB_DAEMON_LISTEN_ALL in .env) binds
+; 0.0.0.0 for clients that connect over the network.
+RBLocal = getShellEnvVar("RB_LISTEN_ALL") != "1"
 RBEcho = nil                                                                     ; Echo bridging messages for debugging
 ; Read IPC logging settings from the Virtuoso process environment at load time.
 ; Only "1" enables logging; a configured path alone does not enable it.
