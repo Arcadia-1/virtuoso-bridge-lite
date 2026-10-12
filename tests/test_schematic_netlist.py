@@ -200,7 +200,35 @@ def test_schematic_import_netlist_skill_overwrites_through_temporary_view() -> N
     assert skill.index("?destViewName vbDestViewName ?block t) nil)") < skill.index(
         'dbCopyCellView(vbTempCv "demoLib" "nand2" "schematic" nil nil t)'
     )
-    assert "unwindProtect" in skill
+
+
+def test_overwrite_conversion_raises_its_failure_only_after_cleanup() -> None:
+    # An error raised inside unwindProtect reached the bridge as "nil" once
+    # the cleanup's own errset reset errset.errset.
+    skill = schematic_import_netlist_skill("demoLib", "nand2", overwrite=True)
+
+    assert "unwindProtect" not in skill
+    assert 'vbFailure = "target schematic copy failed"' in skill
+    cleanup = skill.index("errset(ddDeleteObj(vbTempObj) nil)")
+    assert skill.index('vbFailure = "target schematic copy failed"') < cleanup
+    assert cleanup < skill.index("when(vbFailure error(vbFailure))")
+
+
+def test_overwrite_refuses_a_target_open_in_virtuoso_before_spicein() -> None:
+    open_check = "when(setof(vbOpenCv dbGetOpenCellViews() "
+    message = "target demoLib/nand2/schematic is open for editing in Virtuoso; close it before overwriting"
+    preflight = schematic_netlist_module._schematic_import_preflight_skill(
+        "demoLib", "nand2", netlist_view="netlist", schematic_view="schematic", overwrite=True,
+    )
+    conversion = schematic_import_netlist_skill("demoLib", "nand2", overwrite=True)
+
+    for skill in (preflight, conversion):
+        assert open_check in skill and message in skill
+        assert 'vbOpenCv~>viewName == "schematic" && vbOpenCv~>mode != "r")' in skill
+    assert conversion.index(open_check) < conversion.index("conn2Sch(")
+    assert open_check not in schematic_netlist_module._schematic_import_preflight_skill(
+        "demoLib", "nand2", netlist_view="netlist", schematic_view="schematic", overwrite=False,
+    )
 
 
 def test_schematic_import_netlist_skill_rejects_same_target_views() -> None:

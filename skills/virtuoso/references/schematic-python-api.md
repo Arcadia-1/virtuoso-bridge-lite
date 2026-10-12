@@ -215,6 +215,10 @@ imported = client.schematic.import_netlist(
 )
 ```
 
+With `overwrite=True` the import refuses a target schematic that is open for
+editing (for example in a window), before `spiceIn` runs: Virtuoso cannot copy
+over it. Close the window first; read-only opens do not block the import.
+
 For format and `spiceIn` limitations, see [netlist.md](netlist.md).
 
 ## Low-level SKILL builders
