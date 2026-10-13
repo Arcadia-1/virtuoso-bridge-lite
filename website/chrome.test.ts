@@ -68,7 +68,7 @@ describe("shared light website chrome", () => {
       expect(page).toContain('src="/assets/mark.svg?v=20261012-vb"');
   });
 
-  it("uses a single borderless text language switch on every public page", () => {
+  it("uses the personal homepage's A / 文 language icon on every public page", () => {
     for (const page of pages) {
       const switches = [
         ...page.matchAll(
@@ -76,10 +76,13 @@ describe("shared light website chrome", () => {
         ),
       ];
       expect(switches).toHaveLength(1);
-      expect(switches[0][0]).toContain(
-        '<span class="en" lang="zh-CN">中文</span>',
-      );
-      expect(switches[0][0]).toContain('<span class="zh" lang="en">EN</span>');
+      const toggle = switches[0][0];
+      for (const path of ["m5 8 6 6", "m4 14 6-6 2-3", "M2 5h12", "M7 2h1", "m22 22-5-10-5 10", "M14 18h6"])
+        expect(toggle).toContain(`d="${path}"`);
+      expect(toggle).toContain('width="22"');
+      expect(toggle).toContain('height="22"');
+      expect(toggle).toContain('stroke-width="1.75"');
+      expect(toggle).not.toContain("<span");
       expect(page).not.toContain('data-language="');
     }
   });

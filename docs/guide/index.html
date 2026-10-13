@@ -26,13 +26,13 @@
         var l =
           new URLSearchParams(location.search).get("lang") ||
           localStorage.getItem("vb-language") ||
-          (navigator.language.startsWith("zh") ? "zh" : "en");
+          "en";
         document.documentElement.dataset.lang = l === "zh" ? "zh" : "en";
         document.documentElement.lang = l === "zh" ? "zh-CN" : "en";
       } catch (e) {}
     </script>
-    <link rel="stylesheet" href="/site.css?v=20261012-hero" />
-    <script src="/site.js?v=20261012-hero" defer></script>
+    <link rel="stylesheet" href="/site.css?v=20261013-language" />
+    <script src="/site.js?v=20261013-language" defer></script>
     <script type="module" src="/analytics/track.js?v=20261012-light"></script>
   </head>
   <body>
@@ -195,8 +195,16 @@
             aria-label="切换到中文"
             title="切换到中文"
           >
-            <span class="en" lang="zh-CN">中文</span>
-            <span class="zh" lang="en">EN</span>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="1.75" stroke-linecap="round"
+              stroke-linejoin="round" aria-hidden="true">
+              <path d="m5 8 6 6" />
+              <path d="m4 14 6-6 2-3" />
+              <path d="M2 5h12" />
+              <path d="M7 2h1" />
+              <path d="m22 22-5-10-5 10" />
+              <path d="M14 18h6" />
+            </svg>
           </button>
         </div>
       </div>

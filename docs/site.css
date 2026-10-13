@@ -287,26 +287,36 @@ html[data-lang="zh"] h1 {
 .lang-switch {
   align-items: center;
   justify-content: center;
-  min-width: 40px;
-  min-height: 40px;
-  padding: 0 8px;
+  width: 2.7rem;
+  height: 2.7rem;
+  flex: 0 0 auto;
+  padding: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
-  color: var(--chrome-ink);
-  font-size: 13px;
-  font-weight: 600;
+  color: #131c28;
+  cursor: pointer;
   line-height: 1;
+  box-shadow: none;
+  text-decoration: none;
   transition:
     color 0.15s ease,
-    transform 0.15s ease;
+    transform 0.15s ease,
+    opacity 0.15s ease;
 }
 .lang-switch:hover {
-  color: var(--chrome-muted);
+  color: #3d4756;
   transform: scale(1.06);
+  text-decoration: none;
 }
 .lang-switch:active {
   transform: scale(0.96);
+}
+@media (max-width: 40rem) {
+  .lang-switch {
+    width: 2.35rem;
+    height: 2.35rem;
+  }
 }
 .site-header :focus-visible,
 .site-footer :focus-visible {
