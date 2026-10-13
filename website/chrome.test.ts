@@ -42,6 +42,24 @@ describe("shared light website chrome", () => {
     }
   });
 
+  it("shows four direct cross-site links and keeps Docs in the utility area", () => {
+    for (const page of pages) {
+      const nav = page.match(/<nav class="header-nav"[^>]*>[\s\S]*?<\/nav>/)?.[0] ?? "";
+      const actions = page.match(/<div class="header-actions">[\s\S]*?<\/div>/)?.[0] ?? "";
+      expect(nav.match(/class="site-link"/g)).toHaveLength(4);
+      expect(nav).not.toContain("nav-guide");
+      expect(actions).toContain('class="nav-guide"');
+      expect(page).not.toContain("site-switcher");
+      for (const link of nav.match(/<a [\s\S]*?<\/a>/g) ?? []) {
+        expect(link).toContain('aria-label="');
+        expect(link).toContain('title="');
+        expect(link).toContain('target="_blank" rel="noopener"');
+        expect(link).toContain('width="24" height="24"');
+      }
+    }
+    expect(read("site.js")).not.toContain("siteSwitcher");
+  });
+
   it("uses a light default, including the independent dashboard", () => {
     const css = read("site.css");
     expect(css).toMatch(/color-scheme:\s*light/);

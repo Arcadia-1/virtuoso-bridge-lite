@@ -31,8 +31,8 @@
         document.documentElement.lang = l === "zh" ? "zh-CN" : "en";
       } catch (e) {}
     </script>
-    <link rel="stylesheet" href="/site.css?v=20261013-language" />
-    <script src="/site.js?v=20261013-language" defer></script>
+    <link rel="stylesheet" href="/site.css?v=20261013-navigation" />
+    <script src="/site.js?v=20261013-navigation" defer></script>
     <script type="module" src="/analytics/track.js?v=20261012-light"></script>
   </head>
   <body>
@@ -42,101 +42,38 @@
     >
     <header class="site-header">
       <div class="wrap header-inner">
-        <div class="brand-cluster">
-          <a
-            class="brand"
-            href="/"
-            data-internal
-            aria-label="Virtuoso Bridge home"
-            ><img
-              src="/assets/mark.svg?v=20261012-vb"
-              width="24"
-              height="24"
-              alt=""
-            /><span>Virtuoso Bridge</span></a
-          >
-          <details class="site-switcher">
-            <summary
-              aria-label="Related projects / 相关项目"
-              title="Related projects / 相关项目"
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.6"
-                aria-hidden="true"
-              >
-                <rect x="3" y="3" width="7" height="7" rx="1.5" />
-                <rect x="14" y="3" width="7" height="7" rx="1.5" />
-                <rect x="3" y="14" width="7" height="7" rx="1.5" />
-                <rect x="14" y="14" width="7" height="7" rx="1.5" />
-              </svg>
-              <span class="en">Projects</span><span class="zh">项目</span>
-              <svg
-                class="menu-chevron"
-                width="12"
-                height="12"
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-                aria-hidden="true"
-              >
-                <path d="m4 6 4 4 4-4" />
-              </svg>
-            </summary>
-            <nav class="site-menu" aria-label="Related sites">
-              <a href="https://analog-canvas.tokenzhang.com/"
-                ><img
-                  src="/assets/analog-canvas.svg"
-                  width="20"
-                  height="20"
-                  alt=""
-                /><span>Analog Canvas</span
-                ><span aria-hidden="true">↗</span></a
-              >
-              <a href="https://chip-arena.com/"
-                ><img
-                  src="/assets/chip-arena.svg"
-                  width="20"
-                  height="20"
-                  alt=""
-                /><span>Chip Arena</span><span aria-hidden="true">↗</span></a
-              >
-              <a href="https://circuits-and-systems.tokenzhang.com/"
-                ><img
-                  src="/assets/classroom.svg"
-                  width="20"
-                  height="20"
-                  alt=""
-                /><span>CAS Classroom</span
-                ><span aria-hidden="true">↗</span></a
-              >
-              <a class="site-menu-home" href="https://www.tokenzhang.com/"
-                ><svg
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                  aria-hidden="true"
-                >
-                  <circle cx="12" cy="8" r="3.5" />
-                  <path d="M5 21v-2a7 7 0 0 1 14 0v2" /></svg
-                ><span
-                  ><span class="en">Zhishuai Zhang</span
-                  ><span class="zh">张智帅 · 个人主页</span></span
-                ><span aria-hidden="true">↗</span></a
-              >
-            </nav>
-          </details>
-        </div>
-        <nav class="header-nav" aria-label="Main navigation">
-          <a class="nav-guide" href="/guide/" data-internal
+        <a
+          class="brand"
+          href="/"
+          data-internal
+          aria-label="Virtuoso Bridge home"
+          ><img
+            src="/assets/mark.svg?v=20261012-vb"
+            width="24"
+            height="24"
+            alt=""
+          /><span>Virtuoso Bridge</span></a
+        >
+        <nav class="header-nav" aria-label="Related sites / 相关网站">
+          <a class="site-link" href="https://analog-canvas.tokenzhang.com/" target="_blank" rel="noopener" aria-label="Analog Canvas" title="Analog Canvas">
+            <span class="site-link-logo" aria-hidden="true"><img src="/assets/analog-canvas.svg" width="24" height="24" alt="" /></span>
+            <span class="site-link-label">Analog Canvas</span>
+          </a>
+          <a class="site-link" href="https://chip-arena.com/" target="_blank" rel="noopener" aria-label="Chip Arena" title="Chip Arena">
+            <span class="site-link-logo" aria-hidden="true"><img src="/assets/chip-arena.svg" width="24" height="24" alt="" /></span>
+            <span class="site-link-label">Chip Arena</span>
+          </a>
+          <a class="site-link" href="https://circuits-and-systems.tokenzhang.com/" target="_blank" rel="noopener" aria-label="CAS Classroom" title="CAS Classroom">
+            <span class="site-link-logo" aria-hidden="true"><img src="/assets/classroom.svg" width="24" height="24" alt="" /></span>
+            <span class="site-link-label">CAS Classroom</span>
+          </a>
+          <a class="site-link" href="https://www.tokenzhang.com/" target="_blank" rel="noopener" aria-label="Zhishuai Zhang / 张智帅 · 个人主页" title="Zhishuai Zhang / 张智帅 · 个人主页">
+            <span class="site-link-logo" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="8" r="3.5" /><path d="M5 21v-2a7 7 0 0 1 14 0v2" /></svg></span>
+            <span class="site-link-label"><span class="en">Zhishuai Zhang</span><span class="zh">张智帅 · 个人主页</span></span>
+          </a>
+        </nav>
+        <div class="header-actions">
+          <a class="nav-guide" href="/guide/" data-internal aria-label="Documentation / 使用文档" title="Docs / 使用文档"
             ><svg
               width="16"
               height="16"
@@ -152,8 +89,6 @@
               /></svg
             ><span class="en">Docs</span><span class="zh">使用文档</span></a
           >
-        </nav>
-        <div class="header-actions">
           <a
             class="report-link"
             href="https://github.com/Arcadia-1/virtuoso-bridge-lite/issues"
