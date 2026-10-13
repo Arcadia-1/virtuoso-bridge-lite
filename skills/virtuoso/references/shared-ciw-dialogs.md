@@ -274,9 +274,11 @@ tickets between processes. Rendering differences, obscured windows, animation an
 button highlighting can invalidate a visual match; refusal is intentional.
 
 Let the user complete their dialog whenever its provenance is unknown.
-An explicitly authorized window/action can use `dismiss-window --display DISPLAY`;
-the exact `target.display` from inspection is required for this workflow, since
-window IDs are not unique across displays. Confirm the window still represents
+An explicitly authorized window/action can use `dismiss-window --pid PID` (or
+`--display DISPLAY` with the exact `target.display` from inspection); one of them is
+required for this workflow, since window IDs are not unique across displays. Both
+connect with the Xauthority cookie of the Virtuoso process on that display, which
+`xvfb-run`/`cdsXvfb-run` sessions need; the action never moves to another display. Confirm the window still represents
 the intended dialog before invoking it. Sending a key
 is not proof that the underlying save or simulation succeeded.
 

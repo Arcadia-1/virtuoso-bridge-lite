@@ -1190,8 +1190,12 @@ def cli_list_windows(*, json_output: bool = False, top_level: bool = False) -> i
 
 def cli_dismiss_window(
     *, window_id: str, action: str = "enter", display: str | None = None,
+    pid: int | None = None,
 ) -> int:
     """Dismiss one explicit X11 window id via XTest."""
+    if pid is not None and pid <= 0:
+        print("Error: --pid requires a positive integer")
+        return 2
     _load_cli_env()
     from virtuoso_bridge.virtuoso import x11
     runner, user = _make_ssh_runner()
@@ -1203,6 +1207,7 @@ def cli_dismiss_window(
         action=action,
         display=display,
         profile=_get_cli_profile(),
+        pid=pid,
     )
     if not results:
         print("No result returned.")
@@ -2287,6 +2292,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exact X display from inspection; required for inspection-based recovery",
     )
     sp_dismiss_window.add_argument(
+        "--pid", type=int, default=None,
+        help="Virtuoso process PID from inspection; uses that process's DISPLAY and Xauthority",
+    )
+    sp_dismiss_window.add_argument(
         "--action",
         default="enter",
         choices=["enter", "escape", "alt-o", "alt-y", "alt-n"],
@@ -2632,6 +2641,7 @@ def _run_command(parser: argparse.ArgumentParser, args: argparse.Namespace) -> i
             window_id=getattr(args, "window_id"),
             action=getattr(args, "action", "enter"),
             display=getattr(args, "display", None),
+            pid=getattr(args, "pid", None),
         ),
         "bootstrap": lambda: cli_bootstrap(
             window_id=getattr(args, "window"),
