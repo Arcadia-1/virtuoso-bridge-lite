@@ -288,8 +288,16 @@ def dismiss_window(
     action: str = "enter",
     display: str | None = None,
     profile: str | None = None,
+    pid: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Dismiss an explicit X11 window id with a requested key action."""
+    """Dismiss an explicit X11 window id with a requested key action.
+
+    ``pid`` pins the X11 environment (DISPLAY and its Xauthority cookie) to one
+    Virtuoso process, as ``inspect_dialogs`` does; without it an explicit
+    ``display`` takes its cookie from Virtuoso processes on that display only.
+    """
+    if pid is not None and (isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0):
+        raise ValueError("pid must be a positive integer")
     load_vb_env()
     script = _ensure_helper(runner, user, profile)
     py = _detect_remote_python(runner)
@@ -298,6 +306,8 @@ def dismiss_window(
         f"{py} {script} --dismiss-window {shlex.quote(window_id)} "
         f"--action {shlex.quote(action)}"
     )
+    if pid is not None:
+        cmd += f" --pid {pid}"
     if resolved:
         cmd += f" {shlex.quote(resolved)}"
     result = _run(runner, cmd, timeout=15)

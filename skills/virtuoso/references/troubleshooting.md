@@ -86,7 +86,7 @@ blocked the same CIW event loop that serves the bridge.
 virtuoso-bridge inspect-dialogs --pid PID --json
 virtuoso-bridge list-windows --top-level --json
 # Only with explicit authorization for this window and action:
-virtuoso-bridge dismiss-window WINDOW_ID --display DISPLAY --action escape
+virtuoso-bridge dismiss-window WINDOW_ID --pid PID --action escape
 ```
 
 The first command inspects one process without altering any window. A modal

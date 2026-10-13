@@ -48,6 +48,11 @@ _MAX_FRAME_SEARCH_DEPTH = 8
 _MAX_X11_NATIVE_QUERIES = 4096
 
 
+# XAUTHORITY of the shell that started this helper (usually unset over SSH).
+# Restored whenever a selected X11 environment names no cookie file of its own.
+_SHELL_XAUTHORITY = os.environ.get("XAUTHORITY")
+
+
 class _InspectionFailure(Exception):
     pass
 
@@ -101,6 +106,79 @@ def find_x11_envs(user=None):
             seen.add(key)
             unique.append(candidate)
     return unique
+
+
+def _display_key(display):
+    """(host, display number) of a DISPLAY string; the screen suffix is ignored.
+
+    ":7", ":7.0" and "unix:7" name the same local server; "localhost:10.0"
+    (a TCP or forwarded display) does not.
+    """
+    if not isinstance(display, string_types):
+        return None
+    match = re.match(r"^([^:]*):([0-9]+)(?:\.[0-9]+)?$", display.strip())
+    if not match:
+        return None
+    host = match.group(1)
+    if host == "unix":
+        host = ""
+    return (host, int(match.group(2)))
+
+
+def _same_display(a, b):
+    if a == b:
+        return True
+    key = _display_key(a)
+    return key is not None and key == _display_key(b)
+
+
+def _xauthority_connects(display, xauthority):
+    env = os.environ.copy()
+    env["DISPLAY"] = display
+    if xauthority:
+        env["XAUTHORITY"] = xauthority
+    else:
+        env.pop("XAUTHORITY", None)
+    try:
+        _bounded_check_output(["xwininfo", "-root"], env=env)
+    except _InspectionFailure:
+        return False
+    return True
+
+
+def _explicit_display_env(display):
+    """X11 environment for one explicitly requested DISPLAY.
+
+    xvfb-run and cdsXvfb-run give each X server its own cookie file, named only
+    in the environment of the processes started under it, so the SSH shell's
+    XAUTHORITY usually cannot connect. Take the cookie file from this user's
+    interactive Virtuoso processes on exactly this display, never from another
+    display (window ids repeat across displays), and fall back to the shell's
+    own XAUTHORITY when none names one.
+    """
+    candidates = []
+    for env in find_x11_envs():
+        xauthority = env.get("XAUTHORITY")
+        if xauthority and _same_display(env.get("DISPLAY"), display) and xauthority not in candidates:
+            candidates.append(xauthority)
+    if len(candidates) > 1:
+        working = [xauthority for xauthority in candidates if _xauthority_connects(display, xauthority)]
+        candidates = working or candidates
+    return {"DISPLAY": display, "XAUTHORITY": candidates[0] if candidates else _SHELL_XAUTHORITY}
+
+
+def _pinned_process_env(pid_text, display):
+    """X11 environment of one explicitly selected Virtuoso process (--pid)."""
+    if not (isinstance(pid_text, string_types) and re.match(r"^[0-9]+$", pid_text.strip())) \
+            or int(pid_text.strip()) <= 0:
+        raise _InspectionFailure("--pid requires a positive integer")
+    process_env = _read_process_x11_env(int(pid_text.strip()))
+    if display and not _same_display(display, process_env["DISPLAY"]):
+        raise _InspectionFailure(
+            "supplied DISPLAY %s disagrees with process DISPLAY %s"
+            % (display, process_env["DISPLAY"])
+        )
+    return {"DISPLAY": process_env["DISPLAY"], "XAUTHORITY": process_env.get("XAUTHORITY")}
 
 
 def find_x11_env(user=None):
@@ -1326,6 +1404,10 @@ def _apply_x11_env(x11_env):
     xauth = x11_env.get("XAUTHORITY")
     if isinstance(xauth, string_types) and xauth:
         os.environ["XAUTHORITY"] = xauth
+    elif _SHELL_XAUTHORITY:
+        os.environ["XAUTHORITY"] = _SHELL_XAUTHORITY      # not a cookie left by a previous display
+    else:
+        os.environ.pop("XAUTHORITY", None)
     return display
 
 
@@ -1808,8 +1890,14 @@ def main():
         print(json.dumps(result, sort_keys=True))
         sys.exit(1 if result.get("status") == "indeterminate" else 0)
 
-    if display:
-        x11_envs = [{"DISPLAY": display, "XAUTHORITY": os.environ.get("XAUTHORITY")}]
+    if inspect_pid is not None:
+        try:
+            x11_envs = [_pinned_process_env(inspect_pid, display)]
+        except _InspectionFailure as exc:
+            print(json.dumps({"error": str(exc)}))
+            sys.exit(2)
+    elif display:
+        x11_envs = [_explicit_display_env(display)]
     else:
         x11_envs = find_x11_envs()
         if not x11_envs:
