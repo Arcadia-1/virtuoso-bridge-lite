@@ -49,5 +49,14 @@ def parse_layout_geometry_output(raw: str) -> list[dict[str, Any]]:
             obj["points"] = _parse_skill_point_list(obj["points"])
         if "xy" in obj and isinstance(obj["xy"], str):
             obj["xy"] = _parse_skill_point(obj["xy"])
+        if obj["kind"] == "mosaic":
+            for key in ("rows", "columns"):
+                value = obj.get(key)
+                if isinstance(value, str) and re.fullmatch(r"\d+", value):
+                    obj[key] = int(value)
+            for key in ("lib", "cell", "view"):
+                value = obj.get(key)
+                if isinstance(value, str) and value.startswith('"') and value.endswith('"'):
+                    obj[key] = value[1:-1]
         objects.append(obj)
     return objects

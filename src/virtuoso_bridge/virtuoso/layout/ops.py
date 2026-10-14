@@ -425,11 +425,18 @@ def layout_read_geometry(
         'out = strcat(out sprintf(nil '
         '"via\\tobjType=%s\\tvia=%s\\txy=%L\\torient=%L\\tbbox=%L\\n" '
         'via~>objType via~>viaHeader~>viaDefName via~>origin via~>orient via~>bBox))) '
-        'foreach(inst cv~>instances '
+        # Some releases expose mosaics in both collections; visit each once.
+        'foreach(inst append(cv~>instances setof(m cv~>mosaics !member(m cv~>instances))) '
+        'if(inst~>objType == "mosaic" then '
+        'out = strcat(out sprintf(nil '
+        '"mosaic\\tname=%s\\tlib=%L\\tcell=%L\\tview=%L\\txy=%L\\torient=%L\\trows=%L\\tcolumns=%L\\tbbox=%L\\n" '
+        'inst~>name inst~>libName inst~>cellName inst~>viewName inst~>xy inst~>orient '
+        'inst~>rows inst~>columns inst~>bBox)) '
+        'else '
         'out = strcat(out sprintf(nil '
         '"instance\\tname=%s\\tlib=%s\\tcell=%s\\tview=%s\\txy=%L\\torient=%L\\tbbox=%L\\ttransform=%L\\n" '
         'inst~>name inst~>libName inst~>cellName inst~>viewName inst~>xy inst~>orient '
-        'dbTransformBBox(inst~>master~>bBox inst~>transform) inst~>transform))) '
+        'inst~>bBox inst~>transform)))) '
         "return(out))"
     )
 

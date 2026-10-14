@@ -7,7 +7,7 @@ runs without them. Tests are organised in three layers by what they need.
 |---|---|---|---|
 | Offline | nothing | CI and every checkout | everything not listed below |
 | Recorded Cadence output | nothing to run; any Virtuoso to re-record | CI and every checkout | `test_recorded_cadence_regressions.py`, `fixtures/cadence/` |
-| Live | a Virtuoso session reached through the bridge | a maintainer's own machine, by hand | `test_bridge_live.py`, `test_bridge_live_gds.py` |
+| Live | a Virtuoso session reached through the bridge | a maintainer's own machine, by hand | `test_bridge_live.py`, `test_bridge_live_gds.py`, `test_geometry_regressions_live.py` |
 
 ```bash
 uv run --extra dev pytest            # offline + recorded layers
@@ -46,6 +46,11 @@ Maestro checks remove their cell's run data under the simulation directory
 VB_RUN_LIVE_TESTS=1 VB_TEST_ENV_FILE=<bridge .env> VB_TEST_LIB=<scratch lib> \
 uv run --extra dev pytest tests/test_bridge_live.py tests/test_bridge_live_gds.py -v
 ```
+
+The smaller `test_geometry_regressions_live.py` suite checks offset-label
+terminal connectivity in four directions, polyline vertices and mosaic arrays
+using only analogLib and plain layout geometry. Run it with the same dedicated
+session and scratch-library variables; it needs no Spectre or foundry PDK.
 
 The default run needs only plain Virtuoso and Spectre. Optional variables
 enable more checks:

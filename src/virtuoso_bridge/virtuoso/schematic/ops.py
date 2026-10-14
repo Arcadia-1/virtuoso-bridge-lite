@@ -68,12 +68,24 @@ def schematic_create_wire(
     points: Iterable[tuple[float, float]],
     *,
     cv_expr: str = "cv",
-    route_style: str = "route",
+    route_style: str | None = None,
     route_mode: str = "full",
 ) -> str:
-    """Build SKILL to create a schematic wire from a sequence of points."""
+    """Route two endpoints by default; draw every vertex of a longer polyline.
+
+    Explicit ``route`` accepts exactly two points: Cadence ignores later ones.
+    Use ``draw`` to preserve a polyline. ``route_mode`` is ignored by ``draw``.
+    A non-default mode with a polyline requires an explicit style, so flight
+    lines are not silently replaced with conductive wires.
+    """
+    points = list(points)
+    if route_style == "route" and len(points) > 2:
+        raise ValueError("route accepts only two points; use route_style='draw' for a polyline")
+    if route_style is None and len(points) > 2 and route_mode != "full":
+        raise ValueError("polyline with non-default route_mode requires an explicit route_style")
+    resolved_style = ("draw" if len(points) > 2 else "route") if route_style is None else route_style
     return (
-        f'schCreateWire({cv_expr} "{escape_skill_string(route_style)}" '
+        f'schCreateWire({cv_expr} "{escape_skill_string(resolved_style)}" '
         f'"{escape_skill_string(route_mode)}" {skill_point_list(points)} 0 0 0 nil nil)'
     )
 
@@ -481,7 +493,7 @@ def schematic_label_instance_term_offset(
         # Single wire with three points so the branch is electrically
         # continuous with the main stub:
         "when(rbCtr && rbStubEnd && rbBranchEnd "
-        "schCreateWire(cv \"route\" \"full\" list(rbCtr rbStubEnd rbBranchEnd) 0 0 0 nil nil)) "
+        f'schCreateWire({cv_expr} "draw" "full" list(rbCtr rbStubEnd rbBranchEnd) 0 0 0 nil nil)) '
         "when(rbBranchEnd "
         f'schCreateWireLabel({cv_expr} nil rbBranchEnd "{escape_skill_string(net_name)}" '
         f'"{escape_skill_string(justification)}" '
