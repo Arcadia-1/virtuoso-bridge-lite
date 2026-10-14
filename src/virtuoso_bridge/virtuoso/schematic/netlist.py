@@ -32,6 +32,7 @@ class SchematicNetlistExportResult(TypedDict):
     source_dir: str
     output_dir: str
     input_file: str
+    run_dir: str
     skill_result: Any
     download_result: Any
 
@@ -131,6 +132,7 @@ def schematic_export_netlist_skill(
     view: str = "schematic",
     simulator: str = "spectre",
     recreate_all: bool = True,
+    project_dir: str | None = None,
 ) -> str:
     """Build SKILL to create a schematic netlist and return ``input.scs``.
 
@@ -139,18 +141,41 @@ def schematic_export_netlist_skill(
     generated simulator input file. The Python wrapper downloads the
     containing netlist directory so adjacent includes such as ``ade_e.scs``
     stay with ``input.scs``.
+
+    OCEAN writes the package to ``<projectDir>/<cell>/<simulator>/<view>/netlist``,
+    where ``projectDir`` is the ``asimenv.startup`` setting (``~/simulation``
+    by default), and reads that setting when ``simulator()`` starts the
+    session. With ``project_dir`` the setting points there only while
+    ``simulator()`` runs and is restored right after, also on error, so the
+    netlist lands in ``project_dir`` and the user's own setting is unchanged.
     """
     escaped_lib = escape_skill_string(lib)
     escaped_cell = escape_skill_string(cell)
     escaped_view = escape_skill_string(view)
     simulator_symbol = _skill_symbol(simulator, name="simulator")
     recreate = _skill_bool(recreate_all)
+    simulate = f"errset(simulator({simulator_symbol}) nil)"
+    if project_dir is None:
+        start = f"vbSimResult = {simulate} "
+    else:
+        # OCEAN reads projectDir when simulator() starts the session, so the
+        # redirect covers that call only and is undone even when it fails.
+        project = escape_skill_string(project_dir)
+        start = (
+            'vbProjectDir = envGetVal("asimenv.startup" "projectDir") '
+            'unless(stringp(vbProjectDir) error("cannot read asimenv.startup projectDir")) '
+            "vbSimResult = unwindProtect("
+            f'progn(unless(envSetVal("asimenv.startup" "projectDir" \'string "{project}") '
+            'error("cannot set asimenv.startup projectDir")) '
+            f"{simulate}) "
+            'envSetVal("asimenv.startup" "projectDir" \'string vbProjectDir)) '
+        )
     return (
-        "let((vbSimResult vbDesignResult vbNetlistResult vbSourceFile) "
+        "let((vbSimResult vbDesignResult vbNetlistResult vbSourceFile vbProjectDir) "
         "unless(and(isCallable('simulator) isCallable('design) "
         "isCallable('createNetlist) isCallable('simplifyFilename)) "
         'error("netlist API unavailable")) '
-        f"vbSimResult = errset(simulator({simulator_symbol}) nil) "
+        f"{start}"
         'unless(vbSimResult && car(vbSimResult) error("simulator failed")) '
         f'vbDesignResult = errset(design("{escaped_lib}" "{escaped_cell}" "{escaped_view}" "r") nil) '
         'unless(vbDesignResult && car(vbDesignResult) error("design failed")) '
@@ -172,6 +197,7 @@ def export_schematic_netlist(
     view: str = "schematic",
     simulator: str = "spectre",
     recreate_all: bool = True,
+    run_dir: str | Path | None = None,
     timeout: int = 120,
 ) -> SchematicNetlistExportResult:
     """Export a schematic netlist package to ``output_dir``.
@@ -181,19 +207,61 @@ def export_schematic_netlist(
     Existing ``output_dir`` contents are replaced only after the new package
     has downloaded and the expected input file is present.
 
+    OCEAN netlists into a project directory on the Virtuoso host (the user's
+    ``asimenv.startup`` ``projectDir``, ``~/simulation`` by default). Without
+    ``run_dir`` the export uses a new private (0700) directory under ``/tmp``
+    instead and removes it after a successful download, so it neither leaves
+    a ``<projectDir>/<cell>`` tree behind nor rewrites the netlist of the
+    user's own ADE setup for that cell; the remote ``source_file`` and
+    ``source_dir`` of a successful result then no longer exist. On failure
+    the directory is kept and its path is added to the error (logged as a
+    warning for errors other than ``RuntimeError``). Pass ``run_dir`` (an
+    absolute path on the Virtuoso host) to keep the package there; the caller
+    then owns that directory.
+
     Returns a dictionary with:
     ``source_file`` (Virtuoso host ``input.scs``), ``source_dir`` (Virtuoso
     host netlist package directory), ``output_dir`` (local package directory),
-    ``input_file`` (downloaded local simulator input), ``skill_result``, and
+    ``input_file`` (downloaded local simulator input), ``run_dir`` (the
+    Virtuoso host project directory used), ``skill_result``, and
     ``download_result``.
     """
+    if run_dir is not None and not PurePosixPath(str(run_dir)).is_absolute():
+        raise ValueError(f"run_dir must be an absolute path on the Virtuoso host: {run_dir}")
+    resolved_run_dir = _resolve_run_dir(run_dir, lib, cell, purpose="export")
     skill = schematic_export_netlist_skill(
         lib,
         cell,
         view=view,
         simulator=simulator,
         recreate_all=recreate_all,
+        project_dir=resolved_run_dir,
     )
+    runner = getattr(client, "ssh_runner", None)
+    # Only the default run directory is the export's to create and remove.
+    owned_run_dir = run_dir is None
+    _create_run_dir(runner, resolved_run_dir, owned=owned_run_dir, timeout=timeout, label="netlist export")
+    try:
+        result = _export_into_run_dir(client, skill, resolved_run_dir, output_dir, timeout=timeout)
+    except BaseException as exc:
+        note = f"netlist export files kept in {resolved_run_dir}"
+        if type(exc) is RuntimeError:
+            raise RuntimeError(f"{exc}\n{note}") from exc
+        logger.warning("%s", note)
+        raise
+    if owned_run_dir:
+        _remove_run_dir(runner, resolved_run_dir, timeout=timeout, label="netlist export")
+    return result
+
+
+def _export_into_run_dir(
+    client: Any,
+    skill: str,
+    run_dir: str,
+    output_dir: str | Path,
+    *,
+    timeout: int,
+) -> SchematicNetlistExportResult:
     skill_result = client.execute_skill(skill, timeout=timeout)
     if not _result_ok(skill_result):
         errors = "; ".join(_result_errors(skill_result)) or "createNetlist failed"
@@ -207,6 +275,14 @@ def export_schematic_netlist(
     if not source_path.is_absolute():
         raise RuntimeError(f"createNetlist returned relative netlist path: {source_file}")
     source_dir = source_path.parent.as_posix()
+    if not source_path.is_relative_to(PurePosixPath(run_dir)):
+        # A Virtuoso that ignores the projectDir redirect netlists into the
+        # user's own project directory: export from there, but touch nothing.
+        logger.warning(
+            "createNetlist wrote %s outside the export run directory %s; it was left in place",
+            source_dir,
+            run_dir,
+        )
     destination = Path(output_dir)
     tmp_destination = destination.with_name(
         f".{destination.name}.tmp-{uuid.uuid4().hex}"
@@ -241,6 +317,7 @@ def export_schematic_netlist(
         "source_dir": source_dir,
         "output_dir": str(destination),
         "input_file": str(destination / "input.scs"),
+        "run_dir": run_dir,
         "skill_result": skill_result,
         "download_result": download_result,
     }
@@ -409,7 +486,7 @@ def import_netlist_schematic(
                 overwrite=overwrite, dev_map_file=default_map, run_dir=run_dir, timeout=timeout,
             )
     context = _netlist_import_context(client, timeout=timeout)
-    resolved_run_dir = _resolve_import_run_dir(run_dir, lib, cell)
+    resolved_run_dir = _resolve_run_dir(run_dir, lib, cell)
     preflight = client.execute_skill(
         _schematic_import_preflight_skill(
             lib,
@@ -426,7 +503,7 @@ def import_netlist_schematic(
     # The import owns (creates privately, then removes) only the default run
     # directory; a caller-given run_dir is the caller's to keep.
     owned_run_dir = run_dir is None
-    _create_import_run_dir(runner, resolved_run_dir, owned=owned_run_dir, timeout=timeout)
+    _create_run_dir(runner, resolved_run_dir, owned=owned_run_dir, timeout=timeout)
     try:
         if runner is None:
             paths = _run_spicein_local(
@@ -485,7 +562,7 @@ def import_netlist_schematic(
         raise
 
     if owned_run_dir:
-        _remove_import_run_dir(runner, resolved_run_dir, timeout=timeout)
+        _remove_run_dir(runner, resolved_run_dir, timeout=timeout)
     return result
 
 
@@ -749,16 +826,18 @@ def _input_stage_dir(run_dir: str) -> str:
     return f"{run_dir.rstrip('/')}/inputs"
 
 
-def _resolve_import_run_dir(run_dir: str | Path | None, lib: str, cell: str) -> str:
+def _resolve_run_dir(run_dir: str | Path | None, lib: str, cell: str, *, purpose: str = "import") -> str:
     if run_dir is not None:
         return str(run_dir)
     return (
-        f"/tmp/virtuoso_bridge_netlist_import_"
+        f"/tmp/virtuoso_bridge_netlist_{purpose}_"
         f"{_safe_path_segment(lib)}_{_safe_path_segment(cell)}_{uuid.uuid4().hex}"
     )
 
 
-def _create_import_run_dir(runner: Any, run_dir: str, *, owned: bool, timeout: int) -> None:
+def _create_run_dir(
+    runner: Any, run_dir: str, *, owned: bool, timeout: int, label: str = "netlist import"
+) -> None:
     """Create the run directory before anything is staged in it.
 
     An owned (default) directory must be new and private: on a shared /tmp
@@ -771,38 +850,40 @@ def _create_import_run_dir(runner: Any, run_dir: str, *, owned: bool, timeout: i
         else:
             Path(run_dir).expanduser().resolve().mkdir(parents=True, exist_ok=True)
         return
-    command = _remote_run_dir_create_command(run_dir) if owned else f"mkdir -p {shlex.quote(run_dir)}"
+    command = (
+        _remote_run_dir_create_command(run_dir, label) if owned else f"mkdir -p {shlex.quote(run_dir)}"
+    )
     result = runner.run_command(command, timeout=timeout)
-    _require_command_ok(result, "cannot create netlist import run directory")
+    _require_command_ok(result, f"cannot create {label} run directory")
 
 
-def _remove_import_run_dir(runner: Any, run_dir: str, *, timeout: int) -> None:
+def _remove_run_dir(runner: Any, run_dir: str, *, timeout: int, label: str = "netlist import") -> None:
     """Remove an owned run directory; a failure only logs a warning."""
     try:
         if runner is None:
             shutil.rmtree(run_dir)
         else:
-            result = runner.run_command(_remote_run_dir_remove_command(run_dir), timeout=timeout)
-            _require_command_ok(result, "cannot remove netlist import run directory")
+            result = runner.run_command(_remote_run_dir_remove_command(run_dir, label), timeout=timeout)
+            _require_command_ok(result, f"cannot remove {label} run directory")
     except Exception as exc:
-        logger.warning("netlist import run directory %s was not removed: %s", run_dir, exc)
+        logger.warning("%s run directory %s was not removed: %s", label, run_dir, exc)
 
 
-def _remote_run_dir_create_command(run_dir: str) -> str:
+def _remote_run_dir_create_command(run_dir: str, label: str = "netlist import") -> str:
     """Shell that creates *run_dir* mode 700; fails if the path already exists."""
     quoted = shlex.quote(run_dir)
     return (
-        f"{private_dir_shell_prelude('netlist import')}"
+        f"{private_dir_shell_prelude(label)}"
         f"mkdir -m 700 {quoted} || exit $?\n"
         f"vb_verify_dir {quoted} || exit $?\n"
     )
 
 
-def _remote_run_dir_remove_command(run_dir: str) -> str:
+def _remote_run_dir_remove_command(run_dir: str, label: str = "netlist import") -> str:
     """Shell that removes *run_dir* only if it is still the user's private directory."""
     quoted = shlex.quote(run_dir)
     return (
-        f"{private_dir_shell_prelude('netlist import')}"
+        f"{private_dir_shell_prelude(label)}"
         f"vb_verify_dir {quoted} || exit $?\n"
         f"rm -rf {quoted}\n"
     )

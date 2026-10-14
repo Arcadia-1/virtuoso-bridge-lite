@@ -113,6 +113,15 @@ def client(lib):
         f'foreach(x cells ddDeleteObj(x)) length(cells))', timeout=120)
 
 
+def _assert_export_left_nothing(client, cell, exported):
+    """export_netlist netlists in its own run directory and removes it: neither
+    that directory nor a <projectDir>/<cell> tree may remain on the host."""
+    project = _ok(client.execute_skill('simplifyFilename(envGetVal("asimenv.startup" "projectDir"))'))
+    for path in (exported["run_dir"], posixpath.join(project.strip().strip('"'), cell)):
+        found = _ok(client.execute_skill(f'isDir("{path}")')).strip()
+        assert found == "nil", f"export left {path} on the host"
+
+
 def _rc(client, lib, cell, *, extra_pin=True):
     with client.schematic.create(lib, cell) as sch:
         sch.add(inst("analogLib", "vdc", "symbol", "V0", 0.0, 0.0, "R0"))
@@ -307,6 +316,7 @@ def test_schematic_create_modify_read_netlist_and_symbol(client, lib, tmp_path):
     report = client.schematic.check_and_save(lib, cell)
     assert report.status == "saved" and report.check_error_count == 0
     exported = client.schematic.export_netlist(lib, cell, tmp_path / "netlist")
+    _assert_export_left_nothing(client, cell, exported)
     text = (tmp_path / "netlist" / "input.scs").read_text()
     assert re.search(r"^R0 \(VIN OUT\) resistor", text, re.M), text
     assert re.search(r"^C1 \(OUT 0\) capacitor", text, re.M), text
@@ -360,7 +370,7 @@ def test_pdk_finger_count_reaches_netlist_through_callbacks(client, lib, tmp_pat
     extra = {"w": f"{2 * float(doubled[1]):g}{doubled[2]}"} if doubled else {}
     set_instance_params(client, "M0", nf="2", param_filters=None, **extra)
     client.schematic.check_and_save(lib, cell)
-    client.schematic.export_netlist(lib, cell, tmp_path / "nl")
+    _assert_export_left_nothing(client, cell, client.schematic.export_netlist(lib, cell, tmp_path / "nl"))
     line = next(l for l in (tmp_path / "nl" / "input.scs").read_text().splitlines() if l.startswith("M0 "))
     assert re.search(r"\bnf=2\b", line), line
 

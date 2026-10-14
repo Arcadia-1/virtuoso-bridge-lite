@@ -272,14 +272,18 @@ class SchematicOps:
         view: str = "schematic",
         simulator: str = "spectre",
         recreate_all: bool = True,
+        run_dir: str | Path | None = None,
         timeout: int = 120,
     ) -> SchematicNetlistExportResult:
         """Export a schematic netlist package through Virtuoso's netlister.
 
-        The returned dictionary includes the Virtuoso-side ``source_file`` and
-        ``source_dir``, the local ``output_dir`` and ``input_file``, plus the raw
-        SKILL and download results. Existing ``output_dir`` contents are kept
-        until the new package has downloaded and ``input.scs`` is present.
+        The returned dictionary includes the Virtuoso-side ``source_file``,
+        ``source_dir`` and ``run_dir``, the local ``output_dir`` and
+        ``input_file``, plus the raw SKILL and download results. Existing
+        ``output_dir`` contents are kept until the new package has downloaded
+        and ``input.scs`` is present. Without ``run_dir`` the netlister works
+        in a private ``/tmp`` directory that is removed afterwards, not in the
+        user's ADE project directory; see :func:`export_schematic_netlist`.
         """
         return export_schematic_netlist(
             self._owner,
@@ -289,6 +293,7 @@ class SchematicOps:
             view=view,
             simulator=simulator,
             recreate_all=recreate_all,
+            run_dir=run_dir,
             timeout=timeout,
         )
 

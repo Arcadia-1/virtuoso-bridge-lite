@@ -215,6 +215,13 @@ imported = client.schematic.import_netlist(
 )
 ```
 
+The export does not use the user's ADE project directory (`~/simulation` by
+default): it netlists in a new private (0700) directory under `/tmp` and
+removes it after the download, so the remote `source_file` and `source_dir` of
+a successful result no longer exist. On failure the directory is kept and its
+path is in the error. Pass `run_dir=` (an absolute path on the Virtuoso host)
+to keep the package; the result's `run_dir` names the directory used.
+
 `cell` names the subcircuit to import (spiceIn's import sub-circuit), so it
 must match a `subckt` / `.SUBCKT` name in the netlist; one call converts one
 subcircuit, so import a hierarchy leaf-first. Without `dev_map_file`, a default
