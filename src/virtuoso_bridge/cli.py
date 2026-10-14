@@ -1217,11 +1217,20 @@ def cli_dismiss_window(
         if "error" in result:
             ok = False
             print(f"  Error: {result['error']}")
-        else:
+        elif (result.get("status") == "closed" and result.get("closure_confirmed") is True
+              and result.get("still_mapped") is False):
             print(
                 f"  Dismissed: {result.get('dismissed', window_id)} "
                 f"action={result.get('action', action)}"
             )
+        else:
+            ok = False
+            print(f"  Requested: {result.get('window_id', window_id)} "
+                  f"action={result.get('action', action)}; closure unverified")
+            if result.get("still_mapped") is True:
+                print("  Target remains mapped. Do not repeat input automatically; reconcile the original request.")
+            if result.get("verification_error"):
+                print(f"  Verification: {result['verification_error']}")
     return 0 if ok else 1
 
 

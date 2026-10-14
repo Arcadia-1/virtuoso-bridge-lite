@@ -21,7 +21,7 @@ jobs:
         with:
           enable-cache: true
       - name: Install isolated native X11 test dependencies
-        run: sudo apt-get update && sudo apt-get install -y xvfb libx11-6 libxext6
+        run: sudo apt-get update && sudo apt-get install -y xvfb libx11-6 libxext6 libxtst6
       - name: Run real Xlib dialog regressions on a dedicated Xvfb
         run: uv run --python ${{ matrix.python-version }} --extra dev python tests/test_x11_dialog_close_native.py -v
       - name: Build distributions

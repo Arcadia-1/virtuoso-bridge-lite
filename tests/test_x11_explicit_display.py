@@ -41,7 +41,8 @@ def helper(monkeypatch):
     monkeypatch.delenv("XAUTHORITY", raising=False)
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.setattr(module, "_SHELL_XAUTHORITY", None)
-    monkeypatch.setattr(module, "_verify_dismissal", lambda result: result)
+    monkeypatch.setattr(module, "_verify_dismissal", lambda result: dict(
+        result, status="closed", closure_confirmed=True, still_mapped=False))
     return module
 
 
@@ -182,7 +183,8 @@ def test_client_and_cli_pass_pid_through(monkeypatch, capsys):
     monkeypatch.setattr(cli, "_load_cli_env", lambda: None)
     monkeypatch.setattr(cli, "_make_ssh_runner", lambda: (None, "local"))
     seen = []
-    monkeypatch.setattr(x11, "dismiss_window", lambda *a, **kw: seen.append(kw) or [{"dismissed": "0x10"}])
+    monkeypatch.setattr(x11, "dismiss_window", lambda *a, **kw: seen.append(kw) or [
+        {"dismissed": "0x10", "status": "closed", "closure_confirmed": True, "still_mapped": False}])
     assert cli.main(["dismiss-window", "0x10", "--display", ":7", "--pid", "4242", "--action", "escape"]) == 0
     assert (seen[-1]["display"], seen[-1]["pid"], seen[-1]["action"]) == (":7", 4242, "escape")
     assert cli.main(["dismiss-window", "0x10", "--pid", "0"]) == 2

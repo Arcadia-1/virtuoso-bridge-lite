@@ -592,6 +592,13 @@ class _XWindowAttributes(ctypes.Structure):
     ]
 
 
+class _XErrorEvent(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_int), ("display", ctypes.c_void_p),
+               ("resourceid", ctypes.c_ulong), ("serial", ctypes.c_ulong),
+               ("error_code", ctypes.c_ubyte), ("request_code", ctypes.c_ubyte),
+               ("minor_code", ctypes.c_ubyte)]
+
+
 _X_ERROR_HANDLER = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
 
 
@@ -606,6 +613,7 @@ class _X11InventoryConnection(object):
         self._display = None
         self._closed = False
         self._x_error = False
+        self._error_codes = []
         self._previous_error_handler = None
         self._error_handler_installed = False
         self._error_callback = _X_ERROR_HANDLER(self._handle_x_error)
@@ -678,16 +686,32 @@ class _X11InventoryConnection(object):
 
     def _handle_x_error(self, _display, _event):
         self._x_error = True
+        self._error_codes.append(
+            ctypes.cast(_event, ctypes.POINTER(_XErrorEvent)).contents.error_code if _event else 0)
         return 0
 
     def _begin_request(self):
         self._x_error = False
+        self._error_codes = []
 
     def _request_failed(self, status):
         return not status or self._x_error
 
     def root(self):
         return self._root
+
+    def window_state(self, window_id):
+        """Query the exact XID: only BadWindow proves destruction."""
+        attributes = _XWindowAttributes()
+        self._begin_request()
+        status = self._xlib.XGetWindowAttributes(
+            self._display, int(window_id), ctypes.byref(attributes))
+        if self._error_codes == [3]:  # BadWindow, not an unavailable display.
+            return {"exists": False, "mapped": False}
+        if self._request_failed(status):
+            raise _InspectionFailure("cannot read exact X11 window attributes")
+        # IsUnviewable (mapped child of an unmapped parent) is still mapped.
+        return {"exists": True, "mapped": attributes.map_state != 0}
 
     def children(self, window_id):
         root_return = ctypes.c_ulong()
@@ -1412,12 +1436,26 @@ def _apply_x11_env(x11_env):
 
 
 def _verify_dismissal(result):
-    """Report whether the target is still mapped after an injected action."""
-    if "dismissed" not in result:
+    """An injected action is requested until the exact XID is closed/unmapped."""
+    if "error" in result or ("dismissed" not in result and result.get("status") != "requested"):
         return result
+    target = result.get("child") or result.get("window_id") or result.get("dismissed")
+    result.pop("dismissed", None)
+    result.update(status="requested", window_id=target, action_sent=True,
+                  closure_confirmed=False, still_mapped=None)
     time.sleep(0.3)
-    target = result.get("child") or result.get("dismissed")
-    result["still_mapped"] = bool(_read_window_info(target).get("mapped"))
+    connection = None
+    try:
+        connection = _open_x11_inventory(result.get("display") or os.environ.get("DISPLAY"), os.environ)
+        state = connection.window_state(int(target, 16) if target.startswith("0x") else int(target))
+        result["still_mapped"] = state["mapped"]
+        if state["exists"] is False or state["mapped"] is False:
+            result.update(status="closed", closure_confirmed=True, dismissed=target)
+    except Exception as exc:
+        result["verification_error"] = str(exc)
+    finally:
+        if connection is not None:
+            connection.close()
     return result
 
 
@@ -1678,10 +1716,13 @@ def dismiss_window(display, win_id_str, title="", x=0, y=0, w=0, h=0, action=Non
             action_name, extra = _send_explicit_action(dpy, xlib, xtst, action)
         except ValueError as exc:
             xlib.XCloseDisplay(dpy)
-            return {"error": str(exc), "dismissed": win_id_str, "child": child_id_str}
+            return {"error": str(exc), "status": "not_started", "action_sent": False,
+                    "window_id": win_id_str, "child": child_id_str}
         xlib.XCloseDisplay(dpy)
         result = {
-            "dismissed": win_id_str,
+            "window_id": win_id_str,
+            "status": "requested",
+            "action_sent": True,
             "child": child_id_str,
             "action": action_name,
             "title": title,
@@ -1924,7 +1965,7 @@ def main():
             result["requested_window_id"] = dismiss_target
             verified = _verify_dismissal(result)
             print(json.dumps(verified))
-            failed = failed or "error" in verified or verified.get("still_mapped", False)
+            failed = failed or "error" in verified or not verified.get("closure_confirmed", False)
         sys.exit(1 if failed else 0)
 
     if bootstrap_target:
