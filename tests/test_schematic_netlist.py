@@ -26,17 +26,28 @@ _SPECTRE_TEXT = "simulator lang=spectre\n"
 _IMPORTED = {"status": "success", "output": '("imported" "demoLib" "nand2")'}
 
 
+_PROJECT_DIR = re.compile(r'"projectDir" \'string "([^"]+)"\) error')
+
+
 class _ExportClient:
+    """Fake Virtuoso for exports. By default it netlists into the project
+    directory the SKILL redirects to, as IC 6.1.8 does, and a fake SSH runner
+    records the run-directory commands instead of touching this machine."""
+
     def __init__(
         self,
-        output: str = f'"{_SOURCE_FILE}"',
+        output: str | None = None,
         *,
         files: dict[str, str] | None = None,
         download_errors: list[str] | None = None,
+        download_raises: BaseException | None = None,
+        ssh_runner: "_Runner | None | str" = "fake",
     ) -> None:
         self.output = output
         self.files = {"input.scs": _SPECTRE_TEXT} if files is None else files
         self.download_errors = download_errors
+        self.download_raises = download_raises
+        self.ssh_runner = _Runner() if ssh_runner == "fake" else ssh_runner
         self.skill: str | None = None
         self.timeout: int | None = None
         self.downloads: list[tuple[str, Path, int | None, bool]] = []
@@ -44,7 +55,12 @@ class _ExportClient:
     def execute_skill(self, skill: str, *, timeout: int):
         self.skill = skill
         self.timeout = timeout
-        return {"status": "success", "output": self.output}
+        output = self.output
+        if output is None:
+            project = _PROJECT_DIR.search(skill)
+            root = project.group(1) if project else "/home/designer/simulation"
+            output = f'"{root}/tb_inv/spectre/schematic/netlist/input.scs"'
+        return {"status": "success", "output": output}
 
     def download_file(
         self,
@@ -55,6 +71,8 @@ class _ExportClient:
         recursive: bool = False,
     ):
         self.downloads.append((remote_path, local_path, timeout, recursive))
+        if self.download_raises is not None:
+            raise self.download_raises
         if self.download_errors is not None:
             return {"status": "error", "errors": self.download_errors, "output": ""}
         assert not local_path.exists()
@@ -170,23 +188,168 @@ def test_export_schematic_netlist_downloads_generated_netlist_directory(export, 
 
     result = export(client, output_dir)
 
+    run_dir = _default_export_run_dir(client.ssh_runner.commands)
+    source_dir = f"{run_dir}/tb_inv/spectre/schematic/netlist"
     assert result == {
-        "source_file": _SOURCE_FILE,
-        "source_dir": "/tmp/generated/netlist",
+        "source_file": f"{source_dir}/input.scs",
+        "source_dir": source_dir,
         "output_dir": str(output_dir),
         "input_file": str(output_dir / "input.scs"),
-        "skill_result": {"status": "success", "output": f'"{_SOURCE_FILE}"'},
+        "run_dir": run_dir,
+        "skill_result": {"status": "success", "output": f'"{source_dir}/input.scs"'},
         "download_result": {"status": "success", "output": str(output_dir)},
     }
     assert client.timeout == 45
-    assert client.skill == schematic_export_netlist_skill("demoLib", "tb_inv")
+    assert client.skill == schematic_export_netlist_skill("demoLib", "tb_inv", project_dir=run_dir)
     assert len(client.downloads) == 1
     remote_path, local_path, timeout, recursive = client.downloads[0]
-    assert remote_path == "/tmp/generated/netlist"
+    assert remote_path == source_dir
     assert local_path.parent == tmp_path
     assert local_path.name.startswith(".tb_inv_netlist.tmp-")
     assert timeout == 45
     assert recursive is True
+
+
+def _default_export_run_dir(commands: list[str]) -> str:
+    created = [
+        match.group(1)
+        for command in commands
+        for match in re.finditer(r"^mkdir -m 700 (\S+) \|\| exit \$\?$", command, re.MULTILINE)
+    ]
+    assert len(created) == 1
+    assert created[0].startswith("/tmp/virtuoso_bridge_netlist_export_demoLib_tb_inv_")
+    return created[0]
+
+
+def test_export_netlist_skill_redirects_project_dir_only_around_simulator() -> None:
+    skill = schematic_export_netlist_skill("demoLib", "tb_inv", project_dir='/tmp/run "x"')
+
+    # OCEAN reads projectDir when simulator() starts the session (checked on IC 6.1.8),
+    # so the user's setting is changed only for that call and restored even on error.
+    saved = 'vbProjectDir = envGetVal("asimenv.startup" "projectDir")'
+    redirect = 'envSetVal("asimenv.startup" "projectDir" \'string "/tmp/run \\"x\\"")'
+    restore = 'envSetVal("asimenv.startup" "projectDir" \'string vbProjectDir))'
+    assert skill.index(saved) < skill.index("unwindProtect(progn(") < skill.index(redirect)
+    assert skill.index(redirect) < skill.index("simulator('spectre)") < skill.index(restore)
+    assert skill.index(restore) < skill.index('design("demoLib"')
+    assert 'unless(stringp(vbProjectDir) error("cannot read asimenv.startup projectDir"))' in skill
+
+
+def test_export_netlist_skill_without_project_dir_leaves_the_setting_alone() -> None:
+    skill = schematic_export_netlist_skill("demoLib", "tb_inv")
+    assert "envSetVal" not in skill and "envGetVal" not in skill
+    assert "vbSimResult = errset(simulator('spectre) nil)" in skill
+
+
+def test_export_netlist_creates_a_private_run_dir_and_removes_it_after_download(tmp_path) -> None:
+    client = _ExportClient()
+
+    result = export_schematic_netlist(client, "demoLib", "tb_inv", tmp_path / "netlist")
+
+    commands = client.ssh_runner.commands
+    run_dir = result["run_dir"]
+    assert commands == [
+        schematic_netlist_module._remote_run_dir_create_command(run_dir, "netlist export"),
+        schematic_netlist_module._remote_run_dir_remove_command(run_dir, "netlist export"),
+    ]
+    assert commands[-1].endswith(f"\nvb_verify_dir {run_dir} || exit $?\nrm -rf {run_dir}\n")
+    assert result["source_dir"].startswith(run_dir + "/")
+    assert (tmp_path / "netlist" / "input.scs").read_text(encoding="utf-8") == _SPECTRE_TEXT
+
+
+def test_export_netlist_uses_a_new_run_dir_each_time(tmp_path) -> None:
+    first = export_schematic_netlist(_ExportClient(), "demoLib", "tb_inv", tmp_path / "a")
+    second = export_schematic_netlist(_ExportClient(), "demoLib", "tb_inv", tmp_path / "b")
+    assert first["run_dir"] != second["run_dir"]
+
+
+def test_export_netlist_keeps_the_run_dir_and_names_it_on_failure(tmp_path) -> None:
+    client = _ExportClient(download_errors=["network failed"])
+
+    with pytest.raises(RuntimeError, match="network failed") as excinfo:
+        export_schematic_netlist(client, "demoLib", "tb_inv", tmp_path / "netlist")
+
+    run_dir = _default_export_run_dir(client.ssh_runner.commands)
+    assert str(excinfo.value).endswith(f"\nnetlist export files kept in {run_dir}")
+    assert type(excinfo.value.__cause__) is RuntimeError
+    assert len(client.ssh_runner.commands) == 1, "nothing is removed after a failure"
+
+
+def test_export_netlist_failure_of_another_type_is_reraised_unchanged(tmp_path, caplog) -> None:
+    timeout_error = subprocess.TimeoutExpired(["scp"], 30)
+    client = _ExportClient(download_raises=timeout_error)
+
+    with caplog.at_level(logging.WARNING, logger=schematic_netlist_module.__name__):
+        with pytest.raises(subprocess.TimeoutExpired) as excinfo:
+            export_schematic_netlist(client, "demoLib", "tb_inv", tmp_path / "netlist")
+
+    run_dir = _default_export_run_dir(client.ssh_runner.commands)
+    assert excinfo.value is timeout_error
+    assert f"netlist export files kept in {run_dir}" in caplog.text
+    assert len(client.ssh_runner.commands) == 1
+
+
+def test_export_netlist_keeps_a_caller_run_dir(tmp_path) -> None:
+    client = _ExportClient()
+
+    result = export_schematic_netlist(
+        client, "demoLib", "tb_inv", tmp_path / "netlist", run_dir="/work/nl export"
+    )
+
+    assert client.ssh_runner.commands == ["mkdir -p '/work/nl export'"]
+    assert result["run_dir"] == "/work/nl export"
+    assert result["source_dir"] == "/work/nl export/tb_inv/spectre/schematic/netlist"
+    assert 'envSetVal("asimenv.startup" "projectDir" \'string "/work/nl export")' in client.skill
+
+
+def test_export_netlist_refuses_a_relative_run_dir_before_netlisting(tmp_path) -> None:
+    client = _ExportClient()
+
+    with pytest.raises(ValueError, match="absolute path on the Virtuoso host"):
+        export_schematic_netlist(client, "demoLib", "tb_inv", tmp_path / "netlist", run_dir="nl")
+
+    assert client.skill is None and client.ssh_runner.commands == []
+
+
+def test_export_netlist_outside_the_run_dir_is_left_in_place(tmp_path, caplog) -> None:
+    # A Virtuoso that ignored the redirect netlists into the user's project
+    # directory: the export still works, deletes nothing there, and says so.
+    outside = "/home/designer/simulation/tb_inv/spectre/schematic/netlist"
+    client = _ExportClient(f'"{outside}/input.scs"')
+
+    with caplog.at_level(logging.WARNING, logger=schematic_netlist_module.__name__):
+        result = export_schematic_netlist(client, "demoLib", "tb_inv", tmp_path / "netlist")
+
+    assert result["source_dir"] == outside
+    assert f"createNetlist wrote {outside} outside the export run directory" in caplog.text
+    assert not any(outside in command or "simulation" in command for command in client.ssh_runner.commands)
+    assert client.ssh_runner.commands[-1] == schematic_netlist_module._remote_run_dir_remove_command(
+        result["run_dir"], "netlist export"
+    )
+
+
+def test_local_export_runs_in_a_private_run_dir_and_removes_it(tmp_path) -> None:
+    client = _ExportClient(ssh_runner=None)
+    seen: dict = {}
+    real_execute = client.execute_skill
+
+    def execute_skill(skill: str, *, timeout: int):
+        run_dir = Path(_PROJECT_DIR.search(skill).group(1))
+        seen["run_dir"], seen["mode"] = run_dir, stat.S_IMODE(os.lstat(run_dir).st_mode)
+        return real_execute(skill, timeout=timeout)
+
+    client.execute_skill = execute_skill  # type: ignore[method-assign]
+    try:
+        result = export_schematic_netlist(client, "demoLib", "tb_inv", tmp_path / "netlist")
+
+        assert result["run_dir"] == str(seen["run_dir"])
+        assert seen["run_dir"].name.startswith("virtuoso_bridge_netlist_export_demoLib_tb_inv_")
+        if os.name != "nt":
+            assert seen["mode"] == 0o700
+        assert not seen["run_dir"].exists()
+    finally:
+        if "run_dir" in seen:
+            shutil.rmtree(seen["run_dir"], ignore_errors=True)
 
 
 def test_schematic_import_netlist_skill_overwrites_through_temporary_view() -> None:
@@ -677,6 +840,21 @@ def test_remote_run_dir_remove_command_refuses_a_symlink(tmp_path) -> None:
     assert (target / "keep.txt").read_text(encoding="utf-8") == "keep\n"
 
 
+@_needs_posix_sh
+def test_export_run_dir_remove_command_refuses_a_symlink_and_names_the_export(tmp_path) -> None:
+    target = tmp_path / "target"
+    target.mkdir(mode=0o700)
+    (target / "keep.txt").write_text("keep\n", encoding="utf-8")
+    run_dir = tmp_path / "run"
+    run_dir.symlink_to(target)
+
+    proc = _run_sh(schematic_netlist_module._remote_run_dir_remove_command(str(run_dir), "netlist export"))
+
+    assert proc.returncode != 0
+    assert "unsafe remote netlist export directory" in proc.stderr
+    assert (target / "keep.txt").is_file()
+
+
 @pytest.mark.parametrize(
     ("netlist_file", "test_returncode", "message"),
     [
@@ -827,6 +1005,7 @@ def test_export_schematic_netlist_rejects_local_output_nested_under_source_dir(t
             "demoLib",
             "tb_inv",
             source_dir / "nested" / "export",
+            run_dir=str(tmp_path / "project"),
         )
 
     assert not (source_dir / "nested").exists()

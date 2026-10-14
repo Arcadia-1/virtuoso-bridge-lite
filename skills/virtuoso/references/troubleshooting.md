@@ -175,6 +175,9 @@ Or skip SKILL string-matching entirely and filter on the Python side via `client
 ### si output location
 `si -batch -command nl` outputs to `<runDir>/netlist` (a single file). But if something goes wrong (e.g. GUI dialog blocked), `spectre.inp` may be nearly empty. Check file size after download.
 
+### `createNetlist` writes into the ADE project directory
+OCEAN's `simulator()` → `design()` → `createNetlist()` writes `<projectDir>/<cell>/<simulator>/<view>/netlist` (and a `psf/` beside it), where `projectDir` is the `asimenv.startup` setting, `~/simulation` by default. Left alone, every run leaves a tree there and rewrites the netlist of the user's own ADE setup for that cell. OCEAN reads `projectDir` when `simulator()` starts the session (checked on IC 6.1.8), so point it elsewhere only around that call and restore it, e.g. inside `unwindProtect`. `client.schematic.export_netlist()` does this: by default it netlists in a private `/tmp` directory and removes it after the download; pass `run_dir=` to keep the package. `simulator()` also closes any OCEAN session already open in that CIW.
+
 ### Batch tool exits before an expected artifact appears
 
 Tools such as `strmin` and `ihdl` can fork and write failures only to their own
