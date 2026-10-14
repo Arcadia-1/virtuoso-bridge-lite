@@ -60,7 +60,7 @@ def test_geometry_reads_mosaic_and_ordinary_instance(client, lib):
     with client.layout.create(lib, leaf) as lay:
         lay.add(layout_create_rect("text", "drawing", 0, 0, 1, 1))
     with client.layout.create(lib, parent) as lay:
-        lay.add(layout_create_param_inst(lib, leaf, x=10, y=10, instance_name="ONE"))
+        lay.add(layout_create_param_inst(lib, leaf, "layout", "ONE", 10, 10, "R0"))
         lay.add(layout_create_simple_mosaic(lib, leaf, rows=2, cols=3,
                                            row_pitch=2, col_pitch=2, instance_name="ARR"))
     raw = _ok(client.execute_skill(layout_read_geometry(lib, parent)))
