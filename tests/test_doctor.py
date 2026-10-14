@@ -751,7 +751,7 @@ def test_license_prompting_tiers_warn_with_cdsinit_lines(monkeypatch, tmp_path):
     result = _run(ctx)["license checkout"]
 
     assert result.status == doctor.WARN
-    assert "VSEL_UseNextLicense=ask, VLSXL_UseNextLicense=never" in result.detail
+    assert result.detail.startswith('UseNextLicense is "ask" for VSEL and "never" for VLSXL: ')
     assert result.fix.splitlines() == [
         "Add to .cdsinit:",
         'envSetVal("license" "VSEL_UseNextLicense" \'string "always")',
@@ -782,11 +782,54 @@ def test_license_variables_unknown_to_this_virtuoso_skip(monkeypatch, tmp_path, 
     assert needle in result.detail
 
 
+# The answer of a fresh IC 6.1.8 session (no .cdsinit) to license_query(), recorded live:
+# its tools/dfII/etc/tools/license/.cdsenv defines these nine, all "prompt" by default.
+IC618_DEFAULTS = ("VLSL", "VLSXL", "VSEL", "ADEL", "ADEXL", "VLSAdvOpt", "VIVA", "ADE", "Explorer")
+
+
+def test_license_defaults_of_a_fresh_session_warn_for_every_tier(monkeypatch, tmp_path):
+    answer = "(" + " ".join(f'"{f}_UseNextLicense=prompt"' for f in IC618_DEFAULTS) + ")"
+    client = FakeDaemonClient(skill={**HEALTHY_SKILL, "UseNextLicense": answer})
+    ctx, _, _ = _context(monkeypatch, tmp_path, client=client)
+
+    result = _run(ctx)["license checkout"]
+
+    assert result.status == doctor.WARN
+    assert result.detail.startswith(
+        'UseNextLicense is "prompt" for VLSL, VLSXL, VSEL, ADEL, ADEXL, VLSAdvOpt, VIVA, ADE, Explorer: ')
+    assert result.fix.splitlines()[1:] == [
+        f'envSetVal("license" "{f}_UseNextLicense" \'string "always")' for f in IC618_DEFAULTS]
+
+
+def test_license_variables_named_only_by_the_installation_are_checked(monkeypatch, tmp_path):
+    # A release can define a variable the built-in list does not know.
+    answer = '("VSEL_UseNextLicense=always" "NewTool_UseNextLicense=prompt")'
+    client = FakeDaemonClient(skill={**HEALTHY_SKILL, "UseNextLicense": answer})
+    ctx, _, _ = _context(monkeypatch, tmp_path, client=client)
+
+    result = _run(ctx)["license checkout"]
+
+    assert result.status == doctor.WARN
+    assert result.detail.startswith('UseNextLicense is "prompt" for NewTool: ')
+    assert result.fix.splitlines()[1:] == [
+        'envSetVal("license" "NewTool_UseNextLicense" \'string "always")']
+
+
+def test_license_fallback_names_cover_the_editors():
+    for feature in ("VSEL", "VLSL", "VLSXL", "VLSAdvOpt", "VIVA"):
+        assert feature in doctor.LICENSE_FEATURES
+
+
 def test_license_query_is_guarded_and_reads_only():
     query = doctor.license_query()
-    for feature in doctor.LICENSE_FEATURES:
-        assert f'"{feature}_UseNextLicense"' in query
-    assert "isCallable('envIsVal)" in query and 'envIsVal("license" vbVar)' in query
+    # Names come from the running installation's defaults file, read line by line...
+    assert f'cdsGetInstPath("{doctor.LICENSE_CDSENV}")' in query
+    assert doctor.LICENSE_CDSENV == "tools/dfII/etc/tools/license/.cdsenv"
+    assert "infile(vbFile)" in query and "close(vbPort)" in query
+    # ...and the built-in list is only the fallback when that file yields nothing.
+    fallback = " ".join(f'"{feature}_UseNextLicense"' for feature in doctor.LICENSE_FEATURES)
+    assert f"or(vbNames list({fallback}))" in query
+    assert "isCallable('envIsVal)" in query and 'envIsVal("license" vbVar t)' in query
     assert "envSetVal" not in query
 
 

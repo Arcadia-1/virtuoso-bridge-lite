@@ -35,8 +35,11 @@ X11_TIMEOUT = 15.0
 
 # ``<X>_UseNextLicense`` variables of the "license" tool. Anything but
 # "always" lets a missing lower-tier license pop a modal "Next License"
-# dialog on the first edit, which blocks the CIW.
-LICENSE_FEATURES = ("VSEL", "VLSL", "VLSXL", "ADEL", "ADEXL", "ADE", "Explorer")
+# dialog on the first edit, which blocks the CIW. The query reads the names a
+# version defines from its installed defaults (LICENSE_CDSENV); this list is
+# the fallback when that file cannot be read (IC 6.1.8 defines exactly these).
+LICENSE_FEATURES = ("VSEL", "VLSL", "VLSXL", "VLSAdvOpt", "VIVA", "ADEL", "ADEXL", "ADE", "Explorer")
+LICENSE_CDSENV = "tools/dfII/etc/tools/license/.cdsenv"
 
 # SKILL form symbols of PDK first-use popups that block SKILL until closed.
 PDK_POPUP_FORMS = ("tsmc_PDK_info_table",)
@@ -771,15 +774,29 @@ def check_dialogs(ctx: DoctorContext) -> CheckResult:
 def license_query(features: tuple[str, ...] = LICENSE_FEATURES) -> str:
     """SKILL reading ``<X>_UseNextLicense`` of the "license" tool (read-only).
 
-    A variable this Virtuoso does not define reads as ``<unset>``; without
-    ``envIsVal`` every value is ``<unknown>``. Nothing is read unguarded.
+    The names are the ``license <X>_UseNextLicense`` lines of the running
+    installation's ``LICENSE_CDSENV``, so a release that adds or drops a
+    variable is covered without a code change; ``features`` is used only when
+    that file cannot be read. ``envIsVal(... t)`` faults the tool in if nothing
+    has loaded it yet: that reads its ``.cdsenv`` files the way the first
+    license checkout would, and sets nothing. A variable this Virtuoso does not
+    define reads as ``<unset>``; without ``envIsVal`` every value is
+    ``<unknown>``. Nothing is read unguarded.
     """
     names = " ".join(f'"{feature}_UseNextLicense"' for feature in features)
     return (
-        "let((vbOut vbVal) "
-        f"foreach(vbVar list({names}) "
+        "let((vbOut vbVal vbNames vbFile vbPort vbLine vbTok) "
+        f"vbFile = and(isCallable('cdsGetInstPath) cdsGetInstPath(\"{LICENSE_CDSENV}\")) "
+        "when(and(stringp(vbFile) isFile(vbFile) isReadable(vbFile) vbPort = infile(vbFile)) "
+        "while(gets(vbLine vbPort) "
+        "vbTok = parseString(vbLine \" \\t\\n\") "
+        "when(and(length(vbTok) > 1 equal(car(vbTok) \"license\") "
+        "equal(index(cadr(vbTok) \"_UseNextLicense\") \"_UseNextLicense\")) "
+        "vbNames = append1(vbNames cadr(vbTok)))) "
+        "close(vbPort)) "
+        f"foreach(vbVar or(vbNames list({names})) "
         "vbVal = cond((!isCallable('envIsVal) \"<unknown>\") "
-        "(envIsVal(\"license\" vbVar) envGetVal(\"license\" vbVar)) "
+        "(envIsVal(\"license\" vbVar t) envGetVal(\"license\" vbVar)) "
         "(t \"<unset>\")) "
         "vbOut = cons(sprintf(nil \"%s=%s\" vbVar "
         "if(stringp(vbVal) vbVal sprintf(nil \"%L\" vbVal))) vbOut)) "
@@ -809,12 +826,16 @@ def check_license(ctx: DoctorContext) -> CheckResult:
         return CheckResult(name, SKIP, "no UseNextLicense variable is defined in this Virtuoso")
     prompting = {var: value for var, value in defined.items() if value.strip('"').lower() != "always"}
     if prompting:
-        listed = ", ".join(f"{var}={value}" for var, value in prompting.items())
+        by_value: dict[str, list[str]] = {}
+        for var, value in prompting.items():
+            by_value.setdefault(value.strip('"'), []).append(_feature(var))
+        listed = " and ".join(f'"{value}" for {", ".join(features)}'
+                              for value, features in by_value.items())
         fix = "Add to .cdsinit:\n" + "\n".join(
             f'envSetVal("license" "{var}" \'string "always")' for var in prompting)
         return CheckResult(
-            name, WARN, f"{listed}: a missing license tier can pop a modal 'Next License' "
-            "dialog on the first edit, which blocks the CIW", fix)
+            name, WARN, f"UseNextLicense is {listed}: a missing license tier can pop a modal "
+            "'Next License' dialog on the first edit, which blocks the CIW", fix)
     missing = [_feature(var) for var in values if var not in defined]
     note = f" ({', '.join(missing)} not defined)" if missing else ""
     return CheckResult(name, OK, "UseNextLicense is \"always\" for "
