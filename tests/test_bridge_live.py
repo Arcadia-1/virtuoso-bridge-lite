@@ -32,10 +32,12 @@ import math
 import os
 import posixpath
 import re
+import shlex
+import shutil
 import threading
 import time
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -475,7 +477,92 @@ def maestro_rc(client, lib):
     client.maestro.close_session(session)
     gui = client.maestro.open_gui_session(lib, cell)
     yield cell, gui
-    client.maestro.close_gui_session(gui, save=False)
+    try:
+        reported = _maestro_reported_run_dirs(client, gui)
+    finally:
+        client.maestro.close_gui_session(gui, save=False)
+    # Deleting the cell removes its library-side results; Maestro's run data
+    # lives under the simulation root and would stay behind.
+    lib_path = _ok(client.execute_skill(f'ddGetObj("{lib}")~>readPath')).strip().strip('"')
+    project = _ok(client.execute_skill('simplifyFilename(envGetVal("asimenv.startup" "projectDir"))'))
+    for path in _maestro_scratch_dirs(reported, lib=lib, cell=cell, view="maestro",
+                                      lib_path=lib_path, project_dir=project.strip().strip('"')):
+        _remove_run_scratch(client, path, cell)
+        assert _ok(client.execute_skill(f'isDir("{path}")')).strip() == "nil", f"{path} was not removed"
+
+
+def _maestro_reported_run_dirs(client, session):
+    """Run directories Maestro reports for an open session: the analog run
+    directory, plus each history's point run directory for each test."""
+    from virtuoso_bridge.virtuoso.skill_output import parse_skill_str_list
+
+    probe = (
+        "let((vbOut vbDir vbSdb vbTests vbHist) "
+        f'vbDir = car(errset(asiGetAnalogRunDir(asiGetSession("{session}")) nil)) '
+        "when(stringp(vbDir) vbOut = cons(vbDir vbOut)) "
+        f'vbSdb = car(errset(axlGetMainSetupDB("{session}") nil)) '
+        f'vbTests = car(errset(maeGetSetup(?session "{session}") nil)) '
+        "vbHist = when(vbSdb car(errset(axlGetHistory(vbSdb) nil))) "
+        "when(and(vbSdb listp(vbTests) listp(vbHist)) "
+        "foreach(vbName cadr(vbHist) foreach(vbTest vbTests "
+        "vbDir = car(errset(axlGetPointRunDir(axlGetHistoryEntry(vbSdb vbName) vbTest) nil)) "
+        "when(stringp(vbDir) vbOut = cons(vbDir vbOut))))) "
+        "vbOut)"
+    )
+    output = _ok(client.execute_skill(probe)).strip()
+    return [] if output in ("", "nil") else parse_skill_str_list(output)
+
+
+def _maestro_scratch_dirs(run_dirs, *, lib, cell, view, lib_path, project_dir):
+    """``<root>/<lib>/<cell>`` directories holding a cell's Maestro run data.
+
+    Maestro writes runs under ``<root>/<lib>/<cell>/<view>/results/maestro``;
+    ``<root>`` is the ADE project directory unless a results location is
+    configured, so the roots are the project directory plus whatever the
+    reported run directories show. A path inside the library is the cell's
+    own data, removed with the cell, and a path containing the library would
+    take the library with it: neither is ever returned.
+    """
+    library = PurePosixPath(lib_path)
+    if not library.is_absolute():
+        raise ValueError(f"library path must be absolute: {lib_path!r}")
+    marker = f"/{lib}/{cell}/{view}/results/maestro"
+    roots = {project_dir}
+    for path in run_dirs:
+        index = path.find(marker)
+        if index > 0:
+            roots.add(path[:index])
+    candidates = {PurePosixPath(root) / lib / cell for root in roots if PurePosixPath(root).is_absolute()}
+    return sorted(str(path) for path in candidates
+                  if not path.is_relative_to(library) and not library.is_relative_to(path))
+
+
+def _remove_run_scratch(client, path, cell):
+    """Remove one directory this run created on the Virtuoso host, then the
+    ``<root>/<lib>`` above it if that is now empty. Refuses anything that is
+    not named after this run's cell, a symlink, or owned by someone else."""
+    assert posixpath.basename(path) == cell and cell.startswith(PREFIX) and RUN in cell, path
+    runner = getattr(client, "ssh_runner", None)
+    if runner is None:
+        target = Path(path)
+        assert not target.is_symlink(), path
+        if target.exists():
+            assert target.stat().st_uid == os.getuid(), path
+            shutil.rmtree(target)
+        try:
+            target.parent.rmdir()
+        except OSError:
+            pass
+        return
+    quoted, parent = shlex.quote(path), shlex.quote(posixpath.dirname(path))
+    result = runner.run_command(
+        f"p={quoted}\n"
+        'if [ -L "$p" ]; then echo "refusing symlink $p" >&2; exit 3; fi\n'
+        'if [ -e "$p" ]; then [ -O "$p" ] || { echo "not owned: $p" >&2; exit 3; }; rm -rf -- "$p" || exit $?; fi\n'
+        f"rmdir -- {parent} 2>/dev/null\nexit 0\n",
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_maestro_sweep_bandwidth_matches_analytic(client, lib, maestro_rc):
