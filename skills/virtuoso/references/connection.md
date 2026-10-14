@@ -117,7 +117,10 @@ daemon owner and IPC lane; a daemon listening beyond 127.0.0.1
 (`VB_DAEMON_LISTEN_ALL`); that the remote deploy directories are yours, mode
 0700 and free of symlinks; open dialogs (X11, out of band) and PDK first-use
 forms; `<X>_UseNextLicense` values other than `"always"`, whose "Next License"
-prompt blocks the CIW on the first edit; Spectre; and the documentation that
+prompt blocks the CIW on the first schematic, layout or ADE edit (the names
+come from the running installation's `tools/dfII/etc/tools/license/.cdsenv`,
+VSEL, VLSL, VLSXL, VLSAdvOpt, VIVA, ADEL, ADEXL, ADE and Explorer in IC 6.1.8;
+all default to `"prompt"`); Spectre; and the documentation that
 `skill-find`/`doc-search` would use.
 
 The doctor changes nothing: it never starts, stops, restarts or deploys, writes
