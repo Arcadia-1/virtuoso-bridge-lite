@@ -37,7 +37,10 @@ such where it is defined.
 Use a dedicated Virtuoso session, for example one started under
 `cdsXvfb-run`, never a CIW someone is working in: the tests open windows and
 briefly show a blocking form. Every cell they create is named `VB_LIVE_<id>`
-inside the scratch library and is removed at the end.
+inside the scratch library and is removed at the end, together with what it
+left on the Virtuoso host: netlist exports use a private directory, and the
+Maestro checks remove their cell's run data under the simulation directory
+(`<projectDir>/<lib>/<cell>`, `~/simulation` by default).
 
 ```bash
 VB_RUN_LIVE_TESTS=1 VB_TEST_ENV_FILE=<bridge .env> VB_TEST_LIB=<scratch lib> \
