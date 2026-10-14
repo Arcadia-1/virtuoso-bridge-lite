@@ -350,7 +350,8 @@ def test_cli_explicit_dismissal_preserves_display(monkeypatch, capsys):
     seen = []
     def dismiss(*args, **kwargs):
         seen.append(kwargs)
-        return [{"dismissed": "0x10", "action": "escape"}]
+        return [{"dismissed": "0x10", "action": "escape", "status": "closed",
+                 "closure_confirmed": True, "still_mapped": False}]
     monkeypatch.setattr(x11, "dismiss_window", dismiss)
     assert cli.cli_dismiss_window(window_id="0x10", action="escape", display=":7") == 0
     assert seen[0]["display"] == ":7"

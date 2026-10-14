@@ -470,7 +470,8 @@ def test_helper_exports_auto_detected_display(monkeypatch, capsys) -> None:
         "discover_windows",
         lambda _display: [{"frame_id": "0xframe", "dismiss_id": "0xabc"}],
     )
-    monkeypatch.setattr(helper, "_verify_dismissal", lambda result: result)
+    monkeypatch.setattr(helper, "_verify_dismissal", lambda result: dict(
+        result, status="closed", closure_confirmed=True, still_mapped=False))
     monkeypatch.setattr(helper, "dismiss_window", fake_dismiss_window)
     monkeypatch.setattr(helper.sys, "argv", ["x11_dismiss_dialog.py", "--dismiss-window", "0xabc"])
 

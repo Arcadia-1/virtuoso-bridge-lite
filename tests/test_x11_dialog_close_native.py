@@ -412,6 +412,35 @@ class NativeCloseTests(unittest.TestCase):
         self.canvas.sync()
         self.assert_state(snapshot, True, True)
 
+    def dismissal_result(self):
+        result = MODULE._inventory.dismiss_window(
+            self.display.name, "0x%x" % self.canvas.window, action="enter")
+        result["display"] = self.display.name
+        return MODULE._inventory._verify_dismissal(result)
+
+    def test_sent_key_to_unresponsive_window_is_only_requested(self):
+        result = self.dismissal_result()
+        self.assertEqual(result["status"], "requested", result)
+        self.assertIs(result["action_sent"], True)
+        self.assertIs(result["closure_confirmed"], False)
+        self.assertNotIn("dismissed", result)
+
+    def test_dismissal_confirmation_uses_exact_native_mapping(self):
+        helper = MODULE._inventory
+        target = "0x%x" % self.canvas.window
+        self.canvas.lib.XUnmapWindow(self.canvas.d, self.canvas.frame)
+        self.canvas.sync()
+        result = helper._verify_dismissal({"dismissed": target, "display": self.display.name})
+        self.assertEqual(result["status"], "requested", result)
+        self.canvas.lib.XUnmapWindow(self.canvas.d, self.canvas.window)
+        self.canvas.sync()
+        result = helper._verify_dismissal({"dismissed": target, "display": self.display.name})
+        self.assertEqual(result["status"], "closed", result)
+        self.canvas.lib.XDestroyWindow(self.canvas.d, self.canvas.window)
+        self.canvas.sync()
+        result = helper._verify_dismissal({"dismissed": target, "display": self.display.name})
+        self.assertEqual(result["status"], "closed", result)
+
 
 if __name__ == "__main__":
     if not sys.platform.startswith("linux") or not XVFB:
