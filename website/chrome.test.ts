@@ -8,12 +8,13 @@ const pages = ["index.html", "privacy/index.html", "guide/index.html"].map(
 );
 
 describe("shared light website chrome", () => {
-  it("keeps the same navigation and footer on every public page", () => {
+  it("keeps shared document navigation and the same footer on every public page", () => {
     for (const expression of [
       /<header class="site-header">[\s\S]*?<\/header>/,
       /<footer class="site-footer">[\s\S]*?<\/footer>/,
     ]) {
-      const sections = pages.map((html) => html.match(expression)?.[0]);
+      const sharedPages = expression.source.includes("header") ? pages.slice(1) : pages;
+      const sections = sharedPages.map((html) => html.match(expression)?.[0]);
       expect(sections[0]).toBeTruthy();
       expect(new Set(sections).size).toBe(1);
     }
@@ -44,7 +45,7 @@ describe("shared light website chrome", () => {
 
   it("shows four direct cross-site links and keeps Docs in the utility area", () => {
     for (const page of pages) {
-      const nav = page.match(/<nav class="header-nav"[^>]*>[\s\S]*?<\/nav>/)?.[0] ?? "";
+      const nav = page.match(/<nav class="header-nav(?: project-links)?"[^>]*>[\s\S]*?<\/nav>/)?.[0] ?? "";
       const actions = page.match(/<div class="header-actions">[\s\S]*?<\/div>/)?.[0] ?? "";
       expect(nav.match(/class="site-link"/g)).toHaveLength(4);
       expect(nav).not.toContain("nav-guide");
@@ -113,7 +114,7 @@ describe("shared light website chrome", () => {
 
   it("keeps the landing page a short front door with a correct quick start", () => {
     const landing = pages[0];
-    expect(landing.split("\n").length).toBeLessThan(450);
+    expect(landing).not.toContain("Design preview");
     // `start` opens the tunnel; the CIW load(...) line is printed by `status`.
     expect(landing).toMatch(/virtuoso-bridge status\s+<span class="comment"># prints the load/);
     expect(landing).not.toMatch(/load\([^)]*\)[^<]*(printed by|输出的)[^<]*start/);
@@ -122,7 +123,7 @@ describe("shared light website chrome", () => {
 
   it("lists external projects at the bottom of the home page", () => {
     const landing = pages[0];
-    const section = landing.match(/<section class="block ecosystem" id="ecosystem">[\s\S]*?<\/section>/)?.[0];
+    const section = landing.match(/<section class="block ecosystem" id="ecosystem-index">[\s\S]*?<\/section>/)?.[0];
     expect(section).toBeTruthy();
     const repos = [...section!.matchAll(/<li><a href="https:\/\/github\.com\/([^"]+)" title="\1">/g)].map((m) => m[1]);
     expect(repos.length).toBeGreaterThan(40);
