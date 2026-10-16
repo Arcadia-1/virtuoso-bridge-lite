@@ -954,6 +954,11 @@ let((result winName ciwNum)
         screenshot_dir = default_virtuoso_bridge_dir(username, "screenshots", client_id)
         if self._tunnel and self._tunnel._ssh_runner:
             self._tunnel._ssh_runner.run_command(f"mkdir -p {screenshot_dir}")
+        else:
+            # Local mode: Virtuoso shares our filesystem, but nobody creates
+            # this dir (the mkdir above only runs for remote SSH). Without it
+            # hiWindowSaveImage fails silently and the download finds nothing.
+            Path(screenshot_dir).mkdir(parents=True, exist_ok=True)
 
         from datetime import datetime
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")

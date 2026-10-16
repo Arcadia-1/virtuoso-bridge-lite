@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "vb": {
+      "command": "python3",
+      "args": ["/path/to/virtuoso-bridge-lite/mcp_server.py"],
+      "env": {
+        "VB_REMOTE_HOST": "localhost",
+        "VB_WORK_DIR": "/path/to/agent/work",
+        "VB_PDK_ROOTS": "/path/to/pdks",
+        "VB_CDS_LIB": "/path/to/work/cds.lib",
+        "VB_SAFE_ROOTS": "",
+        "VB_INDEX_DIR": "",
+        "VB_DOC_ROOTS": "",
+        "VB_DISPLAY": ":0",
+        "VB_VIRTUOSO_TIMEOUT": "600",
+        "LD_LIBRARY_PATH": "/path/to/cadence/INVS152/tools.lnx86/inca/lib/64bit"
+      }
+    }
+  }
+}
