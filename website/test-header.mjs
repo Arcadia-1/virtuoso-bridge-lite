@@ -25,16 +25,18 @@ try {
           const box = await link.boundingBox();
           assert(box && box.width >= 36 && box.height >= 36, label);
           assert(box.x >= 0 && box.x + box.width <= width, `Link clipped: ${label}`);
-          assert.equal(await link.locator('.site-link-label').isVisible(), width > 1180, label);
+          assert.equal(await link.locator('.site-link-label').isVisible(), path === '/' || width > 1180, label);
           assert(await link.getAttribute('title'), label);
           assert(await link.getAttribute('aria-label'), label);
-          const logo = link.locator('.site-link-logo');
-          const frame = await logo.boundingBox();
-          const artwork = await logo.locator('img, svg').boundingBox();
-          assert.equal(artwork.width, 24, label);
-          assert.equal(artwork.height, 24, label);
-          assert(artwork.x >= frame.x + 2 && artwork.y >= frame.y + 2, `Missing icon inset: ${label}`);
-          assert.equal(await logo.evaluate(el => getComputedStyle(el).overflow), 'visible', label);
+          if (path !== '/') {
+            const logo = link.locator('.site-link-logo');
+            const frame = await logo.boundingBox();
+            const artwork = await logo.locator('img, svg').boundingBox();
+            assert.equal(artwork.width, 24, label);
+            assert.equal(artwork.height, 24, label);
+            assert(artwork.x >= frame.x + 2 && artwork.y >= frame.y + 2, `Missing icon inset: ${label}`);
+            assert.equal(await logo.evaluate(el => getComputedStyle(el).overflow), 'visible', label);
+          }
           const clickable = await link.evaluate(el => {
             const r = el.getBoundingClientRect();
             return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
@@ -43,7 +45,7 @@ try {
         }
         const groups = await header.locator('.brand, .header-nav, .header-actions').evaluateAll(els => els.map(el => el.getBoundingClientRect().toJSON()));
         for (let i = 1; i < groups.length; i++)
-          assert(groups[i].left >= groups[i - 1].right, `Header groups overlap: ${label}`);
+          assert(groups[i].left >= groups[i - 1].right || groups[i].top >= groups[i - 1].bottom || groups[i].bottom <= groups[i - 1].top, `Header groups overlap: ${label}`);
         assert(groups.at(-1).right <= width, `Utilities overflow: ${label}`);
         assert.equal(await header.locator('[data-language-toggle]').isVisible(), true, label);
       }

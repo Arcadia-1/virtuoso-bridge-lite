@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#f7f8fa" />
+    <meta name="theme-color" content="#efeee8" />
     <title>Virtuoso Bridge — AI agents for Cadence Virtuoso and Spectre</title>
     <meta name="description" content="Open-source bridge that lets AI agents drive Cadence Virtuoso and Spectre from Python, SKILL or the command line." />
     <meta name="site-title-en" content="Virtuoso Bridge — AI agents for Cadence Virtuoso and Spectre" />
@@ -34,13 +34,13 @@
     <link rel="stylesheet" href="/site.css?v=20261013-navigation" />
     <script src="/site.js?v=20261013-navigation" defer></script>
     <script type="module" src="/analytics/track.js?v=20261012-light"></script>
+    <link rel="stylesheet" href="/assets/home/archive-scoped.css?v=20261015-dossier" />
+    <link rel="stylesheet" href="/assets/home/home.css?v=20261015-dossier" />
+    <link rel="stylesheet" href="/assets/home/dossier.css?v=20261015-dossier" />
+    <script type="module" src="/assets/home/home.mjs?v=20261015-dossier"></script>
+    <script type="module" src="/assets/home/archive.mjs?v=20261015-dossier"></script>
   </head>
-  <body>
-    <a class="skip-link" href="#main"
-      ><span class="en">Skip to content</span
-      ><span class="zh">跳转到正文</span></a
-    >
-    <header class="site-header">
+<body class="home"><a class="skip-link" href="#main"><span class="en">Skip to content</span><span class="zh">跳转到正文</span></a><header class="site-header">
       <div class="wrap header-inner">
         <a
           class="brand"
@@ -54,24 +54,7 @@
             alt=""
           /><span>Virtuoso Bridge</span></a
         >
-        <nav class="header-nav" aria-label="Related sites / 相关网站">
-          <a class="site-link" href="https://analog-canvas.tokenzhang.com/" target="_blank" rel="noopener" aria-label="Analog Canvas" title="Analog Canvas">
-            <span class="site-link-logo" aria-hidden="true"><img src="/assets/analog-canvas.svg" width="24" height="24" alt="" /></span>
-            <span class="site-link-label">Analog Canvas</span>
-          </a>
-          <a class="site-link" href="https://chip-arena.com/" target="_blank" rel="noopener" aria-label="Chip Arena" title="Chip Arena">
-            <span class="site-link-logo" aria-hidden="true"><img src="/assets/chip-arena.svg" width="24" height="24" alt="" /></span>
-            <span class="site-link-label">Chip Arena</span>
-          </a>
-          <a class="site-link" href="https://circuits-and-systems.tokenzhang.com/" target="_blank" rel="noopener" aria-label="CAS Classroom" title="CAS Classroom">
-            <span class="site-link-logo" aria-hidden="true"><img src="/assets/classroom.svg" width="24" height="24" alt="" /></span>
-            <span class="site-link-label">CAS Classroom</span>
-          </a>
-          <a class="site-link" href="https://www.tokenzhang.com/" target="_blank" rel="noopener" aria-label="Zhishuai Zhang / 张智帅 · 个人主页" title="Zhishuai Zhang / 张智帅 · 个人主页">
-            <span class="site-link-logo" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="8" r="3.5" /><path d="M5 21v-2a7 7 0 0 1 14 0v2" /></svg></span>
-            <span class="site-link-label"><span class="en">Zhishuai Zhang</span><span class="zh">张智帅 · 个人主页</span></span>
-          </a>
-        </nav>
+
         <div class="header-actions">
           <a class="nav-guide" href="/guide/" data-internal aria-label="Documentation / 使用文档" title="Docs / 使用文档"
             ><svg
@@ -143,9 +126,24 @@
           </button>
         </div>
       </div>
-    </header>
-    <main id="main">
-      <section class="hero" id="top">
+    <div class="project-strip wrap"><span class="project-label"><span class="en">Related projects</span><span class="zh">相关项目</span></span><nav class="header-nav project-links" aria-label="Related sites / 相关网站">
+          <a class="site-link" href="https://analog-canvas.tokenzhang.com/" target="_blank" rel="noopener" aria-label="Analog Canvas" title="Analog Canvas">
+            <span class="site-link-logo" aria-hidden="true"><img src="/assets/analog-canvas.svg" width="24" height="24" alt="" /></span>
+            <span class="site-link-label">Analog Canvas</span>
+          </a>
+          <a class="site-link" href="https://chip-arena.com/" target="_blank" rel="noopener" aria-label="Chip Arena" title="Chip Arena">
+            <span class="site-link-logo" aria-hidden="true"><img src="/assets/chip-arena.svg" width="24" height="24" alt="" /></span>
+            <span class="site-link-label">Chip Arena</span>
+          </a>
+          <a class="site-link" href="https://circuits-and-systems.tokenzhang.com/" target="_blank" rel="noopener" aria-label="CAS Classroom" title="CAS Classroom">
+            <span class="site-link-logo" aria-hidden="true"><img src="/assets/classroom.svg" width="24" height="24" alt="" /></span>
+            <span class="site-link-label">CAS Classroom</span>
+          </a>
+          <a class="site-link" href="https://www.tokenzhang.com/" target="_blank" rel="noopener" aria-label="Zhishuai Zhang / 张智帅 · 个人主页" title="Zhishuai Zhang / 张智帅 · 个人主页">
+            <span class="site-link-logo" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="8" r="3.5" /><path d="M5 21v-2a7 7 0 0 1 14 0v2" /></svg></span>
+            <span class="site-link-label"><span class="en">Zhishuai Zhang</span><span class="zh">张智帅 · 个人主页</span></span>
+          </a>
+        </nav></div></header><main id="main"><section class="hero" id="top">
         <div class="wrap">
           <div class="hero-content">
             <div class="hero-copy">
@@ -164,25 +162,45 @@
               </div>
               <p class="hero-note"><span>OPEN SOURCE</span><span>MIT LICENSE</span><span>PYTHON ≥ 3.9</span></p>
             </div>
-            <div class="hero-visual">
-              <img
-                src="/assets/architecture.svg?v=20261012-hero"
-                width="620"
-                height="490"
-                alt="Architecture: your AI agent talks to Virtuoso Bridge through Python, SKILL or the CLI; the bridge reaches Virtuoso schematic and layout, Maestro, and Spectre, which can also run without a Virtuoso daemon."
-              />
-              <p class="diagram-label"><span class="en">ARCHITECTURE ILLUSTRATION / NOT A LIVE SESSION</span><span class="zh">架构示意 / 非实时会话</span></p>
-            </div>
+            <div class="lab" id="lab">
+<div class="lab-header"><span>REPOSITORY EXAMPLE</span><span class="lab-light">TRANSIENT</span><span>CMOS INVERTER</span></div>
+<div class="schematic"><svg viewBox="0 0 640 330" role="img" aria-label="Functional schematic of repository CMOS inverter testbench: 0.9 volt supply, 1 GHz pulse input, 10 femtofarad output load">
+<defs><pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".7" fill="#9ca78f"/></pattern></defs><rect width="640" height="330" fill="url(#dots)"/>
+<g fill="none" stroke="#647354" stroke-width="2"><path d="M85 155H235M235 104L235 206L330 155ZM350 155H550M280 128V73M280 182V259m-18 0h36m-29 7h22m-15 7h8M460 155v61m-18 0h36m-36 12h36m-18 0v31m-18 0h36m-29 7h22m-15 7h8"/><circle cx="340" cy="155" r="10"/></g>
+<g fill="#34432c" font-family="Consolas,monospace" font-size="22"><text x="75" y="134">VIN</text><text x="503" y="134">VOUT</text><text x="229" y="60">VDD 0.9 V</text><text x="487" y="221">10 fF</text><text x="65" y="202">1 GHz</text></g>
+<g fill="#d75b26"><circle cx="85" cy="155" r="4"/><circle cx="460" cy="155" r="4"/><circle cx="550" cy="155" r="4"/></g>
+<text x="28" y="35" fill="#6b785e" font-family="Consolas,monospace" font-size="16">INV / TRANSIENT TESTBENCH</text>
+<text x="28" y="310" fill="#6b785e" font-family="Consolas,monospace" font-size="14">FUNCTIONAL SCHEMATIC · CMOS INVERTER + LOAD</text>
+</svg></div>
+<div class="wave-panel inverter-waves"><div><span><span class="en">Transient response</span><span class="zh">瞬态响应</span></span><span class="wave-legend">0–3 ns</span></div>
+<svg viewBox="0 0 500 208" role="img" aria-label="Idealized demonstration of VIN pulses and inverted VOUT, not measured Spectre results">
+<g stroke="#bdc7ad" stroke-width=".7" fill="none"><path d="M50 38H478M50 88H478M50 123H478M50 173H478M50 28V180M192.67 28V180M335.33 28V180M478 28V180"/></g>
+<g fill="#61734f" font-family="Consolas,monospace" font-size="15"><text x="0" y="23">VIN</text><text x="0" y="42">0.9</text><text x="24" y="91">0</text><text x="0" y="126">0.9</text><text x="24" y="176">0</text><text x="47" y="199">0</text><text x="190" y="199">1</text><text x="332" y="199">2</text><text x="451" y="199">3 ns</text><text x="0" y="111" fill="#bb5227">VOUT</text></g>
+<path id="wave-input" fill="none" stroke="#6b7f55" stroke-width="2" pathLength="1"/><path id="wave-output" fill="none" stroke="#d75b26" stroke-width="2.5" pathLength="1"/>
+</svg><p class="wave-disclosure"><span class="en">IDEALIZED WAVEFORMS · DEMO ONLY</span><span class="zh">理想化波形 · 仅作演示</span></p></div>
+<a class="example-source" href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/examples/02_spectre/01_inverter_tran.py" target="_blank" rel="noopener noreferrer"><span class="en">Spectre inverter transient · View example ↗</span><span class="zh">Spectre 反相器瞬态仿真 · 查看案例 ↗</span></a>
+<div class="lab-controls"><button type="button" id="run-demo"><span class="play">▶</span><span class="en">Run simulation demo</span><span class="zh">播放仿真演示</span></button><span id="demo-status" role="status"><span class="en">Ready</span><span class="zh">就绪</span></span></div>
+<p class="demo-note"><span class="en">Browser demonstration · No live Spectre execution</span><span class="zh">浏览器演示 · 未运行真实 Spectre 仿真</span></p>
+</div>
+
           </div>
           <div class="hero-baseline">
             <span>ONE BRIDGE. REAL DESIGN TOOLS.</span>
             <div class="capabilities"><span>SCHEMATIC</span><span>LAYOUT</span><span>SPECTRE</span><span>MAESTRO</span></div>
           </div>
         </div>
-      </section>
-
-      <div class="page">
-      <section class="block" id="skillbridge">
+      </section><section class="architecture-section wrap" id="architecture"><div class="section-heading"><span class="kicker">UNDER THE HOOD</span><h2><span class="en">One bridge. <br>Real design tools.</span><span class="zh">一座桥梁，<br>连接真实工具。</span></h2><p><span class="en">Python, SKILL and the command line.<br>Local tools or a remote workstation.</span><span class="zh">Python、SKILL 与命令行。<br>连接本机工具，或远程工作站。</span></p></div><div class="crt-console">
+<div class="crt-bezel"><span>VB / SYSTEM MONITOR</span><span>VB</span></div>
+<div class="crt-screen" role="img" aria-label="Architecture: AI agent uses Python, SKILL or CLI to reach Virtuoso Bridge, connecting to Virtuoso, Maestro and standalone Spectre locally or over SSH.">
+<div class="crt-topline"><span>SYSTEM TOPOLOGY</span><span>LOCAL / SSH</span></div>
+<div class="crt-agent">AI AGENT</div><div class="crt-route"><span class="crt-route-label">PYTHON · SKILL · CLI</span></div>
+<div class="crt-core">VIRTUOSO BRIDGE</div><div class="crt-bus" aria-hidden="true"></div>
+<div class="crt-targets"><div><b>VIRTUOSO</b><span>SCHEMATIC<br>LAYOUT</span></div><div><b>MAESTRO</b><span>RUNS<br>RESULTS</span></div><div><b>SPECTRE</b><span>STANDALONE<br>SIMULATION</span></div></div>
+<div class="crt-caption">SPECTRE CAN RUN WITHOUT VIRTUOSO</div>
+</div><div class="crt-footer"><span class="crt-indicator" aria-hidden="true"></span><span>ARCHITECTURE / REFERENCE DISPLAY</span><span class="crt-knob" aria-hidden="true"></span></div>
+<p class="diagram-label"><span class="en">ARCHITECTURE ILLUSTRATION / NOT A LIVE SESSION</span><span class="zh">架构示意 / 非实时会话</span></p>
+</div>
+</section><div class="comparison-band"><div class="wrap"><section class="block" id="skillbridge">
         <h2><span class="en">How it differs from skillbridge</span><span class="zh">与 skillbridge 的区别</span></h2>
         <p><span class="en">Both run SKILL through the same Virtuoso IPC core (<code>ipcBeginProcess</code> + <code>evalstring</code>). The difference is what sits on top.</span><span class="zh">两者底层相同，都通过 Virtuoso 的 IPC 机制（<code>ipcBeginProcess</code> + <code>evalstring</code>）执行 SKILL，区别在上层。</span></p>
         <table class="compare">
@@ -228,9 +246,7 @@
           </tbody>
         </table>
         <p class="note"><span class="en">skillbridge details checked against its source and docs, version 1.8.0.</span><span class="zh">skillbridge 的信息对照其 1.8.0 版源码和文档核实。</span></p>
-      </section>
-
-      <section class="block" id="start">
+      </section></div></div><div class="light-content wrap"><section class="block" id="start">
         <h2><span class="en">Quick start</span><span class="zh">快速开始</span></h2>
         <div class="code">
           <div class="code-head"><span>macOS · Linux</span><button class="copy-button js-only" type="button" data-copy="quickstart-code"><span class="en">Copy</span><span class="zh">复制</span></button></div>
@@ -247,9 +263,7 @@ virtuoso-bridge eval '1+2'       <span class="comment"># after loading it: 3</sp
         <p class="note">
           <span class="en">Paste the <code>load("...")</code> line into the Virtuoso CIW you want to drive. Windows, local mode and standalone Spectre: see the <a href="/guide/#install" data-internal>guide</a>.</span><span class="zh">把 <code>load("...")</code> 这行粘贴到要控制的 Virtuoso CIW。Windows、本机模式、独立 Spectre 见<a href="/guide/#install" data-internal>使用文档</a>。</span>
         </p>
-      </section>
-
-      <section class="block" id="docs">
+      </section></div><div class="resources wrap"><section class="block" id="docs">
         <h2><span class="en">Read more</span><span class="zh">延伸阅读</span></h2>
         <ul class="links">
           <li><a href="/guide/" data-internal><span class="en">Guide</span><span class="zh">使用文档</span></a><span><span class="en">setup, configuration, CLI, architecture</span><span class="zh">安装、配置、命令行、架构</span></span></li>
@@ -259,8 +273,19 @@ virtuoso-bridge eval '1+2'       <span class="comment"># after loading it: 3</sp
           <li><a href="/guide/#cite" data-internal><span class="en">Citation</span><span class="zh">引用</span></a><span>BibTeX</span></li>
           <li><a href="#ecosystem"><span class="en">Ecosystem</span><span class="zh">生态</span></a><span><span class="en">projects built on Virtuoso Bridge</span><span class="zh">基于 Virtuoso Bridge 的项目</span></span></li>
         </ul>
-      </section>
-      <section class="block ecosystem" id="ecosystem">
+      </section></div><section class="ecosystem-area wrap" id="ecosystem"><div class="ecosystem-heading"><span class="kicker">04 / THE ECOSYSTEM</span><h2><span class="en">An archive of possibilities.</span><span class="zh">让想法，接入现实。</span></h2><p><span class="en">Hover over a folder to explore. Browse all projects in the complete index below.</span><span class="zh">滑过档案，探索项目。在下方完整目录中浏览所有项目。</span></p></div><section class="archive" aria-label="Project archive / 项目档案">
+<div class="collection-bar"><span class="eyebrow">COLLECTIONS</span><nav id="categories" aria-label="Project collections / 项目分类"></nav></div>
+<div class="workspace">
+<div class="visual">
+<div class="stage-top"><span id="collection-code">COLLECTION 01</span><span>VIRTUOSO BRIDGE / PUBLIC ARCHIVE</span></div>
+<div class="scene" id="scene" role="group" tabindex="0" aria-label="Project archive: arrow keys to browse, Enter to extract, Escape to return"><div class="rail"></div><div class="rack" id="rack"></div><div class="floor-label">VB — ECOSYSTEM RECORDS</div></div>
+<div class="stage-bottom"><span><span class="zh">悬停抽取 · ← → 翻阅 · Esc 收回</span><span class="en">Hover to extract · ← → browse · Esc return</span></span><span>CSS / 2.5D</span></div>
+</div>
+<aside class="reader"><div class="reader-meta"><span id="record-id">RECORD 001</span><span class="status" id="status">IN SLEEVE</span></div><div id="record" aria-live="polite" aria-atomic="true"><p id="owner" class="owner"></p><h2 id="project"></h2><p id="description"></p><div class="record-category" id="record-category"></div></div><div class="reader-actions"><a id="repository" target="_blank" rel="noopener noreferrer">GitHub ↗</a></div><div class="browse"><button id="previous" type="button" aria-label="上一个项目">←</button><span id="position"></span><button id="next" type="button" aria-label="下一个项目">→</button></div><div class="reader-foot">OPEN SOURCE CONNECTIONS<br><span>ORIGINAL DESCRIPTIONS · ORIGINAL LINKS</span></div></aside>
+</div>
+</section>
+<div class="index-top"><span class="eyebrow">THE COMPLETE INDEX</span><span class="zh">全部项目均保留，也可以直接检索。</span><span class="en">Every project preserved. Every link accessible.</span></div>
+<details id="full-index"><summary><span class="zh">查看完整目录</span><span class="en">Browse the full index</span><span id="total"></span></summary><label class="search"><span class="zh">检索名称或描述</span><span class="en">Search names or descriptions</span><input id="search" type="search" placeholder="PANDA, Spectre, layout…"></label><p id="search-status" role="status"></p><section class="block ecosystem" id="ecosystem-index">
         <h2><span class="en">Ecosystem</span><span class="zh">生态</span></h2>
         <p><span class="en">53 public GitHub projects that build on, extend, bundle or mention Virtuoso Bridge, as of October 2026.</span><span class="zh">截至 2026 年 10 月，GitHub 上有 53 个公开项目基于、扩展、内置或提及 Virtuoso Bridge。</span></p>
         <h3><span class="en">Rewrites, copies and forks</span><span class="zh">重写、副本与 fork</span> <span class="count">14</span></h3>
@@ -331,10 +356,8 @@ virtuoso-bridge eval '1+2'       <span class="comment"># after loading it: 3</sp
           <li><a href="https://github.com/laojiahuo2003/github-daily-report" title="laojiahuo2003/github-daily-report">laojiahuo2003/github-daily-report</a><span><span class="en">Daily GitHub report</span><span class="zh">GitHub 日报</span></span></li>
           <li><a href="https://github.com/arthurspk/guiadoconhecimento" title="arthurspk/guiadoconhecimento">arthurspk/guiadoconhecimento</a><span><span class="en">Knowledge guide</span><span class="zh">知识导航</span></span></li>
         </ul>
-      </section>
-      </div>
-    </main>
-    <footer class="site-footer">
+      </section></details>
+</section><section class="closing"><div class="wrap"><span class="kicker">YOUR NEXT CONNECTION</span><h2><span class="en">Start with a real circuit.</span><span class="zh">从一份真实电路开始。</span></h2><a class="button primary" data-internal href="/guide/"><span class="en">Read the guide ↗</span><span class="zh">阅读使用文档 ↗</span></a></div></section></main><footer class="site-footer">
       <div class="wrap">
         <div class="footer-row">
           <p class="footer-copyright">
@@ -371,7 +394,4 @@ virtuoso-bridge eval '1+2'       <span class="comment"># after loading it: 3</sp
           >
         </p>
       </div>
-    </footer>
-    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  </body>
-</html>
+    </footer><div id="toast" class="toast" role="status" aria-live="polite" hidden></div></body></html>

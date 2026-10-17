@@ -8,9 +8,17 @@ HTML: edit it directly.
 website package. `npm run preview` serves the full site with local Cloudflare
 Durable Object storage. It does not connect to Cadence.
 
-Public pages use a light palette, a compact 48px product header and a quiet
-footer, aligned with Analog Canvas and Analog Design Bench. The shared chrome
-is checked across the landing and privacy pages by `chrome.test.ts`.
+The homepage uses a warm paper-and-archive palette with expanded Related projects
+navigation; the guide and privacy pages retain their compact shared header.
+All pages keep the same product links, language switch and analytics footer,
+checked by `chrome.test.ts`. Homepage-only styles and modules live in
+`docs/assets/home/` and are copied by the regular build, with no prototype
+dependency. Edit `docs/index.html` directly. The complete ecosystem index is
+the single content source for the animated folders. Motion pauses offscreen
+and honors reduced-motion preferences; the waveform is explicitly an idealized
+demo, not a live simulation. `homepage-content.json` records original destinations
+and section text hashes to prevent accidental omissions during layout changes;
+update it deliberately when changing actual product content.
 `docs/favicon.svg` and `docs/assets/mark.svg` hold the italic VB mark (the favicon
 turns white in dark browser tabs); the PNG icons and social preview
 are derived assets and must be regenerated when the mark changes.
