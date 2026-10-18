@@ -50,6 +50,30 @@ Read a schematic through the same client-bound API:
 data = client.schematic.read(lib, cell, include_positions=False)
 ```
 
+### Inspect parameter evidence
+
+When a device has no explicit sizing properties, compare the stored instance
+properties with the values returned by its instance CDF in the same read:
+
+```python
+data = client.schematic.read(lib, cell, include_param_evidence=True)
+for inst in data["instances"]:
+    evidence = inst["param_evidence"]
+    print(inst["name"], evidence["stored"], evidence["cdf"])
+```
+
+`stored` contains the explicit instance property bag. `cdf` contains instance
+CDF values, or `None` when no instance CDF was available; an available CDF with
+zero parameters is `{}`. An absent property differs from a present property
+whose value is `None` (SKILL `nil`). Strings and lists are decoded, `t` becomes
+`True`, and other atoms remain text.
+
+Evidence is opt-in, unfiltered, and includes empty and long values that the
+compact `params` dictionary omits. `param_filters` continues to affect only
+`params`. Reading evidence runs no parameter callbacks and does not evaluate
+`iPar`/`pPar` expressions. A CDF value without an explicit property establishes
+what the CDF returned; confirm its origin and final netlisted value separately.
+
 ### Structured check/save diagnostics
 
 Use `check_and_save()` when automation needs the diagnostics from one explicit
