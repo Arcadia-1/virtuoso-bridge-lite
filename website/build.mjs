@@ -1,9 +1,11 @@
 import { build } from "esbuild";
-import { cp, mkdir } from "node:fs/promises";
+import { cp, mkdir, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 // Only public website files are packaged; repository documentation stays on GitHub.
 const destination = new URL("./dist/", import.meta.url);
+// Only this generated directory is removed; retired assets must not survive a build.
+await rm(destination, { recursive: true, force: true });
 await mkdir(destination, { recursive: true });
 for (const name of [
   "index.html",

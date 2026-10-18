@@ -25,10 +25,10 @@ try {
           const box = await link.boundingBox();
           assert(box && box.width >= 36 && box.height >= 36, label);
           assert(box.x >= 0 && box.x + box.width <= width, `Link clipped: ${label}`);
-          assert.equal(await link.locator('.site-link-label').isVisible(), path === '/' || width > 1180, label);
+          assert.equal(await link.locator('.site-link-label').isVisible(), width > 1180, label);
           assert(await link.getAttribute('title'), label);
           assert(await link.getAttribute('aria-label'), label);
-          if (path !== '/') {
+          {
             const logo = link.locator('.site-link-logo');
             const frame = await logo.boundingBox();
             const artwork = await logo.locator('img, svg').boundingBox();

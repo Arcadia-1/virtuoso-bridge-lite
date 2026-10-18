@@ -123,7 +123,7 @@ describe("shared light website chrome", () => {
 
   it("lists external projects at the bottom of the home page", () => {
     const landing = pages[0];
-    const section = landing.match(/<section class="block ecosystem" id="ecosystem-index">[\s\S]*?<\/section>/)?.[0];
+    const section = landing.match(/<section class="block ecosystem" id="ecosystem">[\s\S]*?<\/section>/)?.[0];
     expect(section).toBeTruthy();
     const repos = [...section!.matchAll(/<li><a href="https:\/\/github\.com\/([^"]+)" title="\1">/g)].map((m) => m[1]);
     expect(repos.length).toBeGreaterThan(40);

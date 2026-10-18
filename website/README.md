@@ -8,17 +8,23 @@ HTML: edit it directly.
 website package. `npm run preview` serves the full site with local Cloudflare
 Durable Object storage. It does not connect to Cadence.
 
-The homepage uses a warm paper-and-archive palette with expanded Related projects
-navigation; the guide and privacy pages retain their compact shared header.
+The homepage uses the compact shared layout and original architecture illustration,
+with small warm-paper and orange accents. Its first screen names the Lite core:
+Spectre simulation and PDK/CDF callbacks, everyday schematic/symbol/GDS operations,
+and raw SKILL for the rest. Advanced configuration remains optional.
 All pages keep the same product links, language switch and analytics footer,
 checked by `chrome.test.ts`. Homepage-only styles and modules live in
 `docs/assets/home/` and are copied by the regular build, with no prototype
-dependency. Edit `docs/index.html` directly. The complete ecosystem index is
-the single content source for the animated folders. Motion pauses offscreen
-and honors reduced-motion preferences; the waveform is explicitly an idealized
-demo, not a live simulation. `homepage-content.json` records original destinations
+dependency. Edit `docs/index.html` directly. The complete ecosystem index stays
+expanded and works without JavaScript. It is the single content source for
+three project examples and bilingual name/keyword search; category links jump
+to the original groups and clear any active search. `homepage-content.json`
+records original destinations
 and section text hashes to prevent accidental omissions during layout changes;
 update it deliberately when changing actual product content.
+Run `node test-header.mjs [site URL]` and `node test-homepage.mjs [site URL]`
+for browser regressions, with Playwright available via `PLAYWRIGHT_MODULE_PATH`
+if it is not installed locally. These checks opt out of visitor tracking.
 `docs/favicon.svg` and `docs/assets/mark.svg` hold the italic VB mark (the favicon
 turns white in dark browser tabs); the PNG icons and social preview
 are derived assets and must be regenerated when the mark changes.
