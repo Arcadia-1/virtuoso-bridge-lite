@@ -1,6 +1,8 @@
-# Visio stencils — binary, never diff/merge as text
+# Visio stencils â€” binary, never diff/merge as text
 *.vss   binary
 *.vsdx  binary
 
 # PSF binary waveforms (handy if anyone ever commits one by accident)
 *.raw   binary
+
+mcp/mcp_smoke.sh text eol=lf

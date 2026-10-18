@@ -2711,7 +2711,3 @@ _SCREENSHOT_OUTPUT: list[str | None] = [None]
 
 def _get_cli_profile() -> str | None:
     return _CLI_PROFILE[0]
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

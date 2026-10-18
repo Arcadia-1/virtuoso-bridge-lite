@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""virtuoso-bridge MCP server — 2026-07-28 core + tasks/skills extensions.
+"""Optional virtuoso-bridge MCP adapter — 2026-07-28 core + skills extension.
 
-Stdlib only. No extra install. Works on Python >= 3.9.
+Uses the installed virtuoso-bridge package. No extra MCP dependency. Works on Python >= 3.9.
 
 Transports: stdio (JSON-RPC 2.0, one message per line).
 Modern clients use ``server/discover``. Legacy clients use ``initialize``.
@@ -9,16 +9,15 @@ Both are supported. Every request SHOULD carry ``params._meta`` with
 ``io.modelcontextprotocol/protocolVersion``. Every result carries
 ``resultType: complete`` and ``_meta.serverInfo``.
 
-Long jobs (simulate, simulate_many, run_test, capture_session) use the
-official tasks extension when the client opts in. Otherwise they run
-synchronously with a timeout.
+Tools call the existing bridge APIs synchronously with bounded timeouts.
+The adapter does not implement a separate job or recovery engine.
 
 Logs go to stderr only. Never to stdout.
 """
 from __future__ import annotations
 
 import base64
-import concurrent.futures
+import contextlib
 import hashlib
 import json
 import logging
@@ -26,8 +25,17 @@ import sys
 import threading
 import time
 import traceback
-import uuid
 from pathlib import Path
+
+from virtuoso_bridge import VirtuosoClient
+
+
+class _AdapterClient(VirtuosoClient):
+    """Use bridge execution without automatic transport replay for any tool."""
+
+    def execute_skill(self, skill_code, timeout=None, *, retry_connect=False):
+        return super().execute_skill(skill_code, timeout=timeout, retry_connect=False)
+
 
 logger = logging.getLogger("virtuoso-bridge-mcp")
 logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
@@ -37,41 +45,19 @@ SKILLS_DIR = BASE / "skills"
 
 
 def _load_bridge_env() -> None:
-    """Load the bridge .env (same file the CLI uses) without overriding.
-
-    The harness launches this server with a small env. Spectre binary,
-    remote host, and license vars live in ~/.virtuoso-bridge/.env. Without
-    this, simulate fails with 'file not found' for every agent.
-    Harness-provided vars always win. Stdlib-only parser on purpose.
-    """
-    import os
-    cands = [BASE / ".env", Path.home() / ".virtuoso-bridge" / ".env"]
-    for cand in cands:
-        try:
-            text = cand.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        if "VB_REMOTE_HOST" not in text and "VB_SPECTRE_BIN" not in text:
-            continue
-        for line in text.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            k, v = k.strip(), v.strip().strip("'\"")
-            if k.startswith("VB_") and k not in os.environ:
-                os.environ[k] = v
-        break
+    """Use the same configuration discovery and parser as the bridge CLI."""
+    from virtuoso_bridge.env import load_vb_env
+    load_vb_env()
 
 
 _load_bridge_env()
 
 PROTOCOL_VERSION = "2026-07-28"
 SUPPORTED_VERSIONS = ["2026-07-28", "2025-11-25", "2024-11-05"]
+_LEGACY_VERSION = None
 SERVER_INFO = {"name": "virtuoso-bridge", "version": "1.1.0"}
 SERVER_TITLE = "Virtuoso Bridge — Cadence Virtuoso + Spectre"
 
-TASKS_EXT = "io.modelcontextprotocol/tasks"
 SKILLS_EXT = "io.modelcontextprotocol/skills"
 META_VER = "io.modelcontextprotocol/protocolVersion"
 META_CAPS = "io.modelcontextprotocol/clientCapabilities"
@@ -112,7 +98,6 @@ _RATE_LIMITS = {
     "add_part": 60, "add_wire": 60,
     "add_pin": 60,
     # Builds are heavy.
-    "update_search": 6,
     # Bridge bring-up is slow and stateful; do not hammer it.
     "startup": 6,
 }
@@ -134,12 +119,6 @@ def _rate_ok(name: str, limit: int = 30, window: float = 60.0) -> bool:
 
 def _meta_of(params: dict) -> dict:
     return (params or {}).get("_meta", {}) or {}
-
-
-def _client_supports_tasks(params: dict) -> bool:
-    caps = _meta_of(params).get(META_CAPS, {}) or {}
-    ext = caps.get("extensions", {}) or {}
-    return TASKS_EXT in ext
 
 
 def _version_of(params: dict) -> str:
@@ -290,26 +269,13 @@ def _tool_defs() -> list[dict]:
         ("status", "Tunnel, daemon and Spectre license state. Read-only.",
          {"type": "object", "properties": {}, "additionalProperties": False},
          {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False}),
-        ("startup", "Full bring-up on this device: launch Virtuoso if down (needs a live X display, VB_DISPLAY, default :0), wait until it answers SKILL, then set up tunnel + daemon. Work dir defaults to the cds.lib dir (VB_CDS_LIB) or VB_WORK_DIR. Timeout via VB_VIRTUOSO_TIMEOUT (default 600 s). Bring-up flow for any agent: startup, status, then work.",
+        ("startup", "Set up the configured bridge using virtuoso-bridge start. Honors existing local/remote configuration. Returns any CIW load instructions; does not launch or kill Virtuoso, remove locks, or prove SKILL readiness.",
          {"type": "object", "properties": {}, "additionalProperties": False},
          {"destructiveHint": False, "idempotentHint": True, "openWorldHint": False}),
-        ("search_docs", "Search installed Cadence documentation (index-backed). Alias of search with kinds=[doc,topic].",
+        ("search_docs", "Search installed Cadence documentation using the bridge configuration and existing local/remote search API.",
          {"type": "object", "properties": {
              "query": {"type": "string", "minLength": 2, "maxLength": 300},
              "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10}},
-          "required": ["query"], "additionalProperties": False},
-         {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False}),
-        ("search", "ONE index-backed search over everything in Cadence: SKILL APIs, Cadence docs, topic maps, PDK/user libraries, PDK/user cells, and PDK/project files. Use this (not generic web/file search) for ANY Cadence question. Returns ranked hits with kind, path and a highlighted snippet.",
-         {"type": "object", "properties": {
-             "query": {"type": "string", "minLength": 2, "maxLength": 300,
-                       "description": "Free text. Identifiers, cell names, net names, function names, file contents."},
-             "kinds": {"type": "array", "description": "Restrict to these resource kinds. Omit for all.",
-                       "items": {"type": "string", "enum": ["skill", "doc", "topic", "lib", "cell", "file"]}},
-             "lib": {"type": "string", "maxLength": 200, "description": "Only rows of this library."},
-             "cell": {"type": "string", "maxLength": 200, "description": "Only rows of this cell."},
-             "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 12},
-             "refresh": {"type": "boolean", "default": False,
-                         "description": "Rebuild the index before searching (slow)."}},
           "required": ["query"], "additionalProperties": False},
          {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False}),
         ("list_libraries", "Libraries visible in the running Virtuoso session. Use instead of hand-rolled ddGetLibList SKILL.",
@@ -320,27 +286,17 @@ def _tool_defs() -> list[dict]:
              "lib": {"type": "string", "minLength": 1, "maxLength": 200}},
           "required": ["lib"], "additionalProperties": False},
          {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False}),
-        ("search_status", "Show the unified search index: built kinds, row counts, size, build time, source roots.",
-         {"type": "object", "properties": {}, "additionalProperties": False},
+        ("test_results", "Read scalar results from an explicit Maestro session and history. For waveform values use read_waveform.",
+         {"type": "object", "properties": {
+             "session": {"type": "string", "minLength": 1, "maxLength": 200},
+             "history": {"type": "string", "minLength": 1, "maxLength": 200}},
+          "required": ["session", "history"], "additionalProperties": False},
          {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False}),
-        ("update_search", "Build or refresh the unified search index. Omit kinds to build all. Use rebuild to drop first.",
+        ("run_test", "Run the enabled tests in an explicit Maestro session and wait for confirmed completion before reading its acknowledged history. For .scs netlists use simulate.",
          {"type": "object", "properties": {
-             "kinds": {"type": "array",
-                       "items": {"type": "string", "enum": ["skill", "doc", "topic", "lib", "cell", "file"]}},
-             "rebuild": {"type": "boolean", "default": False}},
-          "additionalProperties": False},
-         {"destructiveHint": False, "idempotentHint": True, "openWorldHint": False}),
-        ("test_results", "Read scalar results of one named Maestro test from its history. For waveform values use read_waveform.",
-         {"type": "object", "properties": {
-             "test": {"type": "string", "minLength": 1, "maxLength": 200},
-             "history": {"type": "string", "maxLength": 200}},
-          "required": ["test"], "additionalProperties": False},
-         {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False}),
-        ("run_test", "Run one named Maestro test from a session history (test NAME, not a file). For .scs netlists use simulate instead.",
-         {"type": "object", "properties": {
-             "test": {"type": "string", "minLength": 1, "maxLength": 200},
+             "session": {"type": "string", "minLength": 1, "maxLength": 200},
              "timeout": {"type": "integer", "minimum": 60, "maximum": 7200, "default": 1800}},
-          "required": ["test"], "additionalProperties": False},
+          "required": ["session"], "additionalProperties": False},
          {"destructiveHint": False, "idempotentHint": False, "openWorldHint": True}),
         ("check_netlist", "Run semantic netlist checker in dut or tb mode.",
          {"type": "object", "properties": {
@@ -363,7 +319,7 @@ def _tool_defs() -> list[dict]:
              "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}},
           "required": ["query"], "additionalProperties": False},
          {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False}),
-        ("read_waveform", "Read PSF ASCII signals with the fast parser. Returns stats plus a chart; with 'at' (seconds) also samples every signal at the nearest time points — use instead of hand-parsing PSF files.",
+        ("read_waveform", "Read PSF ASCII signals with the existing bridge parser. Returns stats plus a chart; with 'at' (seconds) also samples every signal at the nearest time points.",
          {"type": "object", "properties": {
              "path": {"type": "string", "minLength": 1, "maxLength": 500},
              "signals": {"type": "array", "items": {"type": "string", "maxLength": 200}, "maxItems": 50},
@@ -418,14 +374,16 @@ def _tool_defs() -> list[dict]:
              "lib": {"type": "string", "minLength": 1, "maxLength": 200},
              "cell": {"type": "string", "minLength": 1, "maxLength": 200},
              "fresh": {"type": "boolean", "default": True,
-                       "description": "true replaces the view, false appends"},
+                       "description": "true creates a new view; false modifies it. Existing views require replace=true for fresh creation."},
+             "replace": {"type": "boolean", "default": False, "description": "Explicit authorization to replace an existing view when fresh=true."},
              "ops": {"type": "array", "maxItems": 200, "items": {"type": "object"}}},
           "required": ["lib", "cell", "ops"], "additionalProperties": False},
          {"destructiveHint": True, "idempotentHint": False, "openWorldHint": True}),
-        ("new_schematic", "Create a fresh empty schematic, replacing the view if present.",
+        ("new_schematic", "Create an empty schematic. Refuses an existing view unless replace=true is explicitly authorized.",
          {"type": "object", "properties": {
              "lib": {"type": "string", "minLength": 1, "maxLength": 200},
-             "cell": {"type": "string", "minLength": 1, "maxLength": 200}},
+             "cell": {"type": "string", "minLength": 1, "maxLength": 200},
+             "replace": {"type": "boolean", "default": False}},
           "required": ["lib", "cell"], "additionalProperties": False},
          {"destructiveHint": True, "idempotentHint": False, "openWorldHint": True}),
         ("evaluate", "Run one SKILL expression in Virtuoso. Max 64k chars.",
@@ -450,23 +408,6 @@ def _tool_defs() -> list[dict]:
              "timeout": {"type": "integer", "minimum": 5, "maximum": 600, "default": 60}},
           "required": ["file"], "additionalProperties": False},
          {"destructiveHint": False, "idempotentHint": False, "openWorldHint": True}),
-        ("signoff", "Build a signoff website: shot gallery, sim results, stats. Scope it: pass shots (files for this circuit) and wave (this circuit's wave JSON). For an optional diagram, follow the signoff-flow prompt and install the external Anatomy skill; this repository does not bundle it.",
-         {"type": "object", "properties": {
-             "out": {"type": "string", "maxLength": 500, "default": "preview/signoff",
-                     "description": "Local dir for the site"},
-             "title": {"type": "string", "maxLength": 200, "default": "Virtuoso Bridge — Signoff"},
-             "shots": {"type": "array", "description": "Shot files for THIS circuit only. Omit for all.",
-                       "items": {"type": "string", "maxLength": 200}},
-             "wave": {"type": "string", "maxLength": 500,
-                      "description": "Wave JSON for this circuit's stats table"}},
-          "required": [], "additionalProperties": False},
-         {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False}),
-        ("log_note", "Append one exact error or note to the signoff log. Shown verbatim on next signoff site.",
-         {"type": "object", "properties": {
-             "message": {"type": "string", "minLength": 1, "maxLength": 4000},
-             "level": {"type": "string", "enum": ["info", "warning", "error"], "default": "info"}},
-          "required": ["message"], "additionalProperties": False},
-         {"readOnlyHint": False, "idempotentHint": False, "openWorldHint": False}),
         ("capture_session", "Dump focused Maestro or schematic session to a local dir. Long job.",
          {"type": "object", "properties": {
              "out": {"type": "string", "minLength": 1, "maxLength": 500},
@@ -502,111 +443,57 @@ def _tool_defs() -> list[dict]:
 
 
 TOOL_NAMES = [d["name"] for d in _tool_defs()]
-LONG_JOBS = {"simulate", "simulate_many", "run_test", "capture_session",
-             "update_search", "startup"}
-
-# ---------------------------------------------------------------- tasks
-# Background jobs for the tasks extension. Handles are opaque UUIDs with
-# a 24 h TTL. State is keyed by handle only, never by connection.
-
-_TASKS: dict[str, dict] = {}
-_TASKS_LOCK = threading.Lock()
-_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=8, thread_name_prefix="vb-mcp")
-
-
-def _task_create(kind: str, fn, poll_ms: int = 2000) -> dict:
-    tid = "tsk_" + uuid.uuid4().hex[:16]
-    now = time.time()
-    with _TASKS_LOCK:
-        _TASKS[tid] = {"taskId": tid, "status": "working", "kind": kind,
-                       "statusMessage": kind + " started",
-                       "created": now, "ttlMs": 24 * 3600 * 1000,
-                       "pollIntervalMs": poll_ms, "result": None, "error": None}
-    fut = _POOL.submit(_task_wrap, tid, fn)
-    _ = fut
-    return {"resultType": "task", "taskId": tid, "status": "working",
-            "statusMessage": kind + " started",
-            "ttlMs": 24 * 3600 * 1000, "pollIntervalMs": poll_ms,
-            "_meta": {META_SERVER: SERVER_INFO}}
-
-
-def _task_wrap(tid: str, fn):
-    try:
-        res = fn()
-        with _TASKS_LOCK:
-            st = _TASKS.get(tid)
-            if st:
-                st["status"] = "completed"
-                st["statusMessage"] = "done"
-                st["result"] = res
-    except Exception as exc:
-        logger.warning("task %s failed: %s", tid, exc)
-        with _TASKS_LOCK:
-            st = _TASKS.get(tid)
-            if st:
-                st["status"] = "failed"
-                st["statusMessage"] = str(exc)[:300]
-                st["error"] = {"code": -32603, "message": str(exc)[:1000]}
-
-
-def _task_get(tid: str) -> dict:
-    with _TASKS_LOCK:
-        st = _TASKS.get(tid)
-        if st is None:
-            return {"error": _rpc_error(-32602, "unknown taskId")}
-        if time.time() - st["created"] > 24 * 3600:
-            return {"error": _rpc_error(-32602, "task expired, start a new job")}
-        out: dict = {"resultType": "complete", "taskId": tid, "status": st["status"]}
-        if st.get("statusMessage"):
-            out["statusMessage"] = st["statusMessage"]
-        out["ttlMs"] = st["ttlMs"]
-        out["pollIntervalMs"] = st["pollIntervalMs"]
-        if st["status"] == "completed":
-            out["result"] = st["result"]
-        elif st["status"] == "failed":
-            out["error"] = st["error"]
-        out["_meta"] = {META_SERVER: SERVER_INFO}
-        return {"result": out}
-
-
 # ---------------------------------------------------------------- tool impl
-# Each impl returns a *result payload* (no resultType). The dispatcher adds
-# resultType, _meta, cache fields. Long jobs run sync here; the dispatcher
-# moves them into tasks when the client opts in.
 
 # --- shared Virtuoso client (one TCP session per process) ---
-# from_env() costs a handshake per call. Cache it for 10 min and retry
-# once on transport failure. Saves ~50-200 ms per SKILL call and survives
-# daemon restarts without agent-visible errors.
+# Retain the client, including request recovery context, for this process.
+# Never rebuild it or replay a mutation as timeout recovery.
 _CLIENT: dict = {"obj": None, "at": 0.0}
-_CLIENT_TTL = 600.0
 _CLIENT_LOCK = threading.Lock()
 
 
 def _client():
-    from virtuoso_bridge import VirtuosoClient
     now = time.monotonic()
     with _CLIENT_LOCK:
         obj = _CLIENT["obj"]
-        if obj is not None and now - _CLIENT["at"] < _CLIENT_TTL:
+        if obj is not None:
             return obj
-        _CLIENT["obj"] = obj = VirtuosoClient.from_env()
+        _CLIENT["obj"] = obj = _AdapterClient.from_env()
         _CLIENT["at"] = now
         return obj
 
 
-def _client_drop():
-    with _CLIENT_LOCK:
-        _CLIENT["obj"] = None
-        _CLIENT["at"] = 0.0
-
-
 def _eval_skill(expr: str, timeout: int):
-    try:
-        return _client().execute_skill(expr, timeout=timeout)
-    except Exception:
-        _client_drop()  # stale session: reconnect once, then report
-        return _client().execute_skill(expr, timeout=timeout)
+    return _client().execute_skill(expr, timeout=timeout, retry_connect=False)
+
+
+def _bridge_result(result) -> dict:
+    """Preserve the bridge outcome, diagnostics and original request handle."""
+    payload = result.model_dump(mode="json")
+    if len(payload.get("output", "")) > TEXT_LIMIT:
+        payload["output"] = payload["output"][:TEXT_LIMIT]
+        payload["output_truncated"] = True
+    # Generic result truncation must never discard recovery metadata.
+    text = json.dumps(payload, default=str)
+    response = _base_result({
+        "content": [{"type": "text", "text": text[:TEXT_LIMIT]}],
+        "structuredContent": payload,
+    }, cache_public=False, ttl=0)
+    if not result.ok:
+        response["isError"] = True
+    return response
+
+
+def _exception_result(exc: Exception) -> dict:
+    result = getattr(exc, "result", None)
+    if result is not None and hasattr(result, "model_dump"):
+        return _bridge_result(result)
+    response = _tool_error("%s: %s" % (type(exc).__name__, str(exc)))
+    response["structuredContent"] = {
+        "outcome": "unknown", "diagnostic": str(exc),
+        "guidance": "Do not resubmit automatically; reconcile the original operation.",
+    }
+    return response
 
 
 # --- license probe cache (60 s): lmstat scans are slow, never per-call ---
@@ -626,155 +513,53 @@ def _license_info() -> dict:
 
 def _impl_skill_eval(a: dict) -> dict:
     r = _eval_skill(a["expr"], timeout=int(a.get("timeout", TIMEOUT_SKILL)))
-    return _text_result("status=%s output=%s" % (r.status, _redact(str(r.output))),
-                        {"status": str(r.status), "output": str(r.output)[:8000]})
+    return _bridge_result(r)
 
 
 def _impl_skill_load(a: dict) -> dict:
     p = _safe_path(a["file"])
     c = _client()
     r = c.load_il(str(p), timeout=int(a.get("timeout", TIMEOUT_SKILL)))
-    return _text_result("status=%s output=%s" % (r.status, _redact(str(r.output))),
-                        {"status": str(r.status)})
+    return _bridge_result(r)
 
 
 def _impl_bridge_status(a: dict) -> dict:
-    info = _license_info()
-    return _text_result(json.dumps(info, indent=2, default=str), info)
+    result = _bridge_command("status")
+    output = ((result.stdout or "") + (result.stderr or "")).strip()
+    response = _text_result(output, {"returncode": result.returncode, "output": output})
+    if result.returncode:
+        response["isError"] = True
+    return response
 
 
-def _virtuoso_running() -> bool:
-    """True when a Virtuoso process is alive."""
+def _bridge_command(command: str):
     import subprocess
-    try:
-        r = subprocess.run(["pgrep", "-f", "dfII/bin.*virtuoso"], capture_output=True,
-                           text=True, timeout=10)
-    except Exception:
-        return False
-    return r.returncode == 0 and bool(r.stdout.strip())
-
-
-def _daemon_port_open(port: int = 65432) -> bool:
-    """True when something answers on the daemon port."""
-    import socket
-    s = socket.socket()
-    s.settimeout(3)
-    try:
-        s.connect(("127.0.0.1", port))
-        return True
-    except Exception:
-        return False
-    finally:
-        try:
-            s.close()
-        except Exception:
-            pass
-
-
-def _display_ok(display: str) -> bool:
-    """True when the X socket for this DISPLAY exists."""
-    import re
-    m = re.search(r":(\d+)", display or "")
-    if not m:
-        return False
-    return Path("/tmp/.X11-unix/X%s" % m.group(1)).exists()
-
-
-def _launch_virtuoso(display: str, workdir: Path, log: Path) -> dict:
-    """Start Virtuoso detached. Returns {pid} or {error}."""
-    import os
-    import subprocess
-    import time
-    for stale in (workdir / "virtuoso.log.cdslck",):
-        try:
-            if stale.exists():
-                stale.unlink()
-        except OSError:
-            pass
-    workdir.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ)
-    env["DISPLAY"] = display
-    boot = workdir / "virtuoso_boot.log"
-    script = ("source /opt/cadence/cadence_env.sh >/dev/null 2>&1; "
-              "exec /opt/cadence/tools.lnx86/dfII/bin/virtuoso -log %s" % log)
-    try:
-        p = subprocess.Popen(["bash", "-lc", script], cwd=str(workdir), env=env,
-                             stdout=open(boot, "ab"), stderr=subprocess.STDOUT,
-                             start_new_session=True)
-    except Exception as exc:
-        return {"error": "launch failed: %s" % exc}
-    return {"pid": p.pid}
-
-
-def _wait_cadence(timeout_s: int) -> dict:
-    """Poll until a trivial SKILL eval succeeds. Returns {ok} or {error}."""
-    import time
-    end = time.monotonic() + max(60, timeout_s)
-    last = ""
-    while time.monotonic() < end:
-        try:
-            r = _eval_skill("1+1", timeout=30)
-            if str(getattr(r, "status", "")) == "ExecutionStatus.SUCCESS" \
-                    and "2" in str(getattr(r, "output", "")):
-                return {"ok": True}
-            last = "%s %s" % (getattr(r, "status", "?"), getattr(r, "output", "")[:100])
-        except Exception as exc:
-            last = "%s: %s" % (type(exc).__name__, str(exc)[:100])
-            try:
-                _client_drop()
-            except Exception:
-                pass
-        time.sleep(10)
-    return {"error": "virtuoso did not answer in %ds (last: %s)" % (timeout_s, last)}
+    executable = str(Path(sys.executable).with_name(
+        "virtuoso-bridge.exe" if sys.platform == "win32" else "virtuoso-bridge"))
+    return subprocess.run([executable, command], capture_output=True,
+                          text=True, timeout=300)
 
 
 def _impl_bridge_start(a: dict) -> dict:
-    """Full bring-up: X display, Virtuoso, tunnel+daemon, end-to-end ping."""
-    import os
+    """Delegate setup to the registered CLI, with its configured host and paths."""
     import subprocess
-    stages: list[str] = []
-    display = (os.environ.get("VB_DISPLAY") or ":0").strip()
-    timeout_v = int(os.environ.get("VB_VIRTUOSO_TIMEOUT") or 600)
-
-    if _virtuoso_running():
-        if _daemon_port_open():
-            stages.append("virtuoso: already running, daemon answers")
-        else:
-            return _tool_error(
-                "virtuoso runs but no daemon answers on 65432 (its daemon died, "
-                "e.g. a past port clash). Save work in the GUI, kill Virtuoso, "
-                "clear virtuoso.log.cdslck, then call startup again.")
-    else:
-        if not _display_ok(display):
-            return _tool_error(
-                "no X display at %s (no /tmp/.X11-unix socket). Start your X "
-                "server first, or set VB_DISPLAY to a live display." % display)
-        cds = _env_paths("VB_CDS_LIB")
-        workdir = cds[0].parent if cds else _work_dir()
-        log = workdir / "virtuoso.log"
-        launched = _launch_virtuoso(display, workdir, log)
-        if "error" in launched:
-            return _tool_error(launched["error"])
-        stages.append("virtuoso: launched pid=%s log=%s" % (launched["pid"], log))
-        wait = _wait_cadence(timeout_v)
-        if "error" in wait:
-            return _tool_error(wait["error"] + " (log: %s)" % log)
-        stages.append("virtuoso: answers SKILL")
-
-    cmd = [sys.executable, "-m", "virtuoso_bridge.cli", "start"]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
-                           cwd=str(BASE))
-    except subprocess.TimeoutExpired:
-        return _tool_error("daemon setup timed out after 300 s; check bridge_status")
-    out = ((r.stdout or "") + (r.stderr or ""))[-4000:].strip()
-    if r.returncode != 0:
-        return _tool_error("daemon setup failed: %s" % (out or "exit %d" % r.returncode))
-    stages.append("daemon: %s" % (out or "rc=0"))
-    return _text_result("\n".join(stages), {"started": True, "stages": stages})
+        result = _bridge_command("start")
+    except subprocess.TimeoutExpired as exc:
+        response = _exception_result(exc)
+        response["content"][0]["text"] = (
+            "Bridge setup wait timed out. Inspect the configured bridge status "
+            "before retrying; setup may have completed.")
+        return response
+    output = ((result.stdout or "") + (result.stderr or "")).strip()
+    if result.returncode:
+        return _tool_error("Bridge setup failed: " + output)
+    return _text_result(output, {"setup_complete": True, "output": output,
+        "guidance": "If setup printed a load() line, load it in the selected idle CIW. "
+                    "Setup success alone does not confirm live SKILL readiness."})
 
 
-def _sch_session(lib: str, cell: str, fresh: bool):
+def _sch_session(lib: str, cell: str, fresh: bool, replace: bool = False):
     """Open a schematic editor session. Caller adds ops, exits to check+save."""
     from virtuoso_bridge.virtuoso.schematic.ops import (
         schematic_create_inst_by_master_name as _inst,
@@ -784,11 +569,18 @@ def _sch_session(lib: str, cell: str, fresh: bool):
     )
     c = _client()
     ed = c.schematic.create(lib, cell) if fresh else c.schematic.modify(lib, cell)
+    if fresh and not replace:
+        from virtuoso_bridge.virtuoso.ops import q
+        # Execute in the same batch, before the destructive open. An error
+        # aborts the batch; no separate check/open round trip can race it.
+        ed.add('when(ddGetObj(%s %s "schematic") '
+               'error("View exists; explicit replace=true authorization required"))'
+               % (q(lib), q(cell)))
     return ed, _inst, _pin, _wire, _label
 
 
 def _impl_schematic_create(a: dict) -> dict:
-    ed, *_ = _sch_session(a["lib"], a["cell"], True)
+    ed, *_ = _sch_session(a["lib"], a["cell"], True, a.get("replace") is True)
     with ed:
         pass
     return _text_result("created %s/%s/schematic" % (a["lib"], a["cell"]),
@@ -824,7 +616,7 @@ def _impl_schematic_add_pin(a: dict) -> dict:
 
 
 def _impl_schematic_build(a: dict) -> dict:
-    ed, _inst, _pin, _wire, _label = _sch_session(a["lib"], a["cell"], bool(a.get("fresh", True)))
+    ed, _inst, _pin, _wire, _label = _sch_session(a["lib"], a["cell"], a.get("fresh", True), a.get("replace") is True)
     done = {"inst": 0, "wire": 0, "pin": 0, "label": 0}
     with ed:
         for op in a["ops"] or []:
@@ -877,21 +669,35 @@ def _impl_schematic_check_save(a: dict) -> dict:
 
 
 def _impl_maestro_read(a: dict) -> dict:
-    c = _client()
-    data = c.maestro.read_results(a["test"], a.get("history"))
+    if not a.get("session") or not a.get("history") or "test" in a:
+        raise ValueError("test_results requires an explicit session and history, not a test name")
+    data = _client().maestro.read_results(a["session"], history=a["history"])
     return _text_result(json.dumps(data, default=str, indent=2)[:TEXT_LIMIT], data)
 
 
 def _impl_maestro_run(a: dict) -> dict:
+    if not a.get("session") or "test" in a:
+        raise ValueError("run_test requires a session and runs its enabled tests; test-name arguments are unsupported")
     c = _client()
-    test = a["test"]
+    session = a["session"]
+    history, status = c.maestro.run_and_wait(
+        session=session, timeout=int(a.get("timeout", 1800)))
+    history = (history or "").strip().strip('"')
+    if status != "done" or not history or history == "nil":
+        response = _tool_error("Maestro completion was not confirmed; inspect this run before retrying.")
+        response["structuredContent"] = {"session": session, "history": history,
+                                         "status": status, "outcome": "unknown"}
+        return response
     try:
-        c.execute_skill('maeRunTest("%s")' % test.replace('"', ''),
-                        timeout=int(a.get("timeout", 1800)))
-        data = c.maestro.read_results(test)
-        return _text_result("test=%s done\n%s" % (test, json.dumps(data, default=str)[:4000]), data)
+        data = c.maestro.read_results(session, history=history)
     except Exception as exc:
-        return _tool_error(str(exc))
+        response = _exception_result(exc)
+        response.setdefault("structuredContent", {}).update(
+            session=session, history=history, completion_status=status)
+        return response
+    return _text_result(json.dumps(data, default=str),
+                        {"session": session, "history": history, "status": status,
+                         "results": data})
 
 
 def _spectre_sim(mode: str, timeout: int):
@@ -914,31 +720,6 @@ def _impl_spectre_run(a: dict) -> dict:
     summary = {"ok": True, "signals": len(data), "output_dir": meta.get("output_dir"),
                "signal_lengths": {k: (len(v) if isinstance(v, list) else 1)
                                   for k, v in list(data.items())[:40]}}
-    try:
-        import time as _t
-        fast = _fast_parser()
-        if fast is not None and hasattr(fast, "measure_period"):
-            tvec = data.get("time", data.get("TIME", []))
-            osc = {}
-            for k, v in list(data.items())[:12]:
-                if isinstance(v, list) and k.lower() != "time":
-                    m = fast.measure_period(tvec, v)
-                    if m:
-                        osc[k] = {"freq_hz": m["freq_hz"], "period_s": m["period_s"],
-                                  "edges": m["edges"]}
-            if osc:
-                summary["osc"] = osc
-        logf = BASE / "preview" / "data" / "sims.jsonl"
-        logf.parent.mkdir(parents=True, exist_ok=True)
-        with open(logf, "a", encoding="utf-8") as _f:
-            _f.write(json.dumps({
-                "ts": _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime()),
-                "netlist": str(p), "mode": a.get("mode", "ax"),
-                "ok": True, "signals": len(data),
-                "output_dir": meta.get("output_dir"),
-                "osc": summary.get("osc", {})}) + "\n")
-    except Exception:
-        pass
     content: list = []
     try:
         import base64
@@ -991,15 +772,7 @@ def _impl_spectre_parallel(a: dict) -> dict:
     return _text_result("done %d/%d ok" % (ok, len(out)), {"ok": ok, "total": len(out), "runs": rows})
 
 
-def _fast_parser():
-    import importlib.util
-    cand = BASE / "src" / "virtuoso_bridge" / "spectre" / "parsers_fast.py"
-    if not cand.exists():
-        return None
-    spec = importlib.util.spec_from_file_location("vb_parsers_fast", cand)
-    m = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(m)  # type: ignore
-    return m
+
 
 
 def _wave_png(traces: dict[str, list], width: int = 800, height: int = 300,
@@ -1334,18 +1107,11 @@ def _editor_shot() -> bytes | None:
 def _impl_psf_read(a: dict) -> dict:
     p = _safe_path(a["path"], must_exist=True)
     wants = a.get("signals") or []
-    fast = _fast_parser()
-    stats_fn = getattr(fast, "signal_stats", None) if fast is not None else None
-    if fast is not None:
-        if p.is_file():
-            data = fast.parse_file_fast(p, want=wants or None)
-        else:
-            data = fast.parse_dir_fast(p)
-    else:
-        from virtuoso_bridge.spectre.parsers import (
-            parse_spectre_psf_ascii, parse_psf_ascii_directory)
-        data = (parse_spectre_psf_ascii(p).data if p.is_file()
-                else parse_psf_ascii_directory(p))
+    from virtuoso_bridge.spectre.parsers import (
+        parse_spectre_psf_ascii, parse_psf_ascii_directory)
+    stats_fn = None
+    data = (parse_spectre_psf_ascii(p).data if p.is_file()
+            else parse_psf_ascii_directory(p))
     data = data or {}
     keys = sorted(data.keys())
     if wants:
@@ -1384,7 +1150,12 @@ def _impl_psf_read(a: dict) -> dict:
                 f = float(tt)
             except (TypeError, ValueError):
                 continue
-            i = max(0, bisect.bisect_left(tvec, f) - 1) if tvec else 0
+            i = bisect.bisect_left(tvec, f) if tvec else 0
+            if tvec:
+                if i == len(tvec):
+                    i -= 1
+                elif i > 0 and f - tvec[i - 1] <= tvec[i] - f:
+                    i -= 1
             row = {"t": tvec[i] if tvec else f}
             for k, v in pick.items():
                 if isinstance(v, list) and k.lower() != "time" and i < len(v):
@@ -1423,26 +1194,13 @@ def _impl_netlist_check(a: dict) -> dict:
     return _text_result((r.stdout or "") + (r.stderr or "") or "(no findings)")
 
 
-def _index_mod():
-    import importlib
-    return importlib.import_module("virtuoso_bridge.unified_search")
 
 
-def _impl_index_status(a: dict) -> dict:
-    try:
-        st = _index_mod().status()
-    except Exception as exc:
-        return _tool_error("index module unavailable: %s" % exc)
-    return _text_result(json.dumps(st, indent=2, default=str)[:TEXT_LIMIT], st)
 
 
-def _impl_index_build(a: dict) -> dict:
-    try:
-        man = _index_mod().build(kinds=a.get("kinds"), rebuild=bool(a.get("rebuild")))
-    except Exception as exc:
-        return _tool_error("index build failed: %s" % exc)
-    body = {"counts": man.get("kinds", {}), "built_at": man.get("built_at")}
-    return _text_result(json.dumps(body, indent=2), man)
+
+
+
 
 
 def _impl_library_list(a: dict) -> dict:
@@ -1466,107 +1224,23 @@ def _impl_cell_list(a: dict) -> dict:
     return _text_result(str(r.output)[:TEXT_LIMIT], {"lib": lib, "cells": str(r.output)[:8000]})
 
 
-def _impl_find(a: dict) -> dict:
-    try:
-        mod = _index_mod()
-    except Exception as exc:
-        return _tool_error("index module unavailable: %s" % exc)
-    kinds = a.get("kinds")
-    try:
-        if a.get("refresh"):
-            mod.build(kinds=kinds)
-        else:
-            mod.ensure(kinds=kinds)
-    except Exception as exc:
-        return _tool_error("index build failed: %s" % exc)
-    hits = mod.search(a["query"], kinds=kinds, limit=int(a.get("limit", 12)),
-                      lib=a.get("lib"), cell=a.get("cell"))
-    if not hits:
-        return _text_result("(no hits)", {"hits": [], "query": a["query"]})
-    lines = []
-    for h in hits:
-        loc = h["path"]
-        if h.get("lib"):
-            loc = "%s %s" % (h["lib"], h.get("cell") or h.get("view") or "")
-        lines.append("[%s] %s  %s" % (h["kind"], h["title"], loc))
-        if h.get("snippet"):
-            lines.append("    " + h["snippet"])
-    return _text_result("\n".join(lines)[:TEXT_LIMIT], {"hits": hits, "query": a["query"]})
+
 
 
 def _impl_skill_find(a: dict) -> dict:
-    try:
-        mod = _index_mod()
-        if not mod.available():
-            mod.ensure(kinds=["skill"])
-        hits = mod.search(a["query"], kinds=["skill"], limit=20)
-        if hits:
-            return _text_result(json.dumps(hits[:20], indent=2, default=str)[:TEXT_LIMIT],
-                                {"hits": hits})
-    except Exception:
-        pass
-    hits = _client().find_skill(a["query"])[:20]
-    return _text_result(json.dumps(hits, default=str, indent=2)[:TEXT_LIMIT], {"hits": hits})
+    hits = _client().find_skill(a['query'])[:20]
+    return _text_result(json.dumps(hits, default=str)[:TEXT_LIMIT], {'hits': hits})
 
 
 def _impl_skill_info(a: dict) -> dict:
-    """Docs for one SKILL function: exact index hit first, find_skill fallback."""
-    func = a["func"]
-    try:
-        mod = _index_mod()
-        if not mod.available():
-            mod.ensure(kinds=["skill"])
-        for hit in mod.search(func, kinds=["skill"], limit=10):
-            if (hit.get("title") or "").lower() == func.lower():
-                body = "%s\n%s\n%s" % (hit["title"], hit["path"], hit.get("snippet", ""))
-                return _text_result(body[:TEXT_LIMIT], {"info": hit})
-    except Exception:
-        pass
-    try:
-        hits = [h for h in _client().find_skill(func)
-                if str(getattr(h, "name", h)).lower() == func.lower()]
-        if hits:
-            return _text_result(str(hits[0])[:TEXT_LIMIT], {"info": str(hits[0])[:8000]})
-    except Exception as exc:
-        return _tool_error("skill lookup failed: %s" % exc)
-    return _tool_error("no SKILL entry for '%s'" % func)
+    hits = _client().find_skill(a['func'])[:20]
+    return _text_result(json.dumps(hits, default=str)[:TEXT_LIMIT], {'hits': hits})
 
 
-def _impl_signoff(a: dict) -> dict:
-    import subprocess
-    out = a.get("out") or "preview/signoff"
-    title = a.get("title") or "Virtuoso Bridge — Signoff"
-    script = BASE / "tools" / "signoff.py"
-    if not script.exists():
-        return _tool_error("signoff generator missing in this checkout")
-    cmd = [sys.executable, str(script), "--out", out, "--title", title,
-           "--shots", ",".join(a.get("shots") or []),
-           "--wave", a.get("wave") or ""]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
-                       cwd=str(BASE))
-    if r.returncode != 0:
-        return _tool_error("signoff failed: %s" % ((r.stdout or "") + (r.stderr or ""))[-800:])
-    try:
-        info = json.loads(r.stdout or "{}")
-    except Exception:
-        info = {"out": out}
-    sid = "sign_" + uuid.uuid4().hex[:12]
-    return _text_result("signoff %s -> %s/index.html (%d shots, %d results)" % (
-        sid, out, info.get("shots", 0), info.get("results", 0)),
-        {"signoff_id": sid, "site": "%s/index.html" % out,
-         "shots": info.get("shots", 0), "results": info.get("results", 0),
-         "stamp": info.get("stamp", "")})
 
 
-def _impl_signoff_log(a: dict) -> dict:
-    import time as _t
-    logf = BASE / "preview" / "data" / "errors.jsonl"
-    logf.parent.mkdir(parents=True, exist_ok=True)
-    entry = {"ts": _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime()),
-             "level": a.get("level", "info"), "message": a["message"][:4000]}
-    with open(logf, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry) + "\n")
-    return _text_result("logged [%s]" % entry["level"], entry)
+
+
 
 
 def _impl_snapshot(a: dict) -> dict:
@@ -1608,10 +1282,8 @@ IMPL = {
     "read_waveform": _impl_psf_read, "check_netlist": _impl_netlist_check,
     "list_pdk": _impl_pdk_list, "search_pdk": _impl_pdk_search, "describe_pdk": _impl_pdk_info,
     "lookup_skill": _impl_skill_find, "describe_skill": _impl_skill_info,
-    "capture_session": _impl_snapshot, "doc_search": None,  # wired below
+    "capture_session": _impl_snapshot,
     "screenshot": _impl_screenshot,
-    "signoff": _impl_signoff,
-    "log_note": _impl_signoff_log,
     "new_schematic": _impl_schematic_create,
     "add_part": _impl_schematic_add_inst,
     "add_wire": _impl_schematic_add_wire,
@@ -1621,19 +1293,13 @@ IMPL = {
 
 
 def _impl_doc_search(a: dict) -> dict:
-    """Cadence documentation search, served by the unified index."""
-    return _impl_find({"query": a["query"], "kinds": ["doc", "topic"],
-                       "limit": int(a.get("limit", 10))})
+    result = _client().search_docs(a['query'], limit=int(a.get('limit', 10)))
+    return _text_result(json.dumps(result, default=str)[:TEXT_LIMIT], result)
 
 
 IMPL["search_docs"] = _impl_doc_search
-IMPL["find"] = _impl_find
-IMPL["search"] = _impl_find
-IMPL["cadence_search"] = _impl_find
 IMPL["list_libraries"] = _impl_library_list
 IMPL["list_cells"] = _impl_cell_list
-IMPL["search_status"] = _impl_index_status
-IMPL["update_search"] = _impl_index_build
 
 
 # Old names keep working but are hidden from tools/list. Every rename
@@ -1641,9 +1307,7 @@ IMPL["update_search"] = _impl_index_build
 ALIASES = {
     "bridge_start": "startup", "bridge_status": "status",
     "cell_list": "list_cells", "doc_search": "search_docs",
-    "find": "search", "cadence_search": "search",
-    "index_build": "update_search",
-    "index_status": "search_status", "library_list": "list_libraries",
+    "library_list": "list_libraries",
     "maestro_read_results": "test_results", "maestro_run": "run_test",
     "netlist_check": "check_netlist", "pdk_info": "describe_pdk",
     "pdk_list": "list_pdk", "pdk_search": "search_pdk",
@@ -1651,7 +1315,7 @@ ALIASES = {
     "schematic_add_pin": "add_pin", "schematic_add_wire": "add_wire",
     "schematic_build": "build_schematic",
     "schematic_check_save": "check_schematic",
-    "schematic_create": "new_schematic", "signoff_log": "log_note",
+    "schematic_create": "new_schematic",
     "skill_eval": "evaluate", "skill_find": "lookup_skill",
     "skill_info": "describe_skill", "skill_load": "load_file",
     "snapshot": "capture_session", "spectre_parallel": "simulate_many",
@@ -1668,19 +1332,17 @@ def dispatch_tool(name: str, args: dict, params: dict) -> dict:
         if lim is not None and not _rate_ok(name, limit=lim):
             return _tool_error("rate limit for %s; retry in ~60 s, or batch into "
                                "fewer calls (one evaluate can run many expressions; "
-                               "one search replaces many shell lookups)" % name)
+                               "use search_docs for documentation)" % name)
     args = args or {}
-    if name in LONG_JOBS and _client_supports_tasks(params):
-        snap = dict(args)
-        fn = lambda: IMPL[name](snap)  # noqa: E731
-        return _task_create(name, fn)
     try:
-        payload = IMPL[name](args)
+        # Bridge helpers may print setup guidance. Keep stdout JSON-RPC only.
+        with contextlib.redirect_stdout(sys.stderr):
+            payload = IMPL[name](args)
     except ValueError as exc:
         return _tool_error(str(exc))
     except Exception as exc:
         logger.warning("tool %s failed: %s", name, traceback.format_exc(limit=3))
-        return _tool_error("%s: %s" % (type(exc).__name__, str(exc)[:500]))
+        return _exception_result(exc)
     if isinstance(payload, dict) and payload.get("isError"):
         return payload  # already a complete result
     if isinstance(payload, dict) and "content" in payload:
@@ -1702,22 +1364,10 @@ def _resource_list() -> list[dict]:
                 items.append({
                     "uri": "skill://%s/SKILL.md" % d.name, "name": "%s skill" % d.name,
                     "description": "Agent skill: %s" % d.name, "mimeType": "text/markdown"})
-    revf = BASE / "preview" / "signoff" / "rev.json"
-    if revf.exists():
-        items.append({
-            "uri": "virtuoso://signoff/latest", "name": "latest signoff",
-            "description": "Revision, counts and diff of newest signoff site",
-            "mimeType": "application/json"})
     return items
 
 
 def _resource_read(uri: str) -> dict:
-    if uri == "virtuoso://signoff/latest":
-        p = BASE / "preview" / "signoff" / "rev.json"
-        if not p.exists():
-            raise FileNotFoundError(uri)
-        return {"contents": [{"uri": uri, "mimeType": "application/json",
-                              "text": p.read_text(encoding="utf-8")}]}
     if uri == "virtuoso://status":
         try:
             info = _license_info()
@@ -1756,16 +1406,6 @@ def _prompt_defs() -> list[dict]:
         {"name": "tune-circuit",
          "description": "Black-box sizing loop with TuRBO or scipy objective",
          "arguments": [{"name": "params", "required": True}]},
-        {"name": "plan-explainer",
-         "description": "START of work: when user asks for ideas, projects, or circuits, offer one isometric explainer. Ask first; install the external Anatomy skill only if accepted.",
-         "arguments": [{"name": "topic", "required": True}]},
-        {"name": "result-explainer",
-         "description": "END of work: offer one isometric recap figure. Ask first; install the external Anatomy skill only if accepted.",
-         "arguments": [{"name": "topic", "required": True}]},
-        {"name": "signoff-flow",
-         "description": "Build a signoff site with real screenshots and measured numbers. Install the external Anatomy skill for an optional circuit diagram.",
-         "arguments": [{"name": "out", "required": True},
-                       {"name": "title", "required": True}]},
     ]
 
 
@@ -1783,40 +1423,6 @@ def _prompt_get(name: str, args: dict) -> dict:
     elif name == "tune-circuit":
         text = ("Tune %s:\n1. define bounds and objective returning scalar\n"
                 "2. penalty 1e6 on failure, never nan\n3. use TuRBO for 3-20 params" % args.get("params", "?"))
-    elif name == "plan-explainer":
-        text = ("EXPLAINER RULE — plan start for %s:\n"
-                "1. user asked for ideas, a project, or circuits, or you start a plan: "
-                "OFFER one isometric explainer first\n"
-                "2. ASK before creating: 'Want a visual explainer of this plan?' "
-                "Proceed only on yes\n"
-                "3. if accepted, install Anatomy from https://github.com/wheresryan22/anatomy "
-                "with npx skills add wheresryan22/anatomy -g if unavailable; then follow it\n"
-                "4. never build explainers unasked, never on every message\n"
-                "5. WORDS: keep technical meaning, write ASD-STE100: "
-                "max 20 words per sentence, simple approved words, "
-                "one instruction per sentence" % args.get("topic", "?"))
-    elif name == "result-explainer":
-        text = ("EXPLAINER RULE — work done for %s:\n"
-                "1. all tasks finished per user: OFFER one isometric recap figure\n"
-                "2. ASK before creating: 'Want a visual recap of what was built?' "
-                "Proceed only on yes\n"
-                "3. if accepted, install Anatomy from https://github.com/wheresryan22/anatomy "
-                "with npx skills add wheresryan22/anatomy -g if unavailable; show real data\n"
-                "4. never on every message, only at true end of work\n"
-                "5. WORDS: keep technical meaning, write ASD-STE100: "
-                "max 20 words per sentence, simple approved words, "
-                "one instruction per sentence" % args.get("topic", "?"))
-    elif name == "signoff-flow":
-        text = ("SIGNOFF RULE for %s:\n"
-                "1. install Anatomy from https://github.com/wheresryan22/anatomy "
-                "with npx skills add wheresryan22/anatomy -g if unavailable; follow its process\n"
-                "2. explain THIS circuit only: its blocks, its nets, its operations\n"
-                "3. every number from measurement (read_waveform, sim logs), never invented\n"
-                "4. every picture a real capture (screenshot) or the built figure; no stock art\n"
-                "5. write the figure as anatomy.html next to the page, then build the site with "
-                "signoff out=%s shots=[this circuit's PNGs] wave=[this circuit's wave JSON]\n"
-                "6. resolve stale log notes with log_note before rebuild" % (
-                    args.get("title", "?"), args.get("out", "?")))
     else:
         raise ValueError("unknown prompt: " + name)
     return {"description": name, "messages": [
@@ -1872,6 +1478,10 @@ def _reply(rid, result=None, error=None):
     if error is not None:
         msg["error"] = error
     else:
+        if _LEGACY_VERSION and isinstance(result, dict):
+            result = dict(result)
+            for key in ("resultType", "ttlMs", "cacheScope"):
+                result.pop(key, None)
         msg["result"] = result
     sys.stdout.write(json.dumps(msg, default=str) + "\n")
     sys.stdout.flush()
@@ -1879,30 +1489,39 @@ def _reply(rid, result=None, error=None):
 
 def _discover() -> dict:
     return _base_result({
-        "protocolVersions": SUPPORTED_VERSIONS,
+        "supportedVersions": SUPPORTED_VERSIONS,
         "capabilities": {
             "tools": {"listChanged": False},
             "resources": {},
             "prompts": {},
-            "extensions": {TASKS_EXT: {}, SKILLS_EXT: {"directoryRead": False}},
+            "extensions": {SKILLS_EXT: {"directoryRead": False}},
         },
         "serverInfo": {**SERVER_INFO, "title": SERVER_TITLE},
     }, ttl=300000)
 
 
 def handle(req: dict):
+    global _LEGACY_VERSION
     rid = req.get("id")
     method = req.get("method", "")
     params = req.get("params") or {}
+    ver = _version_of(params)
+    if method != "initialize" and ver not in SUPPORTED_VERSIONS:
+        if rid is not None:
+            _reply(rid, None, _rpc_error(
+                -32022, "Unsupported protocol version",
+                {"supported": SUPPORTED_VERSIONS, "requested": ver}))
+        return
     if method in ("server/discover", "initialize"):
         if method == "initialize":
             p = params or {}
-            want = p.get("protocolVersion", PROTOCOL_VERSION)
-            if want not in SUPPORTED_VERSIONS:
-                _reply(rid, None, _rpc_error(-32022, "unsupported protocol version: " + str(want)))
-                return
-            # Negotiate: answer with the client's version so older
-            # hosts (2024-11-05, 2025-11-25) stay connected.
+            want = p.get("protocolVersion")
+            legacy = [v for v in SUPPORTED_VERSIONS if v < "2026-07-28"]
+            if want not in legacy:
+                want = legacy[0]
+            _LEGACY_VERSION = want
+            # Legacy negotiation returns a supported fallback for unknown
+            # versions; the client decides whether it can continue.
             _reply(rid, _base_result({
                 "protocolVersion": want,
                 "capabilities": {"tools": {"listChanged": False},
@@ -1914,11 +1533,6 @@ def handle(req: dict):
     if method in ("notifications/initialized", "notifications/cancelled",
                   "notifications/progress", "notifications/message"):
         return  # no reply for notifications
-    ver = _version_of(params)
-    if ver not in SUPPORTED_VERSIONS:
-        if rid is not None:
-            _reply(rid, None, _rpc_error(-32022, "unsupported protocol version: " + ver))
-        return
     try:
         if method == "ping":
             _reply(rid, _base_result({}))
@@ -1977,24 +1591,6 @@ def handle(req: dict):
                 _reply(rid, None, _rpc_error(-32602, "unknown skill uri"))
             else:
                 _reply(rid, _base_result({"skill": e}, ttl=300000))
-        elif method == "tasks/get":
-            g = _task_get((params or {}).get("taskId", ""))
-            if "error" in g:
-                _reply(rid, None, g["error"])
-            else:
-                _reply(rid, g["result"])
-        elif method == "tasks/cancel":
-            tid = (params or {}).get("taskId", "")
-            with _TASKS_LOCK:
-                st = _TASKS.get(tid)
-                if st and st["status"] == "working":
-                    st["status"] = "cancelled"
-                    st["statusMessage"] = "cancel requested"
-            _reply(rid, _base_result({}))
-        elif method == "tasks/update":
-            _reply(rid, _base_result({}))  # ack; no elicitation used yet
-        elif method == "subscriptions/listen":
-            _reply(rid, _base_result({"subscriptionId": 1}))
         else:
             if rid is not None:
                 _reply(rid, None, _rpc_error(-32601, "no method: " + method))

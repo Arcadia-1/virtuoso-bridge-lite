@@ -1,16 +1,6 @@
 .env
 .venv/
 __pycache__/
-# Generated signoff state and captures. Keep only the 5 showcase PNGs.
-preview/data/
-preview/signoff/
-preview/*_signoff/
-preview/shots/*
-!preview/shots/johnson4_schematic.png
-!preview/shots/johnson4_wave.png
-!preview/shots/hslane_wave.png
-!preview/shots/sram_6t_schematic.png
-!preview/shots/dff_x1_custom_layout.png
 *.egg-info/
 dist/
 build/

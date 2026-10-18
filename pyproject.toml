@@ -25,7 +25,8 @@ visio = ["pywin32; sys_platform == 'win32'"]
 ssh = ["paramiko>=3.5", "PySocks>=1.7.1"]
 # Complete test environment, including the optional SSH backend exercised by
 # the transport suite.
-dev = ["pytest>=7.0", "paramiko>=3.5", "PySocks>=1.7.1"]
+dev = [
+    "jsonschema>=4.18","pytest>=7.0", "paramiko>=3.5", "PySocks>=1.7.1"]
 
 [project.scripts]
 virtuoso-bridge = "virtuoso_bridge.cli:main"
