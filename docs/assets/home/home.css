@@ -72,13 +72,6 @@ h3 {
 .home .lang-switch {
   color: #394330;
 }
- {
-  color: #202623;
-  background: #f4f3eb;
-}
- {
-  background: #dce0d2;
-}
 .home .hero {
   padding: 56px 0 0;
   background: var(--paper);
@@ -346,61 +339,6 @@ html[data-lang=zh] .home h2 {
   line-height: 1.35;
   letter-spacing: -.03em;
 }
- {
-  display: grid;
-  grid-template-columns: 1fr 2.1fr;
-  gap: 70px;
-  padding-top: 75px;
-  padding-bottom: 70px;
-}
- {
-  margin-top: 22px;
-}
- {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  list-style: none;
-  padding: 28px 0 0;
-  margin: 0;
-  gap: 28px;
-}
- {
-  min-width: 0;
-  border-top: 1px solid #8f9985;
-  padding-top: 18px;
-}
- {
-  font: 11px var(--mono);
-  color: #a25432;
-}
- {
-  font: 25px Georgia, serif;
-  margin-top: 22px;
-}
- {
-  font-size: 12px;
-  margin: 12px 0;
-  color: #737d68;
-}
- {
-  display: block;
-  font: 10px/1.8 var(--mono);
-  overflow-wrap: anywhere;
-  color: #34422b;
-  margin-top: 25px;
-}
- {
-  white-space: nowrap;
-  font: clamp(14px, 2vw, 25px) var(--mono);
-  color: #626f57;
-  margin-top: 25px;
-}
- {
-  width: 100%;
-  max-width: 150px;
-  margin-top: 15px;
-  color: #b7623c;
-}
 .home #start {
   margin: 0;
   padding: 56px 0 64px;
@@ -481,20 +419,6 @@ html[data-lang=zh] .home h2 {
   font-size: 13px;
   line-height: 1.9;
   color: #717b67;
-}
- {
-  margin: 0;
-  background: #f6f7f0;
-  border: 1px solid #d9ddce;
-  padding: 20px 30px;
-}
- {
-  display: none;
-}
- {
-  max-height: 370px;
-  object-fit: contain;
-  filter: grayscale(1) sepia(.12);
 }
 .architecture-section .diagram-label {
   margin: 10px 0 0;
@@ -762,9 +686,6 @@ html[data-lang=zh] .home h2 {
   .home h2 {
     font-size: 38px;
   }
-   {
-    gap: 18px;
-  }
   .home .code pre {
     font-size: 10px;
   }
@@ -843,27 +764,6 @@ html[data-lang=zh] .home h2 {
     gap: 14px;
     font-size: 9px;
   }
-   {
-    grid-template-columns: 1fr;
-    gap: 24px;
-    padding-top: 42px;
-    padding-bottom: 44px;
-  }
-   {
-    display: none;
-  }
-   {
-    padding-top: 5px;
-  }
-   {
-    font-size: 22px;
-  }
-   {
-    font-size: 11px;
-  }
-   {
-    font-size: 9px;
-  }
   .home h2 {
     font-size: 36px;
   }
@@ -888,10 +788,6 @@ html[data-lang=zh] .home h2 {
   }
   .home #start .note {
     font-size: 12px;
-  }
-   {
-    margin-top: 28px;
-    padding: 20px;
   }
   .home .section-heading h2 br {
     display: none;
@@ -963,9 +859,6 @@ html[data-lang=zh] .home h2 {
     width: 24px;
     height: 24px;
   }
-   {
-    display: block;
-  }
   .home .header-inner {
     grid-template-columns: 1fr auto auto;
     gap: 6px;
@@ -996,21 +889,6 @@ html[data-lang=zh] .home h2 {
   .lab-header {
     font-size: 7px;
     gap: 8px;
-  }
-   {
-    gap: 12px;
-  }
-   {
-    padding-top: 12px;
-  }
-   {
-    font-size: 20px;
-  }
-   {
-    font-size: 19px;
-  }
-   {
-    font-size: 8px;
   }
   .home .hero-description {
     font-size: 13px;
@@ -1061,7 +939,6 @@ html[data-lang=zh] .home h2 {
   display: flex;
   align-items: center;
   gap: 24px;
-  min-height: 52px;
   border-bottom: 1px solid var(--line);
 }
 .project-label {
