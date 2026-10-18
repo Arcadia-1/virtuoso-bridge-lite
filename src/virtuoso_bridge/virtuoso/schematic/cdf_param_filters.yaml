@@ -4,7 +4,7 @@
 # Matched by lib/cell pattern (first match wins). Cell supports * wildcard.
 #
 # To customize: pass your own YAML file to read_schematic(param_filters="my.yaml")
-# To disable filtering: pass param_filters=None (returns all params)
+# To disable name filtering: pass param_filters=None (compact limits still apply)
 
 filters:
   # --- TSMC 28nm PDK transistors ---
@@ -67,6 +67,8 @@ filters:
   - match: {lib: "basic", cell: "*"}
     params: []
 
-# When no rule matches: "all" returns every param (values truncated to 120 chars)
+# With "all", all names pass; nil, empty, and >120-character printed values
+# are still omitted by the compact reader. include_param_evidence=True exposes
+# stored/CDF observations independently of these compact filters and limits.
 # Change to a list like [model, m] to set a global default
 fallback: all

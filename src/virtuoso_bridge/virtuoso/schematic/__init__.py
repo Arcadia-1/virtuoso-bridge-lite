@@ -166,7 +166,8 @@ class SchematicOps:
 
         This is the client-bound form of the legacy :func:`read_schematic`
         function and preserves its default CDF parameter filtering. Passing
-        ``param_filters=None`` returns all CDF parameters.
+        ``param_filters=None`` disables parameter-name filtering; compact
+        value limits still apply.
         ``include_param_evidence=True`` also returns unfiltered explicit
         instance properties and CDF values separately, without evaluating them.
         """

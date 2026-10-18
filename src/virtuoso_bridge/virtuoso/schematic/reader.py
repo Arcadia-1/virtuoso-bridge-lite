@@ -12,7 +12,7 @@ Usage:
     # Custom param filters
     data = read_schematic(client, "myLib", "myCell", param_filters="my.yaml")
 
-    # No param filtering (return all CDF params)
+    # Disable parameter-name filtering (compact value limits still apply)
     data = read_schematic(client, "myLib", "myCell", param_filters=None)
 
 Legacy API (read_placement, read_connectivity, read_instance_params) is
@@ -214,9 +214,9 @@ def read_schematic(
             values read from its instance CDF, or None if no CDF was available.
             Includes empty, nil and long values omitted from ``params``. Values
             are decoded SKILL data, not evaluated or final netlist parameters.
-        param_filters: path to a YAML filter config.  Default uses the
-            built-in cdf_param_filters.yaml.  Pass None to return all
-            CDF params unfiltered.
+        param_filters: path to a YAML filter config. Default uses the built-in
+            cdf_param_filters.yaml. None disables name filtering; compact
+            ``params`` still omits nil, empty and >120-character printed values.
         timeout: Virtuoso SKILL execution timeout in seconds. Large schematics
             can take longer than the transport default, so the reader defaults
             to 300 seconds and lets callers override it.
