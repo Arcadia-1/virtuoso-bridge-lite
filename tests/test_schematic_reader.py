@@ -269,3 +269,83 @@ END
     assert data["instances"][0]["terms"] == {"CINP": "<*14>CINP"}
     assert data["nets"]["FCT_NTUNE_D<2:0>"]["numBits"] == 1
     assert data["pins"]["FCT_NTUNE_D<2:0>"]["numBits"] == 1
+
+
+def _skill_string(value: str) -> str:
+    """Model %L string printing; these payloads are synthetic, not PDK captures."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\t", "\\t") + '"'
+
+
+class _ReadClient:
+    def __init__(self, payload: str, *, quoted: bool = True) -> None:
+        self.output = _skill_string(payload) if quoted else payload
+        self.calls = 0
+
+    def execute_skill(self, *_args, **_kwargs):
+        self.calls += 1
+        return SimpleNamespace(output=self.output, errors=[])
+
+
+@pytest.mark.parametrize("payload", [
+    "nil",
+    "INSTANCES\nINST|M2|demoPdk|pmos\n",
+    "INSTANCES\nNETS\nEND\n",
+    "NETS\nINSTANCES\nPINS\nEND\n",
+    "INSTANCES\nNETS\nNETS\nPINS\nEND\n",
+    "INSTANCES\nNETS\nPINS\nEND\nunexpected trailing data\n",
+    "INSTANCES\nINST|M2\nNETS\nPINS\nEND\n",
+    "INSTANCES\nPARAM|w|\"2u\"\nNETS\nPINS\nEND\n",
+    "INSTANCES\nNETS\nTERM|D|out\nPINS\nEND\n",
+    "INSTANCES\nINST|M2|demoPdk|pmos\nPARAM|w|\"unterminated\nNETS\nPINS\nEND\n",
+])
+def test_read_rejects_incomplete_or_malformed_payload_without_retry(payload: str) -> None:
+    client = _ReadClient(payload)
+
+    with pytest.raises(RuntimeError, match="malformed or incomplete"):
+        SchematicOps(client).read(param_filters=None)
+
+    assert client.calls == 1
+
+
+@pytest.mark.parametrize("quoted", [False, True])
+@pytest.mark.parametrize("value", [
+    'iPar("simM")',
+    'pPar("w") * 2',
+    '"quoted text"',
+    r'C:\models\new\device.scs',
+    'line one\nline two\twith a | separator',
+    '偏置参数',
+])
+def test_read_preserves_cdf_string_values(value: str, quoted: bool) -> None:
+    payload = (
+        "INSTANCES\nINST|M2|demoPdk|pmos\n"
+        f"PARAM|expression|{_skill_string(value)}\n"
+        "NETS\nPINS\nEND\n"
+    )
+    client = _ReadClient(payload, quoted=quoted)
+
+    data = SchematicOps(client).read(param_filters=None)
+
+    assert data["instances"][0]["params"]["expression"] == value
+    assert client.calls == 1
+
+
+def test_read_accepts_a_complete_empty_schematic() -> None:
+    data = SchematicOps(_ReadClient("INSTANCES\nNETS\nPINS\nNOTES\nEND\n")).read()
+
+    assert data == {"instances": [], "nets": {}, "pins": {}, "notes": []}
+
+
+def test_read_preserves_quoted_notes_and_their_geometry() -> None:
+    note = 'Input | output\n"quoted" annotation'
+    payload = (
+        "INSTANCES\nNETS\nPINS\nNOTES\n"
+        f"NOTE|{_skill_string(note)}|(1.0 2.0)|stick|0.1|R0|lowerCenter\nEND\n"
+    )
+
+    data = SchematicOps(_ReadClient(payload)).read(include_positions=True)
+
+    assert data["notes"] == [{
+        "text": note, "xy": [1.0, 2.0], "font": "stick", "height": 0.1,
+        "orient": "R0", "justify": "lowerCenter",
+    }]
