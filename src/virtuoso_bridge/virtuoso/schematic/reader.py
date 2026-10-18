@@ -29,6 +29,7 @@ import yaml
 
 from virtuoso_bridge import VirtuosoClient, decode_skill_output
 from virtuoso_bridge.virtuoso.ops import escape_skill_string
+from virtuoso_bridge.virtuoso.skill_output import is_single_complete_skill_list, parse_sexpr
 
 _DEFAULT_FILTERS_PATH = Path(__file__).parent / "cdf_param_filters.yaml"
 _DEFAULT_TIMEOUT_S = 300
@@ -167,7 +168,7 @@ _NOTES_SECTION_EXPR = r'''
   foreach(shape cv~>shapes
     when(shape~>objType == "label" && shape~>purpose == "drawing"
       && shape~>layerName == "text" && shape~>theLabel
-      result = strcat(result sprintf(nil "NOTE|%s|%L|%s|%g|%s|%s\n"
+      result = strcat(result sprintf(nil "NOTE|%L|%L|%s|%g|%s|%s\n"
         shape~>theLabel shape~>xy
         if(shape~>font shape~>font "stick")
         if(shape~>height shape~>height 0.1)
@@ -211,6 +212,10 @@ def read_schematic(
         Each instance dict carries ``nlAction`` only when set — typically
         ``"ignore"`` when the designer shift+deleted the instance in the
         schematic editor to exclude it from netlisting.  Absent key = normal.
+
+        CDF strings are decoded without evaluating expressions. Incomplete or
+        malformed payloads raise RuntimeError rather than returning a partial
+        schematic; the read is not automatically retried.
     """
     skill = _SKILL_TOPOLOGY.replace(
         "{geometry_inst}", _GEOMETRY_INST_EXPR if include_positions else ""
@@ -222,7 +227,9 @@ def read_schematic(
     r = client.execute_skill(skill, timeout=timeout)
     if getattr(r, "errors", None):
         raise RuntimeError(f"read_schematic SKILL error: {r.errors[0]}")
-    raw = decode_skill_output(r.output)
+    # Decode the outer %L string exactly once. Replacing escapes throughout an
+    # already decoded payload corrupts nested CDF strings and multiline notes.
+    raw = _read_printed_string((r.output or "").strip())
     if raw.strip() == "ERROR":
         raise RuntimeError(f"read_schematic could not open schematic {lib or '(current)'}/{cell or '(current)'}")
     if not raw.strip():
@@ -234,6 +241,55 @@ def read_schematic(
         filter_config = _load_filters(param_filters)
 
     return _parse_schematic(raw, include_positions=include_positions, filter_config=filter_config)
+
+
+def _invalid_payload(detail: str) -> RuntimeError:
+    return RuntimeError(f"read_schematic returned malformed or incomplete data: {detail}")
+
+
+def _read_printed_string(value: str) -> str:
+    """Decode one %L string, preserving non-string parameter atoms as text."""
+    if not value.startswith('"'):
+        return value
+    wrapped = f"({value})"
+    if is_single_complete_skill_list(wrapped):
+        values = parse_sexpr(wrapped)
+        if len(values) == 1 and isinstance(values[0], str):
+            return values[0]
+    raise _invalid_payload("invalid quoted string")
+
+
+def _schematic_lines(raw: str, *, include_positions: bool) -> list[str]:
+    """Require the reader's complete frame before interpreting any records."""
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    markers = ("INSTANCES", "NETS", "PINS", "NOTES", "END")
+    sections = tuple(line for line in lines if line in markers)
+    # Older payloads may omit NOTES, but topology sections and END are required.
+    if sections not in (markers, ("INSTANCES", "NETS", "PINS", "END")):
+        raise _invalid_payload("missing, repeated or out-of-order sections")
+    fields = {
+        "INSTANCES": {"INST": 9 if include_positions else 4, "TERM": 3, "PARAM": 3, "NLACTION": 2},
+        "NETS": {"NET": 5},
+        "PINS": {"PIN": 3},
+        "NOTES": {"NOTE": 2},
+    }
+    section = ""
+    has_instance = False
+    for number, line in enumerate(lines, 1):
+        if line in markers:
+            section = line
+            has_instance = False
+            continue
+        tag = line.partition("|")[0]
+        minimum = fields.get(section, {}).get(tag)
+        if minimum is None or len(line.split("|")) < minimum:
+            raise _invalid_payload(f"unexpected or incomplete record at line {number}")
+        if section == "INSTANCES":
+            if tag == "INST":
+                has_instance = True
+            elif not has_instance:
+                raise _invalid_payload(f"instance data without an instance at line {number}")
+    return lines
 
 
 def _parse_schematic(
@@ -254,11 +310,7 @@ def _parse_schematic(
     current_inst: dict | None = None
     allowed_params: list[str] | None = None  # per-instance param whitelist
 
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-
+    for line in _schematic_lines(raw, include_positions=include_positions):
         if line in ("INSTANCES", "NETS", "PINS", "NOTES", "END"):
             # Flush current instance
             if current_inst is not None:
@@ -310,7 +362,7 @@ def _parse_schematic(
             elif line.startswith("PARAM|") and current_inst is not None:
                 parts = line.split("|", 2)
                 pname = parts[1]
-                pval = parts[2].strip('"') if len(parts) > 2 else ""
+                pval = _read_printed_string(parts[2])
                 if allowed_params is None or pname in allowed_params:
                     current_inst["params"][pname] = pval
 
@@ -349,14 +401,16 @@ def _parse_schematic(
 
         elif section == "notes":
             if line.startswith("NOTE|"):
-                parts = line.split("|")
-                note: dict[str, Any] = {"text": parts[1]}
+                # Text can contain pipes; the five geometry fields form a fixed
+                # suffix. New payloads quote text so line breaks stay escaped.
+                parts = line[5:].rsplit("|", 5)
+                note: dict[str, Any] = {"text": _read_printed_string(parts[0])}
                 if include_positions:
-                    note["xy"] = _parse_point(parts[2]) if len(parts) > 2 else None
-                    note["font"] = parts[3] if len(parts) > 3 else "stick"
-                    note["height"] = float(parts[4]) if len(parts) > 4 else 0.1
-                    note["orient"] = parts[5] if len(parts) > 5 else "R0"
-                    note["justify"] = parts[6] if len(parts) > 6 else "lowerCenter"
+                    note["xy"] = _parse_point(parts[1]) if len(parts) > 1 else None
+                    note["font"] = parts[2] if len(parts) > 2 else "stick"
+                    note["height"] = float(parts[3]) if len(parts) > 3 else 0.1
+                    note["orient"] = parts[4] if len(parts) > 4 else "R0"
+                    note["justify"] = parts[5] if len(parts) > 5 else "lowerCenter"
                 result["notes"].append(note)
 
     # Flush last instance
