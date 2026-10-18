@@ -327,6 +327,25 @@ def test_schematic_create_modify_read_netlist_and_symbol(client, lib, tmp_path):
     assert [t["name"] for t in client.symbol.read_ports(lib, cell)["terms"]] == ["OUT"]
 
 
+def test_schematic_parameter_evidence_preserves_stored_and_cdf_values(client, lib):
+    from virtuoso_bridge.virtuoso.ops import escape_skill_string
+
+    cell = _cell("param_evidence")
+    note = 'Explicit | property\niPar("simM")'
+    escaped_note = escape_skill_string(note).replace("\n", r"\n")
+    with client.schematic.create(lib, cell) as sch:
+        sch.add(inst("analogLib", "vdc", "symbol", "V0", 0.0, 0.0, "R0"))
+        sch.add('dbReplaceProp(car(cv~>instances) "vdc" "string" "1.8")')
+        sch.add(f'dbReplaceProp(car(cv~>instances) "audit_note" "string" "{escaped_note}")')
+
+    data = client.schematic.read(lib, cell, include_param_evidence=True)
+    source = next(i for i in data["instances"] if i["name"] == "V0")
+
+    assert source["param_evidence"]["stored"]["vdc"] == "1.8"
+    assert source["param_evidence"]["cdf"]["vdc"] == "1.8"
+    assert source["param_evidence"]["stored"]["audit_note"] == note
+
+
 def test_netlist_import_through_api_keeps_library_technology(client, lib, tmp_path):
     cell = _cell("div")  # spiceIn imports the subckt whose name equals the target cell
     netlist = tmp_path / "divider.scs"

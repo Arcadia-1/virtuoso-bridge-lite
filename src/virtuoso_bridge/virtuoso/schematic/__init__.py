@@ -158,6 +158,7 @@ class SchematicOps:
         cell: str | None = None,
         *,
         include_positions: bool = False,
+        include_param_evidence: bool = False,
         param_filters: str | Path | None | _UseReaderDefault = _USE_READER_DEFAULT,
         timeout: int = 300,
     ) -> dict[str, Any]:
@@ -165,7 +166,10 @@ class SchematicOps:
 
         This is the client-bound form of the legacy :func:`read_schematic`
         function and preserves its default CDF parameter filtering. Passing
-        ``param_filters=None`` returns all CDF parameters.
+        ``param_filters=None`` disables parameter-name filtering; compact
+        value limits still apply.
+        ``include_param_evidence=True`` also returns unfiltered explicit
+        instance properties and CDF values separately, without evaluating them.
         """
         from virtuoso_bridge.virtuoso.schematic.reader import read_schematic
 
@@ -175,6 +179,8 @@ class SchematicOps:
         }
         if not isinstance(param_filters, _UseReaderDefault):
             kwargs["param_filters"] = param_filters
+        if include_param_evidence:
+            kwargs["include_param_evidence"] = True
         return read_schematic(self._owner, lib, cell, **kwargs)
 
     def plan(

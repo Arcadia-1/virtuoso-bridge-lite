@@ -12,7 +12,7 @@ Usage:
     # Custom param filters
     data = read_schematic(client, "myLib", "myCell", param_filters="my.yaml")
 
-    # No param filtering (return all CDF params)
+    # Disable parameter-name filtering (compact value limits still apply)
     data = read_schematic(client, "myLib", "myCell", param_filters=None)
 
 Legacy API (read_placement, read_connectivity, read_instance_params) is
@@ -84,14 +84,15 @@ let((cv result)
           result = strcat(result sprintf(nil "TERM|%s|%s\n" it~>name it~>net~>name))))
       ; CDF params - only attempt if the cell exists in the database
       ; (ddGetObj is a silent lookup, avoids CIW warnings for missing masters)
-      when(ddGetObj(inst~>libName inst~>cellName)
-        let((cdf)
-          cdf = cdfGetInstCDF(inst)
-          when(cdf
-            foreach(p cdf~>parameters
-              when(p~>value != nil && p~>value != ""
-                && strlen(sprintf(nil "%L" p~>value)) <= 120
-                result = strcat(result sprintf(nil "PARAM|%s|%L\n" p~>name p~>value)))))))))
+      let((cdf)
+        when(ddGetObj(inst~>libName inst~>cellName)
+          cdf = cdfGetInstCDF(inst))
+        {param_evidence}
+        when(cdf
+          foreach(p cdf~>parameters
+            when(p~>value != nil && p~>value != ""
+              && strlen(sprintf(nil "%L" p~>value)) <= 120
+              result = strcat(result sprintf(nil "PARAM|%s|%L\n" p~>name p~>value))))))))
   result = strcat(result "NETS\n")
   foreach(net cv~>nets
       result = strcat(result sprintf(nil "NET|%s|%d|%s|%s"
@@ -176,6 +177,14 @@ _NOTES_SECTION_EXPR = r'''
         if(shape~>justify shape~>justify "lowerCenter")))))
 '''
 
+_PARAM_EVIDENCE_EXPR = r'''
+        result = strcat(result sprintf(nil "PARAM_EVIDENCE|%L\n"
+          list(
+            mapcar(lambda((p) list(p~>name p~>value)) inst~>prop)
+            if(cdf t nil)
+            when(cdf mapcar(lambda((p) list(p~>name p~>value)) cdf~>parameters)))))
+'''
+
 
 # =======================================================================
 # Main API
@@ -187,6 +196,7 @@ def read_schematic(
     cell: str | None = None,
     *,
     include_positions: bool = False,
+    include_param_evidence: bool = False,
     param_filters: str | Path | None = _DEFAULT_FILTERS_PATH,
     timeout: int = _DEFAULT_TIMEOUT_S,
 ) -> dict:
@@ -199,9 +209,14 @@ def read_schematic(
         include_positions: if True, include xy/orient/bBox/numInst/view on each
             instance. False = pure topology + params only.
             Notes are always returned regardless of this flag.
-        param_filters: path to a YAML filter config.  Default uses the
-            built-in cdf_param_filters.yaml.  Pass None to return all
-            CDF params unfiltered.
+        include_param_evidence: add unfiltered ``param_evidence`` per instance:
+            ``stored`` contains explicit instance properties; ``cdf`` contains
+            values read from its instance CDF, or None if no CDF was available.
+            Includes empty, nil and long values omitted from ``params``. Values
+            are decoded SKILL data, not evaluated or final netlist parameters.
+        param_filters: path to a YAML filter config. Default uses the built-in
+            cdf_param_filters.yaml. None disables name filtering; compact
+            ``params`` still omits nil, empty and >120-character printed values.
         timeout: Virtuoso SKILL execution timeout in seconds. Large schematics
             can take longer than the transport default, so the reader defaults
             to 300 seconds and lets callers override it.
@@ -222,6 +237,7 @@ def read_schematic(
     )
     # Notes are always included
     skill = skill.replace("{notes_section}", _NOTES_SECTION_EXPR)
+    skill = skill.replace("{param_evidence}", _PARAM_EVIDENCE_EXPR if include_param_evidence else "")
     skill = _build_cellview_read_skill(skill, lib, cell)
 
     r = client.execute_skill(skill, timeout=timeout)
@@ -240,7 +256,10 @@ def read_schematic(
     if param_filters is not None:
         filter_config = _load_filters(param_filters)
 
-    return _parse_schematic(raw, include_positions=include_positions, filter_config=filter_config)
+    return _parse_schematic(
+        raw, include_positions=include_positions, filter_config=filter_config,
+        include_param_evidence=include_param_evidence,
+    )
 
 
 def _invalid_payload(detail: str) -> RuntimeError:
@@ -268,7 +287,10 @@ def _schematic_lines(raw: str, *, include_positions: bool) -> list[str]:
     if sections not in (markers, ("INSTANCES", "NETS", "PINS", "END")):
         raise _invalid_payload("missing, repeated or out-of-order sections")
     fields = {
-        "INSTANCES": {"INST": 9 if include_positions else 4, "TERM": 3, "PARAM": 3, "NLACTION": 2},
+        "INSTANCES": {
+            "INST": 9 if include_positions else 4, "TERM": 3, "PARAM": 3,
+            "NLACTION": 2, "PARAM_EVIDENCE": 2,
+        },
         "NETS": {"NET": 5},
         "PINS": {"PIN": 3},
         "NOTES": {"NOTE": 2},
@@ -292,11 +314,42 @@ def _schematic_lines(raw: str, *, include_positions: bool) -> list[str]:
     return lines
 
 
+def _parse_param_evidence(raw: str) -> dict[str, Any]:
+    if not is_single_complete_skill_list(raw):
+        raise _invalid_payload("incomplete parameter evidence")
+    values = parse_sexpr(raw)
+    if len(values) != 3 or (values[1] is not True and values[1] is not None):
+        raise _invalid_payload("invalid parameter evidence fields")
+
+    def properties(rows: Any) -> dict[str, Any]:
+        if rows is None:
+            return {}
+        if not isinstance(rows, list):
+            raise _invalid_payload("invalid parameter property list")
+        result: dict[str, Any] = {}
+        for row in rows:
+            if (not isinstance(row, list) or len(row) != 2
+                    or not isinstance(row[0], str) or row[0] in result):
+                raise _invalid_payload("invalid or duplicate parameter property")
+            result[row[0]] = row[1]
+        return result
+
+    stored = properties(values[0])
+    if values[1] is None:
+        if values[2] is not None:
+            raise _invalid_payload("CDF values without an available CDF")
+        cdf = None
+    else:
+        cdf = properties(values[2])
+    return {"stored": stored, "cdf": cdf}
+
+
 def _parse_schematic(
     raw: str,
     *,
     include_positions: bool,
     filter_config: dict | None,
+    include_param_evidence: bool = False,
 ) -> dict:
     """Parse the raw SKILL output into structured dict."""
     result: dict[str, Any] = {
@@ -310,20 +363,24 @@ def _parse_schematic(
     current_inst: dict | None = None
     allowed_params: list[str] | None = None  # per-instance param whitelist
 
+    def finish_instance() -> None:
+        if current_inst is not None:
+            if include_param_evidence and "param_evidence" not in current_inst:
+                raise _invalid_payload("missing requested parameter evidence")
+            result["instances"].append(current_inst)
+
     for line in _schematic_lines(raw, include_positions=include_positions):
         if line in ("INSTANCES", "NETS", "PINS", "NOTES", "END"):
             # Flush current instance
-            if current_inst is not None:
-                result["instances"].append(current_inst)
-                current_inst = None
+            finish_instance()
+            current_inst = None
             section = line.lower()
             continue
 
         if section == "instances":
             if line.startswith("INST|"):
                 # Flush previous instance
-                if current_inst is not None:
-                    result["instances"].append(current_inst)
+                finish_instance()
 
                 parts = line.split("|")
                 name, inst_lib, inst_cell = parts[1], parts[2], parts[3]
@@ -365,6 +422,12 @@ def _parse_schematic(
                 pval = _read_printed_string(parts[2])
                 if allowed_params is None or pname in allowed_params:
                     current_inst["params"][pname] = pval
+
+            elif line.startswith("PARAM_EVIDENCE|") and current_inst is not None:
+                if include_param_evidence:
+                    if "param_evidence" in current_inst:
+                        raise _invalid_payload("duplicate parameter evidence")
+                    current_inst["param_evidence"] = _parse_param_evidence(line.split("|", 1)[1])
 
         elif section == "nets":
             if line.startswith("NET|"):
@@ -414,8 +477,7 @@ def _parse_schematic(
                 result["notes"].append(note)
 
     # Flush last instance
-    if current_inst is not None:
-        result["instances"].append(current_inst)
+    finish_instance()
 
     return result
 

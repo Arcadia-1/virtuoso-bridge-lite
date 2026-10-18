@@ -349,3 +349,102 @@ def test_read_preserves_quoted_notes_and_their_geometry() -> None:
         "text": note, "xy": [1.0, 2.0], "font": "stick", "height": 0.1,
         "orient": "R0", "justify": "lowerCenter",
     }]
+
+
+def _evidence_payload(evidence: str) -> str:
+    return (
+        "INSTANCES\nINST|M2|demoPdk|pmos\n"
+        f"PARAM_EVIDENCE|{evidence}\nNETS\nPINS\nEND\n"
+    )
+
+
+def test_read_distinguishes_unstored_cdf_values_from_explicit_properties() -> None:
+    expression = 'iPar("simM")'
+    payload = (
+        "INSTANCES\nINST|M2|demoPdk|pmos\n"
+        f'PARAM_EVIDENCE|(nil t (("w" "200n") ("m" {_skill_string(expression)})))\n'
+        'PARAM|w|"200n"\n'
+        "INST|M3|demoPdk|pmos\n"
+        'PARAM_EVIDENCE|((("w" "2u")) t (("w" "2u")))\n'
+        'PARAM|w|"2u"\nNETS\nPINS\nEND\n'
+    )
+    client = _ReadClient(payload)
+
+    data = SchematicOps(client).read(include_param_evidence=True)
+
+    first, second = data["instances"]
+    assert first["params"] == {"w": "200n"}
+    assert first["param_evidence"] == {"stored": {}, "cdf": {"w": "200n", "m": expression}}
+    assert second["param_evidence"] == {"stored": {"w": "2u"}, "cdf": {"w": "2u"}}
+    assert client.calls == 1
+
+
+@pytest.mark.parametrize(("evidence", "expected"), [
+    ("(nil nil nil)", {"stored": {}, "cdf": None}),
+    ("(nil t nil)", {"stored": {}, "cdf": {}}),
+    ('((("w" nil)) t (("w" "") ("enabled" t)))',
+     {"stored": {"w": None}, "cdf": {"w": "", "enabled": True}}),
+    ('((("custom" "present")) nil nil)', {"stored": {"custom": "present"}, "cdf": None}),
+])
+def test_read_distinguishes_missing_cdf_empty_cdf_and_explicit_nil(evidence, expected) -> None:
+    data = SchematicOps(_ReadClient(_evidence_payload(evidence))).read(include_param_evidence=True)
+
+    assert data["instances"][0]["param_evidence"] == expected
+
+
+def test_parameter_evidence_preserves_long_values_independent_of_param_filters(tmp_path) -> None:
+    filters = tmp_path / "filters.yaml"
+    filters.write_text('filters: []\nfallback: [w]\n')
+    long_value = 'pPar("bias") | ' + "x" * 160
+    payload = _evidence_payload(
+        f'((("note" {_skill_string(long_value)})) t (("note" {_skill_string(long_value)}) ("w" "2u")))'
+    ).replace("NETS\n", 'PARAM|w|"2u"\nPARAM|hidden|"present"\nNETS\n')
+
+    data = SchematicOps(_ReadClient(payload)).read(
+        include_param_evidence=True, param_filters=filters,
+    )
+
+    inst = data["instances"][0]
+    assert inst["params"] == {"w": "2u"}
+    assert inst["param_evidence"]["stored"]["note"] == long_value
+    assert inst["param_evidence"]["cdf"] == {"note": long_value, "w": "2u"}
+
+
+@pytest.mark.parametrize("evidence", [
+    "nil", '(nil t (("w" "2u"))', '(nil "yes" nil)',
+    '(nil nil (("w" "2u")))', '(nil t (("w")))',
+    '(nil t (("w" "1u") ("w" "2u")))', '(nil t ("not-a-pair"))',
+])
+def test_requested_parameter_evidence_rejects_incomplete_or_ambiguous_data(evidence) -> None:
+    with pytest.raises(RuntimeError, match="malformed or incomplete"):
+        SchematicOps(_ReadClient(_evidence_payload(evidence))).read(include_param_evidence=True)
+
+
+def test_requested_parameter_evidence_must_be_present_for_every_instance() -> None:
+    payload = _evidence_payload("(nil t nil)").replace("NETS\n", "INST|M3|demoPdk|pmos\nNETS\n")
+
+    with pytest.raises(RuntimeError, match="missing requested parameter evidence"):
+        SchematicOps(_ReadClient(payload)).read(include_param_evidence=True)
+
+
+def test_parameter_evidence_is_opt_in_and_read_only() -> None:
+    from virtuoso_bridge.virtuoso.skill_output import is_single_complete_skill_list
+
+    class Client(_ReadClient):
+        skill = ""
+
+        def execute_skill(self, skill, **kwargs):
+            self.skill = skill
+            return super().execute_skill(skill, **kwargs)
+
+    client = Client(_evidence_payload("(nil t nil)"))
+    default = SchematicOps(client).read()
+    assert "param_evidence" not in default["instances"][0]
+    assert "PARAM_EVIDENCE|" not in client.skill
+
+    SchematicOps(client).read(include_param_evidence=True)
+    assert "PARAM_EVIDENCE|" in client.skill
+    assert "{param_evidence}" not in client.skill
+    assert is_single_complete_skill_list("(" + client.skill + ")")
+    for mutation in ("cdfUpdateInstParam", "evalstring", "dbSave", "dbReplaceProp", "schCheck"):
+        assert mutation not in client.skill
