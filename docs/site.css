@@ -747,7 +747,7 @@ pre .comment {
   padding: 11px 0;
   border-bottom: 1px solid var(--line);
 }
-.links li span:last-child {
+.links li > span {
   color: var(--muted);
   font-size: 14px;
 }
