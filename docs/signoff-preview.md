@@ -8,6 +8,11 @@ The selected wave file scopes the statistics table; simulation summaries and
 notes still come from `preview/data`. Use a dedicated checkout per circuit.
 An optional `anatomy.html` can be supplied in the output folder.
 
+`--shots` limits the current gallery, not files copied by earlier builds.
+Use a fresh output directory before sharing a scoped report; inspect its files
+and all supplied notes/logs for private data. Treat a supplied `anatomy.html`
+as executable HTML and include it only from a trusted source. Text files use UTF-8.
+
 Generated HTML and revision JSON are local review artifacts, not electrical
 signoff evidence. The helper does not run Cadence, validate a PDK or declare
 measurements correct. No captured lab images or PDK data are included here.

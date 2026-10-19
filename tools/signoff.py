@@ -12,6 +12,7 @@ import html
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 BASE = Path(__file__).resolve().parent.parent  # repo root (tools/signoff.py)
 REPO = BASE
@@ -41,25 +42,25 @@ def sim_results() -> list[dict]:
     rows = []
     wave = PREVIEW / "data" / "wave.json"
     if wave.exists():
-        w = json.loads(wave.read_text())
+        w = json.loads(wave.read_text(encoding="utf-8"))
         v = [x for x in w.get("vout", []) if isinstance(x, (int, float))]
-        rows.append({"run": "psf_test.tran", "tool": "psf_read",
+        rows.append({"run": wave.name, "tool": "supplied waveform",
                      "detail": "n=%d min=%.4g max=%.4g mean=%.4g" % (
                          w.get("n", len(v)), min(v), max(v), sum(v) / len(v)) if v else "no numeric samples"})
     check = PREVIEW / "data" / "netlist_check.txt"
     if check.exists():
-        lines = check.read_text().splitlines()
-        rows.append({"run": "rc_cascade.scs", "tool": "netlist_check",
+        lines = check.read_text(encoding="utf-8").splitlines()
+        rows.append({"run": check.name, "tool": "netlist_check",
                      "detail": "%d findings" % len(lines)})
     tools = PREVIEW / "data" / "tools.json"
     if tools.exists():
-        t = json.loads(tools.read_text())
+        t = json.loads(tools.read_text(encoding="utf-8"))
         rows.append({"run": "bridge", "tool": "tools/list",
-                     "detail": "%d tools live" % len(t.get("tools", []))})
+                     "detail": "%d tools in supplied snapshot" % len(t.get("tools", []))})
     ring = PREVIEW / "data" / "sims.jsonl"
     if ring.exists():
         latest = {}
-        for line in ring.read_text().splitlines():
+        for line in ring.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -102,7 +103,7 @@ CSS = ("body{font-family:system-ui,Arial,sans-serif;max-width:1000px;margin:0 au
 def notes() -> list[dict]:
     out = []
     if NOTELOG.exists():
-        for line in NOTELOG.read_text().splitlines():
+        for line in NOTELOG.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -117,7 +118,7 @@ def wave_stats(wave: Path | None = None) -> list[dict]:
     w = wave or PREVIEW / "data" / "wave.json"
     if not w.exists():
         return []
-    d = json.loads(w.read_text())
+    d = json.loads(w.read_text(encoding="utf-8"))
     rows = []
     keys = [k for k in d if k not in ("n", "t", "time", "TIME")]
     for k in keys[:20]:
@@ -149,7 +150,7 @@ def build(out: Path, title: str, only_shots: list[str] | None = None,
     dirs = {}
     if STATE.exists():
         try:
-            raw = json.loads(STATE.read_text())
+            raw = json.loads(STATE.read_text(encoding="utf-8"))
             dirs = raw.get("dirs", {}) if isinstance(raw, dict) else {}
             mine = dirs.get(str(out), {})
             rev = int(mine.get("rev", 0)) + 1
@@ -162,14 +163,15 @@ def build(out: Path, title: str, only_shots: list[str] | None = None,
     dirs[str(out)] = {"rev": rev, "hashes": cur}
     STATE.parent.mkdir(parents=True, exist_ok=True)
     STATE.write_text(json.dumps({"dirs": dirs,
-                                 "stamp": datetime.now(timezone.utc).isoformat()}, indent=1))
+                                 "stamp": datetime.now(timezone.utc).isoformat()}, indent=1), encoding="utf-8")
     rows = sim_results()
     stats = wave_stats(wave)
     log = notes()
     gal = "\n".join(
         '<div class="card"><b>%s</b><p class="small">%s · %d KB</p>'
         '<img loading="lazy" src="%s" alt="%s"></div>' % (
-            html.escape(s["file"]), s["mtime"], s["bytes"] // 1024, s["file"], html.escape(s["file"]))
+            html.escape(s["file"]), s["mtime"], s["bytes"] // 1024,
+            html.escape(quote(s["file"], safe="")), html.escape(s["file"]))
         for s in sh)
     have_chart = any(s["file"] == "wave_chart.png" for s in sh)
     chartsec = ('<img class="big fade" src="wave_chart.png" alt="waveform chart">'
@@ -190,7 +192,7 @@ def build(out: Path, title: str, only_shots: list[str] | None = None,
     else:
         errsec = "<h2>Exact errors and notes</h2><p class=small>None logged. Add notes to preview/data/errors.jsonl.</p>"
     check = PREVIEW / "data" / "netlist_check.txt"
-    fulllog = ("<h2>Full netlist check log</h2><pre>%s</pre>" % html.escape(check.read_text()) if check.exists() else "")
+    fulllog = ("<h2>Full netlist check log</h2><pre>%s</pre>" % html.escape(check.read_text(encoding="utf-8")) if check.exists() else "")
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     # Embed a circuit-specific figure only when the agent supplies one.
     anat = out / "anatomy.html"
@@ -214,11 +216,11 @@ def build(out: Path, title: str, only_shots: list[str] | None = None,
             "%s%s"
             "<h2>All PNGs (%d)</h2><div class=grid>%s</div>"
             "</body></html>") % (html.escape(title), CSS, html.escape(title), stamp, revline,
-                                 revdetail, anatsec, chartsec, st, tab, errsec, fulllog, len(sh), gal)
-    (out / "index.html").write_text(page)
+                                 html.escape(revdetail), anatsec, chartsec, st, tab, errsec, fulllog, len(sh), gal)
+    (out / "index.html").write_text(page, encoding="utf-8")
     (out / "rev.json").write_text(json.dumps(
         {"rev": rev, "stamp": stamp, "added": added, "changed": changed,
-         "removed": removed, "shots": len(sh), "results": len(rows)}, indent=1))
+         "removed": removed, "shots": len(sh), "results": len(rows)}, indent=1), encoding="utf-8")
     return {"out": str(out), "rev": rev, "shots": len(sh), "results": len(rows),
             "added": added, "changed": changed, "removed": removed, "stamp": stamp}
 
