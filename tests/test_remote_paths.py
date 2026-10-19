@@ -44,3 +44,16 @@ def test_resolve_client_id_prefers_profile_env(monkeypatch) -> None:
 
     assert resolve_client_id("t28_io") == "workstation_a"
     assert resolve_client_id() == "90590"
+
+
+def test_home_scratch_root_scopes_bridge_and_spectre_without_new_host_settings(monkeypatch):
+    monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", "/home/designer/.virtuoso-bridge/")
+
+    root = "/home/designer/.virtuoso-bridge/virtuoso_bridge_designer/laptop"
+    assert default_virtuoso_bridge_dir("designer", "virtuoso_bridge", "laptop") == (
+        root + "/virtuoso_bridge"
+    )
+    assert default_remote_spectre_work_dir("designer", "laptop") == (
+        root + "/virtuoso_bridge_spectre"
+    )
