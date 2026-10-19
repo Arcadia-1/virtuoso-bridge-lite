@@ -1,11 +1,8 @@
-"""Fast PSF ASCII parser (drop-in, stdlib only).
+"""Optional swept PSF ASCII parser (stdlib only).
 
-Why it is fast:
-- One pass over file (old code reads text twice).
-- Pre-compiled regex, no per-line re.match compile.
-- Streams lines, no big splitlines list.
-- Step-interpolate only on demand.
-- Parallel directory parse with threads.
+This experimental reader is not a drop-in replacement for every PSF format.
+It reads file lines once, retains value events, then materializes selected
+signals. Directory parsing uses threads; no performance benchmark is claimed.
 """
 from __future__ import annotations
 
@@ -159,27 +156,24 @@ def signal_stats(values: list) -> dict:
 
 
 def parse_dir_fast(output_dir: Path, max_workers: int = 4) -> Dict[str, Any]:
-    """Parse one raw dir in parallel. Returns merged {signal: values}."""
+    """Merge one file per analysis: transient, AC (ac_), and DC (dc_)."""
     files: List[Tuple[str, Path]] = []
-    for pat in ("*.tran.tran", "*.tran", "*.ac", "*.ac.ac", "*.dc"):
-        hits = sorted(output_dir.glob(pat))
-        if hits:
-            files.append((pat, hits[0]))
-            if pat.startswith("*.tran"):
+    for prefix, patterns in (("", ("*.tran.tran", "*.tran")),
+                             ("ac_", ("*.ac",)), ("dc_", ("*.dc",))):
+        for pattern in patterns:
+            hits = sorted(output_dir.glob(pattern))
+            if hits:
+                files.append((prefix, hits[0]))
+                # Only stop this analysis's fallback search, not AC/DC.
                 break
     if not files:
         return {}
     merged: Dict[str, Any] = {}
     with ThreadPoolExecutor(max_workers=min(max_workers, len(files))) as ex:
         results = list(ex.map(lambda t: parse_file_fast(t[1]), files))
-    for (pat, _), data in zip(files, results):
+    for (prefix, _), data in zip(files, results):
         if not data:
             continue
-        prefix = ""
-        if ".ac" in pat:
-            prefix = "ac_"
-        elif pat.endswith(".dc"):
-            prefix = "dc_"
         for k, v in data.items():
             merged[prefix + k] = v
     return merged
