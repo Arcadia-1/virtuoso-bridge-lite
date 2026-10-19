@@ -73,6 +73,21 @@ def test_deploy_creates_every_directory_private(monkeypatch, tmp_path):
     assert f"{client.remote_work_dir}/virtuoso_setup.il" in runner.uploads
 
 
+@pytest.mark.parametrize("dirname", [".virtuoso-bridge", "bridge scratch"])
+def test_deploy_in_existing_home_scratch_root(monkeypatch, tmp_path, dirname):
+    # Synthetic remote home; execute the real generated POSIX shell locally.
+    root = tmp_path / "home" / "designer" / dirname
+    root.mkdir(parents=True, mode=0o700)
+    runner = _LocalShellRunner()
+
+    client = _deploy(monkeypatch, root, runner)
+
+    assert client.remote_work_dir == str(_chain(root)[-1])
+    assert [_mode(path) for path in _chain(root)] == [0o700, 0o700, 0o700]
+    assert f"{client.remote_work_dir}/virtuoso_setup.il" in runner.uploads
+    assert all(path.startswith(str(root) + "/") for path in runner.uploads)
+
+
 def test_deploy_tightens_an_existing_directory_of_the_user(monkeypatch, tmp_path):
     for path in _chain(tmp_path):
         path.mkdir()
