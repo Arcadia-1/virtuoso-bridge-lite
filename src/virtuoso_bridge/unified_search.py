@@ -250,21 +250,22 @@ def _iter_files(root: Path) -> Iterator[Path]:
 
 def collect_skill(roots: dict, body_limit: int) -> Iterator[dict]:
     try:
-        from virtuoso_bridge.virtuoso.skill_finder.parser import parse_fnd_directory
+        from virtuoso_bridge.virtuoso.skill_finder.parser import parse_fnd_file
     except Exception:
         return
     seen: set[str] = set()
     for root in roots.get("skill", []):
-        try:
-            entries = parse_fnd_directory(root)
-        except Exception:
-            continue
-        for e in entries:
-            if not e.name or e.name in seen:
+        for path in sorted(root.rglob("*.fnd")):
+            try:
+                entries = parse_fnd_file(path)
+            except OSError:
                 continue
-            seen.add(e.name)
-            yield {"kind": "skill", "title": e.name, "path": e.source_file or str(root),
-                   "body": ("%s %s" % (e.syntax, e.description))[:body_limit]}
+            for e in entries:
+                if not e.name or e.name in seen:
+                    continue
+                seen.add(e.name)
+                yield {"kind": "skill", "title": e.name, "path": str(path.resolve()),
+                       "body": ("%s %s" % (e.syntax, e.description))[:body_limit]}
 
 
 def collect_doc(roots: dict, body_limit: int) -> Iterator[dict]:
@@ -343,21 +344,43 @@ def _cds_lib_files() -> list[Path]:
 def _discover_libs(roots: dict) -> list[tuple[str, Path]]:
     """Find (lib, path) pairs under the PDK roots (and cds.lib DEFINEs)."""
     defs: dict[str, Path] = {}
-    for cds in _cds_lib_files():
-        if not cds.is_file():
-            continue
+    seen: set[Path] = set()
+
+    def expand(raw: str, base: Path) -> Path:
+        import re
+        variables = {"CDS": str(_cds_install()),
+                     "CDS_INST_DIR": str(_cds_install())}
+        def replacement(match):
+            key = match.group(1) or match.group(2)
+            return os.environ.get(key, variables.get(key, match.group(0)))
+        value = re.sub(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)',
+                       replacement, raw.strip().strip('"'))
+        path = Path(os.path.expanduser(value))
+        return path if path.is_absolute() else base / path
+
+    def read_cds(cds: Path) -> None:
+        cds = cds.resolve()
+        if cds in seen or not cds.is_file():
+            return
+        seen.add(cds)
         try:
             text = cds.read_text(encoding="utf-8", errors="replace")
         except OSError:
-            continue
+            return
         for line in text.splitlines():
-            parts = line.split()
-            if parts and parts[0] == "DEFINE" and len(parts) >= 3:
-                p = Path(os.path.expandvars(parts[2].replace("$CDS", "/opt/cadence")))
-                if not p.is_absolute():
-                    p = cds.parent / p
+            parts = line.strip().split(maxsplit=2)
+            if not parts or parts[0].startswith("#"):
+                continue
+            keyword = parts[0].upper()
+            if keyword in ("INCLUDE", "SOFTINCLUDE") and len(parts) >= 2:
+                read_cds(expand(" ".join(parts[1:]), cds.parent))
+            elif keyword == "DEFINE" and len(parts) >= 3:
+                p = expand(parts[2], cds.parent)
                 if p.is_dir():
                     defs[parts[1]] = p
+
+    for cds in _cds_lib_files():
+        read_cds(cds)
 
     cands: dict[str, Path] = dict(defs)
     for root in roots.get("pdk", []):
@@ -430,10 +453,10 @@ def _groups_for(kinds: Sequence[str]) -> list[tuple[str, tuple[str, ...], Callab
 
 def _connect(path: Path) -> sqlite3.Connection:
     con = sqlite3.connect(str(path))
-    con.execute("PRAGMA journal_mode=OFF")
-    con.execute("PRAGMA synchronous=OFF")
-    con.execute("PRAGMA temp_store=MEMORY")
     con.execute("PRAGMA busy_timeout=30000")
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA synchronous=FULL")
+    con.execute("PRAGMA temp_store=MEMORY")
     return con
 
 
@@ -449,6 +472,10 @@ def _create_schema(con: sqlite3.Connection) -> None:
             title,
             body,
             tokenize = 'unicode61'
+        );
+        CREATE TABLE IF NOT EXISTS index_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
         );
         """
     )
@@ -483,15 +510,18 @@ def build(
     db = db_path()
     man = manifest_path()
     db.parent.mkdir(parents=True, exist_ok=True)
-    if rebuild and db.exists():
-        db.unlink()
-
     counts: dict[str, int] = {}
     rebuilt: set[str] = set()
     with _BUILD_LOCK:
         con = _connect(db)
         try:
             _create_schema(con)
+            prev = _manifest_from_db(con) or _read_manifest_file() or {}
+            # SQLite WAL keeps the previous complete index visible to readers
+            # until every selected collector and the manifest have committed.
+            con.execute("BEGIN IMMEDIATE")
+            if rebuild:
+                con.execute("DELETE FROM entries")
             for name, kinds_in_group, collector in _groups_for(kinds):
                 for kind in kinds_in_group:
                     con.execute("DELETE FROM entries WHERE kind = ?", (kind,))
@@ -510,33 +540,49 @@ def build(
                     con.executemany(
                         "INSERT INTO entries (kind,path,lib,cell,view,title,body) "
                         "VALUES (?,?,?,?,?,?,?)", batch)
-                con.commit()
                 rebuilt.update(kinds_in_group)
                 if progress:
                     got = _count_group(con, kinds_in_group)
                     progress("  %s: %d rows in %.1fs"
                              % ("+".join(kinds_in_group), got, time.monotonic() - started))
             counts = _count_by_kind(con)
+            prev_kinds = prev.get("kinds", {}) if not rebuild else {}
+            merged = {k: v for k, v in prev_kinds.items() if k not in rebuilt and v}
+            for k in rebuilt:
+                if counts.get(k):
+                    merged[k] = counts[k]
+            manifest = {
+                "format": FORMAT,
+                "schema_version": SCHEMA_VERSION,
+                "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "body_limit": body_limit,
+                "kinds": merged,
+                "roots": {k: [str(p) for p in v] for k, v in roots.items()},
+            }
+            con.execute("INSERT OR REPLACE INTO index_metadata(key,value) VALUES (?,?)",
+                        ("manifest", json.dumps(manifest, sort_keys=True)))
+            con.commit()
+        except BaseException:
+            con.rollback()
+            raise
         finally:
             con.close()
-
-    prev = _read_manifest() or {}
-    prev_kinds = prev.get("kinds", {}) if not rebuild else {}
-    # Kinds rebuilt now take fresh DB counts (zero drops them, so
-    # "missing" stays accurate). Kinds not touched keep old numbers.
-    merged = {k: v for k, v in prev_kinds.items() if k not in rebuilt and v}
-    for k in rebuilt:
-        if counts.get(k):
-            merged[k] = counts[k]
-    manifest = {
-        "format": FORMAT,
-        "schema_version": SCHEMA_VERSION,
-        "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "body_limit": body_limit,
-        "kinds": merged,
-        "roots": {k: [str(p) for p in v] for k, v in roots.items()},
-    }
-    man.write_text(json.dumps(manifest, indent=1, sort_keys=True), encoding="utf-8")
+        # This JSON is a human-readable mirror. The database copy is the
+        # authoritative manifest and commits atomically with the index rows.
+        import uuid
+        temporary = man.with_name(man.name + "." + uuid.uuid4().hex + ".tmp")
+        try:
+            temporary.write_text(json.dumps(manifest, indent=1, sort_keys=True),
+                                 encoding="utf-8")
+            os.replace(temporary, man)
+        except OSError as exc:
+            if progress:
+                progress("index committed; manifest mirror unavailable: %s" % exc)
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
     return manifest
 
 
@@ -554,11 +600,34 @@ def _count_by_kind(con: sqlite3.Connection) -> dict[str, int]:
     return out
 
 
-def _read_manifest() -> dict | None:
+def _manifest_from_db(con: sqlite3.Connection) -> dict | None:
+    try:
+        row = con.execute("SELECT value FROM index_metadata WHERE key='manifest'").fetchone()
+        return json.loads(row[0]) if row else None
+    except (sqlite3.DatabaseError, json.JSONDecodeError):
+        return None
+
+
+def _read_manifest_file() -> dict | None:
     try:
         return json.loads(manifest_path().read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def _read_manifest() -> dict | None:
+    if db_path().is_file():
+        try:
+            con = _connect(db_path())
+            try:
+                current = _manifest_from_db(con)
+            finally:
+                con.close()
+            if current is not None:
+                return current
+        except sqlite3.DatabaseError:
+            pass
+    return _read_manifest_file()
 
 
 def _built_kinds(manifest: dict | None) -> set[str]:
@@ -570,7 +639,7 @@ def _built_kinds(manifest: dict | None) -> set[str]:
 # ---------------------------------------------------------------- search
 
 def available() -> bool:
-    return db_path().is_file() and manifest_path().is_file()
+    return db_path().is_file() and _read_manifest() is not None
 
 
 def ensure(

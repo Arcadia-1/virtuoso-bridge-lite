@@ -17,6 +17,9 @@ Build only the kinds needed: `skill`, `doc`, `topic`, `lib`, `cell`, `file`.
 Index construction reads the local configured roots and writes a local cache;
 it does not connect to Virtuoso or require MCP. Build time depends on root size.
 Use `build --rebuild` to discard and rebuild the cache after source changes.
+Refresh and rebuild publish one SQLite transaction. If collection is interrupted,
+queries continue to see the previous complete index. The manifest stored in the
+database commits with the indexed rows; `manifest.json` is a readable mirror.
 Existing bridge search APIs remain available without this optional index.
 
 Python callers may pass explicit `roots` to `build` and filter `search` by
