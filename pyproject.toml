@@ -23,6 +23,9 @@ visio = ["pywin32; sys_platform == 'win32'"]
 # Persistent SSH transport with real multi-session multiplexing. This avoids
 # Windows OpenSSH ControlMaster limitations while keeping local mode lightweight.
 ssh = ["paramiko>=3.5", "PySocks>=1.7.1"]
+# Optional labels and legends on MCP waveform PNG previews. Without Pillow the
+# image remains available and its axes/legend are supplied as tool text.
+mcp-visuals = ["Pillow>=10.0"]
 # Complete test environment, including the optional SSH backend exercised by
 # the transport suite.
 dev = [

@@ -50,13 +50,12 @@ def _load_bridge_env() -> None:
     load_vb_env()
 
 
-_load_bridge_env()
-
 PROTOCOL_VERSION = "2026-07-28"
 SUPPORTED_VERSIONS = ["2026-07-28", "2025-11-25", "2024-11-05"]
 _LEGACY_VERSION = None
-SERVER_INFO = {"name": "virtuoso-bridge", "version": "1.1.0"}
 SERVER_TITLE = "Virtuoso Bridge — Cadence Virtuoso + Spectre"
+SERVER_INFO = {"name": "virtuoso-bridge", "version": "1.1.0",
+               "title": SERVER_TITLE}
 
 SKILLS_EXT = "io.modelcontextprotocol/skills"
 META_VER = "io.modelcontextprotocol/protocolVersion"
@@ -304,15 +303,15 @@ def _tool_defs() -> list[dict]:
              "mode": {"type": "string", "enum": ["dut", "tb"], "default": "dut"}},
           "required": ["file"], "additionalProperties": False},
          {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False}),
-        ("describe_pdk", "Detail one PDK lib: path, cell and view counts, techfile, models, sample cells.",
+        ("describe_pdk", "Inspect one server-local filesystem PDK library: path, cell and view counts, techfile, models, sample cells. Does not query the active Virtuoso session or remote hosts.",
          {"type": "object", "properties": {
              "lib": {"type": "string", "minLength": 1, "maxLength": 200}},
           "required": ["lib"], "additionalProperties": False},
          {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False}),
-        ("list_pdk", "List PDK libs visible to Virtuoso: cells, symbols, techfile, models. Cached.",
+        ("list_pdk", "List PDK libraries found on this MCP server's local filesystem. A remote-only PDK may be absent; use list_libraries for the running Virtuoso session. Cached.",
          {"type": "object", "properties": {}, "additionalProperties": False},
          {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False}),
-        ("search_pdk", "Find cells by name across PDK libs. Returns lib, cell, views.",
+        ("search_pdk", "Find cells by name across server-local filesystem PDK libraries. Returns lib, cell, views; remote-only libraries are not indexed.",
          {"type": "object", "properties": {
              "query": {"type": "string", "minLength": 2, "maxLength": 200},
              "lib": {"type": "string", "maxLength": 200},
@@ -414,10 +413,10 @@ def _tool_defs() -> list[dict]:
              "history": {"type": "string", "maxLength": 200}},
           "required": ["out"], "additionalProperties": False},
          {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False}),
-        ("screenshot", "Capture a Virtuoso window to PNG. Returns shot handle plus file path. Use this instead of hand-rolled geOpen/hiWindowSaveImage SKILL.",
+        ("screenshot", "Capture a Virtuoso window to PNG. Returns an inline image and saved file path. A capture is visual context, not an electrical check.",
          {"type": "object", "properties": {
              "target": {"type": "string", "maxLength": 60, "default": "current",
-                        "description": "ciw, current, or window number"},
+                        "description": "ciw, current, view name such as schematic, or window number"},
              "out": {"type": "string", "maxLength": 500, "default": "preview/shots",
                      "description": "Local dir for the PNG"}},
           "required": [], "additionalProperties": False},
@@ -651,21 +650,33 @@ def _impl_schematic_check_save(a: dict) -> dict:
         lines.append("%s %s %s" % (d.severity, d.code, d.message))
     payload = {
         "status": str(rep.status), "errors": rep.check_error_count,
-        "warnings": rep.check_warning_count,
+        "warnings": rep.check_warning_count, "checked": rep.checked,
+        "saved": rep.saved, "lib": a["lib"], "cell": a["cell"],
+        "request_metadata": rep.request_metadata,
+        "evidence": "schCheck counts and dbSave result for this cellview; a screenshot is visual context only",
         "diagnostics": [{"severity": str(d.severity), "code": str(d.code),
                           "message": str(d.message)[:500]} for d in (rep.diagnostics or [])[:30]]}
     content: list = []
     try:
-        import base64
         shot = _editor_shot()
         if shot and len(shot) < 800000:
+            payload["image_context"] = (
+                "largest visible Virtuoso window; its cell identity is not verified")
+            content.append({"type": "text", "text": "Visual context: largest Virtuoso window; "
+                            "confirm its cell identity before treating it as this schematic."})
             content.append({"type": "image", "data": base64.b64encode(shot).decode(),
                             "mimeType": "image/png"})
     except Exception:
         pass
     content.append({"type": "text", "text": "\n".join(lines)})
-    return _base_result({"content": content, "structuredContent": payload},
-                        cache_public=False)
+    response = _base_result({"content": content, "structuredContent": payload},
+                            cache_public=False)
+    if not rep.ok:
+        response["isError"] = True
+        if (rep.request_metadata or {}).get("outcome") == "unknown":
+            response["content"].append({"type": "text", "text":
+                "Outcome unknown. Preserve the original request handle and reconcile before retrying."})
+    return response
 
 
 def _impl_maestro_read(a: dict) -> dict:
@@ -714,24 +725,28 @@ def _impl_spectre_run(a: dict) -> dict:
     sim = _spectre_sim(a.get("mode", "ax"), int(a.get("timeout", TIMEOUT_SPECTRE)))
     res = sim.run_simulation(str(p), {})
     if not res.ok:
-        return _tool_error("; ".join((res.errors or ["simulation failed"])[:5]))
+        details = {"ok": False, "netlist": str(p), "mode": a.get("mode", "ax"),
+                   "status": str(getattr(res.status, "value", res.status)),
+                   "errors": res.errors, "warnings": res.warnings,
+                   "tool_version": res.tool_version, "metadata": res.metadata}
+        response = _base_result({"content": [{"type": "text", "text":
+            "Spectre failed for %s: %s" % (p.name,
+                "; ".join((res.errors or ["see structured diagnostics"])[:5]))}],
+            "structuredContent": details}, cache_public=False, ttl=0)
+        response["isError"] = True
+        return response
     meta = res.metadata or {}
     data = res.data or {}
-    summary = {"ok": True, "signals": len(data), "output_dir": meta.get("output_dir"),
+    summary = {"ok": True, "signals": len(data), "netlist": str(p),
+               "mode": a.get("mode", "ax"), "output_dir": meta.get("output_dir"),
                "signal_lengths": {k: (len(v) if isinstance(v, list) else 1)
                                   for k, v in list(data.items())[:40]}}
     content: list = []
-    try:
-        import base64
-        vecs = {k: v for k, v in data.items() if isinstance(v, list)}
-        if vecs:
-            png = _wave_png({"time": data.get("time", data.get("TIME", [])),
-                             **{k: v for k, v in vecs.items() if k.lower() != "time"}})
-            if png and len(png) < 500000:
-                content.append({"type": "image", "data": base64.b64encode(png).decode(),
-                                "mimeType": "image/png"})
-    except Exception:
-        pass
+    vecs = {k: v for k, v in data.items() if isinstance(v, list)}
+    if vecs:
+        summary["chart"] = _append_wave_chart(content, {
+            "time": data.get("time", data.get("TIME", [])),
+            **{k: v for k, v in vecs.items() if k.lower() != "time"}})
     content.append({"type": "text", "text": "OK signals=%d out=%s\nUse read_waveform with signals for values."
                         % (len(data), meta.get("output_dir"))})
     try:
@@ -763,54 +778,70 @@ def _impl_spectre_parallel(a: dict) -> dict:
                            max_workers=int(a.get("max_workers", 4)))
     ok = sum(1 for r in out if r.ok)
     rows = []
+    content: list = [{"type": "text", "text":
+                      "Spectre batch: %d/%d runs succeeded" % (ok, len(out))}]
+    previewed = 0
     for n, r in zip(nets, out):
         m = r.metadata or {}
-        rows.append({"netlist": n.name, "ok": bool(r.ok),
-                     "signals": len(r.data or {}),
-                     "output_dir": m.get("output_dir"),
-                     "errors": (r.errors or [])[:2]})
-    return _text_result("done %d/%d ok" % (ok, len(out)), {"ok": ok, "total": len(out), "runs": rows})
+        row = {"netlist": str(n), "ok": bool(r.ok),
+               "signals": len(r.data or {}), "output_dir": m.get("output_dir"),
+               "errors": r.errors, "warnings": r.warnings}
+        if r.ok and previewed < 4 and r.data:
+            previewed += 1
+            content.append({"type": "text", "text": "Run: %s" % n.name})
+            row["chart"] = _append_wave_chart(content, r.data)
+        rows.append(row)
+    if ok > previewed and previewed == 4:
+        content.append({"type": "text", "text":
+                        "Showing four waveform previews; inspect remaining runs by output_dir."})
+    response = _base_result({"content": content,
+                             "structuredContent": {"ok": ok, "total": len(out),
+                                "mode": a.get("mode", "ax"), "runs": rows}},
+                            cache_public=False)
+    if ok != len(out):
+        response["isError"] = True
+    return response
 
 
 
 
 
 def _wave_png(traces: dict[str, list], width: int = 800, height: int = 300,
-              max_pts: int = 800, max_traces: int = 4) -> bytes | None:
-    """Minimal RGB PNG line chart. Stdlib only (struct + zlib).
-
-    Returns PNG bytes or None when no plottable data exists. Agents get
-    a picture of every simulation result without new dependencies.
-    """
+              max_traces: int = 4) -> bytes | None:
+    """Plot values at their real timestamps, retaining extrema in each pixel."""
+    import math
     import struct
     import zlib
-    names = [k for k in traces if k.lower() != "time"][:max_traces]
+    names = [k for k, v in traces.items()
+             if k.lower() != "time" and isinstance(v, list)]
     t = traces.get("time") or traces.get("TIME") or []
     if not names or not t:
         return None
-    n = min(len(t), max((len(traces[k]) for k in names), default=0))
-    if n < 2:
+    if len(t) < 2 or not all(isinstance(v, (int, float)) and math.isfinite(v) for v in t):
         return None
-    stride = max(1, (n + max_pts - 1) // max_pts)
-    xs = list(range(0, n, stride))
+    if any(right < left for left, right in zip(t, t[1:])) or t[-1] <= t[0]:
+        return None
     cols = [(37, 99, 235), (220, 38, 38), (22, 163, 74), (168, 85, 247)]
     series = []
     lo = hi = None
     for name in names:
-        v = traces[name]
-        ys = [v[i] for i in xs if i < len(v)
-              and isinstance(v[i], (int, float)) and v[i] == v[i]]
+        v = traces[name][:len(t)]
+        ys = [x for x in v if isinstance(x, (int, float)) and math.isfinite(x)]
         if len(ys) < 2:
             continue
-        series.append(ys)
+        series.append((name, v))
         lo = min(ys) if lo is None else min(lo, min(ys))
         hi = max(ys) if hi is None else max(hi, max(ys))
+        if len(series) == max_traces:
+            break
     if not series or lo is None or hi is None:
         return None
     if hi - lo < 1e-12:
         hi, lo = hi + 1.0, lo - 1.0
     ml, mr, mt, mb = 8, 8, 8, 8
     pw, ph = width - ml - mr, height - mt - mb
+    if pw < 2 or ph < 2:
+        return None
     px = bytearray([255] * (width * height * 3))
 
     def dot(x, y, c):
@@ -822,17 +853,36 @@ def _wave_png(traces: dict[str, list], width: int = 800, height: int = 300,
         dot(x, mt, (200, 200, 200)), dot(x, mt + ph, (200, 200, 200))
     for y in range(mt, mt + ph):
         dot(ml, y, (200, 200, 200)), dot(ml + pw, y, (200, 200, 200))
-    for s, c in zip(series, cols):
-        ln = len(xs)
-        pts = []
-        for i, v in enumerate(s):
-            x = ml + int(i * pw / max(ln - 1, 1))
-            y = mt + int((1.0 - (v - lo) / (hi - lo)) * ph)
-            pts.append((x, y))
-        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
-            dx, dy, steps = x1 - x0, y1 - y0, max(abs(x1 - x0), abs(y1 - y0), 1)
-            for k in range(steps + 1):
-                dot(x0 + dx * k // steps, y0 + dy * k // steps, c)
+    def line(x0, y0, x1, y1, color):
+        dx, dy = x1 - x0, y1 - y0
+        steps = max(abs(dx), abs(dy), 1)
+        for k in range(steps + 1):
+            dot(x0 + dx * k // steps, y0 + dy * k // steps, color)
+
+    for (_name, values), color in zip(series, cols):
+        # A pixel column stores both extremes, so narrow glitches are visible.
+        # Nonfinite samples end a segment; no line is drawn through missing data.
+        buckets = []
+        segment = 0
+        for i, value in enumerate(values):
+            if not isinstance(value, (int, float)) or not math.isfinite(value):
+                segment += 1
+                continue
+            x = ml + round((t[i] - t[0]) / (t[-1] - t[0]) * (pw - 1))
+            y = mt + round((1 - (value - lo) / (hi - lo)) * (ph - 1))
+            if buckets and buckets[-1][0] == segment and buckets[-1][1] == x:
+                buckets[-1][2] = min(buckets[-1][2], y)
+                buckets[-1][3] = max(buckets[-1][3], y)
+                buckets[-1][5] = y
+            else:
+                buckets.append([segment, x, y, y, y, y])
+        previous = None
+        for item in buckets:
+            segment, x, ymin, ymax, first, last = item
+            line(x, ymin, x, ymax, color)
+            if previous is not None and previous[0] == segment:
+                line(previous[1], previous[5], x, first, color)
+            previous = item
 
     def chunk(tag: bytes, data: bytes) -> bytes:
         return (struct.pack(">I", len(data)) + tag + data
@@ -844,6 +894,115 @@ def _wave_png(traces: dict[str, list], width: int = 800, height: int = 300,
             + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
             + chunk(b"IDAT", zlib.compress(bytes(raw), 6))
             + chunk(b"IEND", b""))
+
+
+def _label_wave_png(png: bytes, *, names: list[str], times: list,
+                    value_range: list[float]) -> bytes | None:
+    """Add axes and legend when the optional Pillow visual extra is installed."""
+    try:
+        from io import BytesIO
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return None
+    plot = Image.open(BytesIO(png)).convert("RGB")
+    left, top, right, bottom = 82, 50, 180, 72
+    canvas = Image.new("RGB", (left + plot.width + right,
+                                top + plot.height + bottom), "white")
+    canvas.paste(plot, (left, top))
+    draw = ImageDraw.Draw(canvas)
+    try:
+        font = ImageFont.truetype("DejaVuSans.ttf", 14)
+        title_font = ImageFont.truetype("DejaVuSans.ttf", 18)
+    except OSError:
+        font = title_font = ImageFont.load_default()
+    draw.text((left, 14), "Waveform preview", fill=(25, 35, 50), font=title_font)
+    draw.text((left + plot.width // 2 - 30, top + plot.height + 39),
+              "Time (s)", fill=(40, 50, 65), font=font)
+    draw.text((8, 34), "Values", fill=(40, 50, 65), font=font)
+    x0, x1 = float(times[0]), float(times[-1])
+    ymin, ymax = map(float, value_range)
+    if ymax - ymin < 1e-12:
+        ymin, ymax = ymin - 1.0, ymax + 1.0
+    for i in range(5):
+        fraction = i / 4
+        x = left + 8 + round(fraction * (plot.width - 17))
+        draw.line((x, top + plot.height - 8, x, top + plot.height - 2),
+                  fill=(90, 100, 115), width=1)
+        draw.text((x - 18, top + plot.height + 3),
+                  "%.3g" % (x0 + fraction * (x1 - x0)),
+                  fill=(40, 50, 65), font=font)
+        y = top + 8 + round((1.0 - fraction) * (plot.height - 17))
+        draw.line((left + 2, y, left + 8, y), fill=(90, 100, 115), width=1)
+        draw.text((6, y - 7), "%.3g" % (ymin + fraction * (ymax - ymin)),
+                  fill=(40, 50, 65), font=font)
+    colors = [(37, 99, 235), (220, 38, 38), (22, 163, 74), (168, 85, 247)]
+    for i, (name, color) in enumerate(zip(names, colors)):
+        y = top + 12 + i * 27
+        x = left + plot.width + 17
+        draw.line((x, y + 6, x + 20, y + 6), fill=color, width=3)
+        draw.text((x + 27, y), name[:18], fill=(25, 35, 50), font=font)
+    draw.text((left, top + plot.height + 57),
+              "Sample visualization; verify limits against numeric results.",
+              fill=(95, 105, 120), font=font)
+    buffer = BytesIO()
+    canvas.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _append_wave_chart(content: list, traces: dict[str, list]) -> dict:
+    """Keep chart provenance and limitations adjacent to its image block."""
+    import math
+    times = traces.get("time") or traces.get("TIME") or []
+    names = []
+    plotted_values = []
+    for name, vector in traces.items():
+        if name.lower() == "time" or not isinstance(vector, list):
+            continue
+        valid = [v for v in vector[:len(times)]
+                 if isinstance(v, (int, float)) and math.isfinite(v)]
+        if len(valid) >= 2:
+            names.append(name)
+            plotted_values.extend(valid)
+        if len(names) == 4:
+            break
+    details = {"x": "sample time (s)", "y": "shared numeric scale; units depend on signals",
+               "traces": dict(zip(names, ["blue", "red", "green", "purple"])),
+               "scope": "visualization of returned samples; no electrical pass/fail check"}
+    try:
+        png = _wave_png(traces)
+    except Exception as exc:
+        logger.warning("waveform plot failed: %s", exc)
+        png = None
+    if not png:
+        details["status"] = "unavailable"
+        content.append({"type": "text", "text": "Waveform chart unavailable; inspect numeric samples."})
+        return details
+    try:
+        labeled = _label_wave_png(png, names=names, times=times,
+                                  value_range=[min(plotted_values), max(plotted_values)])
+    except Exception as exc:
+        logger.warning("waveform labels failed: %s", exc)
+        labeled = None
+    if labeled:
+        png = labeled
+    details["labels_in_image"] = bool(labeled)
+    if len(png) > 500000:
+        details["status"] = "omitted: image exceeds 500 KB"
+        content.append({"type": "text", "text": "Waveform chart exceeds tool image limit; inspect numeric samples."})
+        return details
+    details["status"] = "displayed"
+    details["time_range_s"] = [times[0], times[-1]]
+    details["value_range"] = [min(plotted_values), max(plotted_values)]
+    legend = ", ".join("%s=%s" % (color, name)
+                       for name, color in details["traces"].items())
+    content.append({"type": "text", "text": "Waveform: time %.6g–%.6g s; %s. "
+                    "Y range %.6g–%.6g in each signal's units on a shared scale. "
+                    "Per-pixel extrema retain brief events. This plot does not establish pass/fail."
+                    % (times[0], times[-1], legend,
+                       details["value_range"][0], details["value_range"][1])})
+    content.append({"type": "image", "data": base64.b64encode(png).decode(),
+                    "mimeType": "image/png"})
+    return details
 
 
 # ---------------------------------------------------------------- PDK search
@@ -1005,7 +1164,8 @@ def _impl_pdk_list(a: dict) -> dict:
         rows.append({"lib": lib["name"], "path": str(p), "kind": kind, "cells": len(cells),
                      "symbols": syms, "tech_db": tech,
                      "models": mods})
-    return _text_result("%d PDK libs" % len(rows), {"libs": rows})
+    return _text_result("%d server-local filesystem PDK libraries (remote-only libraries excluded)" % len(rows),
+                        {"scope": "server-local filesystem", "libs": rows})
 
 
 def _impl_pdk_search(a: dict) -> dict:
@@ -1109,7 +1269,6 @@ def _impl_psf_read(a: dict) -> dict:
     wants = a.get("signals") or []
     from virtuoso_bridge.spectre.parsers import (
         parse_spectre_psf_ascii, parse_psf_ascii_directory)
-    stats_fn = None
     data = (parse_spectre_psf_ascii(p).data if p.is_file()
             else parse_psf_ascii_directory(p))
     data = data or {}
@@ -1125,21 +1284,25 @@ def _impl_psf_read(a: dict) -> dict:
     summary = {}
     for k, v in pick.items():
         if isinstance(v, list):
-            if stats_fn is not None:
-                st = stats_fn(v)
-            else:
-                nums = [x for x in v[:100000]
-                        if isinstance(x, (int, float)) and x == x]
-                st = {"n": len(v), "numeric": len(nums),
-                      "min": min(nums) if nums else None,
-                      "max": max(nums) if nums else None}
+            import math
+            count = 0
+            minimum = maximum = None
+            for x in v:
+                if not isinstance(x, (int, float)) or not math.isfinite(x):
+                    continue
+                count += 1
+                minimum = x if minimum is None else min(minimum, x)
+                maximum = x if maximum is None else max(maximum, x)
+            st = {"n": len(v), "numeric": count,
+                  "min": minimum, "max": maximum}
             st["head"] = [x for x in v[:1000]
                            if isinstance(x, (int, float)) and x == x][:5] or v[:5]
             summary[k] = st
         else:
             summary[k] = {"scalar": v}
     txt = "signals=%d keys=%s" % (len(keys), keys[:20])
-    payload = {"available": len(keys), "keys": keys[:100], "stats": summary}
+    payload = {"source": str(p), "available": len(keys),
+               "keys": keys[:100], "stats": summary}
     ats = a.get("at") or []
     if ats:
         import bisect
@@ -1160,23 +1323,17 @@ def _impl_psf_read(a: dict) -> dict:
             for k, v in pick.items():
                 if isinstance(v, list) and k.lower() != "time" and i < len(v):
                     x = v[i]
-                    row[k] = round(x, 6) if isinstance(x, float) else x
+                    row[k] = x
             rows.append(row)
         payload["samples"] = rows
         txt += " samples=%d" % len(rows)
     content: list = []
     vecs = {k: v for k, v in pick.items() if isinstance(v, list)}
     if vecs:
-        try:
-            import base64
-            png = _wave_png({"time": data.get("time", data.get("TIME", [])),
-                             **{k: v for k, v in vecs.items() if k.lower() != "time"}})
-            if png and len(png) < 500000:
-                content.append({"type": "image", "data": base64.b64encode(png).decode(),
-                                "mimeType": "image/png"})
-        except Exception:
-            pass
-    content.append({"type": "text", "text": txt + (" + chart" if len(content) else "")})
+        payload["chart"] = _append_wave_chart(content, {
+            "time": data.get("time", data.get("TIME", [])),
+            **{k: v for k, v in vecs.items() if k.lower() != "time"}})
+    content.append({"type": "text", "text": "PSF source: %s; %s" % (p, txt)})
     r = _base_result({"content": content, "structuredContent": payload},
                      cache_public=False)
     return r
@@ -1191,7 +1348,13 @@ def _impl_netlist_check(a: dict) -> dict:
     r = subprocess.run([sys.executable, str(script), str(p),
                         "--mode", a.get("mode", "dut")],
                        capture_output=True, text=True, timeout=60)
-    return _text_result((r.stdout or "") + (r.stderr or "") or "(no findings)")
+    output = ((r.stdout or "") + (r.stderr or "")) or "(no findings)"
+    response = _text_result(output, {"file": str(p),
+                                     "mode": a.get("mode", "dut"),
+                                     "exit_code": r.returncode})
+    if r.returncode:
+        response["isError"] = True
+    return response
 
 
 
@@ -1207,6 +1370,8 @@ def _impl_library_list(a: dict) -> dict:
     import re
     r = _eval_skill("out=list(nil) foreach(l ddGetLibList() out=cons(l->name out)) out",
                     timeout=TIMEOUT_SKILL)
+    if not r.ok:
+        return _bridge_result(r)
     libs = sorted(set(re.findall(r'"([^"]+)"', str(r.output or ""))))
     return _text_result(", ".join(libs) if libs else "(no libraries)", {"libs": libs})
 
@@ -1221,6 +1386,8 @@ def _impl_cell_list(a: dict) -> dict:
         'out=strcat(out c~>name ":" vs ";")) out '
         'else "error: no lib")' % lib.replace('"', ''),
         timeout=TIMEOUT_SKILL)
+    if not r.ok:
+        return _bridge_result(r)
     return _text_result(str(r.output)[:TEXT_LIMIT], {"lib": lib, "cells": str(r.output)[:8000]})
 
 
@@ -1246,31 +1413,51 @@ def _impl_skill_info(a: dict) -> dict:
 def _impl_snapshot(a: dict) -> dict:
     import subprocess
     out = _safe_out_dir(a.get("out"), "snapshot_out")
-    cmd = [sys.executable, "-m", "virtuoso_bridge.cli", "snapshot", "-o", str(out)]
+    cmd = [str(Path(sys.executable).with_name(
+        "virtuoso-bridge.exe" if sys.platform == "win32" else "virtuoso-bridge")),
+        "snapshot", "-o", str(out)]
     if a.get("history"):
         cmd += ["--history", a["history"]]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT_SNAPSHOT)
-    return _text_result(((r.stdout or "") + (r.stderr or ""))[-6000:] or "(empty snapshot)")
+    output = ((r.stdout or "") + (r.stderr or ""))[-6000:]
+    if r.returncode:
+        return _tool_error("snapshot failed: " + output)
+    return _text_result(output or "(empty snapshot)",
+                        {"output_dir": str(out), "cli_exit_code": r.returncode})
 
 
 def _impl_screenshot(a: dict) -> dict:
-    import subprocess
+    import re
+    target = a.get("target") or "current"
+    if not isinstance(target, str) or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9_.-]{0,59}", target) or ".." in target:
+        raise ValueError("target must be a window number or simple view name")
+    if isinstance(target, str) and target.isdecimal():
+        target = int(target)
     out = _safe_out_dir(a.get("out"), "preview/shots")
-    before = {p.name for p in out.glob("*.png")}
-    cmd = [sys.executable, "-m", "virtuoso_bridge.cli", "screenshot",
-           a.get("target") or "current", "-o", str(out)]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    if r.returncode != 0:
-        return _tool_error("screenshot failed: %s" % (((r.stdout or "") + (r.stderr or ""))[-800:]))
-    new = sorted([p for p in out.glob("*.png") if p.name not in before],
-                 key=lambda p: p.stat().st_mtime)
-    if not new:
-        return _tool_error("no new PNG in %s" % out)
-    shot = new[-1]
-    sid = "shot_" + uuid.uuid4().hex[:12]
-    return _text_result("shot %s -> %s" % (sid, shot),
-                        {"shot_id": sid, "file": str(shot),
-                         "uri": "file://%s" % shot.resolve()})
+    result = _client().screenshot(output=out, target=target, timeout=120)
+    if not result.ok:
+        return _bridge_result(result)
+    shot = Path(str(result.output or ""))
+    if out.resolve() not in shot.resolve().parents:
+        return _tool_error("screenshot output escaped the selected directory")
+    if not shot.is_file():
+        return _tool_error("screenshot reported success but no local PNG was found: %s" % shot)
+    png = shot.read_bytes()
+    if not png.startswith(b"\x89PNG\r\n\x1a\n"):
+        return _tool_error("screenshot output is not a PNG: %s" % shot)
+    payload = {"file": str(shot.resolve()),
+               "target": target, "bytes": len(png),
+               "evidence": "window capture only; electrical correctness requires checks and simulation"}
+    content = [{"type": "text", "text": "Virtuoso %s window capture: %s" % (target, shot)}]
+    if len(png) <= 2_000_000:
+        content.append({"type": "image", "data": base64.b64encode(png).decode(),
+                        "mimeType": "image/png"})
+    else:
+        payload["image_omitted"] = "PNG exceeds 2 MB tool display limit"
+        content[0]["text"] += "; image exceeds 2 MB, use the saved file"
+    return _base_result({"content": content, "structuredContent": payload},
+                        cache_public=False)
 
 
 IMPL = {
@@ -1354,8 +1541,8 @@ def dispatch_tool(name: str, args: dict, params: dict) -> dict:
 
 def _resource_list() -> list[dict]:
     items = [{
-        "uri": "virtuoso://status", "name": "bridge status",
-        "description": "Tunnel, daemon and license state snapshot",
+        "uri": "virtuoso://status", "name": "Spectre license status",
+        "description": "Spectre license probe; use the status tool for bridge readiness",
         "mimeType": "application/json"}]
     if SKILLS_DIR.exists():
         for d in sorted(SKILLS_DIR.iterdir()):
@@ -1496,7 +1683,6 @@ def _discover() -> dict:
             "prompts": {},
             "extensions": {SKILLS_EXT: {"directoryRead": False}},
         },
-        "serverInfo": {**SERVER_INFO, "title": SERVER_TITLE},
     }, ttl=300000)
 
 
@@ -1604,6 +1790,7 @@ def handle(req: dict):
 
 
 def main() -> None:
+    _load_bridge_env()
     for line in sys.stdin:
         line = line.strip()
         if not line:

@@ -16,6 +16,9 @@ uv pip install -e '.[dev]'
 On Windows use `.venv/Scripts/python.exe`. Copy `mcp.example.json` into your
 client configuration and replace the interpreter and server paths with absolute
 paths for this checkout. Send logs to stderr; stdout is JSON-RPC only.
+For waveform images with axis labels and a legend, install the optional visual
+extra with `uv pip install -e '.[mcp-visuals]'`. Without it, the PNG and its
+numeric axis/legend description still appear in the tool result.
 
 ## Operations
 
@@ -24,6 +27,22 @@ inspection, schematic editing, Maestro, standalone Spectre, waveform reading,
 screenshots and existing documentation/SKILL lookup APIs. `search_docs` delegates
 to the bridge's local/remote documentation search. `read_waveform` uses the
 existing PSF parser, with nearest timestamp selection (ties choose the earlier sample).
+`screenshot` returns an MCP PNG image block and its saved file path in the same
+tool result. `simulate` and `read_waveform` return a PNG waveform preview with
+the color legend, real time range, numeric stats and source path alongside it.
+The preview keeps per-pixel extrema so a brief event is not silently discarded.
+Clients decide whether to display image blocks inline; the saved file and
+structured values remain available when a client collapses tool output.
+
+Use `check_schematic` for scoped `schCheck`/`dbSave` counts and diagnostics,
+`screenshot` for visual context, and Spectre/PSF results for electrical data.
+An image or a successful tool call alone does not establish electrical signoff.
+If a check or Maestro run has an unknown outcome, retain the returned request
+metadata, history and completion marker before any retry.
+
+`list_pdk`, `search_pdk` and `describe_pdk` inspect this MCP server's local
+filesystem. They do not enumerate remote-only libraries. `list_libraries`
+queries the active Virtuoso session.
 
 `startup` invokes the registered `virtuoso-bridge start` command and returns its
 CIW load instructions. Setup completion does not establish live readiness.

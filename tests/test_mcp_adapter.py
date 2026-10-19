@@ -12,7 +12,7 @@ from unittest.mock import Mock
 import jsonschema
 import pytest
 
-from virtuoso_bridge.models import ExecutionStatus, VirtuosoResult
+from virtuoso_bridge.models import ExecutionStatus, SimulationResult, VirtuosoResult
 from virtuoso_bridge.virtuoso.requests import RequestRecoveryError
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -183,6 +183,173 @@ def test_waveform_samples_exact_nearest_and_boundaries(monkeypatch, tmp_path):
     rows = response['structuredContent']['samples']
     assert [r['t'] for r in rows] == [0, 0, 0, 0, 1, 1, 2, 2]
     assert [r['OUT'] for r in rows] == [10, 10, 10, 10, 20, 20, 30, 30]
+
+
+def test_tiny_waveform_sample_keeps_full_precision(monkeypatch, tmp_path):
+    path = tmp_path / 'wave.tran'
+    path.touch()
+    monkeypatch.setattr(mcp, '_safe_path', lambda *a, **kw: path)
+    monkeypatch.setattr(mcp, '_wave_png', lambda *a, **kw: None)
+    from virtuoso_bridge.spectre import parsers
+    monkeypatch.setattr(parsers, 'parse_spectre_psf_ascii', lambda *a, **kw: SimpleNamespace(
+        data={'time': [0., 1.], 'I': [0., 2e-9]}))
+    response = mcp._impl_psf_read({'path': str(path), 'signals': ['I'], 'at': [1.]})
+    assert response['structuredContent']['samples'][0]['I'] == 2e-9
+
+
+def test_waveform_extrema_cover_samples_after_old_display_limit(monkeypatch, tmp_path):
+    path = tmp_path / 'wave.tran'
+    path.touch()
+    monkeypatch.setattr(mcp, '_safe_path', lambda *a, **kw: path)
+    monkeypatch.setattr(mcp, '_wave_png', lambda *a, **kw: None)
+    from virtuoso_bridge.spectre import parsers
+    monkeypatch.setattr(parsers, 'parse_spectre_psf_ascii', lambda *a, **kw: SimpleNamespace(
+        data={'time': list(range(100001)), 'I': [0.] * 100000 + [2e-9]}))
+    response = mcp._impl_psf_read({'path': str(path), 'signals': ['I']})
+    stats = response['structuredContent']['stats']['I']
+    assert stats['numeric'] == 100001
+    assert stats['max'] == 2e-9
+
+
+@pytest.mark.parametrize('name,args', [('list_libraries', {}), ('list_cells', {'lib': 'L'})])
+def test_library_queries_preserve_uncertain_receipt(monkeypatch, name, args):
+    result = uncertain_result()
+    monkeypatch.setattr(mcp, '_eval_skill', lambda *a, **kw: result)
+    response = mcp.dispatch_tool(name, args, {})
+    assert response['isError']
+    assert response['structuredContent']['metadata']['request_handle'] == result.metadata['request_handle']
+
+
+def test_check_schematic_marks_uncertain_save_and_keeps_receipt(monkeypatch):
+    from virtuoso_bridge.virtuoso.schematic.diagnostics import SchematicCheckSaveResult
+    result = SchematicCheckSaveResult(
+        status='operation_error', lib='L', cell='C', view='schematic',
+        checked=False, saved=False, check_error_count=0, check_warning_count=0,
+        log_capture_available=False, request_metadata=uncertain_result().metadata)
+    check = Mock(return_value=result)
+    monkeypatch.setattr(mcp, '_client', lambda: SimpleNamespace(
+        schematic=SimpleNamespace(check_and_save=check)))
+    monkeypatch.setattr(mcp, '_editor_shot', lambda: None)
+    response = mcp.dispatch_tool('check_schematic', {'lib': 'L', 'cell': 'C'}, {})
+    assert response['isError']
+    assert response['structuredContent']['request_metadata']['request_handle']
+    assert response['structuredContent']['saved'] is False
+    check.assert_called_once_with('L', 'C')
+
+
+def test_screenshot_returns_real_png_block_and_original_failure(monkeypatch, tmp_path):
+    from virtuoso_bridge.models import VirtuosoResult, ExecutionStatus
+    shot = tmp_path / 'shot.png'
+    shot.write_bytes(mcp._wave_png({'time': [0., 1.], 'OUT': [0., 1.]}))
+    monkeypatch.setattr(mcp, '_safe_out_dir', lambda *a, **kw: tmp_path)
+    take = Mock(return_value=VirtuosoResult(status=ExecutionStatus.SUCCESS, output=str(shot)))
+    monkeypatch.setattr(mcp, '_client', lambda: SimpleNamespace(screenshot=take))
+    response = mcp.dispatch_tool('screenshot', {'target': 'schematic'}, {})
+    assert any(part['type'] == 'image' and part['mimeType'] == 'image/png'
+               for part in response['content'])
+    assert response['structuredContent']['file'] == str(shot.resolve())
+    take.assert_called_once_with(output=tmp_path, target='schematic', timeout=120)
+    take.return_value = uncertain_result()
+    response = mcp.dispatch_tool('screenshot', {'target': 'schematic'}, {})
+    assert response['isError']
+    assert response['structuredContent']['metadata']['request_handle']
+
+
+def test_screenshot_rejects_target_path_escape_before_capture(monkeypatch, tmp_path):
+    monkeypatch.setattr(mcp, '_safe_out_dir', lambda *a, **kw: tmp_path)
+    capture = Mock()
+    monkeypatch.setattr(mcp, '_client', lambda: SimpleNamespace(screenshot=capture))
+    response = mcp.dispatch_tool('screenshot', {'target': '../../outside'}, {})
+    assert response['isError']
+    capture.assert_not_called()
+
+
+def test_load_file_uses_local_tunnel_without_ssh_upload(monkeypatch, tmp_path):
+    from virtuoso_bridge.transport.tunnel import SSHClient
+    source = tmp_path / 'params.il'
+    source.write_text('1 + 2\n', encoding='utf-8')
+    tunnel = SSHClient(remote_host='localhost', port=65432)
+    assert tunnel.ssh_runner is None
+    client = mcp._AdapterClient.from_tunnel(tunnel)
+    client._log_to_ciw = False
+    execute = Mock(return_value=VirtuosoResult(status=ExecutionStatus.SUCCESS))
+    monkeypatch.setattr(client, 'execute_skill', execute)
+    monkeypatch.setattr(mcp, '_safe_roots', lambda: [tmp_path])
+    monkeypatch.setattr(mcp, '_client', lambda: client)
+    response = mcp.dispatch_tool('load_file', {'file': str(source)}, {})
+    assert not response.get('isError')
+    assert response['structuredContent']['metadata']['uploaded'] is False
+    assert 'load(' in execute.call_args.args[0]
+
+
+def test_snapshot_uses_registered_cli_and_reports_failure(monkeypatch, tmp_path):
+    monkeypatch.setattr(mcp, '_safe_out_dir', lambda *a, **kw: tmp_path)
+    run = Mock(return_value=subprocess.CompletedProcess([], 1, '', 'snapshot failed'))
+    monkeypatch.setattr(subprocess, 'run', run)
+    response = mcp._impl_snapshot({})
+    assert response['isError']
+    assert 'snapshot failed' in response['content'][0]['text']
+    assert Path(run.call_args.args[0][0]).name in ('virtuoso-bridge', 'virtuoso-bridge.exe')
+
+
+def test_wave_plot_uses_elapsed_time_and_retains_short_peak():
+    import struct
+    import zlib
+    png = mcp._wave_png({'time': [0., 1., 2., 100.], 'V': [0., 1., 0., 0.]},
+                        width=120, height=50)
+    assert png and png.startswith(b'\x89PNG')
+    pos = 8
+    chunks = []
+    while pos < len(png):
+        size = struct.unpack('>I', png[pos:pos + 4])[0]
+        tag = png[pos + 4:pos + 8]
+        if tag == b'IDAT':
+            chunks.append(png[pos + 8:pos + 8 + size])
+        pos += 12 + size
+    rows = zlib.decompress(b''.join(chunks))
+    width = 120
+    def pixel(x, y):
+        offset = y * (1 + width * 3) + 1 + x * 3
+        return rows[offset:offset + 3]
+    # The peak is at t=1/100, near the left edge, rather than at sample 1/3.
+    blue = bytes((37, 99, 235))
+    peak_xs = [x for x in range(width) if pixel(x, 8) == blue]
+    assert peak_xs and max(peak_xs) < 20
+
+
+def test_spectre_failure_keeps_run_diagnostics(monkeypatch, tmp_path):
+    netlist = tmp_path / 'amp.scs'
+    netlist.touch()
+    monkeypatch.setattr(mcp, '_safe_roots', lambda: [tmp_path])
+    failed = SimulationResult(status=ExecutionStatus.ERROR,
+        errors=['license checkout failed'], warnings=['site warning'],
+        metadata={'output_dir': '/runs/amp.raw', 'returncode': 1})
+    monkeypatch.setattr(mcp, '_spectre_sim', lambda *a: SimpleNamespace(
+        run_simulation=Mock(return_value=failed)))
+    response = mcp._impl_spectre_run({'netlist': str(netlist)})
+    assert response['isError']
+    details = response['structuredContent']
+    assert details['netlist'] == str(netlist)
+    assert details['errors'] == ['license checkout failed']
+    assert details['metadata']['returncode'] == 1
+
+
+def test_parallel_run_exposes_success_image_and_failed_run(monkeypatch, tmp_path):
+    first = tmp_path / 'first.scs'
+    second = tmp_path / 'second.scs'
+    first.touch()
+    second.touch()
+    monkeypatch.setattr(mcp, '_safe_roots', lambda: [tmp_path])
+    successful = SimulationResult(status=ExecutionStatus.SUCCESS,
+        data={'time': [0., 1., 2.], 'VOUT': [0., 1., 0.]},
+        metadata={'output_dir': '/runs/first.raw'})
+    failed = SimulationResult(status=ExecutionStatus.ERROR, errors=['bad model'])
+    monkeypatch.setattr(mcp, '_spectre_sim', lambda *a: SimpleNamespace(
+        run_parallel=Mock(return_value=[successful, failed])))
+    response = mcp._impl_spectre_parallel({'netlists': [str(first), str(second)]})
+    assert response['isError']
+    assert response['structuredContent']['runs'][1]['errors'] == ['bad model']
+    assert any(item['type'] == 'image' for item in response['content'])
 
 
 def wire(requests):

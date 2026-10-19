@@ -1980,7 +1980,9 @@ let((result winName ciwNum)
     def _prepare_il_path(self, path: str | Path) -> tuple[str, bool]:
         """Return (remote_path, uploaded) where uploaded=False means cache hit."""
         p = Path(path)
-        if self._tunnel is not None and p.is_file():
+        if (self._tunnel is not None
+                and getattr(self._tunnel, "ssh_runner", None) is not None
+                and p.is_file()):
             from virtuoso_bridge.transport.remote_paths import (
                 default_virtuoso_bridge_dir,
                 resolve_client_id,

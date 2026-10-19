@@ -123,6 +123,22 @@ def test_run_and_wait_uses_one_timeout_budget(monkeypatch) -> None:
     assert wait_timeouts == [48]
 
 
+def test_completion_wait_timeout_keeps_acknowledged_run(monkeypatch) -> None:
+    client = _RecordingClient()
+    monkeypatch.setattr(writer, "run_simulation", lambda *a, **kw: '"Interactive.11"')
+    monkeypatch.setattr(writer, "_wait_until_done", lambda *a, **kw:
+                        (_ for _ in ()).throw(TimeoutError("completion timed out")))
+    monkeypatch.setattr(writer.uuid, "uuid4", lambda: SimpleNamespace(hex="deadbeef"))
+    with pytest.raises(writer.MaestroCompletionUnknown) as caught:
+        run_and_wait(client, session="amp", timeout=60)
+    metadata = caught.value.result.metadata
+    assert metadata["outcome"] == "unknown"
+    assert metadata["history"] == "Interactive.11"
+    assert metadata["session"] == "amp"
+    assert metadata["completion_marker"] == "/tmp/vb_sim_done_deadbeef"
+    assert metadata["simulation_start_sent"] is True
+
+
 def test_wait_until_done_caps_remote_poll_and_sleep_to_budget(monkeypatch) -> None:
     clock = [100.0]
     command_timeouts: list[float] = []

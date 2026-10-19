@@ -74,6 +74,7 @@ class SchematicCheckSaveResult:
     modal_windows: tuple[dict[str, Any], ...] = ()
     screenshot: Path | None = None
     raw_output: str = ""
+    request_metadata: dict[str, Any] | None = None
 
     @property
     def ok(self) -> bool:
@@ -195,6 +196,7 @@ def check_and_save_schematic(
             timeout=timeout,
             capture_screenshot=capture_screenshot,
             screenshot_output=screenshot_output,
+            request_metadata=dict(getattr(response, "metadata", None) or {}),
         )
 
     try:
@@ -396,6 +398,7 @@ def _failed_transport_result(
     timeout: int,
     capture_screenshot: bool,
     screenshot_output: str | Path | None,
+    request_metadata: dict[str, Any] | None = None,
 ) -> SchematicCheckSaveResult:
     timed_out = any(
         "timeout" in message.lower() or "timed out" in message.lower()
@@ -474,6 +477,7 @@ def _failed_transport_result(
         modal_windows=windows,
         screenshot=screenshot,
         raw_output=output,
+        request_metadata=request_metadata,
     )
 
 
