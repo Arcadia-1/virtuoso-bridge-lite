@@ -206,3 +206,13 @@ def test_check_save_rejects_malformed_protocol_output() -> None:
     assert result.status == "protocol_error"
     assert not result.checked
     assert "complete SKILL list" in result.errors[0].message
+
+
+def test_check_save_preserves_uncertain_bridge_receipt() -> None:
+    metadata = {"outcome": "unknown", "request_handle": {"request_id": "original"}}
+    client = _Client(VirtuosoResult(status=ExecutionStatus.ERROR,
+                                   errors=["response pending"], metadata=metadata))
+    result = check_and_save_schematic(client, "LIB", "AMP")
+    assert not result.ok
+    assert result.request_metadata == metadata
+    assert result.status == "operation_error"
