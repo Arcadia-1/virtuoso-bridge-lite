@@ -170,6 +170,48 @@ def test_maestro_start_uncertainty_is_not_retried(monkeypatch):
     maestro.read_results.assert_not_called()
 
 
+@pytest.mark.parametrize('poll_error', [
+    subprocess.TimeoutExpired('marker poll', 10),
+    ConnectionError('SSH connection lost'),
+    RuntimeError('Persistent SSH shell exited unexpectedly.'),
+])
+def test_maestro_poll_failure_preserves_acknowledged_run(monkeypatch, poll_error):
+    from virtuoso_bridge.virtuoso.maestro import MaestroOps
+
+    client = SimpleNamespace(
+        execute_skill=Mock(side_effect=[
+            VirtuosoResult(status=ExecutionStatus.SUCCESS, output='t'),
+            VirtuosoResult(status=ExecutionStatus.SUCCESS, output='"Interactive.42"'),
+        ]),
+        ssh_runner=SimpleNamespace(run_command=Mock(side_effect=[
+            SimpleNamespace(returncode=0, stdout=''),
+            poll_error,
+        ])),
+    )
+    client.maestro = MaestroOps(client)
+    monkeypatch.setattr(mcp, '_client', lambda: client)
+
+    response = mcp.dispatch_tool('run_test', {'session': 's1', 'timeout': 30}, {})
+
+    assert response['isError']
+    metadata = response['structuredContent']['metadata']
+    assert metadata['outcome'] == 'unknown'
+    assert metadata['session'] == 's1'
+    assert metadata['history'] == 'Interactive.42'
+    assert metadata['phase'] == 'completion_wait'
+    assert metadata['simulation_start_sent'] is True
+    marker = metadata['completion_marker']
+    assert marker.startswith('/tmp/vb_sim_done_')
+    # Only the pre-start cleanup and one read-only poll: no retry or cleanup
+    # after uncertainty, so the original callback marker remains observable.
+    assert [call.args[0] for call in client.ssh_runner.run_command.call_args_list] == [
+        f'rm -f {marker}', f'cat {marker} 2>/dev/null',
+    ]
+    calls = client.execute_skill.call_args_list
+    assert len(calls) == 2
+    assert sum('maeRunSimulation(' in call.args[0] for call in calls) == 1
+
+
 def test_waveform_samples_exact_nearest_and_boundaries(monkeypatch, tmp_path):
     path = tmp_path / 'wave.tran'
     path.touch()
@@ -218,6 +260,43 @@ def test_library_queries_preserve_uncertain_receipt(monkeypatch, name, args):
     response = mcp.dispatch_tool(name, args, {})
     assert response['isError']
     assert response['structuredContent']['metadata']['request_handle'] == result.metadata['request_handle']
+
+
+@pytest.mark.parametrize('include', [None, 'INCLUDE', 'SOFTINCLUDE'])
+def test_local_pdk_discovery_resolves_complete_variables_and_source_paths(
+    monkeypatch, tmp_path, include,
+):
+    install = tmp_path / 'cadence'
+    rf = install / 'libs' / 'RF'
+    setup = tmp_path / 'setup'
+    source_dir = setup / 'nested' if include else setup
+    passive = source_dir / 'libs with space' / 'Passive'
+    for lib in (rf, passive):
+        lib.mkdir(parents=True)
+        (lib / 'cdsinfo.tag').touch()
+    main = setup / 'cds.lib'
+    source = source_dir / 'cds.lib'
+    source.write_text(
+        'DEFINE RF $CDS_INST_DIR/libs/RF\n'
+        'DEFINE Passive "libs with space/Passive"\n'
+        + ('SOFTINCLUDE ../cds.lib\n' if include else ''),
+        encoding='utf-8',
+    )
+    if include:
+        main.write_text(f'{include} nested/cds.lib\n', encoding='utf-8')
+    monkeypatch.setenv('CDS_INST_DIR', str(install))
+    monkeypatch.setattr(mcp, '_cds_lib_files', lambda: [main])
+    monkeypatch.setattr(mcp, '_pdk_roots', lambda: [])
+    monkeypatch.setattr(mcp, '_PDK', {'at': 0.0, 'libs': []})
+
+    response = mcp.dispatch_tool('list_pdk', {}, {})
+
+    assert not response.get('isError')
+    data = response['structuredContent']
+    assert data['scope'] == 'server-local filesystem'
+    assert {row['lib']: Path(row['path']).resolve() for row in data['libs']} == {
+        'RF': rf.resolve(), 'Passive': passive.resolve(),
+    }
 
 
 def test_check_schematic_marks_uncertain_save_and_keeps_receipt(monkeypatch):

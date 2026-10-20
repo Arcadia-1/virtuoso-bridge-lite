@@ -20,8 +20,8 @@ from virtuoso_bridge.virtuoso.ops import escape_skill_string
 logger = logging.getLogger(__name__)
 
 
-class MaestroCompletionUnknown(RuntimeError):
-    """A run was acknowledged, but its completion could not be confirmed."""
+class MaestroCompletionUnknown(TimeoutError):
+    """An acknowledged run is unconfirmed; compatible with timeout handlers."""
 
     def __init__(self, result: VirtuosoResult) -> None:
         self.result = result
@@ -566,9 +566,16 @@ procedure(_vb_sim_done_{nonce}(session runID)
     # Poll marker via SSH (SKILL channel stays free)
     try:
         status = _wait_until_done(client, marker, timeout=remaining_timeout())
-    except TimeoutError as exc:
+    except DialogBlockedError as exc:
+        exc.result.metadata.update(history=history_name, session=session,
+                                   phase="completion_wait", completion_marker=marker,
+                                   simulation_start_sent=True)
+        raise
+    except Exception as exc:
         # The start was acknowledged. Keep its identity when completion is
         # uncertain so clients can inspect this run without starting another.
+        # Transport polling can also raise TimeoutExpired or connection errors,
+        # not just the end-to-end TimeoutError.
         result = VirtuosoResult(
             status=ExecutionStatus.ERROR,
             errors=[str(exc)],
@@ -577,11 +584,6 @@ procedure(_vb_sim_done_{nonce}(session runID)
                       "phase": "completion_wait", "simulation_start_sent": True},
         )
         raise MaestroCompletionUnknown(result) from exc
-    except DialogBlockedError as exc:
-        exc.result.metadata.update(history=history_name, session=session,
-                                   phase="completion_wait", completion_marker=marker,
-                                   simulation_start_sent=True)
-        raise
     return history, status
 
 

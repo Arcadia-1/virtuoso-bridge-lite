@@ -129,8 +129,10 @@ def test_completion_wait_timeout_keeps_acknowledged_run(monkeypatch) -> None:
     monkeypatch.setattr(writer, "_wait_until_done", lambda *a, **kw:
                         (_ for _ in ()).throw(TimeoutError("completion timed out")))
     monkeypatch.setattr(writer.uuid, "uuid4", lambda: SimpleNamespace(hex="deadbeef"))
-    with pytest.raises(writer.MaestroCompletionUnknown) as caught:
+    # Existing callers catch TimeoutError; the recovery receipt is additive.
+    with pytest.raises(TimeoutError) as caught:
         run_and_wait(client, session="amp", timeout=60)
+    assert isinstance(caught.value, writer.MaestroCompletionUnknown)
     metadata = caught.value.result.metadata
     assert metadata["outcome"] == "unknown"
     assert metadata["history"] == "Interactive.11"

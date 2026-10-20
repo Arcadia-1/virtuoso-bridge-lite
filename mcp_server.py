@@ -1016,18 +1016,25 @@ _PDK_MAX_CELLS = 20000
 
 def _expand_vars(text: str, base: Path) -> str:
     import os
+    import re
     cds = (os.environ.get("CDS_INST_DIR") or os.environ.get("CDSHOME")
            or "/opt/cadence")
     guess_pdk = str(base.parent.parent) if (base.parent).name == "setup" else str(base.parent)
-    table = {"CDS": cds, "PDK_DIR": guess_pdk,
+    table = {"CDS": cds, "CDS_INST_DIR": cds, "PDK_DIR": guess_pdk,
              "HOME": os.path.expanduser("~"), "CWD": str(Path.cwd())}
-    for k, v in table.items():
-        text = text.replace("$" + k, v).replace("${" + k + "}", v)
-    return os.path.expandvars(text)
+
+    def replacement(match):
+        key = match.group(1) or match.group(2)
+        return os.environ.get(key, table.get(key, match.group(0)))
+
+    # Match whole names: replacing "$CDS" must not corrupt "$CDS_INST_DIR".
+    value = re.sub(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)',
+                   replacement, text.strip().strip('"'))
+    return os.path.expanduser(value)
 
 
 def _parse_cds_lib(path: Path, seen: set | None = None) -> dict[str, str]:
-    """Return {lib: path} from cds.lib, one SOFTINCLUDE level, no cycles."""
+    """Resolve local DEFINEs and recursive INCLUDE/SOFTINCLUDE without cycles."""
     out: dict[str, str] = {}
     if seen is None:
         seen = set()
@@ -1046,11 +1053,15 @@ def _parse_cds_lib(path: Path, seen: set | None = None) -> dict[str, str]:
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        parts = line.split()
-        if parts[0] == "DEFINE" and len(parts) >= 3:
-            out[parts[1]] = _expand_vars(parts[2], path)
-        elif parts[0] == "SOFTINCLUDE" and len(parts) >= 2:
-            inc = Path(_expand_vars(parts[1], path))
+        parts = line.split(maxsplit=2)
+        keyword = parts[0].upper()
+        if keyword == "DEFINE" and len(parts) >= 3:
+            lib_path = Path(_expand_vars(parts[2], path))
+            if not lib_path.is_absolute():
+                lib_path = path.parent / lib_path
+            out[parts[1]] = str(lib_path.resolve())
+        elif keyword in ("INCLUDE", "SOFTINCLUDE") and len(parts) >= 2:
+            inc = Path(_expand_vars(" ".join(parts[1:]), path))
             if not inc.is_absolute():
                 inc = path.parent / inc
             out.update(_parse_cds_lib(inc, seen))

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -420,6 +421,29 @@ def test_run_reports_unknown_outcome_without_retry(monkeypatch, error) -> None:
     with pytest.raises(MaestroMonteCarloOutcomeUnknown, match="may have started"):
         run_monte_carlo_and_wait(SimpleNamespace(), session="s", timeout=30)
     assert calls == 1
+
+
+def test_run_preserves_completion_timeout_translation_and_original_receipt() -> None:
+    client = _Client(
+        _result(f'("{mc._RUN_MODE_TAG}" "ok" "{MC_RUN_MODE}")'),
+        _result(),
+        _result('"MonteCarlo.9"'),
+    )
+    client.ssh_runner = SimpleNamespace(run_command=Mock(side_effect=[
+        SimpleNamespace(returncode=0, stdout=""),
+        TimeoutError("Simulation did not finish within 30s"),
+    ]))
+
+    with pytest.raises(MaestroMonteCarloOutcomeUnknown) as caught:
+        run_monte_carlo_and_wait(client, session="s", timeout=30)
+
+    cause = caught.value.__cause__
+    assert isinstance(cause, TimeoutError)
+    assert cause.result.metadata["history"] == "MonteCarlo.9"
+    assert cause.result.metadata["session"] == "s"
+    assert cause.result.metadata["simulation_start_sent"] is True
+    assert sum("maeRunSimulation(" in call[0] for call in client.calls) == 1
+    assert len(client.calls) == 3
 
 
 def test_export_uses_explicit_history_filters_and_output_path() -> None:
