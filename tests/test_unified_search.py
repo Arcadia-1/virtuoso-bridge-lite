@@ -1,9 +1,35 @@
 """Synthetic local search fixtures; no installed Cadence or PDK data."""
+import multiprocessing
+from pathlib import Path
+import sqlite3
 import threading
 
 import pytest
 
 from virtuoso_bridge import unified_search as search
+
+
+def _build_files_after_other_writer(cache, files, ready, release):
+    """Child process with its own build lock; pause at the SQLite write boundary."""
+    search.cache_root = lambda: Path(cache)
+    original_connect = sqlite3.connect
+
+    class PausedConnection(sqlite3.Connection):
+        def execute(self, sql, *args, **kwargs):
+            if sql == "BEGIN IMMEDIATE":
+                ready.set()
+                if not release.wait(10):
+                    raise TimeoutError("other index writer did not finish")
+            return super().execute(sql, *args, **kwargs)
+
+    def connect(*args, **kwargs):
+        return original_connect(*args, factory=PausedConnection, **kwargs)
+
+    sqlite3.connect = connect
+    try:
+        search.build(kinds=['file'], roots={'file': [Path(files)]})
+    finally:
+        sqlite3.connect = original_connect
 
 
 def test_build_search_refresh_and_kind_isolation(tmp_path, monkeypatch):
@@ -77,6 +103,51 @@ def test_reader_sees_previous_complete_index_during_rebuild(tmp_path, monkeypatc
     assert not failures
     assert not search.search('stablecapacitor', kinds=['doc'])
     assert search.search('newinductor', kinds=['doc'])
+
+
+def test_independent_writers_publish_counts_for_all_committed_kinds(tmp_path, monkeypatch):
+    cache = tmp_path / 'cache'
+    monkeypatch.setattr(search, 'cache_root', lambda: cache)
+    skill = tmp_path / 'skill'
+    docs = tmp_path / 'docs'
+    files = tmp_path / 'project'
+    for root in (skill, docs, files):
+        root.mkdir()
+    (skill / 'api.fnd').write_text(
+        '("syntheticSkill"\n"syntheticSkill()"\n"syntheticskillfixture")\n',
+        encoding='utf-8',
+    )
+    (docs / 'guide.html').write_text('<p>syntheticdocfixture</p>', encoding='utf-8')
+    (files / 'model.scs').write_text('syntheticfilefixture', encoding='utf-8')
+    search.build(kinds=['skill'], roots={'skill': [skill]})
+
+    context = multiprocessing.get_context('spawn')
+    ready, release = context.Event(), context.Event()
+    worker = context.Process(
+        target=_build_files_after_other_writer,
+        args=(str(cache), str(files), ready, release),
+    )
+    worker.start()
+    try:
+        assert ready.wait(10), 'file writer never reached its transaction'
+        # The file writer has opened the existing index but not acquired its
+        # write lock. Another process can commit a new kind in this gap.
+        search.build(kinds=['doc'], roots={'doc': [docs]})
+        release.set()
+        worker.join(10)
+        assert not worker.is_alive(), 'file writer did not finish'
+        assert worker.exitcode == 0
+    finally:
+        release.set()
+        if worker.is_alive():
+            worker.terminate()
+        worker.join(5)
+
+    for kind in ('skill', 'doc', 'file'):
+        assert search.search(f'synthetic{kind}fixture', kinds=[kind])
+    status = search.status()
+    assert status['counts'] == {'skill': 1, 'doc': 1, 'file': 1}
+    assert status['built_kinds'] == ['doc', 'file', 'skill']
 
 
 def test_cds_includes_expand_complete_install_variable_and_stop_cycles(tmp_path, monkeypatch):

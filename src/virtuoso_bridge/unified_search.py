@@ -510,13 +510,10 @@ def build(
     db = db_path()
     man = manifest_path()
     db.parent.mkdir(parents=True, exist_ok=True)
-    counts: dict[str, int] = {}
-    rebuilt: set[str] = set()
     with _BUILD_LOCK:
         con = _connect(db)
         try:
             _create_schema(con)
-            prev = _manifest_from_db(con) or _read_manifest_file() or {}
             # SQLite WAL keeps the previous complete index visible to readers
             # until every selected collector and the manifest have committed.
             con.execute("BEGIN IMMEDIATE")
@@ -540,23 +537,20 @@ def build(
                     con.executemany(
                         "INSERT INTO entries (kind,path,lib,cell,view,title,body) "
                         "VALUES (?,?,?,?,?,?,?)", batch)
-                rebuilt.update(kinds_in_group)
                 if progress:
                     got = _count_group(con, kinds_in_group)
                     progress("  %s: %d rows in %.1fs"
                              % ("+".join(kinds_in_group), got, time.monotonic() - started))
+            # Count every kind from this transaction, including kinds another
+            # process refreshed before we acquired the write lock. Merging a
+            # pre-transaction manifest could otherwise lose their metadata.
             counts = _count_by_kind(con)
-            prev_kinds = prev.get("kinds", {}) if not rebuild else {}
-            merged = {k: v for k, v in prev_kinds.items() if k not in rebuilt and v}
-            for k in rebuilt:
-                if counts.get(k):
-                    merged[k] = counts[k]
             manifest = {
                 "format": FORMAT,
                 "schema_version": SCHEMA_VERSION,
                 "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "body_limit": body_limit,
-                "kinds": merged,
+                "kinds": counts,
                 "roots": {k: [str(p) for p in v] for k, v in roots.items()},
             }
             con.execute("INSERT OR REPLACE INTO index_metadata(key,value) VALUES (?,?)",
