@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#faf9f5" />
+    <meta name="theme-color" content="#ffffff" />
     <title>Virtuoso Bridge — AI agents for Cadence Virtuoso and Spectre</title>
     <meta name="description" content="A lightweight bridge for Spectre simulation and PDK/CDF callbacks, with schematic, symbol and GDS operations through Python, SKILL or the CLI." />
     <meta name="site-title-en" content="Virtuoso Bridge — AI agents for Cadence Virtuoso and Spectre" />
@@ -32,17 +32,12 @@
       } catch (e) {}
     </script>
     <link rel="stylesheet" href="/site.css?v=20261018-lite" />
-    <link rel="stylesheet" href="/assets/home/home.css?v=20261018-lite" />
-    <script src="/site.js?v=20261013-navigation" defer></script>
-    <script type="module" src="/assets/home/home.mjs?v=20261018-lite"></script>
-    <script type="module" src="/analytics/track.js?v=20261012-light"></script>
-  </head>
-  <body class="home">
-    <a class="skip-link" href="#main"
+<script src="/site.js?v=20261013-navigation" defer></script><link rel="stylesheet" href="/assets/home/archive-scoped.css?v=20261021-archive"><link rel="stylesheet" href="/assets/home/home.css?v=20261021-archive"><script type="module" src="/assets/home/archive.mjs?v=20261025-waterfall"></script><script type="module" src="/assets/home/home.mjs?v=20261021-archive"></script><link rel="stylesheet" href="/assets/home/cool-paper.css?v=20261021-archive"><script type="module" src="/analytics/track.js?v=20261012-light"></script>
+<link rel="stylesheet" href="/assets/home/waterfall.css?v=20261025-waterfall"></head>
+<body><a class="skip-link" href="#main"
       ><span class="en">Skip to content</span
       ><span class="zh">跳转到正文</span></a
-    >
-    <header class="site-header">
+    ><header class="site-header">
       <div class="wrap header-inner">
         <a
           class="brand"
@@ -146,48 +141,69 @@
           </button>
         </div>
       </div>
-    </header>
-    <main id="main">
-      <section class="hero" id="top">
-        <div class="wrap">
-          <div class="hero-content">
-            <div class="hero-copy">
-              <div class="eyebrow">
-                <span class="en">Infrastructure for agentic chip design</span><span class="zh">面向智能体的芯片设计基础设施</span>
-              </div>
-              <h1>
-                <span class="en">Your agent.<span class="gradient-text">Inside Virtuoso.</span></span><span class="zh">让智能体，<span class="gradient-text">走进 Virtuoso。</span></span>
-              </h1>
-              <p class="hero-description">
-                <span class="en">Connect AI agents to real Cadence tools. <strong>Spectre simulation and PDK/CDF callbacks</strong> at the core, through Python, SKILL or the CLI.</span><span class="zh">连接 AI 智能体与真实的 Cadence 设计环境。以 <strong>Spectre 仿真与 PDK/CDF 回调</strong>为核心，通过 Python、SKILL 或命令行调用。</span>
-              </p>
-              <p class="hero-scope"><span class="en">Schematic, symbol and GDS operations for everyday work. Raw SKILL for the rest. <strong>Lite by default; advanced configuration is optional.</strong></span><span class="zh">原理图、symbol、GDS 操作覆盖日常需求，其他交给原生 SKILL。<strong>默认极简，高级配置按需开启。</strong></span></p>
-              <div class="actions">
-                <a class="button primary" href="#start"><span class="en">Build your first connection</span><span class="zh">开始连接</span><span class="arrow">↗</span></a>
-                <a class="button" href="https://github.com/Arcadia-1/virtuoso-bridge-lite"><span class="en">Explore the source</span><span class="zh">查看开源代码</span><span class="arrow">↗</span></a>
-              </div>
-              <p class="hero-note"><span>OPEN SOURCE</span><span>MIT LICENSE</span><span>PYTHON ≥ 3.9</span></p>
-            </div>
-            <div class="hero-visual">
-              <img
-                src="/assets/architecture.svg?v=20261012-hero"
-                width="620"
-                height="490"
-                alt="Architecture: your AI agent talks to Virtuoso Bridge through Python, SKILL or the CLI; the bridge reaches Virtuoso schematic and layout, Maestro, and Spectre, which can also run without a Virtuoso daemon."
-              />
-              <p class="diagram-label"><span class="en">ARCHITECTURE ILLUSTRATION / NOT A LIVE SESSION</span><span class="zh">架构示意 / 非实时会话</span></p>
-            </div>
-          </div>
-          <div class="hero-baseline">
-            <span>ONE BRIDGE. REAL DESIGN TOOLS.</span>
-            <div class="capabilities"><span>SPECTRE</span><span>PDK / CDF</span><span>SCHEMATIC · SYMBOL · GDS</span></div>
-          </div>
-        </div>
-      </section>
+    </header><main id="main" class="refined"><div class="intro-stage"><section class="intro wrap" id="top">
+  <div class="intro-copy type-study">
+    <p class="intro-eyebrow"><span class="en">Infrastructure for agentic chip design</span><span class="zh">面向智能体的芯片设计基础设施</span></p>
+    <h1 class="hero-title"><span class="en"><span class="headline-line"><span class="headline-word">Your agent.</span></span> <span class="headline-line"><span class="headline-word">Inside Virtuoso.</span></span></span><span class="zh"><span class="headline-line"><span class="headline-word">让智能体，</span></span> <span class="headline-line"><span class="headline-word">走进 Virtuoso。</span></span></span></h1>
+    <div class="hero-summary">
+      <p><span class="en">Connect AI agents to real Cadence tools. <strong>Spectre simulation and PDK/CDF callbacks</strong> at the core, through Python, SKILL or the CLI.</span><span class="zh">连接 AI 智能体与真实的 Cadence 设计环境。以 <strong>Spectre 仿真与 PDK/CDF 回调</strong>为核心，通过 Python、SKILL 或命令行调用。</span></p>
+      <p><span class="en">Schematic, symbol and GDS operations for everyday work. Raw SKILL for the rest. <strong>Lite by default; advanced configuration is optional.</strong></span><span class="zh">原理图、symbol、GDS 操作覆盖日常需求，其他交给原生 SKILL。<strong>默认极简，高级配置按需开启。</strong></span></p>
+    </div>
+    <div class="intro-actions"><a class="button primary" href="#start"><span class="en">Build your first connection</span><span class="zh">开始连接</span> ↗</a><a class="source-link" href="https://github.com/Arcadia-1/virtuoso-bridge-lite"><span class="en">Explore the source</span><span class="zh">查看开源代码</span> ↗</a></div>
+    <p class="intro-license">OPEN SOURCE <span>MIT LICENSE</span><span>PYTHON ≥ 3.9</span></p>
+  </div>
+  <figure id="bridge-visual" class="hero-flow">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 740" role="img" aria-label="AI agent connects through Virtuoso Bridge to Virtuoso, Maestro and Spectre" aria-describedby="hero-flow-desc">
+  <desc id="hero-flow-desc">A centered input reaches the Bridge junction, then three continuous curves lead to Virtuoso, Maestro and Spectre. All names are horizontal and clear of the lines. An orange signal follows the connections while the text stays still.</desc>
+  <g class="system-guides" fill="none" stroke="#99a58c" stroke-width="9" stroke-linecap="butt" aria-hidden="true">
+    <path class="companion-output" pathLength="100" d="M248 140C248 196 300 210 300 282V610"/>
+    <path class="companion-output" pathLength="100" d="M313 140V610"/>
+  </g>
+  <g class="system-guides companion-white" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="butt" aria-hidden="true">
+    <path class="companion-output" pathLength="100" d="M248 140C248 196 300 210 300 282V610"/>
+    <path class="companion-output" pathLength="100" d="M313 140V610"/>
+  </g>
+  <g class="system-routes" fill="none" stroke="#53694a" stroke-width="8" stroke-linecap="round">
+    <path id="route-input" class="route-draw" data-geometry="input" pathLength="100" d="M330 140V320"/>
+    <path id="route-virtuoso" class="route-draw route-output" data-geometry="virtuoso" pathLength="100" d="M330 320C330 438 130 407 130 540"/>
+    <path id="route-maestro" class="route-draw route-output" data-geometry="maestro" pathLength="100" d="M330 320V610"/>
+    <path id="route-spectre" class="route-draw route-output" data-geometry="spectre" pathLength="100" d="M330 320C330 438 540 359 540 480"/>
+  </g>
+  <g class="system-signals" fill="none" stroke="#c15b29" stroke-width="9" stroke-linecap="round" aria-hidden="true">
+    <path class="signal-input" pathLength="100" d="M330 140V320"/>
+    <path class="signal-output signal-left" pathLength="100" d="M330 320C330 438 130 407 130 540"/>
+    <path class="signal-output signal-center" pathLength="100" d="M330 320V610"/>
+    <path class="signal-output signal-right" pathLength="100" d="M330 320C330 438 540 359 540 480"/>
+  </g>
+  <g fill="#f4f3ec" stroke="#b3542d" stroke-width="3">
+    <circle cx="330" cy="140" r="6"/>
+    <circle class="node-bridge" cx="330" cy="320" r="11" stroke-width="4"/>
+    <circle class="node-tool node-left" cx="130" cy="540" r="8"/>
+    <circle class="node-tool node-center" cx="330" cy="610" r="8"/>
+    <circle class="node-tool node-right" cx="540" cy="480" r="8"/>
+  </g>
+  <g font-family="Arial, Helvetica, sans-serif" fill="#30432b">
+    <g text-anchor="middle">
+      <text class="system-agent" x="330" y="83" font-size="43" font-weight="800" letter-spacing="-1.4">AI agent</text>
+      <text class="system-caption" x="330" y="111" font-size="15" font-weight="500" letter-spacing=".7">PYTHON / SKILL / CLI</text>
+    </g>
+    <text x="365" y="278" font-size="28" font-weight="700" letter-spacing="2.6">VIRTUOSO</text>
+    <text x="362" y="332" font-size="61" font-weight="900" letter-spacing="-3">BRIDGE</text>
+    <g text-anchor="middle">
+      <text class="system-tool" x="130" y="600" font-size="41" font-weight="800" letter-spacing="-1.4">Virtuoso</text>
+      <text class="system-caption" x="130" y="628" font-size="15" letter-spacing=".2">SCHEMATIC / LAYOUT</text>
+      <text class="system-tool" x="330" y="670" font-size="41" font-weight="800" letter-spacing="-1.4">Maestro</text>
+      <text class="system-caption" x="330" y="698" font-size="15" letter-spacing=".2">SIMULATION SETUP</text>
+      <text class="system-tool" x="540" y="540" font-size="41" font-weight="800" letter-spacing="-1.4">Spectre</text>
+      <text class="system-caption" x="540" y="568" font-size="15" letter-spacing=".2">NETLIST / PSF</text>
+    </g>
+  </g>
+</svg>
 
-      <div class="page">
-      <section class="block" id="skillbridge">
-        <h2><span class="en">How it differs from skillbridge</span><span class="zh">与 skillbridge 的区别</span></h2>
+  </figure>
+</section></div>
+<div class="content-band band-skillbridge"><div class="wrap"><section class="block" id="skillbridge">
+        <span class="section-no">01</span><h2><span class="en">How it differs from skillbridge</span><span class="zh">与 skillbridge 的区别</span></h2>
         <p><span class="en">Both run SKILL through the same Virtuoso IPC core (<code>ipcBeginProcess</code> + <code>evalstring</code>). The difference is what sits on top.</span><span class="zh">两者底层相同，都通过 Virtuoso 的 IPC 机制（<code>ipcBeginProcess</code> + <code>evalstring</code>）执行 SKILL，区别在上层。</span></p>
         <table class="compare">
           <thead>
@@ -232,10 +248,8 @@
           </tbody>
         </table>
         <p class="note"><span class="en">skillbridge details checked against its source and docs, version 1.8.0.</span><span class="zh">skillbridge 的信息对照其 1.8.0 版源码和文档核实。</span></p>
-      </section>
-
-      <section class="block" id="start">
-        <h2><span class="en">Quick start</span><span class="zh">快速开始</span></h2>
+      </section></div></div><div class="content-band band-start"><div class="wrap"><section class="block" id="start">
+        <span class="section-no">02</span><h2><span class="en">Quick start</span><span class="zh">快速开始</span></h2>
         <div class="code">
           <div class="code-head"><span>macOS · Linux</span><button class="copy-button js-only" type="button" data-copy="quickstart-code"><span class="en">Copy</span><span class="zh">复制</span></button></div>
           <pre id="quickstart-code"><code>git clone https://github.com/Arcadia-1/virtuoso-bridge-lite.git
@@ -251,10 +265,8 @@ virtuoso-bridge eval '1+2'       <span class="comment"># after loading it: 3</sp
         <p class="note">
           <span class="en">Paste the <code>load("...")</code> line into the Virtuoso CIW you want to drive. Windows, local mode and standalone Spectre: see the <a href="/guide/#install" data-internal>guide</a>.</span><span class="zh">把 <code>load("...")</code> 这行粘贴到要控制的 Virtuoso CIW。Windows、本机模式、独立 Spectre 见<a href="/guide/#install" data-internal>使用文档</a>。</span>
         </p>
-      </section>
-
-      <section class="block" id="docs">
-        <h2><span class="en">Read more</span><span class="zh">延伸阅读</span></h2>
+      </section></div></div><div class="content-band band-docs"><div class="wrap"><section class="block" id="docs">
+        <span class="section-no">03</span><h2><span class="en">Read more</span><span class="zh">延伸阅读</span></h2>
         <ul class="links">
           <li><a href="/guide/" data-internal><span class="en">Guide</span><span class="zh">使用文档</span></a><span><span class="en">setup, configuration, CLI, architecture</span><span class="zh">安装、配置、命令行、架构</span></span></li>
           <li><a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/tree/main/examples">examples/</a><span><span class="en">runnable workflows</span><span class="zh">可运行的工作流</span></span></li>
@@ -263,31 +275,21 @@ virtuoso-bridge eval '1+2'       <span class="comment"># after loading it: 3</sp
           <li><a href="/guide/#cite" data-internal><span class="en">Citation</span><span class="zh">引用</span></a><span>BibTeX</span></li>
           <li><a href="#ecosystem"><span class="en">Ecosystem</span><span class="zh">生态</span></a><span><span class="en">projects built on Virtuoso Bridge</span><span class="zh">基于 Virtuoso Bridge 的项目</span></span></li>
         </ul>
-      </section>
-      <section class="block ecosystem" id="ecosystem">
-        <h2><span class="en">Ecosystem</span><span class="zh">生态</span></h2>
-        <p><span class="en">53 public GitHub projects that build on, extend, bundle or mention Virtuoso Bridge, as of October 2026.</span><span class="zh">截至 2026 年 10 月，GitHub 上有 53 个公开项目基于、扩展、内置或提及 Virtuoso Bridge。</span></p>
-        <div id="eco-featured" hidden>
-          <p class="eco-featured-heading"><span class="en">Project examples</span><span class="zh">项目示例</span></p>
-          <div class="eco-featured-grid"></div>
-        </div>
-        <div class="eco-search-controls" id="eco-search-controls" hidden>
-          <label for="eco-search"><span class="en">Search projects</span><span class="zh">搜索项目</span></label>
-          <div class="eco-search-row">
-            <input id="eco-search" type="search" placeholder="Name or keyword" aria-controls="ecosystem-index" autocomplete="off" spellcheck="false" />
-            <button id="eco-clear" type="button" disabled><span class="en">Clear</span><span class="zh">清除</span></button>
-          </div>
-          <p id="eco-search-status" role="status" aria-live="polite" aria-atomic="true"></p>
-        </div>
-        <nav class="eco-categories" aria-label="Project categories / 项目分类">
+      </section></div></div><section class="ecosystem-area wrap" id="ecosystem"><div class="ecosystem-heading"><span class="section-no">04</span><h2><span class="en">Projects using Virtuoso Bridge</span><span class="zh">使用 Virtuoso Bridge 的项目</span></h2><p><span class="en">Explore the folders, or search the complete directory below.</span><span class="zh">抽取档案浏览项目，或在下方完整目录中搜索。</span></p></div><section hidden class="archive" data-waterfall aria-label="Project archive / 项目档案">
+<div class="collection-bar"><span class="eyebrow">COLLECTIONS</span><nav id="categories" aria-label="Project collections / 项目分类"></nav></div>
+<div class="wf-workspace"><div class="wf-window"><div class="wf-panorama"></div></div>
+<aside class="wf-detail" aria-label="Project details / 项目详情"><div class="wf-detail-meta"><span class="wf-detail-id"></span><span>GITHUB / PUBLIC</span></div><p class="wf-detail-owner"></p><h3 class="wf-detail-title"></h3><p class="wf-detail-description"></p><p class="wf-detail-category"></p><a class="wf-detail-link" target="_blank" rel="noopener noreferrer">GitHub ↗</a><div class="wf-detail-position"></div></aside></div>
+</section>
+<div class="index-top"><span class="eyebrow">THE COMPLETE INDEX</span><span class="zh">搜索全部 53 个项目</span><span class="en">Search all 53 projects</span></div>
+<details id="full-index" open><summary><span class="zh">查看完整目录</span><span class="en">Browse the full index</span><span id="total"></span></summary><div id="eco-search-controls" hidden><label class="search"><span class="zh">检索名称或描述</span><span class="en">Search names or descriptions</span><input id="search" type="search" aria-controls="ecosystem-index" autocomplete="off" placeholder="PANDA, Spectre, layout…"></label><button id="index-clear" type="button" disabled><span class="en">Clear search</span><span class="zh">清除搜索</span></button><p id="search-status" role="status" aria-live="polite" aria-atomic="true"></p></div><nav class="eco-categories" aria-label="Project categories / 项目分类">
           <a href="#eco-forks"><span class="en">Rewrites &amp; forks</span><span class="zh">重写与 fork</span></a>
           <a href="#eco-tools"><span class="en">Tools</span><span class="zh">工具</span></a>
           <a href="#eco-agents"><span class="en">Agents &amp; designs</span><span class="zh">智能体与设计</span></a>
           <a href="#eco-skills"><span class="en">Skills &amp; knowledge</span><span class="zh">技能与知识库</span></a>
           <a href="#eco-mentions"><span class="en">Mentions &amp; lists</span><span class="zh">提及与收录</span></a>
-        </nav>
-        <p id="eco-empty" hidden><span class="en">No matching projects. Try another keyword or clear the search.</span><span class="zh">没有匹配项目。请换个关键词，或清除搜索查看全部项目。</span></p>
-        <div id="ecosystem-index">
+        </nav><p id="eco-empty" hidden><span class="en">No matching projects. Try another keyword or clear the search.</span><span class="zh">没有匹配项目。请换个关键词，或清除搜索查看全部项目。</span></p><section class="block ecosystem" id="ecosystem-index">
+        <h2><span class="en">Ecosystem</span><span class="zh">生态</span></h2>
+        <p><span class="en">53 public GitHub projects that build on, extend, bundle or mention Virtuoso Bridge, as of October 2026.</span><span class="zh">截至 2026 年 10 月，GitHub 上有 53 个公开项目基于、扩展、内置或提及 Virtuoso Bridge。</span></p>
         <h3 id="eco-forks"><span class="en">Rewrites, copies and forks</span><span class="zh">重写、副本与 fork</span> <span class="count">14</span></h3>
         <ul class="eco">
           <li><a href="https://github.com/deanyou/virtuoso-cli" title="deanyou/virtuoso-cli">deanyou/virtuoso-cli</a><span><span class="en">Rust rewrite (vcli), multi-session</span><span class="zh">Rust 重写（vcli），多会话</span></span></li>
@@ -356,11 +358,8 @@ virtuoso-bridge eval '1+2'       <span class="comment"># after loading it: 3</sp
           <li><a href="https://github.com/laojiahuo2003/github-daily-report" title="laojiahuo2003/github-daily-report">laojiahuo2003/github-daily-report</a><span><span class="en">Daily GitHub report</span><span class="zh">GitHub 日报</span></span></li>
           <li><a href="https://github.com/arthurspk/guiadoconhecimento" title="arthurspk/guiadoconhecimento">arthurspk/guiadoconhecimento</a><span><span class="en">Knowledge guide</span><span class="zh">知识导航</span></span></li>
         </ul>
-        </div>
-      </section>
-      </div>
-    </main>
-    <footer class="site-footer">
+      </section></details>
+</section></main><footer class="site-footer">
       <div class="wrap">
         <div class="footer-row">
           <p class="footer-copyright">
@@ -397,7 +396,4 @@ virtuoso-bridge eval '1+2'       <span class="comment"># after loading it: 3</sp
           >
         </p>
       </div>
-    </footer>
-    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  </body>
-</html>
+    </footer><div id="toast" class="toast" role="status" aria-live="polite" hidden></div></body></html>

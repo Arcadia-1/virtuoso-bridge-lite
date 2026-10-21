@@ -8,21 +8,28 @@ HTML: edit it directly.
 website package. `npm run preview` serves the full site with local Cloudflare
 Durable Object storage. It does not connect to Cadence.
 
-The homepage uses the compact shared layout and original architecture illustration,
-with small warm-paper and orange accents. Its first screen names the Lite core:
+The homepage uses a cool paper archive layout, a staggered two-line headline,
+and a signal diagram from AI agent through the bridge to three tools. Its first screen names the Lite core:
 Spectre simulation and PDK/CDF callbacks, everyday schematic/symbol/GDS operations,
 and raw SKILL for the rest. Advanced configuration remains optional.
 All pages keep the same product links, language switch and analytics footer,
 checked by `chrome.test.ts`. Homepage-only styles and modules live in
 `docs/assets/home/` and are copied by the regular build, with no prototype
-dependency. Edit `docs/index.html` directly. The complete ecosystem index stays
-expanded and works without JavaScript. It is the single content source for
-three project examples and bilingual name/keyword search; category links jump
-to the original groups and clear any active search. `homepage-content.json`
+dependency. Edit `docs/index.html` directly. The complete ecosystem index is open
+by default and works without JavaScript. It is the single content source for
+the waterfall browser and bilingual, multi-term name/keyword search; category links
+jump to the original groups and clear any active search. The waterfall and search
+controls appear only after initialization. Five collection buttons pan the three-column
+view, with graduated blur confined to the outer edges and project details alongside.
+Hovering or focusing a card pauses the downward flow and lifts it without enlargement;
+the detail panel does not pause the flow. Motion pauses offscreen and honors reduced-motion
+preferences. The complete index remains available independently of the animation.
+`homepage-content.json`
 records original destinations
 and section text hashes to prevent accidental omissions during layout changes;
 update it deliberately when changing actual product content.
-Run `node test-header.mjs [site URL]` and `node test-homepage.mjs [site URL]`
+Run `node test-header.mjs [site URL]`, `node test-homepage.mjs [site URL]`
+and `node test-archive.mjs [site URL]`
 for browser regressions, with Playwright available via `PLAYWRIGHT_MODULE_PATH`
 if it is not installed locally. These checks opt out of visitor tracking.
 `docs/favicon.svg` and `docs/assets/mark.svg` hold the italic VB mark (the favicon

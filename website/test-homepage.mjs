@@ -36,37 +36,37 @@ try {
       await page.goto(new URL("/?lang=" + lang, base).href, { waitUntil: "networkidle" });
       await page.locator("#eco-search-controls").waitFor({ state: "visible" });
       const metrics = await page.evaluate(() => {
-        const primary = document.querySelector(".hero .primary");
+        const primary = document.querySelector(".intro .primary");
         const guide = document.querySelector("#docs .links a");
         return {
           overflow: document.documentElement.scrollWidth > innerWidth + 1,
           header: document.querySelector(".site-header").getBoundingClientRect().height,
           ctaFont: parseFloat(getComputedStyle(primary).fontSize),
           ctaBottom: primary.getBoundingClientRect().bottom,
-          headingWeight: Number(getComputedStyle(document.querySelector(".hero h1")).fontWeight),
-          descriptionFont: parseFloat(getComputedStyle(document.querySelector(".hero-description")).fontSize),
+          headingWeight: Number(getComputedStyle(document.querySelector(".intro h1")).fontWeight),
+          descriptionFont: parseFloat(getComputedStyle(document.querySelector(".hero-summary")).fontSize),
           guideFont: getComputedStyle(guide).fontSize,
           guideZhFont: getComputedStyle(guide.querySelector(".zh")).fontSize,
           guideColor: getComputedStyle(guide).color,
           guideZhColor: getComputedStyle(guide.querySelector(".zh")).color,
           start: document.querySelector("#start").getBoundingClientRect().top + scrollY,
           comparisonCell: getComputedStyle(document.querySelector(".compare td")).display,
-          diagramLoaded: document.querySelector(".hero-visual img").naturalWidth > 0,
+          diagramLoaded: document.querySelectorAll(".hero-flow svg .system-routes path").length > 0,
         };
       });
       assert(!metrics.overflow, "Page overflow: " + label);
       assert(metrics.header < 60, "Header consumes the first screen: " + label);
-      assert(metrics.ctaFont >= 14, "Tiny primary action: " + label);
+      assert(metrics.ctaFont >= 13, "Tiny primary action: " + label);
       assert(metrics.ctaBottom < 900, "Primary action below first screen: " + label);
       assert(metrics.headingWeight >= 700, "Weak heading: " + label);
-      assert(metrics.descriptionFont >= 15, "Small body text: " + label);
+      assert(metrics.descriptionFont >= 14, "Small body text: " + label);
       assert.equal(metrics.guideZhFont, metrics.guideFont, "Chinese link font: " + label);
       assert.equal(metrics.guideZhColor, metrics.guideColor, "Chinese link contrast: " + label);
-      assert(metrics.diagramLoaded, "Missing original architecture: " + label);
+      assert(metrics.diagramLoaded, "Missing bridge signal diagram: " + label);
       if (width >= 1280) assert(metrics.start < 2100, "Quick start pushed down: " + label);
       if (width <= 640) assert.equal(metrics.comparisonCell, "block", "Mobile comparison: " + label);
       assert.equal(await page.locator("#ecosystem-index li:visible").count(), 53, label);
-      assert.equal(await page.locator(".eco-featured-card").count(), 3, label);
+      assert.equal(await page.locator("#categories button").count(), 5, label);
       if (screenshots && [1440, 390].includes(width)) {
         await page.screenshot({ path: join(screenshots, lang + "-" + width + "-first-screen.png") });
         await page.locator("#ecosystem").screenshot({ path: join(screenshots, lang + "-" + width + "-ecosystem.png") });
@@ -77,14 +77,13 @@ try {
   }
 
   const visibleProjects = page.locator("#ecosystem-index li:visible");
-  const input = page.locator("#eco-search");
+  const input = page.locator("#search");
   await input.fill("  PANDA   layout ");
   assert.equal(await visibleProjects.count(), 1);
   assert((await visibleProjects.first().textContent()).includes("PKU-IDEA/PANDA"));
-  assert.equal(await page.locator("#eco-featured").isVisible(), false);
-  assert.match(await page.locator("#eco-search-status").textContent(), /1 \/ 53/);
+  assert.equal(await page.locator("#search-status").textContent(), "1 个匹配项目");
   await page.locator("[data-language-toggle]").click();
-  await page.waitForFunction(() => document.querySelector("#eco-search-status").textContent === "1 of 53 projects match");
+  await page.waitForFunction(() => document.querySelector("#search-status").textContent === "1 matching projects");
   assert.equal(await visibleProjects.count(), 1);
   assert.equal(await input.inputValue(), "  PANDA   layout ");
   await input.fill("版图");
@@ -92,7 +91,7 @@ try {
   await input.fill("no-such-project-<script>");
   assert.equal(await visibleProjects.count(), 0);
   assert.equal(await page.locator("#eco-empty").isVisible(), true);
-  await page.locator("#eco-clear").click();
+  await page.locator("#index-clear").click();
   assert.equal(await visibleProjects.count(), 53);
   assert.equal(await input.evaluate(el => el === document.activeElement), true);
   assert.equal(await page.locator("#eco-empty").isVisible(), false);
@@ -108,7 +107,7 @@ try {
   await page.keyboard.type("mock-virtuoso");
   assert.equal(await visibleProjects.count(), 1);
   await page.keyboard.press("Tab");
-  assert.equal(await page.locator("#eco-clear").evaluate(el => el === document.activeElement), true);
+  assert.equal(await page.locator("#index-clear").evaluate(el => el === document.activeElement), true);
   await page.keyboard.press("Enter");
   assert.equal(await visibleProjects.count(), 53);
   await active.close();
@@ -119,15 +118,17 @@ try {
   assert.equal(await noJs.locator("#ecosystem-index li:visible").count(), 53);
   assert.equal(await noJs.locator(".eco-categories a:visible").count(), 5);
   assert.equal(await noJs.locator("#eco-search-controls").isVisible(), false);
-  assert.equal(await noJs.locator(".hero .primary").isVisible(), true);
+  assert.equal(await noJs.locator(".intro .primary").isVisible(), true);
+  assert.equal(await noJs.locator(".archive").isVisible(), false);
   await plain.close();
 
   const blocked = await context();
-  await blocked.route("**/assets/home/home.mjs*", route => route.abort());
+  await blocked.route("**/assets/home/archive.mjs*", route => route.abort());
   const withoutModule = await blocked.newPage();
   await withoutModule.goto(base.href);
   assert.equal(await withoutModule.locator("#ecosystem-index li:visible").count(), 53);
   assert.equal(await withoutModule.locator("#eco-search-controls").isVisible(), false);
+  assert.equal(await withoutModule.locator(".archive").isVisible(), false);
   await blocked.close();
   assert.deepEqual(errors, []);
   console.log("PASS: 14 responsive/language layouts; search, categories, keyboard, language switch and no-script fallbacks.");

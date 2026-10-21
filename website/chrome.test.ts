@@ -107,9 +107,10 @@ describe("shared light website chrome", () => {
   });
 
   it("keeps the two-line hero headline", () => {
-    const h1 = pages[0].match(/<h1>[\s\S]*?<\/h1>/)?.[0] ?? "";
-    expect(h1).toContain('Your agent.<span class="gradient-text">Inside Virtuoso.</span>');
-    expect(h1).toContain('让智能体，<span class="gradient-text">走进 Virtuoso。</span>');
+    const h1 = pages[0].match(/<h1\b[^>]*>[\s\S]*?<\/h1>/)?.[0] ?? "";
+    const text = h1.replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
+    for (const line of ["Your agent.", "Inside Virtuoso.", "让智能体，", "走进 Virtuoso。"])
+      expect(text).toContain(line);
   });
 
   it("keeps the landing page a short front door with a correct quick start", () => {
@@ -123,7 +124,7 @@ describe("shared light website chrome", () => {
 
   it("lists external projects at the bottom of the home page", () => {
     const landing = pages[0];
-    const section = landing.match(/<section class="block ecosystem" id="ecosystem">[\s\S]*?<\/section>/)?.[0];
+    const section = landing.match(/<section class="block ecosystem" id="ecosystem-index">[\s\S]*?<\/section>/)?.[0];
     expect(section).toBeTruthy();
     const repos = [...section!.matchAll(/<li><a href="https:\/\/github\.com\/([^"]+)" title="\1">/g)].map((m) => m[1]);
     expect(repos.length).toBeGreaterThan(40);
