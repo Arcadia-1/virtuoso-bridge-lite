@@ -37,7 +37,7 @@ def log_dir(monkeypatch, tmp_path):
 def _client_raising(monkeypatch, exc: BaseException) -> None:
     class _FailingVirtuosoClient:
         @classmethod
-        def from_env(cls, profile=None):
+        def from_env(cls, profile=None, timeout=30):
             raise exc
 
     monkeypatch.setattr(virtuoso_bridge, "VirtuosoClient", _FailingVirtuosoClient)

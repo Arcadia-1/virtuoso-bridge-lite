@@ -133,6 +133,69 @@ otherwise blocks the first bridge request that touches its technology; for a
 headless Virtuoso, initialise the technology in `.cdsinit` or the `-restore`
 script before the bridge is used, e.g. `techGetTechFile(ddGetObj("<pdkLib>"))`.
 
+## Existing configuration under an isolated agent home
+
+If an agent redirects `HOME`, select the existing file by an accessible absolute
+path; keep the sandbox's home unchanged. No config migration or `init` is needed:
+
+```bash
+virtuoso-bridge status --env /allowed/bridge.env
+```
+
+Pass `--env` on each CLI invocation. For Python, select it before creating clients:
+
+```python
+from virtuoso_bridge.env import set_runtime_env_file
+from virtuoso_bridge import VirtuosoClient
+
+set_runtime_env_file("/allowed/bridge.env")
+client = VirtuosoClient.from_env()
+```
+
+This selects bridge configuration only; it neither grants filesystem permission
+nor relocates SSH credentials or runtime files. Grant the agent access only to
+the files it needs, rather than exposing or copying the entire real home:
+
+- SSH: `VB_SSH_CONFIG=/allowed/ssh_config` selects the SSH config. Use accessible
+  absolute `IdentityFile` and `UserKnownHostsFile` paths (and ensure any jump-host
+  credentials or SSH agent socket are accessible). Keep host-key checking enabled.
+  `~` expansion depends on the backend and environment; it is not the original home.
+- Tunnel state/logs/cache: leave them in the agent's writable runtime directories.
+  `VB_STATE_DIR`, `VB_LOG_DIR` and `VB_CACHE_DIR` are optional overrides for those
+  paths. Reusing an existing tunnel's state requires the same local process context
+  and accessible state directory; the `.env` alone does not attach to it.
+- Authentication: the client token/identity cache remains under the Python
+  process's `~/.virtuoso-bridge/remote_daemons/`; local-mode tokens use
+  `~/.virtuoso-bridge/bridge_token`. The remote daemon's token stays on its host.
+  The generic runtime-directory overrides do not move these authentication files.
+
+`VB_CONFIG_DIR` and `VB_HOME` are not selectors for legacy `.env` discovery.
+Changing `HOME` globally also affects other tools, SSH paths and token caches;
+use explicit paths instead of treating a home override as a bridge-only setting.
+
+## Slow SSH to a local VM (Windows or other clients)
+
+If `start` succeeds but identity checks time out, compare with a plain SSH command
+using the same host, account, config and jump route. Use `ssh -v <target> whoami`
+locally and inspect where the pause occurs; redact host/user details before sharing
+logs. A delay before authentication can be server-side reverse DNS or GSSAPI,
+not a busy Virtuoso. The displayed `tunnel.warm` time also includes deployment;
+it is not a measurement or proof of DNS latency.
+
+On VMware/VirtualBox host-only networks, an administrator can check guest name
+resolution (`getent hosts <client-IP>`), correct DNS or an `/etc/hosts` mapping,
+and review sshd's `UseDNS` policy. Do not change or restart system SSH services
+without authorization. A daemon identity timeout is not proof of a user mismatch;
+keep daemon authentication and identity checks enabled.
+
+For a slow but healthy path, `eval/load --timeout 60` and
+`VirtuosoClient.from_env(timeout=60)` / `from_tunnel(..., timeout=60)` now pass that
+budget to identity probes as well as SKILL execution, without the old 10-second
+cap. These are per-operation timeouts, not an overall wall-clock deadline or a
+setting for every SSH setup phase. `status` keeps short diagnostic probes;
+repair SSH latency before treating its timeout as a broken Virtuoso session.
+Check the installed version before expecting this behavior on older clients.
+
 ## Optional advanced installations
 
 Only configure extra roles when the user actually has a split installation.

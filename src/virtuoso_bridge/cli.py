@@ -275,6 +275,12 @@ def _start_one_profile(profile: str | None) -> int:
             return 1
         elapsed = time.monotonic() - started
         print(f"tunnel.warm = {_fmt(elapsed)}")
+        if not is_local and elapsed >= 10:
+            print(
+                "  [hint] Slow setup includes deployment as well as SSH. If plain SSH "
+                "also stalls before authentication, ask the server administrator to check "
+                "reverse DNS, /etc/hosts and sshd UseDNS (common on local VM networks)."
+            )
 
         if is_local:
             _print_start_load_line(SSHClient.read_state(profile))
@@ -1021,7 +1027,7 @@ def cli_load(*, file: str, timeout: int = 60, quiet: bool = False) -> int:
         return 2
 
     _load_cli_env()
-    client = _vb_pkg.VirtuosoClient.from_env(profile=_get_cli_profile())
+    client = _vb_pkg.VirtuosoClient.from_env(profile=_get_cli_profile(), timeout=timeout)
     result = client.load_il(p, timeout=timeout)
 
     if not quiet:
@@ -1082,7 +1088,7 @@ def cli_eval(*, skill: str | None, stdin: bool, timeout: int = 60,
     wrapped = f"progn(\n{skill}\n)"
 
     _load_cli_env()
-    client = _vb_pkg.VirtuosoClient.from_env(profile=_get_cli_profile())
+    client = _vb_pkg.VirtuosoClient.from_env(profile=_get_cli_profile(), timeout=timeout)
     result = client.execute_skill(wrapped, timeout=timeout)
 
     if not quiet:
@@ -2224,7 +2230,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp_load.add_argument("--env", default=None,
                          help="Explicit .env file path (highest priority)")
     sp_load.add_argument("--timeout", type=int, default=60,
-                         help="SKILL execution timeout in seconds (default: 60)")
+                         help="Per-operation identity-check and SKILL execution timeout in seconds (default: 60)")
     sp_load.add_argument("--quiet", action="store_true",
                          help="Suppress JSON output; only the exit code is reported")
 
@@ -2257,7 +2263,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp_eval.add_argument("--env", default=None,
                          help="Explicit .env file path (highest priority)")
     sp_eval.add_argument("--timeout", type=int, default=60,
-                         help="SKILL execution timeout in seconds (default: 60)")
+                         help="Per-operation identity-check and SKILL execution timeout in seconds (default: 60)")
     sp_eval.add_argument("--quiet", action="store_true",
                          help="Suppress JSON output; only the exit code is reported")
 

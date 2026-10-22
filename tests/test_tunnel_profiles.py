@@ -732,7 +732,8 @@ def test_start_hint_uses_distinct_local_and_remote_ports(monkeypatch, capsys) ->
 
 
 @pytest.mark.parametrize("daemon_host", ["eda-host", "localhost"])
-def test_start_prints_the_ciw_load_line(monkeypatch, capsys, daemon_host) -> None:
+@pytest.mark.parametrize("elapsed", [1, 12])
+def test_start_prints_the_ciw_load_line(monkeypatch, capsys, daemon_host, elapsed) -> None:
     setup_path = "/tmp/virtuoso_bridge_designer/virtuoso_bridge/virtuoso_setup.il"
 
     class _FakeSSHClient:
@@ -764,9 +765,15 @@ def test_start_prints_the_ciw_load_line(monkeypatch, capsys, daemon_host) -> Non
         lambda profile, load=False: SimpleNamespace(daemon_host=daemon_host),
     )
     monkeypatch.setattr(cli, "_wait_for_tunnel_running", lambda profile: True)
+    times = iter([0, elapsed])
+    monkeypatch.setattr(cli.time, "monotonic", lambda: next(times))
 
     assert cli._start_one_profile(None) == 0
-    assert f'Load in Virtuoso CIW: load("{setup_path}")' in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert f'Load in Virtuoso CIW: load("{setup_path}")' in output
+    assert ("reverse DNS" in output) == (daemon_host != "localhost" and elapsed >= 10)
+    if "reverse DNS" in output:
+        assert "If plain SSH" in output
 
 
 def test_wait_for_tunnel_running_retries_during_startup(monkeypatch) -> None:

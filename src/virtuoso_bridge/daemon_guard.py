@@ -80,7 +80,9 @@ def cross_user_override_enabled() -> bool:
     return os.getenv(OVERRIDE_ENV, "").strip().lower() in _TRUTHY
 
 
-def expected_remote_user(profile: str | None, runner: Any = None) -> str:
+def expected_remote_user(
+    profile: str | None, runner: Any = None, *, timeout: int | None = None,
+) -> str:
     """Unix user the tunnel is expected to reach.
 
     ``VB_REMOTE_USER[_<profile>]`` first; without it, SSH ``whoami`` through
@@ -93,7 +95,7 @@ def expected_remote_user(profile: str | None, runner: Any = None) -> str:
         return configured
     if runner is not None:
         try:
-            result = runner.run_command("whoami")
+            result = runner.run_command("whoami", timeout=timeout)
             if result.returncode == 0:
                 who = (result.stdout or "").strip()
                 if who:
@@ -184,10 +186,10 @@ def _signed_virtuoso_pid(client: Any, timeout: int) -> int | None:
         return None
 
 
-def _process_owner(runner: Any, pid: int | str) -> str:
+def _process_owner(runner: Any, pid: int | str, timeout: int) -> str:
     for cmd in (f"stat -c %U /proc/{pid} 2>/dev/null", f"ps -o user= -p {pid} 2>/dev/null"):
         try:
-            result = runner.run_command(cmd)
+            result = runner.run_command(cmd, timeout=timeout)
         except Exception:
             continue
         if result.returncode == 0:
@@ -220,7 +222,7 @@ def _daemon_user_from_process(client: Any, runner: Any, timeout: int) -> str:
         client._remote_virtuoso_pid = int(pid)
     except Exception:
         pass
-    return _process_owner(runner, pid)
+    return _process_owner(runner, pid, timeout)
 
 
 def query_daemon_user(client: Any, *, timeout: int = 5, runner: Any = None) -> str:
@@ -234,7 +236,7 @@ def query_daemon_user(client: Any, *, timeout: int = 5, runner: Any = None) -> s
     if runner is not None:
         pid = _signed_virtuoso_pid(client, timeout)
         if pid:
-            owner = _process_owner(runner, pid)
+            owner = _process_owner(runner, pid, timeout)
             if owner:
                 return owner
     for expr in ('getShellEnvVar("USER")', 'getShellEnvVar("LOGNAME")'):
@@ -259,7 +261,7 @@ def check_daemon_user(
     """
     if runner is None:
         runner = getattr(client, "ssh_runner", None)
-    expected = expected_remote_user(profile, runner=runner)
+    expected = expected_remote_user(profile, runner=runner, timeout=timeout)
 
     if cross_user_override_enabled():
         try:
@@ -291,8 +293,13 @@ def check_daemon_user(
         )
 
     if not expected:
-        # Nothing to compare against (no VB_REMOTE_USER and no SSH login
-        # name) — typically local mode; keep the historical permissive path.
+        if runner is not None:
+            return DaemonUserCheck(
+                ok=False,
+                daemon_user=daemon_user,
+                error="could not determine the SSH login user; refusing an unverified remote session",
+            )
+        # Only local mode has no SSH login identity to compare against.
         return DaemonUserCheck(ok=True, expected_user="", daemon_user=daemon_user)
 
     if not daemon_user:
