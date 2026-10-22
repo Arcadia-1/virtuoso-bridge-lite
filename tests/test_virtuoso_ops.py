@@ -54,7 +54,8 @@ def test_layout_read_summary_returns_after_instance_loop() -> None:
 
     # Return the accumulated text even with zero instances, and only after
     # every instance has been appended.
-    assert skill.endswith("yCoord(inst~>xy)))) return(buf))")
+    assert "return(unwindProtect(progn(" in skill
+    assert "yCoord(inst~>xy)))) buf) when(ownsCv " in skill
 
 
 def test_layout_reads_report_vias_as_their_own_objects() -> None:

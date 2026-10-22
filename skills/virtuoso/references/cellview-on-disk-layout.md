@@ -13,6 +13,19 @@ is not proof that it has reloaded the latest disk state. Closing one handle and
 reopening may still leave other references or editor windows holding that view.
 The bridge's Python daemon is not an independent OA database session.
 
+`layout_read_geometry()` and `layout_read_summary()` borrow a view already open
+in the selected process without opening or closing another reference. Otherwise
+they open it read-only and close it after serialization, including on an error.
+This prevents these helpers from accumulating references that retain stale
+geometry. A borrowed view deliberately includes the session's unsaved edits;
+it is not a fresh-disk snapshot. Updating the Python client does not release
+references left by older code, raw SKILL, editor windows or other callers.
+
+For raw SKILL, balance each open that you own and protect cleanup on errors.
+Check for an already-open view before taking ownership; a local variable going
+out of scope does not close its database reference. These layout helpers do not
+manage the lifetime of arbitrary `eval`/`load` scripts.
+
 For suspected stale reads, record the resolved library path, Virtuoso PID/version,
 open modes and exact open/read/close/save sequence in each session. Compare file
 hashes and readback in a dedicated fresh reader, with the same library mapping

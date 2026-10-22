@@ -49,6 +49,8 @@ def sessions(tmp_path):
     def launch(name):
         work = tmp_path / name
         work.mkdir()
+        # Keep any library creation in this private session, not a site cds.lib.
+        (work / "cds.lib").write_text("")
         resource = resources.files("virtuoso_bridge.virtuoso.basic.resources")
         skill = str(resource.joinpath("ramic_bridge.il"))
         with socket.socket() as probe:
