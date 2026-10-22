@@ -52,6 +52,21 @@ terminal connectivity in four directions, polyline vertices and mosaic arrays
 using only analogLib and plain layout geometry. Run it with the same dedicated
 session and scratch-library variables; it needs no Spectre or foundry PDK.
 
+`test_layout_read_lifecycle_live.py` instead launches two isolated, headless
+Virtuoso processes in private working directories. It creates its own scratch
+library and plain rectangles, never connecting to an existing bridge or CIW.
+It checks external-save visibility, repeated reads, borrowed/unsaved views,
+and error-path cleanup for both layout readers. Run on a Linux Cadence host
+with the project environment and a configured Cadence license environment:
+
+```bash
+VB_RUN_FRESHNESS_TESTS=1 VB_TEST_VIRTUOSO=/path/to/virtuoso \
+uv run --extra dev pytest tests/test_layout_read_lifecycle_live.py -v
+```
+
+This is native OA lifecycle coverage, not PDK or electrical-equivalence testing.
+The offline generation tests do not substitute for it.
+
 The default run needs only plain Virtuoso and Spectre. Optional variables
 enable more checks:
 

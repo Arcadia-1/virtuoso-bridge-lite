@@ -368,6 +368,27 @@ def layout_delete_selected(
         'return(sprintf(nil "deleted %d selected figure(s)" count)))'
     )
 
+def _layout_read_cellview(
+    lib: str,
+    cell: str,
+    view: str,
+    view_type: str | None,
+    variables: str,
+    body: str,
+) -> str:
+    """Borrow an open view; release only a view opened by this read."""
+    names = " ".join(f'"{escape_skill_string(name)}"' for name in (lib, cell, view))
+    kind = escape_skill_string(view_type or default_view_type_for(view))
+    return (
+        f"prog((cv ownsCv {variables}) "
+        f"cv = dbFindOpenCellViewByName({names}) "
+        f'unless(cv cv = dbOpenCellViewByType({names} "{kind}" "r") ownsCv = cv) '
+        f'unless(cv return(sprintf(nil "ERROR: cannot open %s/%s/%s" {names}))) '
+        f"return(unwindProtect(progn({body}) "
+        'when(ownsCv unless(dbClose(cv) error("layout reader close failed"))))))'
+    )
+
+
 def layout_read_summary(
     lib: str,
     cell: str,
@@ -375,17 +396,16 @@ def layout_read_summary(
     view: str = "layout",
     view_type: str | None = None,
 ) -> str:
-    """Build SKILL to read a summary of shapes and instances from a layout cellview."""
-    resolved_view_type = view_type or default_view_type_for(view)
+    """Build SKILL to read a summary, releasing only a view it opens.
+
+    An already-open view is borrowed unchanged, including unsaved edits; this
+    is not a forced reload of another process's latest saved disk state.
+    """
     escaped_lib = escape_skill_string(lib)
     escaped_cell = escape_skill_string(cell)
     escaped_view = escape_skill_string(view)
-    escaped_view_type = escape_skill_string(resolved_view_type)
-    return (
-        "prog((cv buf bb) "
-        f'cv = dbOpenCellViewByType("{escaped_lib}" "{escaped_cell}" "{escaped_view}" "{escaped_view_type}" "r") '
-        f'unless(cv return(sprintf(nil "ERROR: cannot open %s/%s/{escaped_view}" "{escaped_lib}" "{escaped_cell}"))) '
-        f'buf = sprintf(nil "Layout: %s/%s/{escaped_view}  (%d shapes  %d vias  %d instances)\\n" "{escaped_lib}" "{escaped_cell}" length(cv~>shapes) length(cv~>vias) length(cv~>instances)) '
+    body = (
+        f'buf = sprintf(nil "Layout: %s/%s/%s  (%d shapes  %d vias  %d instances)\\n" "{escaped_lib}" "{escaped_cell}" "{escaped_view}" length(cv~>shapes) length(cv~>vias) length(cv~>instances)) '
         'foreach(shape cv~>shapes '
         'buf = strcat(buf sprintf(nil "  %s [%s %s]" shape~>objType car(shape~>lpp) cadr(shape~>lpp))) '
         'when(shape~>objType == "rect" '
@@ -396,8 +416,9 @@ def layout_read_summary(
         'buf = strcat(buf sprintf(nil "  via: %s [%s]  @ (%.3f %.3f)\\n" via~>viaHeader~>viaDefName via~>objType xCoord(via~>origin) yCoord(via~>origin)))) '
         'foreach(inst cv~>instances '
         'buf = strcat(buf sprintf(nil "  inst: %s  [%s/%s]  @ (%.3f %.3f)\\n" inst~>name inst~>libName inst~>cellName xCoord(inst~>xy) yCoord(inst~>xy)))) '
-        "return(buf))"
+        "buf"
     )
+    return _layout_read_cellview(lib, cell, view, view_type, "buf bb", body)
 
 def layout_read_geometry(
     lib: str,
@@ -406,16 +427,12 @@ def layout_read_geometry(
     view: str = "layout",
     view_type: str | None = None,
 ) -> str:
-    """Build SKILL to dump layout geometry in a parseable line-oriented format."""
-    resolved_view_type = view_type or default_view_type_for(view)
-    escaped_lib = escape_skill_string(lib)
-    escaped_cell = escape_skill_string(cell)
-    escaped_view = escape_skill_string(view)
-    escaped_view_type = escape_skill_string(resolved_view_type)
-    return (
-        "prog((cv out) "
-        f'cv = dbOpenCellViewByType("{escaped_lib}" "{escaped_cell}" "{escaped_view}" "{escaped_view_type}" "r") '
-        f'unless(cv return(sprintf(nil "ERROR: cannot open %s/%s/{escaped_view}" "{escaped_lib}" "{escaped_cell}"))) '
+    """Build SKILL to dump geometry, releasing only a view it opens.
+
+    An already-open view is borrowed unchanged, including unsaved edits; this
+    is not a forced reload of another process's latest saved disk state.
+    """
+    body = (
         'out = "" '
         'foreach(shape cv~>shapes '
         'out = strcat(out sprintf(nil '
@@ -437,8 +454,9 @@ def layout_read_geometry(
         '"instance\\tname=%s\\tlib=%s\\tcell=%s\\tview=%s\\txy=%L\\torient=%L\\tbbox=%L\\ttransform=%L\\n" '
         'inst~>name inst~>libName inst~>cellName inst~>viewName inst~>xy inst~>orient '
         'inst~>bBox inst~>transform)))) '
-        "return(out))"
+        "out"
     )
+    return _layout_read_cellview(lib, cell, view, view_type, "out", body)
 
 # Set by LayoutEditor for the duration of a create()/modify() batch, so the
 # content operations below act on the edited cellview there rather than on

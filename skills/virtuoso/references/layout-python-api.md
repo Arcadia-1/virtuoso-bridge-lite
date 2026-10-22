@@ -245,6 +245,11 @@ Use these with `lay.add(...)`:
 | `layout_read_geometry(lib, cell)` | Full geometry dump | Tab-separated output |
 | `layout_list_shapes()` | Shape types and LPPs | Edited cellview inside an editor, else current window |
 
+The two named readers release a view they opened themselves; an already-open
+view is borrowed and left unchanged. See [session readback versus saved disk
+state](cellview-on-disk-layout.md#session-readback-versus-saved-disk-state) before
+using readback to verify another process's edits.
+
 **Edit:**
 
 | Function | SKILL | Description |
