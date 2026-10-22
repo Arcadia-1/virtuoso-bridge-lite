@@ -346,6 +346,99 @@ def test_from_tunnel_skips_guard_for_local_tunnels(monkeypatch, foreign_daemon) 
     assert result.status == ExecutionStatus.SUCCESS
 
 
+@pytest.mark.parametrize("factory", ["from_env", "from_tunnel"])
+@pytest.mark.parametrize(
+    "timeout, owner, error",
+    [(30, "user1", None), (30, "user2", "does not match"),
+     (8, "user1", "could not determine")],
+)
+def test_factory_identity_budget_preserves_slow_match_and_refuses_mismatch(
+    monkeypatch, factory, timeout, owner, error,
+) -> None:
+    """Model a 12-second identity response without sleeping or using SSH.
+
+    Keep the real factory and guard policy: the transport boundary alone
+    models latency, so a hidden 10-second cap fails even with a 30s budget.
+    """
+    from virtuoso_bridge.transport.tunnel import SSHClient
+    from virtuoso_bridge.virtuoso.basic import bridge
+
+    monkeypatch.setenv("VB_REMOTE_USER", "user1")
+    monkeypatch.delenv(OVERRIDE_ENV, raising=False)
+    tunnel = _FakeTunnel(9, FakeRunner(owner=owner))
+    monkeypatch.setattr(bridge, "load_vb_env", lambda: None)
+    monkeypatch.setattr(bridge, "resolve_profile", lambda profile: profile)
+    monkeypatch.setattr(bridge, "_acquire_daemon_token", lambda ssh: None)
+    monkeypatch.setattr(SSHClient, "is_running", lambda profile: True)
+    monkeypatch.setattr(SSHClient, "read_state", lambda profile: {"port": 9})
+    monkeypatch.setattr(SSHClient, "from_env", lambda **kwargs: tunnel)
+    monkeypatch.setattr(VirtuosoClient, "_signed_handshake", lambda *args: None)
+    probes = []
+
+    def delayed_identity(self, skill, timeout=None):
+        probes.append((skill, timeout))
+        if timeout < 12:
+            return VirtuosoResult(
+                status=ExecutionStatus.ERROR,
+                errors=["SKILL execution timeout in Virtuoso"],
+            )
+        return VirtuosoResult(status=ExecutionStatus.SUCCESS, output=f'"{owner}"')
+
+    monkeypatch.setattr(VirtuosoClient, "execute_skill", delayed_identity)
+    kwargs = {"timeout": timeout}
+    if factory == "from_tunnel":
+        kwargs["tunnel"] = tunnel
+    if error:
+        with pytest.raises(RuntimeError, match=error) as exc_info:
+            getattr(VirtuosoClient, factory)(**kwargs)
+        if owner == "user1":
+            assert OVERRIDE_ENV not in str(exc_info.value)
+            assert "SSH" in str(exc_info.value)
+    else:
+        getattr(VirtuosoClient, factory)(**kwargs)
+    assert probes == [('getShellEnvVar("USER")', timeout)]
+
+
+def test_signed_identity_uses_requested_timeout_for_ssh(monkeypatch) -> None:
+    monkeypatch.delenv("VB_REMOTE_USER", raising=False)
+    monkeypatch.delenv(OVERRIDE_ENV, raising=False)
+    calls = []
+
+    class SignedClient(FakeClient):
+        def handshake_virtuoso_pid(self, timeout=None):
+            return 4242
+
+    class SlowRunner(FakeRunner):
+        def run_command(self, command, timeout=None):
+            calls.append((command, timeout))
+            return super().run_command(command, timeout=timeout)
+
+    client = SignedClient()
+    check = check_daemon_user(
+        client, profile=None, timeout=45,
+        runner=SlowRunner(whoami="user1", owner="user1"),
+    )
+    assert check.ok
+    assert client.executed == []
+    assert calls == [("whoami", 45), ("stat -c %U /proc/4242 2>/dev/null", 45)]
+
+
+def test_unknown_ssh_login_fails_closed(monkeypatch) -> None:
+    monkeypatch.delenv("VB_REMOTE_USER", raising=False)
+    monkeypatch.delenv(OVERRIDE_ENV, raising=False)
+
+    class TimedOutRunner(FakeRunner):
+        def run_command(self, command, timeout=None):
+            raise TimeoutError("SSH authentication timed out")
+
+    check = check_daemon_user(
+        FakeClient({'getShellEnvVar("USER")': "user1"}),
+        profile=None, runner=TimedOutRunner(), timeout=8,
+    )
+    assert not check.ok and not check.skipped
+    assert "SSH login user" in check.error
+
+
 def test_client_rejects_cross_user_before_any_skill_execution(
     monkeypatch, foreign_daemon
 ) -> None:

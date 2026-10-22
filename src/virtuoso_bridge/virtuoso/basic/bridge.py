@@ -273,7 +273,7 @@ class VirtuosoClient(VirtuosoInterface):
             # design); it is fetched from the daemon host over SSH.
             client = cls(host="127.0.0.1", port=port, timeout=timeout, tunnel=ssh,
                          log_to_ciw=log_to_ciw, daemon_token=_acquire_daemon_token(ssh))
-            client._reject_cross_user_daemon_if_reachable(profile=profile, timeout=min(timeout, 10))
+            client._reject_cross_user_daemon_if_reachable(profile=profile, timeout=timeout)
             return client
 
         # No tunnel running: construct the role-aware transports, but defer
@@ -339,7 +339,7 @@ class VirtuosoClient(VirtuosoInterface):
         if has_runner:
             client._reject_cross_user_daemon_if_reachable(
                 profile=getattr(tunnel, "_profile", None),
-                timeout=min(timeout, 10),
+                timeout=timeout,
             )
         return client
 
@@ -535,6 +535,14 @@ class VirtuosoClient(VirtuosoInterface):
                 "idle or its dialog is closed; `virtuoso-bridge status` shows the lane."
             )
         if not check.ok:
+            if not check.expected_user or not check.daemon_user:
+                raise RuntimeError(
+                    f"Virtuoso daemon identity check failed: {check.error}. "
+                    "Identity is unconfirmed, not a confirmed user mismatch. "
+                    "Check plain SSH latency/authentication (including server reverse DNS) "
+                    "and the CIW state; increase the client timeout or eval/load --timeout "
+                    "for a slow healthy connection. Keep identity checks enabled."
+                )
             raise RuntimeError(
                 f"Virtuoso daemon identity check failed: {check.error}. "
                 f"If the daemon is genuinely busy, retry once the CIW is idle; "

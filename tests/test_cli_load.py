@@ -24,12 +24,15 @@ from virtuoso_bridge.models import ExecutionStatus, VirtuosoResult
 class _FakeClient:
     def __init__(self, result: VirtuosoResult) -> None:
         self._result = result
+        self.last_timeout = None
+        self.connection_timeout = None
 
     def load_il(self, path, timeout=None):
+        self.last_timeout = timeout
         return self._result
 
 
-def _patch_client(monkeypatch, result: VirtuosoResult) -> None:
+def _patch_client(monkeypatch, result: VirtuosoResult) -> _FakeClient:
     """Replace ``VirtuosoClient.from_env`` with a stub yielding *result*.
 
     Also silences ``_load_cli_env`` so .env auto-discovery doesn't
@@ -39,11 +42,24 @@ def _patch_client(monkeypatch, result: VirtuosoResult) -> None:
 
     class _FakeVirtuosoClient:
         @classmethod
-        def from_env(cls, profile=None):
+        def from_env(cls, profile=None, timeout=30):
+            fake.connection_timeout = timeout
             return fake
 
     monkeypatch.setattr(virtuoso_bridge, "VirtuosoClient", _FakeVirtuosoClient)
     monkeypatch.setattr("virtuoso_bridge.cli._load_cli_env", lambda: None)
+    return fake
+
+
+def test_load_passes_timeout_to_connection_and_execution(tmp_path, monkeypatch):
+    source = tmp_path / "ok.il"
+    source.write_text("1\n", encoding="utf-8")
+    fake = _patch_client(
+        monkeypatch, VirtuosoResult(status=ExecutionStatus.SUCCESS, output="1"),
+    )
+
+    assert main(["load", str(source), "--timeout", "120", "--quiet"]) == 0
+    assert fake.connection_timeout == fake.last_timeout == 120
 
 
 def test_load_missing_file_returns_2(tmp_path, capsys):

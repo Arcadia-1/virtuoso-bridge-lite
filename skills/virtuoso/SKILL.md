@@ -88,7 +88,7 @@ Read the branch needed for the operation; do not load the entire catalog.
 | Maestro configuration, snapshots and result reading | [maestro-python-api.md](references/maestro-python-api.md), [maestro-skill-api.md](references/maestro-skill-api.md) |
 | GUI-based simulation lifecycle | [simulation-flow.md](references/simulation-flow.md) |
 | Netlist import/export or batch netlisting without Maestro | [netlist.md](references/netlist.md), [batch-netlist-si.md](references/batch-netlist-si.md) |
-| Cellview files, lock files and text/binary boundaries | [cellview-on-disk-layout.md](references/cellview-on-disk-layout.md) |
+| Cellview files, stale readback after another session saves, lock files and text/binary boundaries | [cellview-on-disk-layout.md](references/cellview-on-disk-layout.md) |
 | SKILL Finder API | [skill-finder-python-api.md](references/skill-finder-python-api.md) |
 | Errors, stalled batch tools or connection problems | [troubleshooting.md](references/troubleshooting.md) |
 

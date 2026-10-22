@@ -26,6 +26,7 @@ class _FakeClient:
         self._result = result
         self.last_skill: str | None = None
         self.last_timeout: int | None = None
+        self.connection_timeout: int | None = None
 
     def execute_skill(self, skill_code: str, timeout=None):
         self.last_skill = skill_code
@@ -38,7 +39,8 @@ def _patch_client(monkeypatch, result: VirtuosoResult) -> _FakeClient:
 
     class _FakeVirtuosoClient:
         @classmethod
-        def from_env(cls, profile=None):
+        def from_env(cls, profile=None, timeout=30):
+            fake.connection_timeout = timeout
             return fake
 
     monkeypatch.setattr(virtuoso_bridge, "VirtuosoClient", _FakeVirtuosoClient)
@@ -129,6 +131,7 @@ def test_eval_passes_timeout(monkeypatch):
     rc = main(["eval", "1+1", "--timeout", "120", "--quiet"])
     assert rc == 0
     assert fake.last_timeout == 120
+    assert fake.connection_timeout == 120
 
 
 def test_eval_wraps_in_progn_for_multi_statement(monkeypatch):
@@ -184,7 +187,7 @@ def test_eval_stdout_is_only_json_while_env_and_ssh_echoes_go_to_stderr(
 
     class _EchoingVirtuosoClient:
         @classmethod
-        def from_env(cls, profile=None):
+        def from_env(cls, profile=None, timeout=30):
             SSHRunner("eda-host", verbose=True)._print_cmd(["ssh", "eda-host", "cat", "token"])
             return fake
 
