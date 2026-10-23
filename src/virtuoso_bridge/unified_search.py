@@ -359,6 +359,9 @@ def _discover_libs(roots: dict) -> list[tuple[str, Path]]:
         return path if path.is_absolute() else base / path
 
     def read_cds(cds: Path) -> None:
+        # Relative directives belong to the logical include location, not a
+        # symlink target's directory. Resolve only for physical-file cycle checks.
+        base = cds.parent
         cds = cds.resolve()
         if cds in seen or not cds.is_file():
             return
@@ -373,9 +376,9 @@ def _discover_libs(roots: dict) -> list[tuple[str, Path]]:
                 continue
             keyword = parts[0].upper()
             if keyword in ("INCLUDE", "SOFTINCLUDE") and len(parts) >= 2:
-                read_cds(expand(" ".join(parts[1:]), cds.parent))
+                read_cds(expand(" ".join(parts[1:]), base))
             elif keyword == "DEFINE" and len(parts) >= 3:
-                p = expand(parts[2], cds.parent)
+                p = expand(parts[2], base)
                 if p.is_dir():
                     defs[parts[1]] = p
 

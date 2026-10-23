@@ -166,6 +166,49 @@ def test_cds_includes_expand_complete_install_variable_and_stop_cycles(tmp_path,
     assert ('RF', lib) in search._discover_libs({'pdk': []})
 
 
+@pytest.mark.parametrize('keyword', ['INCLUDE', 'SOFTINCLUDE'])
+@pytest.mark.parametrize('symlinked', [False, True])
+def test_symlinked_cds_lib_indexes_relative_includes_and_defines(
+    tmp_path, monkeypatch, keyword, symlinked
+):
+    """A relocated setup file still resolves paths beside its logical alias."""
+    logical = tmp_path / 'setup'
+    physical = tmp_path / 'legacy'
+    nested = logical / 'dfII'
+    nested.mkdir(parents=True)
+    physical.mkdir()
+    for name in ('SyntheticDirect', 'SyntheticNested'):
+        lib = logical / name
+        view = lib / 'syntheticCell' / 'symbol'
+        view.mkdir(parents=True)
+        (lib / 'syntheticCell' / 'data.dm').touch()
+    alias = logical / 'cds.lib'
+    target = physical / 'cds.lib' if symlinked else alias
+    target.write_text(
+        f'{keyword} dfII/cds.lib\nDEFINE SyntheticDirect SyntheticDirect\n',
+        encoding='utf-8',
+    )
+    (nested / 'cds.lib').write_text(
+        'SOFTINCLUDE ../cds.lib\nDEFINE SyntheticNested ../SyntheticNested\n',
+        encoding='utf-8',
+    )
+    if symlinked:
+        try:
+            alias.symlink_to(target)
+        except OSError as exc:
+            pytest.skip(f'symlink creation unavailable: {exc}')
+    monkeypatch.setattr(search, '_cds_lib_files', lambda: [alias])
+    monkeypatch.setattr(search, 'cache_root', lambda: tmp_path / 'cache')
+    assert dict(search._discover_libs({'pdk': []})) == {
+        'SyntheticDirect': logical / 'SyntheticDirect',
+        'SyntheticNested': nested / '../SyntheticNested',
+    }
+    search.build(kinds=['lib', 'cell'], roots={'pdk': []})
+    for name in ('SyntheticDirect', 'SyntheticNested'):
+        assert search.search(name, kinds=['lib']), name
+        assert search.search(name, kinds=['cell']), name
+
+
 def test_skill_hit_has_inspectable_nested_source_path(tmp_path):
     nested = tmp_path / 'area' / 'nested'
     nested.mkdir(parents=True)
