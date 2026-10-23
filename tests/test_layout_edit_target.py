@@ -24,8 +24,12 @@ def _balanced(text: str) -> bool:
     depth, in_string, escaped = 0, False, False
     for char in text:
         if in_string:
-            escaped = char == "\\" and not escaped
-            in_string = not (char == '"' and not escaped)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
             continue
         if char == '"':
             in_string = True
@@ -33,7 +37,17 @@ def _balanced(text: str) -> bool:
             depth += 1 if char == "(" else -1
             if depth < 0:
                 return False
-    return depth == 0
+    return depth == 0 and not in_string
+
+
+@pytest.mark.parametrize("text,expected", [
+    ('printf("a\\"(b")', True),
+    ('printf("a\\\\")', True),
+    ('printf("unterminated)', False),
+    ('printf("a\\"(b"))', False),
+])
+def test_balance_check_respects_string_escapes(text, expected):
+    assert _balanced(text) is expected
 
 
 @pytest.mark.parametrize("build", BUILDERS)

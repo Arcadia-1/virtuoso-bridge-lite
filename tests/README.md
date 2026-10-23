@@ -56,7 +56,11 @@ session and scratch-library variables; it needs no Spectre or foundry PDK.
 Virtuoso processes in private working directories. It creates its own scratch
 library and plain rectangles, never connecting to an existing bridge or CIW.
 It checks external-save visibility, repeated reads, borrowed/unsaved views,
-and error-path cleanup for both layout readers. Run on a Linux Cadence host
+and error-path cleanup for both layout readers. Each case also runs with the
+generated newer lookup name replaced by an undefined test symbol, exercising
+the legacy lookup in native SKILL without changing protected system functions.
+This simulates a missing API; it is not a substitute for testing another IC build.
+Run on a Linux Cadence host
 with the project environment and a configured Cadence license environment:
 
 ```bash

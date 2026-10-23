@@ -24,18 +24,31 @@ BUILDERS = [layout_read_geometry, layout_read_summary]
 LIB = "VB_FRESHNESS_TEST"
 
 
-@pytest.fixture
-def readers(sessions, tmp_path):
+@pytest.fixture(params=[False, True], ids=["installed-api", "missing-by-name-api"])
+def readers(sessions, tmp_path, request):
     writer = sessions("writer")["evaluate"]
     reader = sessions("reader")["evaluate"]
     library_path = json.dumps(str(tmp_path / "library"))
     for evaluate in (writer, reader):
         assert evaluate(f'ddCreateLib("{LIB}" {library_path})') != "nil"
+    if request.param:
+        # System functions can be write-protected. Rename only this test's
+        # generated lookup to an undefined symbol, including its capability
+        # probe, to exercise the missing-API path in the native interpreter.
+        assert reader("isCallable('vbTestAbsentFindOpenByName)") == "nil"
+        original = reader
+        reader = lambda code: original(code.replace(
+            "dbFindOpenCellViewByName", "vbTestAbsentFindOpenByName"
+        ))
     return reader, writer
 
 
 def _find(cell):
-    return f'dbFindOpenCellViewByName("{LIB}" "{cell}" "layout")'
+    # Independent oracle: do not reuse either lookup API under test.
+    return (
+        'car(setof(cv dbGetOpenCellViews() '
+        f'cv~>libName == "{LIB}" && cv~>cellName == "{cell}" && cv~>viewName == "layout"))'
+    )
 
 
 def _save_rectangle(evaluate, cell, *, create=False):
@@ -133,3 +146,9 @@ def test_missing_cell_does_not_leave_an_open_view(readers, build):
     reader, _ = readers
     assert "ERROR: cannot open" in reader(build(LIB, "does_not_exist"))
     assert reader(_find("does_not_exist")) == "nil"
+
+
+@pytest.mark.parametrize("build", BUILDERS)
+def test_missing_library_does_not_call_lookup_with_nil_library(readers, build):
+    reader, _ = readers
+    assert "ERROR: cannot open" in reader(build("VB_FRESHNESS_ABSENT_LIBRARY", "missing"))

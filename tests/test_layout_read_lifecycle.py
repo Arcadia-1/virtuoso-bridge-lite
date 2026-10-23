@@ -11,6 +11,9 @@ def test_named_layout_read_borrows_or_closes_its_own_view(build):
     skill = build("L", "C")
     find = 'cv = dbFindOpenCellViewByName("L" "C" "layout")'
     assert find in skill
+    assert "if(isCallable('dbFindOpenCellViewByName) then " in skill
+    assert 'libId = ddGetObj("L")' in skill
+    assert 'when(libId cv = dbFindOpenCellView(libId "C" "layout"))' in skill
     assert 'unless(cv cv = dbOpenCellViewByType(' in skill
     assert skill.index(find) < skill.index("dbOpenCellViewByType(")
     assert "ownsCv = cv" in skill
@@ -26,6 +29,8 @@ def test_named_layout_read_escapes_names_and_keeps_custom_view_type(build):
     skill = build('L"x', "C\\x", view='custom"view', view_type="maskLayout")
     names = '"L\\"x" "C\\\\x" "custom\\"view"'
     assert f"dbFindOpenCellViewByName({names})" in skill
+    assert 'libId = ddGetObj("L\\"x")' in skill
+    assert 'dbFindOpenCellView(libId "C\\\\x" "custom\\"view")' in skill
     assert f'dbOpenCellViewByType({names} "maskLayout" "r")' in skill
     assert "ERROR: cannot open %s/%s/%s" in skill
     assert _balanced(skill)
