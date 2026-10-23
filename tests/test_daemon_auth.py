@@ -765,6 +765,67 @@ def _wait_for_listener(proc: subprocess.Popen, port: int) -> None:
     reason="real bridge daemon needs POSIX fcntl/signals (macOS/Linux only)",
 )
 class TestRealDaemon:
+    @pytest.mark.parametrize("version,interpreter", [
+        ("3", sys.executable), ("27", shutil.which("python2.7")),
+    ])
+    def test_parallel_daemons_need_distinct_ports(self, tmp_path, version, interpreter):
+        if interpreter is None:
+            pytest.skip("Python 2.7 is unavailable")
+        daemon_src = _resources_dir() / f"ramic_bridge_daemon_{version}.py"
+        token_path = tmp_path / "bridge_token"
+        env = {key: value for key, value in os.environ.items() if not key.startswith("RB_")}
+        env["RB_TOKEN_PATH"] = str(token_path)
+        processes = []
+
+        def launch(port):
+            proc = subprocess.Popen(
+                [interpreter, str(daemon_src), "127.0.0.1", str(port)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE, env=env,
+            )
+            processes.append(proc)
+            _wait_for_listener(proc, port)
+            return proc
+
+        try:
+            first_port = _free_port()
+            first = launch(first_port)
+            collision = subprocess.run(
+                [interpreter, str(daemon_src), "127.0.0.1", str(first_port)],
+                stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=5,
+            )
+            assert collision.returncode == 1
+            assert f"Port {first_port} is already in use" in collision.stderr.decode()
+            assert b"VB_REMOTE_PORT" in collision.stderr
+            assert b"each CIW" in collision.stderr
+            assert first.poll() is None
+
+            second_port = _free_port()
+            second = launch(second_port)
+            token = daemon_auth.read_local_token(token_path)
+            instances = []
+            for port in (first_port, second_port):
+                nonce = os.urandom(16).hex()
+                reply = _raw_exchange(port, {
+                    "proto": 1, "op": "hello", "nonce": nonce,
+                    "mac": daemon_auth.hello_mac(token, nonce=nonce),
+                })
+                caps = json.loads(daemon_auth.verify_response(reply, token, nonce)[1:])
+                assert caps["auth"] == "on"
+                instances.append(caps["daemon_instance"])
+            assert instances[0] != instances[1]
+            assert first.poll() is None and second.poll() is None
+        finally:
+            for proc in processes:
+                if proc.poll() is None:
+                    proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                proc.stderr.close()
+
     def test_rejects_unauthenticated_and_mismatched_requests(self, tmp_path) -> None:
         daemon_src = _resources_dir() / "ramic_bridge_daemon_3.py"
         token_path = tmp_path / "bridge_token"

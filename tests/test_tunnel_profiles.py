@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -101,6 +102,38 @@ def test_status_infers_profile_scoped_setup_path(monkeypatch, capsys) -> None:
         'load("/tmp/virtuoso_bridge_designer/90590/virtuoso_bridge_t28_io/virtuoso_setup.il")'
         in capsys.readouterr().out
     )
+
+
+@pytest.mark.parametrize("local", [False, True])
+def test_same_account_profiles_do_not_overwrite_each_others_setup(tmp_path, monkeypatch, local):
+    monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.state_dir", lambda: tmp_path)
+    monkeypatch.delenv("VB_REMOTE_SCRATCH_ROOT", raising=False)
+    monkeypatch.setenv("VB_CLIENT_ID", "synthetic-client")
+    fake = _FakeRunner()
+    paths = []
+    setups = []
+    for profile, port in (("project_a", 65101), ("project_b", 65102)):
+        monkeypatch.delenv(f"VB_CLIENT_ID_{profile}", raising=False)
+        client = SSHClient(
+            remote_host="localhost" if local else "eda-host",
+            remote_user="designer", port=port, profile=profile,
+        )
+        client._ssh_runner = fake
+        monkeypatch.setattr(client, "_detect_remote_python", lambda: ("python3", 3, 11))
+        if local:
+            client.ensure_local_setup()
+        else:
+            client.ensure_remote_setup()
+        paths.append(client.setup_path)
+        if local:
+            setups.append(Path(paths[-1]).read_text(encoding="utf-8"))
+        else:
+            setups.append(fake.uploads[paths[-1]])
+        assert f'setShellEnvVar("RB_PORT" "{port}")' in setups[-1]
+    assert paths[0] != paths[1]
+    first_after = Path(paths[0]).read_text(encoding="utf-8") if local else fake.uploads[paths[0]]
+    assert first_after == setups[0]
 
 
 def test_status_no_response_prints_stale_daemon_hint(monkeypatch, capsys, tmp_path) -> None:

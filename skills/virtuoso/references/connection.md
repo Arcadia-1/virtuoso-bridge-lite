@@ -215,6 +215,46 @@ that file.
 Configured process/version metadata is a declaration, not verified runtime
 CIW identity. Read the checkout's profile documentation for supported fields.
 
+### Two projects under the same account
+
+Only use this setup when two Virtuoso processes must run side by side. Changing
+the project working directory does not change a daemon's TCP port. Two processes
+loading the same setup still compete for that port, even under the same account.
+An occupied same-account endpoint may be the session a client intends to reuse;
+`start` therefore does not randomly move it to a new port.
+
+Use two named profiles with distinct unused daemon ports. Add these optional
+entries to the selected `.env`, substituting your existing host/account:
+
+```dotenv
+VB_REMOTE_HOST_project_a=eda-host
+VB_REMOTE_USER_project_a=eda-user
+VB_REMOTE_PORT_project_a=65101
+VB_REMOTE_HOST_project_b=eda-host
+VB_REMOTE_USER_project_b=eda-user
+VB_REMOTE_PORT_project_b=65102
+```
+
+Keep any required SSH jump or split-host settings consistent with the existing
+connection. For same-machine use, set both profile hosts to `localhost`.
+Profiles isolate generated setup/identity files as well as tunnel state;
+different ports alone do not isolate the generated setup path.
+
+1. Run `virtuoso-bridge start -p project_a --env /path/to/bridge.env` and load
+   its exact printed setup in project A's CIW.
+2. Run the equivalent command with `-p project_b` and load its distinct setup
+   in project B's CIW. If `.cdsinit` autoloads the bridge, make the startup for
+   each project select its own setup instead of loading A's setup in both.
+3. Keep `-p` and `--env` on later commands. Verify each endpoint with
+   `virtuoso-bridge eval 'getWorkingDir()' -p project_a --env /path/to/bridge.env`
+   (then `project_b`) against its intended project directory before editing.
+
+If a port still conflicts, choose another unused port for that profile and
+regenerate its setup; leave the other session running. For an unresolved error,
+collect the bridge/IC versions, sanitized profile port entries, each startup's
+bridge `load(...)` line and exact error. This isolates an endpoint problem from
+an unrelated failure; authentication and identity checks stay enabled.
+
 Check the installed client and running daemon before using newer APIs.
 Files deployed on disk do not upgrade a daemon already running inside CIW.
 For suspected dialogs or uncertain submissions, use

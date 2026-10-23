@@ -86,16 +86,17 @@ def test_each_env_file_finds_only_its_own_tunnel(state_root, monkeypatch):
     ]
 
 
-def test_stopping_one_tunnel_leaves_the_other(state_root, monkeypatch):
+@pytest.mark.parametrize("other", [B, ("eda-a", "alice", 65101)])
+def test_stopping_one_tunnel_leaves_the_other(state_root, monkeypatch, other):
     a = _started(*A, local_port=65100, pid=111)
-    _started(*B, local_port=65201, pid=222)
+    _started(*other, local_port=65201, pid=222)
 
     a.stop()
 
     assert a._ssh_runner.stopped
     _configure(monkeypatch, *A)
     assert SSHClient.read_state() is None
-    _configure(monkeypatch, *B)
+    _configure(monkeypatch, *other)
     assert SSHClient.read_state()["tunnel_pid"] == 222
 
 

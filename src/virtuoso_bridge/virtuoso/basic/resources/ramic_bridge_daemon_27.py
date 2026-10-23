@@ -908,6 +908,11 @@ def start_server():
         except socket.error as e:
             if e.errno == errno.EADDRINUSE:
                 sys.stderr.write("ERROR: Port {0} is already in use. Another daemon may be running.\n".format(PORT))
+                sys.stderr.write(
+                    "For parallel Virtuoso sessions, use separate profiles with distinct "
+                    "VB_REMOTE_PORT values; load the matching generated setup in each CIW. "
+                    "Leave the existing session running.\n"
+                )
                 sys.exit(1)
             else:
                 raise

@@ -813,6 +813,11 @@ def start_server():
         except OSError as e:
             if e.errno == errno.EADDRINUSE:
                 sys.stderr.write(f"ERROR: Port {PORT} is already in use. Another daemon may be running.\n")
+                sys.stderr.write(
+                    "For parallel Virtuoso sessions, use separate profiles with distinct "
+                    "VB_REMOTE_PORT values; load the matching generated setup in each CIW. "
+                    "Leave the existing session running.\n"
+                )
                 sys.exit(1)
             raise
         s.listen(_MAX_CONNECTIONS)
