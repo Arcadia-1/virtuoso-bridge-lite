@@ -61,6 +61,7 @@ class _Runner:
 def _started(host: str, user: str, port: int, local_port: int, pid: int) -> SSHClient:
     client = SSHClient(remote_host=host, remote_user=user, port=port, local_port=local_port)
     client._ssh_runner = _Runner(pid)
+    client._tunnel_endpoint = (local_port, port, pid)
     client.save_state()
     return client
 
@@ -127,3 +128,52 @@ def test_without_a_configuration_a_single_saved_tunnel_is_found(state_root, monk
 
     _started(*B, local_port=65201, pid=222)
     assert SSHClient.read_state() is None
+
+
+@pytest.mark.parametrize("remote_port", [None, "", 65085])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_stale_state_cannot_drive_clients_or_stop(state_root, monkeypatch, remote_port, legacy):
+    from virtuoso_bridge.transport import tunnel
+    _configure(monkeypatch, *A)
+    state_root.mkdir(parents=True)
+    target = "alice@eda-a:65100"
+    path = state_root / "state.json" if legacy else tunnel._state_file(None, target)
+    path.write_text(json.dumps(dict(mode="remote", port=65082, remote_port=remote_port,
+                                   target=target, daemon_host="eda-a", remote_user="alice",
+                                   tunnel_pid=111)), encoding="utf-8")
+    assert SSHClient.read_state() is None
+    assert not SSHClient.is_running()
+    assert SSHClient.running_targets() == []
+    client = SSHClient.from_env(keep_remote_files=True)
+    runner = SimpleNamespace(tunnel_pid=None, is_tunnel_alive=False,
+                             stop_port_forward=lambda: None)
+    client._ssh_runner = runner
+    monkeypatch.setattr(client, "close", lambda: None)
+    client.stop()
+    assert runner.tunnel_pid is None  # the stale PID is never adopted or signalled
+
+
+def test_auto_mode_requires_selection_even_if_old_fixed_port_is_live(state_root, monkeypatch):
+    from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
+    from virtuoso_bridge.daemon_auth import DaemonAuthError
+    import time
+    _configure(monkeypatch, *A)
+    _started(*A, local_port=65082, pid=111)
+    monkeypatch.delenv("VB_REMOTE_PORT")
+    assert SSHClient.read_state() is None
+    assert not SSHClient.is_running()
+    client = VirtuosoClient.from_env()
+    monkeypatch.setattr(client, "_exchange_payload", lambda *a: pytest.fail("stale listener contacted"))
+    with pytest.raises(DaemonAuthError, match="start first"):
+        client._ensure_daemon_capabilities(time.monotonic() + 1)
+
+
+def test_saving_new_target_preserves_unidentified_legacy_state(state_root, monkeypatch):
+    _configure(monkeypatch, *A)
+    state_root.mkdir(parents=True)
+    legacy = state_root / "state.json"
+    old = json.dumps(dict(mode="remote", port=65082, daemon_host="eda-a", tunnel_pid=111))
+    legacy.write_text(old, encoding="utf-8")
+    _started(*A, local_port=65083, pid=222)
+    assert SSHClient.read_state()["tunnel_pid"] == 222
+    assert legacy.read_text(encoding="utf-8") == old

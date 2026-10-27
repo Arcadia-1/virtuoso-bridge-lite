@@ -119,6 +119,19 @@ def test_signed_endpoint_must_match_selected_record():
         daemon.close()
 
 
+def test_cached_capabilities_cannot_outlive_instance_selection(monkeypatch):
+    from types import SimpleNamespace
+    from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
+    tunnel = SimpleNamespace(_discover_instances=True, instance_record=row(65002, 20))
+    client = VirtuosoClient(tunnel=tunnel, daemon_token="ab" * 32)
+    client._daemon_caps = dict(instance_record=row(), auth="on")
+    def exchange(*args):
+        raise ConnectionRefusedError("fresh handshake required")
+    monkeypatch.setattr(client, "_exchange_payload", exchange)
+    with pytest.raises(ConnectionRefusedError, match="fresh handshake"):
+        client._ensure_daemon_capabilities(time.monotonic() + 1)
+
+
 def test_python27_automatic_credential_is_an_hmac_byte_key(monkeypatch):
     import ast
     import hashlib
@@ -236,6 +249,29 @@ def test_ambiguous_start_prints_all_rows_without_ssh_diagnosis(monkeypatch, caps
     assert cli._start_one_profile(None) == 1
     out = capsys.readouterr().out
     assert "65001  10" in out and "65002  20" in out and "--port" in out
+
+
+def test_start_reports_daemon_reset_without_misdiagnosing_ssh(monkeypatch, capsys):
+    from virtuoso_bridge import cli
+    from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
+    from virtuoso_bridge.instance_discovery import InstanceConnectionError
+    monkeypatch.setenv("VB_REMOTE_HOST", "test-host")
+    client = SSHClient(remote_host="test-host", port=34713, local_port=65083)
+    client.instance_record = row(34713)
+    monkeypatch.setattr(SSHClient, "from_env", lambda **kwargs: client)
+    monkeypatch.setattr(client, "close", lambda: None)
+    monkeypatch.setattr(client, "warm", lambda: client._verify_discovered_instance(1))
+    def reset(*args):
+        raise ConnectionResetError("connection reset by peer")
+    monkeypatch.setattr(VirtuosoClient, "_ensure_daemon_capabilities", reset)
+    monkeypatch.setattr(cli, "_format_ssh_failure", lambda *args: pytest.fail("SSH already succeeded"))
+    with pytest.raises(InstanceConnectionError) as caught:
+        client._verify_discovered_instance(1)
+    assert isinstance(caught.value.__cause__, ConnectionResetError)
+    assert cli._start_one_profile(None) == 1
+    out = capsys.readouterr().out
+    assert "Daemon handshake failed" in out
+    assert "65083" in out and "34713" in out and "connection reset" in out
 
 
 linux = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requires native Linux flock and UID semantics")

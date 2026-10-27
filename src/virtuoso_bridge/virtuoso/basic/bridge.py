@@ -2111,7 +2111,13 @@ let((result winName ciwNum)
         ``ConnectionRefusedError``/``OSError`` propagate so callers can apply
         their normal connect-retry policy.
         """
-        if self._daemon_caps is not None and not refresh:
+        expected = getattr(self._tunnel, "instance_record", None)
+        if getattr(self._tunnel, "_discover_instances", False) and not expected:
+            raise daemon_auth.DaemonAuthError(
+                "No Virtuoso instance selected. Run virtuoso-bridge start first."
+            )
+        if (self._daemon_caps is not None and not refresh
+                and (not expected or self._daemon_caps.get("instance_record") == expected)):
             return self._daemon_caps
         payload = self._build_hello_payload()
         nonce = payload["nonce"]

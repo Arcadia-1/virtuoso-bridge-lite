@@ -92,12 +92,19 @@ def _configured_target(profile: str | None = None) -> str | None:
 def _state_target_matches(state: dict[str, Any], target: str) -> bool:
     """Whether a saved state describes *target*.
 
-    States written before targets were recorded have no ``remote_user``;
-    their host and daemon port must still match. A state that records no
-    host at all cannot be told apart and is accepted, as before.
+    Remote states must record a host and port, even when their filename or
+    target field already matches. Older local-only states remain readable.
     """
-    if state.get("target"):
-        return state["target"] == target
+    if state.get("target") and state["target"] != target:
+        return False
+    if state.get("mode") == "remote":
+        try:
+            if not 1 <= int(state.get("remote_port")) <= 65535:
+                return False
+        except (TypeError, ValueError):
+            return False
+        if not (state.get("daemon_host") or state.get("remote_host")):
+            return False
     saved = _tunnel_target(
         state.get("remote_user"),
         str(state.get("daemon_host") or state.get("remote_host") or ""),
@@ -387,6 +394,7 @@ class SSHClient:
         self._daemon_endpoint_hostname: str | None = None
         self._daemon_token: str | None = None
         self._daemon_token_from_cache = False
+        self._tunnel_endpoint: tuple[int, int, int | None] | None = None
 
     def _new_role_runner(
         self,
@@ -741,7 +749,7 @@ class SSHClient:
     def is_tunnel_alive(self) -> bool:
         if self._ssh_runner is None:
             return False
-        return self._ssh_runner.is_tunnel_alive
+        return self._active_tunnel_matches()
 
     # -- remote deployment --------------------------------------------------
 
@@ -1054,13 +1062,7 @@ class SSHClient:
         state = self.read_state(self._profile, target=self.target) or {}
         saved_host = str(state.get("daemon_host") or state.get("remote_host") or "")
         expected_host = self._daemon_host.strip().rstrip(".").lower()
-        # State files written before ``remote_port`` was introduced still
-        # describe a bridge-owned tunnel.  The configured remote port is the
-        # only value the old format omitted, so use it once while adopting;
-        # the subsequent ``save_state`` call upgrades the file in place.
         saved_remote_port = state.get("remote_port")
-        if saved_remote_port in (None, ""):
-            saved_remote_port = self._port
         try:
             endpoints_match = (
                 state.get("mode") == "remote"
@@ -1076,7 +1078,13 @@ class SSHClient:
         if not SSHRunner.can_reach_port(local_port):
             return False
         self._require_runner().tunnel_pid = int(pid)
+        self._tunnel_endpoint = (local_port, self._port, int(pid))
         return True
+
+    def _active_tunnel_matches(self) -> bool:
+        runner = self._require_runner()
+        return runner.is_tunnel_alive and self._tunnel_endpoint == (
+            self._local_port, self._port, runner.tunnel_pid)
 
     def _select_local_port(self, local_port: int) -> None:
         if local_port == self._local_port:
@@ -1092,7 +1100,12 @@ class SSHClient:
             return
         runner = self._require_runner()
         if runner.is_tunnel_alive:
-            return
+            if self._active_tunnel_matches():
+                return
+            # Leave the old forward alive for its users, but do not reuse or
+            # stop it after this client selects another daemon.
+            runner.detach_port_forward()
+            self._tunnel_endpoint = None
 
         max_attempts = 10
         local_port = self._local_port
@@ -1118,6 +1131,7 @@ class SSHClient:
             if proc.poll() is None:
                 # Tunnel running
                 self._select_local_port(local_port)
+                self._tunnel_endpoint = (local_port, self._port, runner.tunnel_pid)
                 logger.info(
                     "SSH tunnel established (PID %d): localhost:%d -> %s:localhost:%d",
                     proc.pid, local_port, self._remote_host, self._port,
@@ -1223,10 +1237,17 @@ class SSHClient:
     def _verify_discovered_instance(self, timeout: int) -> None:
         if not self.instance_record:
             return
+        from virtuoso_bridge.instance_discovery import InstanceConnectionError
         from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
         client = VirtuosoClient(host="127.0.0.1", port=self.port, tunnel=self,
                                 daemon_token=self._daemon_token, timeout=timeout)
-        client._ensure_daemon_capabilities(time.monotonic() + timeout)
+        try:
+            client._ensure_daemon_capabilities(time.monotonic() + timeout)
+        except Exception as exc:
+            raise InstanceConnectionError(
+                f"Daemon handshake failed at local port {self.port} "
+                f"(remote port {self.remote_port}): {exc}"
+            ) from exc
 
     def stop(self) -> None:
         """Kill the tunnel and clean up."""
@@ -1236,6 +1257,9 @@ class SSHClient:
             return
 
         runner = self._require_runner()
+        if runner.is_tunnel_alive and not self._active_tunnel_matches():
+            runner.detach_port_forward()
+            self._tunnel_endpoint = None
         # Try state file PID first (may be from a previous session)
         if not runner.is_tunnel_alive:
             state = self.read_state(self._profile, target=self.target)
@@ -1369,13 +1393,18 @@ class SSHClient:
 
         *target* defaults to the configuration loaded into the environment,
         so a tunnel another ``.env`` started for a different host is not
-        mistaken for this one. ``None`` accepts any old-format state.
+        mistaken for this one. ``None`` ignores the configured target;
+        remote state must still record its destination port.
         """
         if target is _CONFIGURED:
             target = _read_selection(profile).get("target")
             suffix = f"_{profile}" if profile else ""
             if not target and os.getenv(f"VB_REMOTE_WORK_DIR{suffix}", "").strip():
                 return None  # legacy state has no proof of the requested directory
+            roles = remote_host_roles_from_os(profile, load=False)
+            if (not target and roles.daemon_host and not _is_localhost(roles.daemon_host)
+                    and not os.getenv(f"VB_REMOTE_PORT{suffix}", "").strip()):
+                return None  # automatic mode needs a saved discovery selection
             target = target or _configured_target(profile)
         if target:
             candidates = [_state_file(profile, target)]
@@ -1394,7 +1423,9 @@ class SSHClient:
                 continue
             if not isinstance(state, dict):
                 continue
-            if target and sf in _legacy_state_files(profile) and not _state_target_matches(state, target):
+            if target and not _state_target_matches(state, target):
+                continue
+            if state.get("mode") == "remote" and not state.get("remote_port"):
                 continue
             return state
         return None
@@ -1436,12 +1467,13 @@ class SSHClient:
             local_port = int(port)
         except (TypeError, ValueError):
             return False
-        if remote_port not in (None, ""):
-            try:
-                if int(remote_port) <= 0:
-                    return False
-            except (TypeError, ValueError):
+        try:
+            if not 1 <= int(remote_port) <= 65535:
                 return False
+        except (TypeError, ValueError):
+            return False
+        if state.get("target") and not _state_target_matches(state, state["target"]):
+            return False
         if local_port <= 0 or not _pid_is_alive(pid):
             return False
         return SSHRunner.can_reach_port(local_port)

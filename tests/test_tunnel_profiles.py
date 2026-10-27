@@ -395,7 +395,8 @@ def test_ensure_tunnel_skips_unknown_local_listener(monkeypatch) -> None:
     assert updates == [("VB_LOCAL_PORT_t28", "65062")]
 
 
-def test_ensure_tunnel_reuses_only_matching_managed_listener(monkeypatch) -> None:
+@pytest.mark.parametrize("saved_port", [65062, 65085, None, ""])
+def test_ensure_tunnel_reuses_only_matching_managed_listener(monkeypatch, saved_port) -> None:
     client = SSHClient(
         remote_host="thu-wei",
         remote_user="designer",
@@ -411,7 +412,7 @@ def test_ensure_tunnel_reuses_only_matching_managed_listener(monkeypatch) -> Non
         lambda profile=None, **_: {
             "mode": "remote",
             "port": 65061,
-            "remote_port": 65062,
+            "remote_port": saved_port,
             "daemon_host": "thu-wei",
             "tunnel_pid": 9876,
         },
@@ -424,20 +425,26 @@ def test_ensure_tunnel_reuses_only_matching_managed_listener(monkeypatch) -> Non
         "virtuoso_bridge.transport.tunnel.SSHRunner.can_reach_port",
         lambda port: port == 65061,
     )
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel._update_env_file", lambda *a: True)
 
     client.ensure_tunnel()
 
-    assert runner.tunnel_pid == 9876
-    assert runner.start_calls == []
+    if saved_port == 65062:
+        assert runner.tunnel_pid == 9876
+        assert runner.start_calls == []
+    else:
+        assert runner.start_calls == [(65062, 65062)]
 
 
-def test_ensure_tunnel_adopts_legacy_state_without_remote_port(monkeypatch) -> None:
+@pytest.mark.parametrize("discover", [False, True])
+def test_legacy_tunnel_is_not_reused_even_with_fixed_port(monkeypatch, discover) -> None:
     client = SSHClient(
         remote_host="thu-wei",
         remote_user="designer",
         port=65062,
         local_port=65061,
         profile="t28",
+        discover_instances=discover,
     )
     runner = _TunnelRunner()
     client._ssh_runner = runner
@@ -452,6 +459,7 @@ def test_ensure_tunnel_adopts_legacy_state_without_remote_port(monkeypatch) -> N
         },
     )
     monkeypatch.setattr("virtuoso_bridge.transport.tunnel._pid_is_alive", lambda pid: pid == 9876)
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel._update_env_file", lambda *a: True)
     monkeypatch.setattr(
         "virtuoso_bridge.transport.tunnel.SSHRunner.can_reach_port",
         lambda port: port == 65061,
@@ -459,8 +467,45 @@ def test_ensure_tunnel_adopts_legacy_state_without_remote_port(monkeypatch) -> N
 
     client.ensure_tunnel()
 
-    assert runner.tunnel_pid == 9876
-    assert runner.start_calls == []
+    assert runner.start_calls == [(65062, 65062)]
+    assert client.port == 65062
+
+
+def test_active_runner_is_rechecked_when_selected_port_changes(monkeypatch):
+    client = SSHClient(remote_host="eda", port=34713, local_port=65082,
+                       discover_instances=True, keep_remote_files=True)
+    runner = client.ssh_runner
+    forwards = []
+    occupied = set()
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh._pid_is_alive", lambda pid: True)
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHRunner.can_reach_port",
+                        lambda port: port in occupied)
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel._update_env_file", lambda *a: True)
+    monkeypatch.setattr(client, "read_state", lambda *a, **kw: None)
+    def start(port, settle, *, remote_port):
+        forwards.append((port, remote_port))
+        occupied.add(port)
+        runner.tunnel_pid = 100 + len(forwards)
+        return SimpleNamespace(pid=runner.tunnel_pid, poll=lambda: None)
+    monkeypatch.setattr(runner, "start_port_forward", start)
+    client.ensure_tunnel()
+    client.ensure_tunnel()
+    assert forwards == [(65082, 34713)]
+    client._port = 40109
+    assert not client.is_tunnel_alive  # the SSH process lives, but serves another port
+    client.ensure_tunnel()
+    assert forwards == [(65082, 34713), (65083, 40109)]
+    assert occupied == {65082, 65083}  # no old forward was terminated
+    assert client.is_tunnel_alive
+
+    # A subsequent stop must not signal an attached forward for another target.
+    client._port = 41000
+    stopped = []
+    monkeypatch.setattr(runner, "stop_port_forward", lambda: stopped.append(runner.tunnel_pid))
+    monkeypatch.setattr(client, "_clear_state", lambda: None)
+    monkeypatch.setattr(client, "close", lambda: None)
+    client.stop()
+    assert stopped == [None]
 
 
 def test_remote_running_state_requires_pid_endpoint_and_reachable_port(monkeypatch) -> None:
@@ -480,7 +525,7 @@ def test_remote_running_state_requires_pid_endpoint_and_reachable_port(monkeypat
     assert SSHClient.is_running("t28")
 
     state.pop("remote_port")
-    assert SSHClient.is_running("t28")
+    assert not SSHClient.is_running("t28")
 
     state["remote_port"] = "not-a-port"
     assert not SSHClient.is_running("t28")

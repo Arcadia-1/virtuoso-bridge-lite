@@ -22,6 +22,10 @@ scoped to config, profile, host, user, directory, env port and scratch root.
 `status` discovers without changing port requests. A saved connection must
 match a live record and pass signed identity checks; otherwise it lists
 available instances instead of probing a stale tunnel. Status uses no SKILL.
+Tunnel reuse requires a known matching remote port, including forwards already
+attached to the client. Unknown or mismatched saved destinations cannot drive
+clients, stop/restart, or diagnostics. Old SSH processes are left alive: their
+local ports are skipped, and unknown legacy state is retained for inspection.
 The default bootstrap is `<scratch>/daemon/virtuoso_setup.il`. Discovery also
 reads existing `<scratch>/virtuoso_bridge_<user>/runs` records during migration;
 loading the new bootstrap moves a future daemon to `<scratch>/runs`.

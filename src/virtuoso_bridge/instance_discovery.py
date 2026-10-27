@@ -8,6 +8,10 @@ class InstanceSelectionError(RuntimeError):
     pass
 
 
+class InstanceConnectionError(RuntimeError):
+    """The selected daemon did not authenticate through the open endpoint."""
+
+
 def select_instance(rows: list[dict], work_dir: str = "", port: int | None = None) -> dict | None:
     if work_dir and not work_dir.startswith("/"):
         raise InstanceSelectionError("VB_REMOTE_WORK_DIR must be an absolute remote path")

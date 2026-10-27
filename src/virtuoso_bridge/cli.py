@@ -262,8 +262,8 @@ def _start_one_profile(profile: str | None) -> int:
             # the actual tunnel would have succeeded.
             ssh.warm()
         except Exception as exc:
-            from virtuoso_bridge.instance_discovery import InstanceSelectionError
-            if isinstance(exc, InstanceSelectionError):
+            from virtuoso_bridge.instance_discovery import InstanceConnectionError, InstanceSelectionError
+            if isinstance(exc, (InstanceSelectionError, InstanceConnectionError)):
                 print(str(exc))
                 return 1
             if not is_local:
