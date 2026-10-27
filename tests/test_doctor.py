@@ -235,7 +235,8 @@ def _context(monkeypatch, tmp_path, *, runner=None, client=None, running=True, s
     monkeypatch.setenv("VB_CLIENT_ID", "client1")
     if deployed:
         path = scratch
-        for part in ("daemon",):
+        from virtuoso_bridge.transport.tunnel import _profiled_bridge_leaf
+        for part in ("client1", _profiled_bridge_leaf(profile)):
             path = path / part
             path.mkdir(mode=0o700, exist_ok=True)
             path.chmod(0o700)
@@ -339,7 +340,7 @@ def test_without_a_tunnel_nothing_is_started_and_daemon_checks_skip(monkeypatch,
     _assert_read_only(runner, client, ctx)
 
 
-def test_local_daemon_uses_the_local_token_and_no_ssh(monkeypatch, tmp_path):
+def test_legacy_local_daemon_uses_the_local_token_and_no_ssh(monkeypatch, tmp_path):
     token_file = tmp_path / "token"
     token_file.write_text(TOKEN + "\n", encoding="utf-8")
     monkeypatch.setenv("VB_BRIDGE_TOKEN", str(token_file))
@@ -352,6 +353,7 @@ def test_local_daemon_uses_the_local_token_and_no_ssh(monkeypatch, tmp_path):
                         lambda spectre_bin="": ("/cad/ic/bin/spectre", "@(#)$CDS: spectre version 23.1"))
     client = FakeDaemonClient()
     ctx = doctor.DoctorContext(None)
+    ctx.make_ssh = lambda: SSHClient(remote_host="localhost", discover_instances=False)
     ctx.make_daemon_client = lambda port, token: (setattr(client, "daemon_token", token), client)[1]
 
     results = _run(ctx)
@@ -383,7 +385,7 @@ def test_unconfigured_default_names_the_configured_profiles(monkeypatch):
     monkeypatch.setenv("VB_REMOTE_HOST_worker", "eda-host")
     result = doctor.check_configuration(doctor.DoctorContext(None))
     assert result.status == doctor.FAIL
-    assert "select a configured profile (-p worker)" in result.fix
+    assert "select a configured profile (-p worker)" in result.fix.lower()
 
 
 def test_missing_env_file_fails_configuration(monkeypatch):
@@ -544,7 +546,7 @@ def test_bind_falls_back_to_the_ciw_variable(monkeypatch, tmp_path):
 
 def _chain(tmp_path):
     top = tmp_path / "scratch"
-    return [top, top / "daemon"]
+    return [top, top / "client1" / "virtuoso_bridge"]
 
 
 def _mode(path) -> int:
@@ -559,7 +561,7 @@ def test_scratch_group_access_warns_and_is_left_unchanged(monkeypatch, tmp_path)
     result = doctor.check_scratch_dir(_configured(ctx))
 
     assert result.status == doctor.WARN
-    assert "daemon (mode 755)" in result.detail
+    assert "virtuoso_bridge (mode 755)" in result.detail
     assert result.fix.startswith("Run `chmod 700 ")
     assert _mode(_chain(tmp_path)[1]) == 0o755  # observed, never tightened
     _assert_read_only(runner, client)
@@ -570,12 +572,13 @@ def test_scratch_symlink_fails(monkeypatch, tmp_path):
     ctx, runner, _ = _context(monkeypatch, tmp_path, deployed=False)
     planted = tmp_path / "planted"
     planted.mkdir()
-    (tmp_path / "scratch" / "daemon").symlink_to(planted)
+    (tmp_path / "scratch" / "client1").mkdir(mode=0o700)
+    (tmp_path / "scratch" / "client1" / "virtuoso_bridge").symlink_to(planted)
 
     result = doctor.check_scratch_dir(_configured(ctx))
 
     assert result.status == doctor.FAIL
-    assert "daemon is a symlink" in result.detail
+    assert "virtuoso_bridge is a symlink" in result.detail
     assert "VB_REMOTE_SCRATCH_ROOT" in result.fix
     assert list(planted.iterdir()) == []
 
@@ -1065,6 +1068,25 @@ def _configured(ctx):
     """Run the configuration check first, as run_checks does."""
     assert doctor.check_configuration(ctx).status == doctor.OK
     return ctx
+
+
+@pytest.mark.parametrize("fault", ["missing-record", "wrong-endpoint", "missing-token"])
+def test_automatic_doctor_fails_closed_without_retargeting(monkeypatch, tmp_path, fault):
+    from tests.test_instance_discovery import row
+    ctx, runner, client = _context(monkeypatch, tmp_path)
+    ssh = ctx.ssh
+    ssh._discover_instances = True
+    ssh.instance_record = row(65123)
+    monkeypatch.setattr(ssh, "list_instances", lambda: [] if fault == "missing-record" else [ssh.instance_record])
+    monkeypatch.setattr(ssh, "read_daemon_token", lambda: None if fault == "missing-token" else TOKEN)
+    monkeypatch.setattr(ssh, "reconcile_instance", lambda *a: pytest.fail("doctor must not retarget"))
+    monkeypatch.setattr(ssh, "ensure_daemon_token", lambda: pytest.fail("doctor must not provision"))
+    monkeypatch.setenv("VB_ALLOW_UNAUTHENTICATED_DAEMON", "1")
+    if fault == "wrong-endpoint":
+        monkeypatch.setattr(SSHClient, "read_state", staticmethod(lambda *a, **k: dict(STATE, remote_port=65124)))
+    result = doctor.check_daemon(_configured(ctx))
+    assert result.status == doctor.FAIL
+    assert ctx.created == [] and client.sent == []
 
 
 def _after_daemon(ctx):

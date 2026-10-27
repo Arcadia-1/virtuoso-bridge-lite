@@ -151,8 +151,15 @@ procedure(RBIpcErrHandler(ipcId data)
                 when(strlen(tok) > 4 && equal(substring(tok 1 4) "pid=")
                     RBLastPid = atoi(substring(tok 5)))
                 when(strlen(tok) > 5 && equal(substring(tok 1 5) "bind=")
-                    RBLastBind = substring(tok 6)
-                    RBPort = atoi(cadr(parseString(RBLastBind ":"))))
+                    let((parts candidate parsed)
+                        parts = parseString(substring(tok 6) ":")
+                        when(length(parts) == 2
+                            candidate = cadr(parts)
+                            parsed = atoi(candidate t)
+                            when(integerp(parsed) && parsed > 0 && parsed <= 65535 &&
+                                 equal(candidate sprintf(nil "%d" parsed))
+                                RBLastBind = substring(tok 6)
+                                RBPort = parsed))))
                 when(strlen(tok) > 5 && equal(substring(tok 1 5) "host=")
                     RBLastHost = substring(tok 6))
                 when(strlen(tok) > 3 && equal(substring(tok 1 3) "ip=")
@@ -638,6 +645,9 @@ procedure(RBMRefresh()
 procedure(RBMApply()
     ; Apply changes from the monitor form to the configuration
 	when(boundp('RBMonInstalled)
+	unless(integerp(RBMonitor->RBMIntPort->value) &&
+           RBMonitor->RBMIntPort->value >= 0 && RBMonitor->RBMIntPort->value <= 65535
+        error("Port must be 0 (automatic) or 1..65535"))
 	RBEcho = RBMonitor->RBMBolEcho->value
 	prog((refresh)
 	unless(RBMonitor->RBMBolLocal->value == RBLocal
@@ -653,8 +663,7 @@ procedure(RBMApply()
 		refresh = t
 	)
 	when(refresh
-		RBStop()
-		RBStart()
+		RBSetPort(RBConfiguredPort)
 	)
 	)
 	)

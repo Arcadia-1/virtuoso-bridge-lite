@@ -12,6 +12,26 @@ def default_path():
                         ".virtuoso-bridge", "bridge_token")
 
 
+def read_existing(path=None):
+    """Validate and read without creating files or changing permissions."""
+    path = path or default_path()
+    parent = os.path.dirname(path)
+    info = os.lstat(parent)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+        raise OSError("credential directory must be private and owned by the current UID")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+            raise OSError("credential must be a private regular file owned by the current UID")
+        data = os.read(fd, 66).decode("ascii").strip()
+        if len(data) != 64 or any(c not in "0123456789abcdefABCDEF" for c in data):
+            raise OSError("invalid credential file")
+        return data.lower()
+    finally:
+        os.close(fd)
+
+
 def read_or_create(path=None):
     path = path or default_path()
     parent = os.path.dirname(path)
@@ -63,4 +83,5 @@ def read_or_create(path=None):
 
 if __name__ == "__main__":
     # Used ONLY by the authenticated SSH command, never by the CIW launcher.
-    print(read_or_create())
+    import sys
+    print(read_existing() if "--read-only" in sys.argv else read_or_create())

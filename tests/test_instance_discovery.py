@@ -17,7 +17,8 @@ from virtuoso_bridge.virtuoso.basic.resources import ramic_registry as registry
 
 
 def row(port=65001, pid=10, work_dir="/project/a"):
-    return dict(port=port, pid=pid, work_dir=work_dir)
+    return dict(port=port, pid=pid, daemon_pid=pid + 1, uid=1000, user="fixture",
+                work_dir=work_dir, instance="%032x" % pid)
 
 
 def test_selection_requires_unique_instance_and_exact_port():
@@ -68,18 +69,19 @@ def test_cli_port_overrides_env_port(monkeypatch):
     from virtuoso_bridge import cli
     from virtuoso_bridge.instance_discovery import InstanceSelectionError
     monkeypatch.setenv("VB_REMOTE_HOST", "fixture-host")
-    monkeypatch.setattr(cli, "_CLI_PORT", [61235])
     client = SSHClient(remote_host="fixture-host", selected_port=61234)
     def warm():
-        assert client._selected_port == 61235
         raise InstanceSelectionError("fixture stop")
-    monkeypatch.setattr(SSHClient, "from_env", lambda **kwargs: client)
+    def from_env(**kwargs):
+        assert kwargs["selected_port"] == 61235
+        return client
+    monkeypatch.setattr(SSHClient, "from_env", from_env)
     monkeypatch.setattr(client, "warm", warm)
     monkeypatch.setattr(client, "close", lambda: None)
-    assert cli._start_one_profile(None) == 1
+    assert cli._start_one_profile(None, 61235) == 1
 
 
-def test_requested_port_is_written_before_missing_instance_load_hint(monkeypatch):
+def test_missing_selected_port_never_writes_allocation_request(monkeypatch):
     import shlex
     from virtuoso_bridge.transport.ssh import CommandResult
     from virtuoso_bridge.transport import tunnel
@@ -93,11 +95,10 @@ def test_requested_port_is_written_before_missing_instance_load_hint(monkeypatch
             return CommandResult(0, "[]", "")
     client._ssh_runner = Runner()
     monkeypatch.setattr(client, "_detect_remote_python", lambda *args: ("python3", 3, 9))
-    monkeypatch.setattr(tunnel, "remote_scratch_root", lambda: "/scratch with spaces")
-    with pytest.raises(InstanceSelectionError, match="fixed-port request for 61234"):
+    monkeypatch.setattr(tunnel, "remote_scratch_root", lambda *args: "/scratch with spaces")
+    with pytest.raises(InstanceSelectionError, match="VB_REMOTE_PORT 61234"):
         client.discover_instance()
-    assert commands[0][3:] == ["--scratch-root", "/scratch with spaces", "--configure",
-                               "--work-dir", "/project with spaces", "--port", "61234"]
+    assert commands[0][3:] == ["--scratch-root", "/scratch with spaces"]
 
 
 def test_signed_endpoint_must_match_selected_record():
@@ -159,6 +160,10 @@ def test_saved_selection_is_scoped_to_config_and_expected_directory(tmp_path, mo
     second.write_text("VB_REMOTE_HOST=localhost\n")
     monkeypatch.setattr(tunnel, "state_dir", lambda: tmp_path / "state")
     monkeypatch.setattr(env, "_RUNTIME_ENV_FILE", first)
+    monkeypatch.setattr(tunnel, "load_vb_env", lambda **kwargs: None)
+    for key in list(os.environ):
+        if key.startswith("VB_"):
+            monkeypatch.delenv(key)
     monkeypatch.setenv("VB_REMOTE_HOST", "localhost")
     monkeypatch.setenv("VB_REMOTE_WORK_DIR", "/project/a")
     client = SSHClient.from_env()
@@ -225,6 +230,7 @@ def test_discovery_does_not_deploy_or_write_port_config(monkeypatch):
     from virtuoso_bridge.transport.ssh import CommandResult
     client = SSHClient(remote_host="host", remote_user="test-user", discover_instances=True)
     class Runner:
+        _vb_remote_home = "/home/fixture"
         def run_command(self, command):
             return CommandResult(0, json.dumps([row()]), "")
     client._ssh_runner = Runner()
@@ -408,6 +414,7 @@ def test_credential_symlink_is_rejected_without_modifying_target(tmp_path):
 def test_status_discovery_does_not_write_fixed_port_requests(monkeypatch):
     from virtuoso_bridge.transport.ssh import CommandResult
     client = SSHClient(remote_host="host", selected_port=61234)
+    monkeypatch.setattr(client, "_instance_root", lambda: "/private/fixture")
     commands = []
     class Runner:
         def run_command(self, command):

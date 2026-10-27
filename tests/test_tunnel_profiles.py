@@ -15,6 +15,15 @@ from virtuoso_bridge.transport.tunnel import (
 from virtuoso_bridge import cli
 
 
+@pytest.fixture(autouse=True)
+def isolated_configuration(monkeypatch, tmp_path):
+    """Offline transport tests must not load a developer's live EDA config."""
+    from virtuoso_bridge import env
+    path = tmp_path / "empty.env"
+    path.write_text("")
+    monkeypatch.setattr(env, "_RUNTIME_ENV_FILE", path)
+
+
 class _FakeRunner:
     def __init__(self) -> None:
         self.commands: list[str] = []
@@ -22,7 +31,7 @@ class _FakeRunner:
 
     def run_command(self, command: str, timeout=None) -> CommandResult:
         self.commands.append(command)
-        return CommandResult(returncode=0, stdout="/home/designer" if command == 'printf %s "$HOME"' else "", stderr="")
+        return CommandResult(returncode=0, stdout="/home/designer" if command == 'getent passwd "$(id -u)" | cut -d: -f6' else "", stderr="")
 
     def upload_text(self, text: str, remote_path: str, timeout=None) -> CommandResult:
         self.uploads[remote_path] = text
@@ -231,7 +240,7 @@ class _ScriptedRunner:
         if "echo OWN" in command:
             verdict = self.verdicts.pop(0) if self.verdicts else "FREE"
             return CommandResult(returncode=0, stdout=f"{verdict}\n", stderr="")
-        return CommandResult(returncode=0, stdout="/home/designer" if command == 'printf %s "$HOME"' else "", stderr="")
+        return CommandResult(returncode=0, stdout="/home/designer" if command == 'getent passwd "$(id -u)" | cut -d: -f6' else "", stderr="")
 
     def upload_text(self, text: str, remote_path: str, timeout=None) -> CommandResult:
         self.uploads[remote_path] = text
@@ -689,7 +698,7 @@ def test_deploy_reports_a_replaced_setup_that_used_another_port(monkeypatch, pre
     class _Runner(_FakeRunner):
         def run_command(self, command: str, timeout=None) -> CommandResult:
             self.commands.append(command)
-            stdout = previous if command.startswith("cat ") else ("/home/designer" if command == 'printf %s "$HOME"' else "")
+            stdout = previous if command.startswith("cat ") else ("/home/designer" if command == 'getent passwd "$(id -u)" | cut -d: -f6' else "")
             return CommandResult(returncode=0, stdout=stdout, stderr="")
 
     client = SSHClient(remote_host="eda-host", remote_user="designer", port=65263, profile="t28")

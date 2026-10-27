@@ -14,6 +14,36 @@ import pytest
 from virtuoso_bridge.transport import ssh, tunnel
 
 
+@pytest.mark.parametrize("saved,current", [(None, "birth2"), ("birth1", "birth2")])
+def test_stop_rejects_unverified_or_reused_adopted_pid(monkeypatch, saved, current):
+    runner = ssh.SSHRunner("fixture")
+    runner.tunnel_pid = 42
+    runner._saved_tunnel_identity = saved
+    monkeypatch.setattr(ssh, "_process_identity", lambda pid: current)
+    monkeypatch.setattr(ssh.os, "kill", lambda *a: pytest.fail("must not signal"))
+    with pytest.raises(RuntimeError, match="unverified or reused"):
+        runner.stop_port_forward()
+    assert runner.tunnel_pid == 42
+    runner.detach_port_forward()
+
+
+def test_stop_verified_adopted_pid_and_clear_identity(monkeypatch):
+    runner = ssh.SSHRunner("fixture")
+    runner.tunnel_pid = 42
+    runner._saved_tunnel_identity = "birth1"
+    monkeypatch.setattr(ssh, "_process_identity", lambda pid: "birth1")
+    calls = []
+    monkeypatch.setattr(ssh.os, "kill", lambda *a: calls.append(a))
+    runner.stop_port_forward()
+    assert calls == [(42, ssh.signal.SIGTERM)]
+    assert runner.tunnel_pid is None
+    assert runner._saved_tunnel_identity is None
+
+
+def test_process_identity_rejects_current_non_ssh_process():
+    assert ssh._process_identity(os.getpid()) is None
+
+
 def _forbid_signals(*_args):
     raise AssertionError("Windows liveness checks must not call os.kill")
 

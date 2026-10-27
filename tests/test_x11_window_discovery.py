@@ -164,6 +164,10 @@ WM_CLASS(STRING) = "virtuoso", "virtuoso"
 def test_bootstrap_refuses_non_ciw_and_injects_only_generated_load(monkeypatch) -> None:
     helper = _load_helper_module()
     typed = []
+    monkeypatch.setattr(helper, "_bounded_check_output", lambda *a, **k:
+                        '_NET_WM_PID(CARDINAL) = 123\nWM_CLIENT_MACHINE(STRING) = "fixture"')
+    monkeypatch.setattr(helper, "_local_hostnames", lambda env: {"fixture"})
+    monkeypatch.setattr(helper, "_read_process_x11_env", lambda pid: {"DISPLAY": ":7"})
 
     monkeypatch.setattr(
         helper,
@@ -199,6 +203,7 @@ def test_bootstrap_refuses_non_ciw_and_injects_only_generated_load(monkeypatch) 
     result = helper.bootstrap_ciw(":7", "0xframe", "/shared/virtuoso_setup.il")
 
     assert "error" not in result
+    assert result["pid"] == 123
     assert typed == [(":7", "0xciw", 'load("/shared/virtuoso_setup.il")')]
 
 

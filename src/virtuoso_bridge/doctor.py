@@ -197,10 +197,14 @@ class DoctorContext:
         return SSHClient.from_env(keep_remote_files=True, profile=self.profile)
 
     def make_daemon_client(self, port: int, token: Optional[str]) -> Any:
-        return ReadOnlyVirtuosoClient(
+        client = ReadOnlyVirtuosoClient(
             host="127.0.0.1", port=port, timeout=self.timeout, log_to_ciw=False,
             daemon_token=token, max_timeout=self.timeout,
         )
+        if getattr(self.ssh, "_discover_instances", False):
+            client._tunnel = self.ssh
+            client._selection_reconciled = True  # check_daemon validates without retargeting
+        return client
 
     def make_docs_client(self) -> Any:
         client = VirtuosoClient(host="127.0.0.1", port=self.ssh.port, tunnel=self.ssh, log_to_ciw=False)
@@ -242,6 +246,8 @@ class DoctorContext:
         provisioned.
         """
         ssh = self.ssh
+        if getattr(ssh, "_discover_instances", False):
+            return ssh.read_daemon_token(), False
         if getattr(ssh, "ssh_runner", None) is None:
             return daemon_auth.read_local_token(), False
         cache = ssh.remote_cache_path()
@@ -251,6 +257,8 @@ class DoctorContext:
         return self.fetch_remote_token(), False
 
     def fetch_remote_token(self) -> Optional[str]:
+        if getattr(self.ssh, "_discover_instances", False):
+            return self.ssh.read_daemon_token()
         runner = self.runner("daemon")
         if runner is None:
             return None
@@ -443,11 +451,25 @@ def check_daemon(ctx: DoctorContext) -> CheckResult:
         return CheckResult(name, WARN, "the saved tunnel state names no port", start_fix)
     where = f"local daemon port {port}" if local else f"tunnel to {ctx.target} (local port {port})"
 
+    automatic = getattr(ctx.ssh, "_discover_instances", False)
+    if automatic:
+        from virtuoso_bridge.instance_discovery import validate_record
+        try:
+            record = validate_record(ctx.ssh.instance_record)
+            if record not in ctx.ssh.list_instances():
+                raise ValueError("saved instance is no longer live")
+            if record["port"] != (ctx.state or {}).get("remote_port"):
+                raise ValueError("saved endpoint differs from selected instance")
+        except (ValueError, RuntimeError) as exc:
+            ctx.skill_blocker = "selected instance is not verified"
+            return CheckResult(name, FAIL, str(exc),
+                               "Use sessions and start to select explicitly. Doctor does not retarget.")
+
     token, from_cache = ctx.read_token()
     if token is None and not local and ctx.ssh_failed(ctx.roles.daemon_host):
         ctx.skill_blocker = "SSH to the daemon host failed"
         return _ssh_failure(name, ctx, ctx.roles.daemon_host)
-    if token is None and not daemon_auth.allow_unauthenticated():
+    if token is None and (automatic or not daemon_auth.allow_unauthenticated()):
         ctx.skill_blocker = "no bridge token was found"
         token_home = "this machine" if local else ctx.roles.daemon_host
         return CheckResult(
@@ -654,7 +676,6 @@ def check_scratch_dir(ctx: DoctorContext) -> CheckResult:
         default_virtuoso_bridge_dir,
         private_dirs_below,
         remote_scratch_root,
-        resolve_remote_username,
     )
 
     host = ctx.roles.deploy_host
@@ -669,11 +690,13 @@ def check_scratch_dir(ctx: DoctorContext) -> CheckResult:
         return skipped
     result = None
     try:
-        # The same directory `start` deploys into (`whoami` without VB_REMOTE_USER).
-        user = resolve_remote_username(configured_user=ctx.roles.remote_user, runner=runner)
+        from virtuoso_bridge.transport.tunnel import _profiled_bridge_leaf
+        from virtuoso_bridge.transport.remote_paths import resolve_client_id
+        automatic = getattr(ctx.ssh, "_discover_instances", False)
         root = remote_scratch_root(runner)
         work_dir = default_virtuoso_bridge_dir(
-            user, "daemon", runner=runner)
+            "", "daemon" if automatic else _profiled_bridge_leaf(ctx.profile),
+            None if automatic else resolve_client_id(ctx.profile), runner=runner)
         paths = [root] + private_dirs_below(root, work_dir)
         if not runner.transport_error:
             result = runner.run_command(scratch_inspection_script(paths))

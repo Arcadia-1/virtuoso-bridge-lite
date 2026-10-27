@@ -72,7 +72,7 @@ def test_home_is_resolved_on_remote_host_once(monkeypatch):
     assert remote_scratch_root(runner) == "/home/remote-user/.virtuoso-bridge"
     assert default_virtuoso_bridge_dir("ignored", "daemon", runner=runner) == (
         "/home/remote-user/.virtuoso-bridge/daemon")
-    assert calls == ['printf %s "$HOME"']
+    assert calls == ['getent passwd "$(id -u)" | cut -d: -f6']
 
 
 def test_invalid_home_or_relative_root_is_rejected(monkeypatch):
@@ -88,3 +88,22 @@ def test_invalid_home_or_relative_root_is_rejected(monkeypatch):
         monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", root)
         with pytest.raises(ValueError):
             remote_scratch_root()
+
+
+def test_passwd_home_cache_is_per_runner_and_ignores_client_home(monkeypatch):
+    from types import SimpleNamespace
+    from virtuoso_bridge.transport.remote_paths import remote_scratch_root
+    monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
+    monkeypatch.setenv("HOME", "/wrong/client/home")
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", "~/scratch with spaces")
+    calls = []
+    def runner(home):
+        def run(command, timeout):
+            calls.append(command)
+            return SimpleNamespace(returncode=0, stdout=home + "\n")
+        return SimpleNamespace(run_command=run)
+    first, second = runner("/home/one"), runner("/home/two")
+    assert remote_scratch_root(first) == "/home/one/scratch with spaces"
+    assert remote_scratch_root(second) == "/home/two/scratch with spaces"
+    assert remote_scratch_root(first) == "/home/one/scratch with spaces"
+    assert len(calls) == 2

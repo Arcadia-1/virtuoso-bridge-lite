@@ -17,6 +17,15 @@ from virtuoso_bridge.transport.ssh import CommandResult, SSHRunner
 from virtuoso_bridge.transport.tunnel import SSHClient
 
 
+@pytest.fixture(autouse=True)
+def isolated_openssh_configuration(monkeypatch, tmp_path):
+    from virtuoso_bridge import env
+    path = tmp_path / "empty.env"
+    path.write_text("")
+    monkeypatch.setattr(env, "_RUNTIME_ENV_FILE", path)
+    monkeypatch.setenv("VB_SSH_BACKEND", "openssh")
+
+
 def _decode_remote_script(command: str) -> str:
     argv = shlex.split(command)
     assert argv[:2] == ["bash", "-c"]

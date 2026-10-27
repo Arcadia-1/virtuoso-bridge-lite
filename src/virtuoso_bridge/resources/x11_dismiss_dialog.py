@@ -1660,7 +1660,22 @@ def bootstrap_ciw(display, requested_id, setup_path):
     except ValueError as exc:
         return {"error": str(exc), "window_id": requested_id}
     target = window.get("dismiss_id") or window.get("window_id") or requested_id
+    # Read the selected application's PID before injection. Missing metadata
+    # permits the explicit input, but cannot prove which daemon later started.
+    pid = None
+    try:
+        metadata = _parse_xprop_inspection(_bounded_check_output(
+            ["xprop", "-id", target, "_NET_WM_PID", "WM_CLIENT_MACHINE"],
+            env=dict(os.environ, DISPLAY=display), timeout=2.0))
+        candidate = metadata.get("pid")
+        if candidate and _client_machine_status(metadata.get("client_machine"), _local_hostnames(os.environ)) == "local":
+            process_env = _read_process_x11_env(candidate)
+            if process_env.get("DISPLAY") == display:
+                pid = candidate
+    except _InspectionFailure:
+        pass
     result = _type_ascii_into_window(display, target, expression)
+    result["pid"] = pid
     result["requested_window_id"] = requested_id
     result["display"] = display
     result["title"] = window.get("title") or ""

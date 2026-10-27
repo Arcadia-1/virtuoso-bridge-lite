@@ -30,7 +30,7 @@ from virtuoso_bridge.transport.remote_paths import (
     private_dir_shell_prelude,
     remote_scratch_root,
     resolve_client_id,
-    resolve_remote_username,
+
 )
 from virtuoso_bridge.transport.remote_roles import remote_host_roles_from_os
 from virtuoso_bridge.transport.ssh import (
@@ -1048,10 +1048,7 @@ class SpectreSimulator:
             )
             if result.returncode:
                 raise RuntimeError(result.stderr.strip() or "Cannot create private Spectre scratch")
-            username = resolve_remote_username(
-                configured_user=self._remote_user or runner.user,
-                runner=runner,
-            )
+            username = ""  # compatibility argument; account-home paths supply isolation
             self._remote_work_dir = default_remote_spectre_work_dir(
                 username,
                 resolve_client_id(self._profile),

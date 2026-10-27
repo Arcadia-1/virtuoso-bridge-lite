@@ -231,15 +231,34 @@ One match connects. Multiple matches list port/PID/directory and require:
 virtuoso-bridge start --port 65123
 ```
 
-`--port` overrides `VB_REMOTE_PORT`; both also save a fixed-port request for
-future daemons in that directory (or account-wide without a directory filter).
-A requested port must bind successfully; there is no fallback. Existing daemons
-are unaffected. Requests persist until `start` without either selector clears
-that scope. Directory requests override account-wide requests; clear both to
-restore automatic ports.
+Use `sessions --json` to list records without selecting or provisioning, and
+`status --port PORT` to check an exact instance. `start --port` overrides
+`VB_REMOTE_PORT`; both are exact selectors only. A miss reports candidates;
+selection never writes or clears allocation requests. Remove an obsolete
+`VB_REMOTE_PORT` from the selected `.env` deliberately before automatic selection.
+Profiles remain optional; one host and one `.env` suffice.
 
-No match prints a `load("...")` instruction. Load it in the intended idle CIW,
-then rerun `start`. Older daemons need an explicit upgrade before discovery.
+For a deliberate persistent allocation request, run the installed helper on the
+daemon host (replace paths and project directory):
+
+```bash
+/usr/bin/python3 /opt/virtuoso-bridge/v2/ramic_registry.py --scratch-root /home/user/.virtuoso-bridge --configure --work-dir /projects/project-a --port 65123
+# Clear that directory's request by omitting --port:
+/usr/bin/python3 /opt/virtuoso-bridge/v2/ramic_registry.py --scratch-root /home/user/.virtuoso-bridge --configure --work-dir /projects/project-a
+# Clear the separate account-wide request by omitting --work-dir too:
+/usr/bin/python3 /opt/virtuoso-bridge/v2/ramic_registry.py --scratch-root /home/user/.virtuoso-bridge --configure
+```
+
+Directory requests take precedence over account requests. Clear both applicable
+scopes to restore automatic allocation. A requested port must bind or startup
+fails; existing daemons are unaffected. Earlier clients may have left these
+requests behind. Ordinary `start`, `status` and `sessions` never repair them.
+
+No match prints a `load("...")` instruction. In the intended idle CIW, stop its
+old child with `RBStop()`, wait for exit, then load the new setup and rerun
+`start`. A legacy daemon without records needs this explicit upgrade. Missing
+build metadata means unknown compatibility; a different build is informational
+unless a required protocol capability is absent. Never restart another CIW.
 `RBSetPort(N)` switches an idle instance; `RBSetPort(0)` consults saved requests,
 then defaults to automatic allocation. Files uploaded to disk do not replace
 functions already loaded in Virtuoso.
@@ -251,19 +270,63 @@ functions already loaded in Virtuoso.
 Install once into a new protected directory on the Cadence host:
 
 ```bash
-uv run python tools/install_shared_daemon.py /opt/virtuoso-bridge/v1 --python python3
+uv run python tools/install_shared_daemon.py /opt/virtuoso-bridge/v2 --python /usr/bin/python3
 ```
 
 Use the printed load line in each project's `.cdsinit`. Set
-`VB_DAEMON_SETUP=/opt/virtuoso-bridge/v1/virtuoso_setup.il` on clients to use
+`VB_DAEMON_SETUP=/opt/virtuoso-bridge/v2/virtuoso_setup.il` on clients to use
 that same path in load instructions. Without it, the bridge generates a
 private bootstrap at `~/.virtuoso-bridge/daemon/virtuoso_setup.il`, shared across projects.
 
-Daemon and client must use the same `VB_REMOTE_SCRATCH_ROOT` (default `~/.virtuoso-bridge`).
-Generated setup includes it; shared setup accepts `--scratch-root` or the
-Virtuoso startup environment. Records are private under
-`<scratch>/runs`; the authentication secret stays in the
-OS-account home. Automatic mode ignores `RB_TOKEN_PATH` and requires auth.
+Order: prepare the Linux host and an absolute Python interpreter; have a trusted
+installer create a new protected bundle; add its load line to project `.cdsinit`;
+configure the client; list/select an instance; check signed status. Installation
+refuses overwrite, symlink ancestors, foreign owners and group/other-writable
+ancestors (including `/tmp`). All users loading the bundle trust its installing
+UID, which need not be root. Upgrade into a new versioned path.
+
+Daemon and client must use the same deployment root, defaulting to
+`~/.virtuoso-bridge` in the passwd account home, independent of `$HOME`.
+Explicit `~/` uses that same account home. Generated setup includes the resolved
+root; shared setup takes `--scratch-root`, otherwise daemon `RB_SCRATCH_ROOT`,
+then daemon `VB_REMOTE_SCRATCH_ROOT`, then the default. A stale `RB_SCRATCH_ROOT`
+inside an existing Virtuoso wins over client settings. Client `.env` edits do
+not update a running CIW. The absolute project directory filter is not this root.
+Use a private child instead of `/tmp`; do not chmod `/tmp` or the account home.
+All relevant hosts must see the chosen files.
+
+Records are private under `<root>/runs`; the authentication secret remains in
+the passwd account home. Automatic mode requires per-UID authentication and
+ignores `RB_TOKEN_PATH` and unauthenticated overrides. Explicit legacy clients
+retain their documented token-path/unauthenticated settings. A shared UID is one
+trust boundary: project and port filters prevent mistakes, not access by another
+process using that UID. A signed response must match the whole record; record
+files alone are not authentic proof of daemon identity.
+
+Existing artifacts in old `/tmp/virtuoso_bridge_<user>/...` or client/profile
+directories are not moved or deleted. Durable jobs and other sessions may still
+use them. Account-home defaults consume home quota; choose a safe private root
+explicitly if needed. Discovery also reads the deployed older
+`<root>/virtuoso_bridge_<user>/runs` layout with the same ownership and lock
+checks. An already loaded daemon keeps its original record until explicit upgrade;
+loading the new bootstrap places its next record in `<root>/runs`.
+
+`status` reports host roles, endpoints and other managed tunnels, uses no SKILL,
+and reads existing credentials without creating them. Spectre is checked even
+if discovery fails; bridge status remains nonzero until authenticated. Automatic
+mode has no legacy CIW banner identity file. A fresh client can reconcile a
+vanished instance only within an explicit project constraint and before sending
+work; an exact port remains exact. Uncertain application requests are never
+replayed. Stop a retained tunnel using its original `--env`/profile and
+`stop --port PORT`; this targets saved endpoint state without rediscovery.
+Legacy state without process-birth identity cannot authorize a
+stop; inspect it manually. Windows ACLs, rather than POSIX mode bits, protect
+local state. `bootstrap --window` needs an existing generated setup or
+`VB_DAEMON_SETUP`; it never proves completion by finding an unrelated instance.
+
+Automatic local discovery and daemon installation require Linux (`flock`, UID
+ownership and `/proc/self/fd`). Windows/macOS clients can use SSH to Linux;
+independent Spectre workflows and explicit legacy APIs retain their own support.
 
 See the [discovery design](../../../docs/adr/0004-instance-discovery.md) for
 locking and security, and [shared-CIW protection](shared-ciw-dialogs.md) before

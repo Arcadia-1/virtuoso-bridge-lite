@@ -1,4 +1,4 @@
-"""Automatic ports retain runtime identity and limit stop to the tracked child."""
+"""Source-shape guards only; native SKILL behavior requires isolated live tests."""
 import os
 from pathlib import Path
 import re
@@ -41,7 +41,19 @@ def test_monitor_describes_current_ciw_scope():
 def test_runtime_port_survives_reload_and_monitor_edits_configuration():
     source = SOURCE.read_text(encoding="utf-8")
     config = source[:source.index('RBIdentityPath =')]
-    assert "unless(boundp('RBPort) && boundp('RBIpc) && RBIpc && RBIpc != 'unbound" in config
+    assert "unless(boundp('RBPort)&&boundp('RBIpc)&&RBIpc&&RBIpc!='unbound" in re.sub(r"\s+", "", config)
     assert '?value RBConfiguredPort' in source
     assert 'RBMIntPort->value = RBConfiguredPort' in procedure(source, "RBMRefresh")
 
+
+
+def test_monitor_uses_bounded_restart_and_checks_port():
+    source = SOURCE.read_text(encoding="utf-8")
+    body = procedure(source, "RBMApply")
+    assert "integerp(" in body and "RBSetPort(RBConfiguredPort)" in body
+    assert "RBStart()" not in body
+
+
+def test_resource_override_is_visible(record_property):
+    record_property("daemon_resources", str(RESOURCES.resolve()))
+    assert SOURCE.is_file()

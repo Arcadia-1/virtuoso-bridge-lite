@@ -15,6 +15,10 @@ import tempfile
 import time
 import unittest
 
+if not sys.platform.startswith("linux"):
+    print("native_instance_registry: skipped; requires Linux flock, UID and /proc/self/fd")
+    raise SystemExit(0)
+
 RESOURCES = Path(sys.argv.pop(1)).resolve()
 WORKER_PYTHON = os.environ.get("VB_TEST_WORKER_PYTHON", sys.executable)
 sys.path.insert(0, str(RESOURCES))
@@ -86,26 +90,47 @@ assert os.listdir(expected) == ['runs']
         stdout, stderr = worker.communicate(timeout=5)
         self.assertEqual(worker.returncode, 0, stderr)
 
-    def test_legacy_records_remain_visible_and_stale_cleanup_covers_both_layouts(self):
+    def test_abandoned_temporary_cleanup_preserves_live_writers(self):
+        import fcntl
+        opened = registry.Registry(self.directory)
+        try:
+            for prefix in (".record-", ".request-"):
+                old = Path(self.directory) / (prefix + "a" * 32)
+                old.write_text("incomplete")
+                old.chmod(0o600)
+                os.utime(old, (time.time() - 600, time.time() - 600))
+                live = Path(self.directory) / (prefix + "b" * 32)
+                with live.open("w") as stream:
+                    live.chmod(0o600)
+                    fcntl.flock(stream, fcntl.LOCK_EX)
+                    os.utime(live, (time.time() - 600, time.time() - 600))
+                    opened.sweep()
+                    self.assertFalse(old.exists())
+                    self.assertTrue(live.exists())
+                opened.sweep()
+                self.assertFalse(live.exists())
+        finally:
+            opened.close()
+
+    def test_distinct_projects_have_distinct_live_records(self):
+        self.spawn(WORKER.replace('/synthetic/project', '/project/a'), self.directory)
+        self.spawn(WORKER.replace('/synthetic/project', '/project/b'), self.directory)
+        rows = self.await_rows(2)
+        self.assertEqual(set(row['work_dir'] for row in rows), {'/project/a', '/project/b'})
+        self.assertEqual(len(set(row['port'] for row in rows)), 2)
+
+    def test_deployed_nested_layout_remains_discoverable_during_upgrade(self):
         import pwd
-        legacy = self.root / ("virtuoso_bridge_" + pwd.getpwuid(os.geteuid()).pw_name)
-        legacy.mkdir(mode=0o700)
-        worker = self.spawn(WORKER, legacy / "runs")
-        deadline = time.monotonic() + 5
-        rows = []
-        while not rows and time.monotonic() < deadline:
-            rows = registry.discover(root=str(self.root))
-            time.sleep(.03)
-        self.assertEqual(len(rows), 1)
-        registry.Registry(root=str(self.root)).close()
-        stale = Path(self.directory) / ("a" * 32 + ".json")
-        stale.write_text("stale")
-        self.assertEqual(registry.discover(root=str(self.root)), rows)
-        self.assertFalse(stale.exists())
-        worker.kill()
-        worker.communicate(timeout=5)
-        self.assertEqual(registry.discover(root=str(self.root)), [])
-        self.assertEqual(list((legacy / "runs").iterdir()), [])
+        import re
+        username = re.sub(r"[^a-zA-Z0-9._-]", "_", pwd.getpwuid(os.geteuid()).pw_name)[:64]
+        parent = self.root / ("virtuoso_bridge_" + username)
+        parent.mkdir(mode=0o700)
+        old = self.spawn(WORKER, parent / "runs")
+        new = self.spawn(WORKER, self.root / "runs")
+        old_row = json.loads(old.stdout.readline())
+        new_row = json.loads(new.stdout.readline())
+        rows = registry.discover(root=str(self.root))
+        self.assertEqual({row["instance"] for row in rows}, {old_row["instance"], new_row["instance"]})
 
     def test_registry_rejects_shared_and_symlink_roots_without_chmod(self):
         shared = self.root / "shared"
@@ -324,6 +349,32 @@ assert os.listdir(expected) == ['runs']
             lease.close()
             self.assertEqual(replacement.read_text(), "preserve")
 
+    def test_automatic_token_provisioning_failure_publishes_no_instance(self):
+        private = self.root / "private"
+        private.mkdir(mode=0o700)
+        victim = self.root / "untouched"
+        victim.write_text("ab" * 32)
+        (private / "bridge_token").symlink_to(victim)
+        source = '''
+import os, runpy, sys
+sys.path.insert(0, sys.argv[1])
+import ramic_token
+token_path = sys.argv[2] + '/private/bridge_token'
+ramic_token.default_path = lambda: token_path
+os.environ['RB_AUTO_PORT'] = '1'
+os.environ['RB_SCRATCH_ROOT'] = sys.argv[2] + '/registry'
+version = '27' if sys.version_info[0] == 2 else '3'
+path = sys.argv[1] + '/ramic_bridge_daemon_' + version + '.py'
+sys.argv = [path, '127.0.0.1', '0']
+runpy.run_path(path, run_name='__main__')
+'''
+        process = self.spawn(source, self.root)
+        stdout, stderr = process.communicate(timeout=5)
+        self.assertNotEqual(process.returncode, 0)
+        self.assertEqual(registry.discover(root=str(self.root / 'registry')), [])
+        self.assertEqual(victim.read_text(), 'ab' * 32)
+        self.assertNotIn(('ab' * 32).encode(), stdout + stderr)
+
     def test_automatic_daemon_creates_secret_and_rejects_foreign_credentials(self):
         token_path = self.root / "private" / "bridge_token"
         # Redirect only test storage. Run the real standalone daemon and
@@ -374,6 +425,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         body = response[65:].decode()
         self.assertEqual(response[1:65].decode(), mac(token, "vb1-response", nonce, "\x02", body))
         self.assertEqual(json.loads(body)["instance_record"], record)
+        self.assertEqual(json.loads(body)["build"], "instance-discovery-2")
         for secret in ("00" * 32, "ff" * 32):
             nonce = os.urandom(16).hex()
             response = request(dict(proto=1, nonce=nonce, skill="1+1", timeout=1,

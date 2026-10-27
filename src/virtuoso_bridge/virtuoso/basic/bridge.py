@@ -923,7 +923,7 @@ let((result winName ciwNum)
         """
         from virtuoso_bridge.transport.remote_paths import (
             default_virtuoso_bridge_dir,
-            resolve_remote_username,
+
         )
 
         effective_timeout = timeout if timeout is not None else self._timeout
@@ -946,10 +946,7 @@ let((result winName ciwNum)
             )
 
         # Remote path
-        username = resolve_remote_username(
-            configured_user=self._tunnel._remote_user if self._tunnel else None,
-            runner=self._tunnel._ssh_runner if self._tunnel else None,
-        )
+        username = ""  # compatibility argument; account-home paths supply isolation
         from virtuoso_bridge.transport.remote_paths import resolve_client_id
 
         client_id = resolve_client_id(getattr(self._tunnel, '_profile', None)) if self._tunnel else None
@@ -1988,15 +1985,12 @@ let((result winName ciwNum)
             from virtuoso_bridge.transport.remote_paths import (
                 default_virtuoso_bridge_dir,
                 resolve_client_id,
-                resolve_remote_username,
+
             )
             from virtuoso_bridge.transport.tunnel import _profiled_bridge_leaf
             work_dir = self._tunnel.remote_work_dir
             if not work_dir:
-                remote_username = resolve_remote_username(
-                    configured_user=getattr(self._tunnel, '_remote_user', None),
-                    runner=self._tunnel.ssh_runner,
-                )
+                remote_username = ""  # compatibility argument; account-home paths supply isolation
                 work_dir = default_virtuoso_bridge_dir(
                     remote_username,
                     _profiled_bridge_leaf(getattr(self._tunnel, '_profile', None)),
@@ -2112,10 +2106,24 @@ let((result winName ciwNum)
         their normal connect-retry policy.
         """
         expected = getattr(self._tunnel, "instance_record", None)
-        if getattr(self._tunnel, "_discover_instances", False) and not expected:
-            raise daemon_auth.DaemonAuthError(
-                "No Virtuoso instance selected. Run virtuoso-bridge start first."
-            )
+        if getattr(self._tunnel, "_discover_instances", False):
+            from virtuoso_bridge.instance_discovery import validate_record
+            try:
+                validate_record(expected)
+            except ValueError as exc:
+                raise daemon_auth.DaemonAuthError(
+                    "No valid Virtuoso instance selected. Run virtuoso-bridge start first: " + str(exc)
+                ) from exc
+            if not getattr(self, "_selection_reconciled", False) and hasattr(self._tunnel, "reconcile_instance"):
+                changed = self._tunnel.reconcile_instance(max(1, int(deadline - time.monotonic())))
+                if changed:
+                    self._port = self._tunnel.port
+                    self.daemon_token = self._tunnel.daemon_token
+                    self._daemon_caps = None
+                expected = self._tunnel.instance_record
+                self._selection_reconciled = True
+        elif expected is not None and not isinstance(expected, dict):
+            raise daemon_auth.DaemonAuthError("Invalid expected instance record")
         if (self._daemon_caps is not None and not refresh
                 and (not expected or self._daemon_caps.get("instance_record") == expected)):
             return self._daemon_caps
@@ -2131,9 +2139,9 @@ let((result winName ciwNum)
                 raise daemon_auth.DaemonAuthError(message)
             raise daemon_auth.DaemonAuthError(
                 "daemon did not answer the bridge capability handshake — it "
-                "predates bridge token auth or runs with auth disabled; run "
-                "`virtuoso-bridge restart` (or re-load virtuoso_setup.il in "
-                "the CIW) to upgrade it"
+                    "predates bridge token auth or runs with auth disabled; "
+                    "in the intended idle CIW, RBStop(), wait for the child "
+                    "to exit, then load the intended new virtuoso_setup.il"
             )
         if raw[:1] != b"\x02":
             raise daemon_auth.DaemonAuthError(

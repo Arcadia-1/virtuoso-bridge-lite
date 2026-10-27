@@ -13,6 +13,7 @@ import json
 import os
 import re
 import stat
+import time
 import uuid
 
 
@@ -37,7 +38,8 @@ def _private_directory(path, create):
     info = os.fstat(fd)
     if info.st_uid != os.geteuid() or info.st_mode & 0o077:
         os.close(fd)
-        raise RuntimeError("Instance scratch directory must be owned by this UID with mode 0700")
+        raise RuntimeError("Instance scratch directory must be owned by this UID with mode 0700: %s. "
+                           "Use a private child directory, not /tmp; the default is ~/.virtuoso-bridge." % path)
     return fd
 
 
@@ -80,19 +82,25 @@ class Registry(object):
     def close(self):
         os.close(self.fd)
 
-    def files(self):
+    def files(self, temporaries=False):
         for name in os.listdir(self.anchor):
-            if re.match(r"^[0-9a-f]{32}\.json$", name):
+            if re.match(r"^[0-9a-f]{32}\.json$", name) or (
+                    temporaries and re.match(r"^\.(record|request)-[0-9a-f]{32}$", name)):
                 yield os.path.join(self.anchor, name)
 
     def sweep(self):
         import fcntl
-        for path in self.files():
+        for path in self.files(temporaries=True):
             fd = None
             try:
                 fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
                 info = os.fstat(fd)
                 if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+                    continue
+                # Give a newly created temporary time to acquire its lock.
+                # Age is only a grace period: the lock and inode checks below
+                # are still required, including for arbitrarily old writers.
+                if os.path.basename(path).startswith(".") and time.time() - info.st_mtime < 300:
                     continue
                 _flock(fd, fcntl.LOCK_EX)
                 if _same_file(fd, path):
@@ -142,12 +150,14 @@ def configure_port(port=None, work_dir="", directory=None, root=None):
                 if exc.errno != errno.ENOENT:
                     raise
         else:
+            import fcntl
             fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             with os.fdopen(fd, "wb") as stream:
+                _flock(stream.fileno(), fcntl.LOCK_EX)
                 stream.write(json.dumps(dict(port=port, work_dir=work_dir)).encode("utf-8"))
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.rename(temporary, target)
+                os.rename(temporary, target)
     finally:
         try:
             os.unlink(temporary)
@@ -197,7 +207,7 @@ class Lease(object):
             self.fd = None
 
 
-def bind_instance(sock, host, port=0, directory=None, pid=None, work_dir=None):
+def bind_instance(sock, host, port=0, directory=None, pid=None, work_dir=None, backlog=8):
     """Bind once (zero means OS ephemeral), then publish a private live record."""
     import fcntl
     import pwd
@@ -213,7 +223,7 @@ def bind_instance(sock, host, port=0, directory=None, pid=None, work_dir=None):
         # Keep this socket open throughout. No probe, port scan, or filesystem
         # reservation participates in choosing the TCP port.
         sock.bind((host, fixed))
-        sock.listen(8)
+        sock.listen(backlog)
         actual_port = sock.getsockname()[1]
         metadata = dict(port=actual_port, pid=pid or os.getpid(), daemon_pid=os.getpid(),
                         uid=os.geteuid(), user=pwd.getpwuid(os.geteuid()).pw_name,
@@ -300,7 +310,8 @@ def _discover(directory=None, root=None, legacy=False):
 
 def discover(directory=None, root=None):
     rows = _discover(directory, root)
-    # Already-loaded daemons retain locks in the previous per-user subfolder.
+    # A live deployed daemon was verified using the prior nested layout.
+    # Read both during explicit upgrades; never move a live record or lock.
     if directory is None:
         rows += _discover(root=root, legacy=True)
     return sorted(rows, key=lambda row: row["port"])

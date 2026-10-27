@@ -57,6 +57,25 @@ are synthetic and temporary. It does not switch Linux UIDs or test native
 SKILL timers, a live CIW, or electrical equivalence. The related pytest cases
 skip Linux-only operations on Windows.
 
+Linux CI runs the harness on both supported Python matrix lanes. Its Python
+3.13 lane builds CPython 2.7.18 from the pinned python.org source and verified
+SHA256, installs it under runner temporary storage, then selects that actual
+worker with `VB_TEST_WORKER_PYTHON`. The harness itself stays on Python 3.
+Non-Linux invocation exits with an explicit skip before creating fixtures.
+
+`VB_TEST_DAEMON_RESOURCES=/absolute/resources` selects alternate daemon resources
+for source checks that support it; `test_auto_port_state.py` reports the resolved
+path as the `daemon_resources` test property. Those checks only inspect source.
+Do not present them as SKILL execution or silently test an installed old bundle.
+The native harness takes its resource path explicitly and exercises startup,
+publication, active-writer protection, stale cleanup and authentication.
+
+Use the project virtualenv and registered `virtuoso-bridge` entrypoint for CLI
+subprocess tests. Keep live `.env` settings out of offline test runs. Linux shell
+tests must actually execute a bounded shell, including successful private staging
+and failure cases; Windows/source-only assertions do not replace these checks.
+Report Windows, native Linux, Python 2.7 and Cadence results separately.
+
 ## Live tests
 
 Use a dedicated Virtuoso session, for example one started under
@@ -98,6 +117,14 @@ The offline generation tests do not substitute for it.
 
 The default run needs only plain Virtuoso and Spectre. Optional variables
 enable more checks:
+
+`VB_RUN_LIFECYCLE_TESTS=1 VB_TEST_VIRTUOSO=/path/to/virtuoso` enables
+`tests/test_daemon_lifecycle_live.py`. Its automatic-port case launches two
+private headless CIWs and checks signed build/record identity, reload, malformed
+bind banners, bounded restart and timeout, monitor changes and tracked-child-only
+stop. It uses the existing account credential in automatic mode and never loads
+code into existing user CIWs. This verifies native SKILL behavior on the installed
+Cadence build; it is not cross-version or electrical-equivalence evidence.
 
 | Variable | Enables |
 |---|---|

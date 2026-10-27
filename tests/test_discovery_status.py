@@ -19,7 +19,7 @@ def status(monkeypatch):
     monkeypatch.setattr(SSHClient, "read_state", lambda *a: state)
     monkeypatch.setattr(SSHClient, "is_running", lambda *a: True)
     monkeypatch.setattr(client, "close", lambda: None)
-    monkeypatch.setattr(client, "refresh_daemon_token", lambda: pytest.fail("stale endpoint probed"))
+    monkeypatch.setattr(client, "read_daemon_token", lambda: pytest.fail("stale endpoint probed"))
     return client, state
 
 
@@ -48,7 +48,7 @@ def test_status_respects_directory_and_port(status, monkeypatch, capsys):
     client._selected_port = 65001
     monkeypatch.setattr(client, "list_instances", lambda: [row(), row(65002, 20, "/project/b")])
     assert cli._print_status() == 1
-    assert "No matching live instance" in capsys.readouterr().out
+    assert "No valid instance matches" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("wrong_identity", [False, True])
@@ -58,7 +58,7 @@ def test_status_authenticates_exact_saved_record_without_skill(status, monkeypat
     selected = row()
     client.instance_record = selected
     monkeypatch.setattr(client, "list_instances", lambda: [selected, row(65002, 20)])
-    monkeypatch.setattr(client, "refresh_daemon_token", lambda: TOKEN)
+    monkeypatch.setattr(client, "read_daemon_token", lambda: TOKEN)
     # The old cross-user override must not bypass signed record matching.
     monkeypatch.setenv("VB_ALLOW_CROSS_USER_DAEMON", "1")
     caps = dict(proto=1, auth="on", daemon="ramic-bridge", virtuoso_pid=10,

@@ -23,7 +23,6 @@ from virtuoso_bridge.transport.remote_paths import (
     default_virtuoso_bridge_dir,
     private_dir_shell_prelude,
     resolve_client_id,
-    sanitize_username_for_path,
 )
 from virtuoso_bridge.virtuoso.layout.xstream import (
     XStreamExportRequest,
@@ -742,7 +741,6 @@ def _export_gds_remote(
 ) -> GdsExportResult:
     try:
         runner = getattr(client, "ssh_runner")
-        configured_user = getattr(runner, "user", None)
     except Exception as exc:
         return _remote_error_result(
             inputs,
@@ -750,38 +748,11 @@ def _export_gds_remote(
             f"failed to inspect remote XStream runner: {exc}",
         )
 
-    if isinstance(configured_user, str) and configured_user.strip():
-        username = sanitize_username_for_path(configured_user)
-    else:
-        try:
-            whoami = runner.run_command(
-                "whoami",
-                timeout=budget.timeout(finalizing=False),
-            )
-            returncode, stdout, stderr = _command_result_fields(whoami)
-        except Exception as exc:
-            return _remote_error_result(
-                inputs,
-                budget,
-                f"failed to resolve remote XStream username: {exc}",
-                timed_out=_exception_timed_out(exc),
-            )
-        if returncode != 0 or not stdout.strip():
-            detail = stderr.strip() or stdout.strip() or (
-                f"whoami returned exit status {returncode}"
-            )
-            return _remote_error_result(
-                inputs,
-                budget,
-                f"failed to resolve remote XStream username: {detail}",
-            )
-        username = sanitize_username_for_path(stdout)
-
     try:
         client_id = resolve_client_id()
         owned_root = PurePosixPath(
             default_virtuoso_bridge_dir(
-                username,
+                "",
                 "xstream",
                 client_id,
                 runner=runner,

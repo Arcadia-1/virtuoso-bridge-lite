@@ -113,6 +113,46 @@ def _pid_is_alive(pid: Any) -> bool:
         return False
 
 
+def _process_identity(pid: Any) -> str | None:
+    """Read executable and birth time; a reused PID must not authorize a stop."""
+    if type(pid) is not int or pid <= 0 or (os.name == "nt" and pid > 0xFFFFFFFF):
+        return None
+    try:
+        if os.name != "nt":
+            proc = Path("/proc") / str(pid)
+            fields = (proc / "stat").read_text().rsplit(")", 1)[1].split()
+            executable = os.readlink(proc / "exe")
+            if Path(executable).name != "ssh":
+                return None
+            return executable + ":" + fields[19]  # field 22 (starttime)
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+        kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+        handle = kernel.OpenProcess(0x1000, False, pid)  # query limited information
+        if not handle:
+            return None
+        try:
+            size = wintypes.DWORD(32768)
+            name = ctypes.create_unicode_buffer(size.value)
+            times = [wintypes.FILETIME() for _ in range(4)]
+            if not kernel.QueryFullProcessImageNameW(handle, 0, name, ctypes.byref(size)):
+                return None
+            if Path(name.value).name.lower() != "ssh.exe":
+                return None
+            if not kernel.GetProcessTimes(handle, *(ctypes.byref(value) for value in times)):
+                return None
+            return name.value.lower() + ":" + str((times[0].dwHighDateTime << 32) | times[0].dwLowDateTime)
+        finally:
+            kernel.CloseHandle(handle)
+    except (OSError, ValueError, IndexError, OverflowError):
+        return None
+
+
 def _windows_no_window_kwargs(
     *,
     detached: bool = False,
@@ -630,6 +670,9 @@ class SSHRunner:
         if self._tunnel_proc is not None and self._tunnel_proc.poll() is None:
             pid = self._tunnel_proc.pid
         elif self._tunnel_pid:
+            expected = getattr(self, "_saved_tunnel_identity", None)
+            if not expected or _process_identity(self._tunnel_pid) != expected:
+                raise RuntimeError("Refusing to stop an unverified or reused tunnel PID; inspect retained state")
             pid = self._tunnel_pid
         if pid:
             logger.info("Terminating SSH tunnel (PID %d)", pid)
@@ -640,6 +683,7 @@ class SSHRunner:
         self._tunnel_proc = None
         self._tunnel_pid = None
         self._tunnel_using_external = False
+        self._saved_tunnel_identity = None
 
     @property
     def is_tunnel_alive(self) -> bool:
@@ -654,6 +698,7 @@ class SSHRunner:
         self._tunnel_proc = None
         self._tunnel_pid = None
         self._tunnel_using_external = False
+        self._saved_tunnel_identity = None
 
     @property
     def tunnel_pid(self) -> int | None:
@@ -663,6 +708,7 @@ class SSHRunner:
 
     @tunnel_pid.setter
     def tunnel_pid(self, value: int | None) -> None:
+        self._saved_tunnel_identity = None
         self._tunnel_pid = value
         if value is not None:
             self._tunnel_using_external = True

@@ -353,6 +353,7 @@ def _capabilities_body():
             "proto": _PROTO,
             "auth": "on" if BRIDGE_TOKEN else "off",
             "daemon": "ramic-bridge",
+            "build": "instance-discovery-2",
             "virtuoso_pid": virtuoso_pid,
             "instance_record": _INSTANCE_LEASE.metadata if _INSTANCE_LEASE else None,
             "recoverable_requests": 1 if BRIDGE_TOKEN else 0,
@@ -922,9 +923,15 @@ def start_server():
                 from ramic_registry import bind_instance
             except ImportError:
                 from virtuoso_bridge.virtuoso.basic.resources.ramic_registry import bind_instance
-            _INSTANCE_LEASE = bind_instance(
-                s, HOST, PORT, pid=virtuoso_pid,
-                work_dir=os.environ.get("RB_VIRTUOSO_WORK_DIR") or os.getcwd())
+            try:
+                _INSTANCE_LEASE = bind_instance(
+                    s, HOST, PORT, pid=virtuoso_pid, backlog=_MAX_CONNECTIONS,
+                    work_dir=os.environ.get("RB_VIRTUOSO_WORK_DIR") or os.getcwd())
+            except socket.error as exc:
+                if exc.errno == errno.EADDRINUSE:
+                    sys.stderr.write("ERROR: Requested port is already in use; clear the explicit fixed-port request or choose a free port.\n")
+                    raise SystemExit(1)
+                raise
             PORT = _INSTANCE_LEASE.metadata["port"]
         else:
             try:
@@ -932,6 +939,7 @@ def start_server():
             except socket.error as exc:
                 if exc.errno == errno.EADDRINUSE:
                     sys.stderr.write("ERROR: Port %s is already in use. Leave the existing session running; load the automatic bootstrap or use RBSetPort(port).\n" % PORT)
+                    raise SystemExit(1)
                 raise
             s.listen(_MAX_CONNECTIONS)
         # Banner -- SKILL side parses this from stderr to populate

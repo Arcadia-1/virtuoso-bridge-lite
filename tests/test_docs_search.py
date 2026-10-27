@@ -1033,6 +1033,7 @@ def test_client_doc_info_includes_ok_key_in_every_mode(tmp_path: Path, monkeypat
     monkeypatch.delenv("CDS_INST_DIR", raising=False)
     monkeypatch.delenv("CDSHOME", raising=False)
     monkeypatch.delenv("CDS_HOME", raising=False)
+    monkeypatch.setattr("virtuoso_bridge.virtuoso.skill_finder.SKILLFinder.discover", lambda *a, **k: None)
     fallback = VirtuosoClient.local().doc_info()
     assert fallback["ok"] is True
     assert fallback["doc_roots"] == []

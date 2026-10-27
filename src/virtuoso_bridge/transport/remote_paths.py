@@ -24,7 +24,7 @@ def remote_scratch_root(runner: SSHRunner | None = None) -> str:
     if root.startswith("~/") and runner is not None:
         home = getattr(runner, "_vb_remote_home", None)
         if not isinstance(home, str):
-            result = runner.run_command('printf %s "$HOME"', timeout=10)
+            result = runner.run_command('getent passwd "$(id -u)" | cut -d: -f6', timeout=10)
             home = result.stdout.strip()
             if result.returncode or not home.startswith("/"):
                 raise ValueError("Cannot resolve the remote account home")
@@ -119,7 +119,8 @@ def default_virtuoso_bridge_dir(
 ) -> str:
     """Return the default remote scratch directory for bridge artifacts.
 
-    When *client_id* is provided, include it as a path segment so the same
+    The username argument is retained for source compatibility; account-home
+    roots now provide user isolation. When *client_id* is provided, include it as a path segment so the same
     remote user/profile pair can safely use a shared scratch root from
     multiple local machines.
     """

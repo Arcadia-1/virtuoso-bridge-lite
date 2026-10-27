@@ -46,7 +46,7 @@ def _alive(pid):
 def sessions(tmp_path):
     owned = []
 
-    def launch(name):
+    def launch(name, automatic=False):
         work = tmp_path / name
         work.mkdir()
         # Keep any library creation in this private session, not a site cds.lib.
@@ -67,6 +67,10 @@ def sessions(tmp_path):
                    RB_IDENTITY_PATH=str(identity), RB_PYTHON_PATH=sys.executable,
                    RB_DAEMON_PATH=str(resource.joinpath("ramic_bridge_daemon_3.py")),
                    RB_LOG_ENABLED="1", RB_LOG_PATH=str(work / "bridge.log"))
+        env["RB_AUTO_PORT"] = "1" if automatic else "0"
+        if automatic:
+            env["RB_PORT"] = "0"
+            env["RB_SCRATCH_ROOT"] = str(work / "private")
         output = (work / "stdout.log").open("w")
         proc = subprocess.Popen(
             [os.environ["VB_TEST_VIRTUOSO"], "-nograph", "-nocdsinit", "-restore",
@@ -76,11 +80,35 @@ def sessions(tmp_path):
         )
         item = dict(proc=proc, output=output, pids=[], work=work)
         owned.append(item)
-        _wait(lambda: identity.exists() and "pid=" in identity.read_text())
-        daemon_pid = int(dict(line.split("=", 1) for line in identity.read_text().splitlines())["pid"])
+        if automatic:
+            from virtuoso_bridge.virtuoso.basic.resources import ramic_registry, ramic_token
+            def records():
+                return ramic_registry.discover(root=str(work / "private"))
+            _wait(lambda: len(records()) == 1)
+            record = records()[0]
+            daemon_pid, port = record["daemon_pid"], record["port"]
+            token = ramic_token.read_existing()
+        else:
+            _wait(lambda: identity.exists() and "pid=" in identity.read_text())
+            daemon_pid = int(dict(line.split("=", 1) for line in identity.read_text().splitlines())["pid"])
         ipc_pid = int(Path(f"/proc/{daemon_pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
         item["pids"].extend([daemon_pid, ipc_pid])
         client = VirtuosoClient(port=port, daemon_token=token, timeout=5, log_to_ciw=False)
+        if automatic:
+            from types import SimpleNamespace
+            client._tunnel = SimpleNamespace(_discover_instances=True, instance_record=record)
+
+            def refresh_after_restart(previous):
+                _wait(lambda: len(records()) == 1 and records()[0]["instance"] != previous["instance"])
+                fresh = records()[0]
+                assert fresh["pid"] == previous["pid"]
+                client._port = fresh["port"]
+                client._daemon_caps = None
+                client._tunnel.instance_record = fresh
+                item["pids"].append(fresh["daemon_pid"])
+                item["record"] = fresh
+                return fresh
+            item.update(record=record, refresh=refresh_after_restart, client=client)
 
         def evaluate(code):
             result = client.execute_skill(code)
@@ -138,3 +166,43 @@ def test_owner_exit_releases_only_its_daemon(sessions, shutdown):
     keeper["evaluate"]('hiRegTimer("exit()" 2)')
     keeper["proc"].wait(timeout=15)
     _wait(lambda: not _alive(keeper["daemon_pid"]) and not _alive(keeper["ipc_pid"]), timeout=3)
+
+
+def test_automatic_reload_banner_and_bounded_restart_preserve_other_ciw(sessions):
+    keeper = sessions("automatic-keeper", automatic=True)
+    target = sessions("automatic-target", automatic=True)
+    evaluate = target["evaluate"]
+    original = target["record"]
+    assert evaluate(f'load({json.dumps(target["skill"])})') == "t"
+    assert int(evaluate("RBPort")) == original["port"]
+    assert target["client"]._ensure_daemon_capabilities(time.monotonic() + 5)["build"] == "instance-discovery-2"
+    for value in ("", "oops", "-1", "65536", "12oops"):
+        banner = "[RB-banner] pid=123 bind=127.0.0.1:" + value + "\n"
+        evaluate("RBIpcErrHandler(RBIpc %s)" % json.dumps(banner))
+        assert int(evaluate("RBPort")) == original["port"]
+    # Schedule once; never replay a request whose daemon may have stopped.
+    evaluate('hiRegTimer("RBSetPort(0)" 2)')
+    fresh = target["refresh"](original)
+    assert not _alive(original["daemon_pid"])
+    assert fresh["daemon_pid"] != original["daemon_pid"]
+    assert evaluate("6*7") == "42"
+    # Exercise the actual timeout and timer branches against a live child.
+    evaluate("RBRequestedPort = 0 RBApplyPort(0)")
+    assert int(evaluate("RBPort")) == fresh["port"]
+    evaluate("RBApplyPort(2)")
+    time.sleep(0.5)
+    assert int(evaluate("RBPort")) == fresh["port"]
+    assert _alive(fresh["daemon_pid"])
+    assert evaluate('errset(RBSetPort("invalid") nil)') == "nil"
+    assert evaluate('errset(progn(RBMonitor->RBMIntPort->value = -1 RBMApply()) nil)') == "nil"
+    evaluate("RBMonitor->RBMIntPort->value = 0")
+    evaluate("RBMonitor->RBMBolLog->value = !RBDLog")
+    evaluate('hiRegTimer("RBMApply()" 2)')
+    monitored = target["refresh"](fresh)
+    assert not _alive(fresh["daemon_pid"])
+    assert evaluate("6*7") == "42"
+    assert keeper["evaluate"]("40+2") == "42"
+    assert int(keeper["evaluate"]("RBLastPid")) == keeper["daemon_pid"]
+    evaluate('hiRegTimer("RBStopAll()" 2)')
+    _wait(lambda: not _alive(monitored["daemon_pid"]))
+    assert keeper["evaluate"]("40+2") == "42"

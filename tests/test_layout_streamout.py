@@ -2602,13 +2602,13 @@ def test_remote_sentinel_parser_fails_closed_on_malformed_protocol(
         )
 
 
-@pytest.mark.parametrize("scenario", ["symlink", "wrong_owner", "unsafe_mode"])
+@pytest.mark.parametrize("scenario", ["symlink", "wrong_owner", "unsafe_mode", "clean"])
 def test_remote_stage_command_secures_private_chain(
     tmp_path: Path,
     scenario: str,
 ) -> None:
     scratch = tmp_path / "scratch root"
-    scratch.mkdir()
+    scratch.mkdir(mode=0o700)
     paths = _remote_paths(
         (scratch / "virtuoso_bridge_secureuser" / "client" / "xstream").as_posix()
     )
@@ -2631,6 +2631,14 @@ def test_remote_stage_command_secures_private_chain(
     completed = _sh(streamout._remote_stage_command(paths), env=environment)
 
     run_dir = Path(paths.run_dir.as_posix())
+    if scenario == "clean":
+        assert completed.returncode == 0, completed.stderr
+        assert "VBXSTREAM_STAGE_CREATED" in completed.stdout
+        assert "VBXSTREAM_STAGE_READY" in completed.stdout
+        assert run_dir.is_dir()
+        assert all(stat.S_IMODE(path.stat().st_mode) == 0o700
+                   for path in (user_dir, user_dir / "client", Path(paths.owned_root), run_dir))
+        return
     assert completed.returncode != 0
     assert "VBXSTREAM_STAGE_CREATED" not in completed.stdout
     assert not run_dir.exists()
@@ -2716,7 +2724,7 @@ def test_remote_export_stages_owned_posix_run_and_all_request_fields(
     assert str(tmp_path) not in skill
 
 
-def test_remote_export_budgeted_whoami_is_sanitized_and_runs_once_per_export(
+def test_remote_export_does_not_probe_unused_username(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     stream_map: Path,
@@ -2738,7 +2746,7 @@ def test_remote_export_budgeted_whoami_is_sanitized_and_runs_once_per_export(
     assert second.remote_run_dir is not None
     assert "/laptop/xstream/" in first.remote_run_dir
     assert first.remote_run_dir != second.remote_run_dir
-    assert [command for command, _timeout in runner.calls].count("whoami") == 2
+    assert "whoami" not in [command for command, _timeout in runner.calls]
     assert len(client.uploads) == 2
 
 
