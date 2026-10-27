@@ -134,6 +134,17 @@ def _load_or_create_token():
     Unusable token files are FATAL unless RB_ALLOW_UNAUTHENTICATED=1 was
     explicitly set.
     """
+    if os.environ.get("RB_AUTO_PORT") == "1" or (len(sys.argv) > 2 and sys.argv[2] == "0"):
+        try:
+            try:
+                from ramic_token import read_or_create
+            except ImportError:
+                from virtuoso_bridge.virtuoso.basic.resources.ramic_token import read_or_create
+            # Python 2 hmac requires a byte-string key, not unicode.
+            return read_or_create().encode("ascii")
+        except (IOError, OSError, ValueError):
+            sys.stderr.write("[RB-auth] Cannot provision private per-user credential; refusing startup\n")
+            sys.exit(1)
     path = _token_file_path()
     try:
         with open(path, "r") as handle:
@@ -343,6 +354,7 @@ def _capabilities_body():
             "auth": "on" if BRIDGE_TOKEN else "off",
             "daemon": "ramic-bridge",
             "virtuoso_pid": virtuoso_pid,
+            "instance_record": _INSTANCE_LEASE.metadata if _INSTANCE_LEASE else None,
             "recoverable_requests": 1 if BRIDGE_TOKEN else 0,
             "daemon_instance": _RECOVERY.instance_id,
             "server_time_ms": int(time.time() * 1000),
@@ -404,6 +416,7 @@ except ImportError:
 # Command line arguments for host and port
 HOST = sys.argv[1]
 PORT = int(sys.argv[2])
+_INSTANCE_LEASE = None
 
 # Global timeout control flag
 timeout_flag = False
@@ -893,6 +906,7 @@ def _connection_thread(conn, addr, slots):
         slots.release()
 
 def start_server():
+    global PORT, _INSTANCE_LEASE
     """Start the TCP server to accept client connections."""
     # Python 2.7 compatibility: don't use context manager for socket
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -903,21 +917,23 @@ def start_server():
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
         # Try to bind with error handling for port conflicts
-        try:
-            s.bind((HOST, PORT))
-        except socket.error as e:
-            if e.errno == errno.EADDRINUSE:
-                sys.stderr.write("ERROR: Port {0} is already in use. Another daemon may be running.\n".format(PORT))
-                sys.stderr.write(
-                    "For parallel Virtuoso sessions, use separate profiles with distinct "
-                    "VB_REMOTE_PORT values; load the matching generated setup in each CIW. "
-                    "Leave the existing session running.\n"
-                )
-                sys.exit(1)
-            else:
+        if PORT == 0 or os.environ.get("RB_AUTO_PORT") == "1":
+            try:
+                from ramic_registry import bind_instance
+            except ImportError:
+                from virtuoso_bridge.virtuoso.basic.resources.ramic_registry import bind_instance
+            _INSTANCE_LEASE = bind_instance(
+                s, HOST, PORT, pid=virtuoso_pid,
+                work_dir=os.environ.get("RB_VIRTUOSO_WORK_DIR") or os.getcwd())
+            PORT = _INSTANCE_LEASE.metadata["port"]
+        else:
+            try:
+                s.bind((HOST, PORT))
+            except socket.error as exc:
+                if exc.errno == errno.EADDRINUSE:
+                    sys.stderr.write("ERROR: Port %s is already in use. Leave the existing session running; load the automatic bootstrap or use RBSetPort(port).\n" % PORT)
                 raise
-
-        s.listen(_MAX_CONNECTIONS)
+            s.listen(_MAX_CONNECTIONS)
         # Banner -- SKILL side parses this from stderr to populate
         # RBLastPid / RBLastBind / RBLastHost / RBLastIP for the monitor
         # display.  Format is frozen:

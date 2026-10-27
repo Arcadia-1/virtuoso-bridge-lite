@@ -93,9 +93,9 @@ def _ensure_helper(
     """
     if runner is None:
         return str(_HELPER_SCRIPT)
-    remote_dir = default_virtuoso_bridge_dir(user, "x11", resolve_client_id(profile))
+    remote_dir = default_virtuoso_bridge_dir(user, "x11", resolve_client_id(profile), runner=runner)
     remote_path = f"{remote_dir}/x11_dismiss_dialog.py"
-    runner.run_command(f"mkdir -p {remote_dir}")
+    runner.run_command(f"umask 077; mkdir -p {shlex.quote(remote_dir)}")
     runner.upload(_HELPER_SCRIPT, remote_path)
     return remote_path
 
@@ -187,9 +187,9 @@ def inspect_dialogs(
         if cached is not None and cached[0] == key:
             script, py = cached[1:]
         else:
-            root = default_virtuoso_bridge_dir(user, "x11", resolve_client_id(profile))
+            root = default_virtuoso_bridge_dir(user, "x11", resolve_client_id(profile), runner=runner)
             script = f"{root}/dialog_inspect_{digest}.py"
-            made = runner.run_command(f"mkdir -p {shlex.quote(root)}", timeout=remaining())
+            made = runner.run_command(f"umask 077; mkdir -p {shlex.quote(root)}", timeout=remaining())
             if made.returncode != 0:
                 raise RuntimeError(made.stderr or "cannot prepare X11 helper directory")
             uploaded = runner.upload(_HELPER_SCRIPT, script, timeout=remaining())
@@ -250,9 +250,9 @@ def dialog_close_exchange(
         if cached is not None and cached[0] == key:
             script, py = cached[1:]
         else:
-            root = default_virtuoso_bridge_dir(user, "x11", resolve_client_id(profile))
+            root = default_virtuoso_bridge_dir(user, "x11", resolve_client_id(profile), runner=runner)
             directory = f"{root}/close_{digest}"
-            made = runner.run_command(f"mkdir -p {shlex.quote(directory)}", timeout=remaining())
+            made = runner.run_command(f"umask 077; mkdir -p {shlex.quote(directory)}", timeout=remaining())
             if made.returncode:
                 raise RuntimeError(made.stderr or "Cannot prepare dialog action helper")
             for local in (_HELPER_SCRIPT, helper):

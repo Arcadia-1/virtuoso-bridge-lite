@@ -11,6 +11,7 @@ import math
 import os
 import re
 import secrets
+import shlex
 import socket
 import hashlib
 import time
@@ -61,14 +62,7 @@ _UNSET: Any = object()
 def _default_remote_port(
     username: str | None = None, *, environ: Mapping[str, str] | None = None,
 ) -> int:
-    """Return a stable per-user default port in the range 65000-65499.
-
-    SHA-1 based: the previous ``sum(ord(c)) % 500`` assigned identical ports
-    to any anagram pair (and collided often on shared EDA hosts), which made
-    cross-user daemon squatting trivial.  Deployment-time occupancy probing
-    (SSHClient.ensure_remote_setup) additionally shifts away ports already
-    held by another user.
-    """
+    """Legacy/default local-forwarding port; automatic daemons use bind(0)."""
     values = os.environ if environ is None else environ
     user = username or values.get("VB_REMOTE_USER", "").strip()
     if not user:
@@ -959,9 +953,9 @@ let((result winName ciwNum)
         from virtuoso_bridge.transport.remote_paths import resolve_client_id
 
         client_id = resolve_client_id(getattr(self._tunnel, '_profile', None)) if self._tunnel else None
-        screenshot_dir = default_virtuoso_bridge_dir(username, "screenshots", client_id)
+        screenshot_dir = default_virtuoso_bridge_dir(username, "screenshots", client_id, runner=self.ssh_runner)
         if self._tunnel and self._tunnel._ssh_runner:
-            self._tunnel._ssh_runner.run_command(f"mkdir -p {screenshot_dir}")
+            self._tunnel._ssh_runner.run_command(f"umask 077; mkdir -p {shlex.quote(screenshot_dir)}")
 
         from datetime import datetime
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2007,6 +2001,7 @@ let((result winName ciwNum)
                     remote_username,
                     _profiled_bridge_leaf(getattr(self._tunnel, '_profile', None)),
                     resolve_client_id(getattr(self._tunnel, '_profile', None)),
+                    runner=self._tunnel.ssh_runner,
                 )
             remote_dir = work_dir.rstrip("/")
             remote_path = f"{remote_dir}/{p.name}"
@@ -2188,6 +2183,14 @@ let((result winName ciwNum)
                     f"{daemon_auth.UNAUTH_OPTIN_ENV}=1 to explicitly accept "
                     "insecure legacy mode"
                 )
+
+        expected = getattr(self._tunnel, "instance_record", None)
+        if isinstance(expected, dict) and (
+            caps.get("auth") != "on" or caps.get("instance_record") != expected
+        ):
+            raise daemon_auth.DaemonAuthError(
+                "Authenticated daemon does not match the discovered instance; run start again"
+            )
 
         # Free identity data from the (signed, when auth is on) handshake.
         pid = caps.get("virtuoso_pid")

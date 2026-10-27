@@ -230,13 +230,12 @@ def _context(monkeypatch, tmp_path, *, runner=None, client=None, running=True, s
     monkeypatch.setenv(f"VB_REMOTE_USER{'_' + profile if profile else ''}", "designer")
     monkeypatch.setenv(f"VB_REMOTE_PORT{'_' + profile if profile else ''}", "65123")
     scratch = tmp_path / "scratch"
-    scratch.mkdir(exist_ok=True)
+    scratch.mkdir(mode=0o700, exist_ok=True)
     monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", str(scratch))
     monkeypatch.setenv("VB_CLIENT_ID", "client1")
     if deployed:
-        leaf = "virtuoso_bridge" + (f"_{profile}" if profile else "")
         path = scratch
-        for part in ("virtuoso_bridge_designer", "client1", leaf):
+        for part in ("daemon",):
             path = path / part
             path.mkdir(mode=0o700, exist_ok=True)
             path.chmod(0o700)
@@ -544,8 +543,8 @@ def test_bind_falls_back_to_the_ciw_variable(monkeypatch, tmp_path):
 # -- 4. remote scratch directory ------------------------------------------------------
 
 def _chain(tmp_path):
-    top = tmp_path / "scratch" / "virtuoso_bridge_designer"
-    return [top, top / "client1", top / "client1" / "virtuoso_bridge"]
+    top = tmp_path / "scratch"
+    return [top, top / "daemon"]
 
 
 def _mode(path) -> int:
@@ -560,7 +559,7 @@ def test_scratch_group_access_warns_and_is_left_unchanged(monkeypatch, tmp_path)
     result = doctor.check_scratch_dir(_configured(ctx))
 
     assert result.status == doctor.WARN
-    assert "client1 (mode 755)" in result.detail
+    assert "daemon (mode 755)" in result.detail
     assert result.fix.startswith("Run `chmod 700 ")
     assert _mode(_chain(tmp_path)[1]) == 0o755  # observed, never tightened
     _assert_read_only(runner, client)
@@ -571,12 +570,12 @@ def test_scratch_symlink_fails(monkeypatch, tmp_path):
     ctx, runner, _ = _context(monkeypatch, tmp_path, deployed=False)
     planted = tmp_path / "planted"
     planted.mkdir()
-    (tmp_path / "scratch" / "virtuoso_bridge_designer").symlink_to(planted)
+    (tmp_path / "scratch" / "daemon").symlink_to(planted)
 
     result = doctor.check_scratch_dir(_configured(ctx))
 
     assert result.status == doctor.FAIL
-    assert "virtuoso_bridge_designer is a symlink" in result.detail
+    assert "daemon is a symlink" in result.detail
     assert "VB_REMOTE_SCRATCH_ROOT" in result.fix
     assert list(planted.iterdir()) == []
 
@@ -638,6 +637,7 @@ def test_scratch_unexpected_output_warns():
 def test_scratch_ssh_failure_fails(monkeypatch, tmp_path):
     runner = FakeRunner({"for vb_path in": CommandResult(255, "", "ssh: connect to host eda-host: Connection refused")})
     ctx, _, _ = _context(monkeypatch, tmp_path, runner=runner)
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", "/fixture/scratch")
     result = doctor.check_scratch_dir(_configured(ctx))
     assert result.status == doctor.FAIL
     assert "SSH to eda-host failed: ssh: connect to host eda-host: Connection refused" == result.detail
@@ -648,6 +648,7 @@ def test_an_unreachable_host_costs_one_timeout(monkeypatch, tmp_path):
     hang = subprocess.TimeoutExpired("ssh", 10)
     runner = FakeRunner({"for vb_path in": hang, "": hang})
     ctx, _, client = _context(monkeypatch, tmp_path, runner=runner, running=False)
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", "/fixture/scratch")
 
     results = _run(ctx)
 

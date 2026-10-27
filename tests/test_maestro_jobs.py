@@ -28,6 +28,8 @@ class Result:
 
 
 class RecordingRunner:
+    _vb_remote_home = "/home/designer"
+
     host = "gui.example"
     user = "designer"
 

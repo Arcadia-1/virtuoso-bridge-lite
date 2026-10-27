@@ -1,0 +1,391 @@
+"""Standalone Linux acceptance checks; stdlib only, no Cadence or SSH needed.
+
+Usage: python3 native_instance_registry.py /path/to/resources
+All test files/credentials are synthetic and private temporary data.
+"""
+import hashlib
+import hmac
+import json
+import os
+from pathlib import Path
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+
+RESOURCES = Path(sys.argv.pop(1)).resolve()
+WORKER_PYTHON = os.environ.get("VB_TEST_WORKER_PYTHON", sys.executable)
+sys.path.insert(0, str(RESOURCES))
+import ramic_registry as registry
+import ramic_token
+
+WORKER = '''
+import json, socket, sys
+sys.path.insert(0, sys.argv[1])
+from ramic_registry import bind_instance
+s = socket.socket()
+lease = bind_instance(s, '127.0.0.1', directory=sys.argv[2], work_dir='/synthetic/project')
+sys.stdout.write(json.dumps(lease.metadata) + '\\n')
+sys.stdout.flush()
+sys.stdin.readline()
+lease.close()
+s.close()
+'''
+
+
+class NativeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="vb-native-")
+        self.root = Path(self.temp.name)
+        self.directory = str(self.root / "runs")
+        self.processes = []
+
+    def tearDown(self):
+        for process in self.processes:
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=5)
+        self.temp.cleanup()
+
+    def spawn(self, source, *args):
+        process = subprocess.Popen([WORKER_PYTHON, "-u", "-c", source, str(RESOURCES), *map(str, args)],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.processes.append(process)
+        return process
+
+    def await_rows(self, count):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            rows = registry.discover(self.directory)
+            if len(rows) == count:
+                return rows
+            time.sleep(.03)
+        self.fail("Timed out discovering %d instances" % count)
+
+    def test_private_home_default_and_flat_records(self):
+        source = '''
+import os, pwd, sys
+sys.path.insert(0, sys.argv[1])
+import ramic_registry as r
+for key in ('RB_SCRATCH_ROOT', 'VB_REMOTE_SCRATCH_ROOT'):
+    os.environ.pop(key, None)
+class Account(object):
+    pw_dir = sys.argv[2]
+pwd.getpwuid = lambda uid: Account()
+expected = os.path.join(sys.argv[2], '.virtuoso-bridge')
+assert r.scratch_root() == expected
+reg = r.Registry()
+reg.close()
+assert os.path.isdir(expected + '/runs')
+assert os.stat(expected).st_mode & 0o777 == 0o700
+assert os.listdir(expected) == ['runs']
+'''
+        worker = self.spawn(source, self.root)
+        stdout, stderr = worker.communicate(timeout=5)
+        self.assertEqual(worker.returncode, 0, stderr)
+
+    def test_legacy_records_remain_visible_and_stale_cleanup_covers_both_layouts(self):
+        import pwd
+        legacy = self.root / ("virtuoso_bridge_" + pwd.getpwuid(os.geteuid()).pw_name)
+        legacy.mkdir(mode=0o700)
+        worker = self.spawn(WORKER, legacy / "runs")
+        deadline = time.monotonic() + 5
+        rows = []
+        while not rows and time.monotonic() < deadline:
+            rows = registry.discover(root=str(self.root))
+            time.sleep(.03)
+        self.assertEqual(len(rows), 1)
+        registry.Registry(root=str(self.root)).close()
+        stale = Path(self.directory) / ("a" * 32 + ".json")
+        stale.write_text("stale")
+        self.assertEqual(registry.discover(root=str(self.root)), rows)
+        self.assertFalse(stale.exists())
+        worker.kill()
+        worker.communicate(timeout=5)
+        self.assertEqual(registry.discover(root=str(self.root)), [])
+        self.assertEqual(list((legacy / "runs").iterdir()), [])
+
+    def test_registry_rejects_shared_and_symlink_roots_without_chmod(self):
+        shared = self.root / "shared"
+        shared.mkdir(mode=0o777)
+        shared.chmod(0o777)
+        link = self.root / "link"
+        link.symlink_to(shared)
+        for root in (shared, link):
+            with self.assertRaises((OSError, RuntimeError)):
+                registry.Registry(root=str(root))
+        self.assertEqual(shared.stat().st_mode & 0o777, 0o777)
+        self.assertEqual(list(shared.iterdir()), [])
+
+    def test_concurrent_start_kill_sweep_and_graceful_exit(self):
+        workers = [self.spawn(WORKER, self.directory) for _ in range(12)]
+        rows = self.await_rows(12)
+        self.assertEqual(len({r["port"] for r in rows}), 12)
+        self.assertEqual(os.stat(self.directory).st_mode & 0o777, 0o700)
+        for record in rows:
+            self.assertEqual((Path(self.directory) / (record["instance"] + ".json")).stat().st_mode & 0o777, 0o600)
+        sweep = registry.Registry(self.directory)
+        try:
+            sweep.sweep()
+        finally:
+            sweep.close()
+        self.assertEqual(len(registry.discover(self.directory)), 12)
+        workers[0].kill()
+        workers[0].communicate(timeout=5)
+        self.await_rows(11)
+        replacement = self.spawn(WORKER, self.directory)
+        self.await_rows(12)
+        self.assertEqual(len(list(Path(self.directory).iterdir())), 12)
+        replacement.communicate(b"exit\n", timeout=5)
+        self.assertEqual(len(list(Path(self.directory).iterdir())), 11)
+
+    def test_live_record_lock_never_blocks_start_or_discovery(self):
+        first = self.spawn(WORKER, self.directory)
+        self.await_rows(1)
+        started = time.monotonic()
+        for _ in range(20):
+            self.assertEqual(len(registry.discover(self.directory)), 1)
+        self.assertLess(time.monotonic() - started, 2)
+        self.spawn(WORKER, self.directory)
+        self.await_rows(2)
+        first.kill()
+        first.communicate(timeout=5)
+        self.await_rows(1)
+        self.assertEqual(len(list(Path(self.directory).iterdir())), 1)
+
+    def test_socket_conflict_and_malicious_file_types(self):
+        registry.Registry(self.directory).close()
+        target = self.root / "victim"
+        target.write_text("unchanged")
+        (Path(self.directory) / ("1" * 32 + ".json")).symlink_to(target)
+        os.mkfifo(str(Path(self.directory) / ("2" * 32 + ".json")))
+        (Path(self.directory) / ("3" * 32 + ".json")).write_text("stale")
+        with socket.socket() as busy, socket.socket() as candidate:
+            busy.bind(("127.0.0.1", 0))
+            busy.listen(1)
+            with self.assertRaises(OSError):
+                registry.bind_instance(candidate, "127.0.0.1", busy.getsockname()[1], self.directory)
+        self.assertEqual(target.read_text(), "unchanged")
+        self.assertFalse((Path(self.directory) / ("3" * 32 + ".json")).exists())
+        self.assertEqual(registry.discover(self.directory), [])
+
+    def test_ephemeral_bind_and_fixed_port_request_lifecycle(self):
+        class ObservedSocket:
+            def __init__(self):
+                self.socket = socket.socket()
+                self.calls = []
+            def bind(self, address):
+                self.calls.append(address)
+                return self.socket.bind(address)
+            def listen(self, count):
+                self.socket.listen(count)
+            def getsockname(self):
+                return self.socket.getsockname()
+        observed = ObservedSocket()
+        try:
+            lease = registry.bind_instance(observed, "127.0.0.1", directory=self.directory)
+            self.assertEqual(observed.calls, [("127.0.0.1", 0)])
+            self.assertEqual(lease.metadata["port"], observed.getsockname()[1])
+            lease.close()
+        finally:
+            observed.socket.close()
+        with socket.socket() as occupied:
+            occupied.bind(("127.0.0.1", 0))
+            occupied.listen(1)
+            fixed = occupied.getsockname()[1]
+            registry.configure_port(fixed, "/synthetic/project", self.directory)
+            flags = list(Path(self.directory).glob("fixed-port-*.json"))
+            self.assertEqual(len(flags), 1)
+            self.assertEqual(flags[0].stat().st_mode & 0o777, 0o600)
+            with socket.socket() as candidate:
+                with self.assertRaises(OSError):
+                    registry.bind_instance(candidate, "127.0.0.1", directory=self.directory,
+                                           work_dir="/synthetic/project")
+            # A directory-scoped flag must not affect another project.
+            with socket.socket() as candidate:
+                lease = registry.bind_instance(candidate, "127.0.0.1", directory=self.directory,
+                                               work_dir="/other/project")
+                lease.close()
+        with socket.socket() as candidate:
+            lease = registry.bind_instance(candidate, "127.0.0.1", directory=self.directory,
+                                           work_dir="/synthetic/project")
+            self.assertEqual(lease.metadata["port"], fixed)
+            lease.close()
+        registry.configure_port(None, "/synthetic/project", self.directory)
+        self.assertFalse(list(Path(self.directory).glob("fixed-port-*.json")))
+        # Account-wide compatibility request, with exact-scope precedence.
+        registry.configure_port(12345, "", self.directory)
+        registry.configure_port(12346, "/specific", self.directory)
+        opened = registry.Registry(self.directory)
+        try:
+            self.assertEqual(registry.requested_port(opened, "/specific"), 12346)
+            self.assertEqual(registry.requested_port(opened, "/other"), 12345)
+        finally:
+            opened.close()
+
+    def test_private_scratch_validation_and_malformed_flag_fail_closed(self):
+        registry.Registry(self.directory).close()
+        os.chmod(self.directory, 0o755)
+        with self.assertRaises(RuntimeError):
+            registry.discover(self.directory)
+        os.chmod(self.directory, 0o700)
+        registry.configure_port(12345, "", self.directory)
+        flag = next(Path(self.directory).glob("fixed-port-*.json"))
+        flag.write_text('{"port": "invalid", "work_dir": ""}')
+        with socket.socket() as candidate:
+            with self.assertRaises(ValueError):
+                registry.bind_instance(candidate, "127.0.0.1", directory=self.directory)
+        flag.unlink()
+        target = self.root / "outside-flag"
+        target.write_text('{"port": 12345, "work_dir": ""}')
+        flag.symlink_to(target)
+        with socket.socket() as candidate:
+            with self.assertRaises(OSError):
+                registry.bind_instance(candidate, "127.0.0.1", directory=self.directory)
+        self.assertEqual(registry.discover(self.directory), [])
+
+    def test_concurrent_fixed_port_starters_have_one_winner(self):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        registry.configure_port(port, "", self.directory)
+        workers = [self.spawn(WORKER, self.directory) for _ in range(8)]
+        rows = self.await_rows(1)
+        deadline = time.monotonic() + 5
+        while sum(p.poll() is None for p in workers) > 1 and time.monotonic() < deadline:
+            time.sleep(.03)
+        self.assertEqual(sum(p.poll() is None for p in workers), 1)
+        self.assertEqual(rows[0]["port"], port)
+        self.assertEqual(len(list(Path(self.directory).glob("[0-9a-f]" * 32 + ".json"))), 1)
+
+    def test_scratch_command_sets_private_flag_and_cleans_stale_records(self):
+        root = self.root / "scratch root"
+        root.mkdir(mode=0o700)
+        command = [WORKER_PYTHON, str(RESOURCES / "ramic_registry.py"),
+                   "--scratch-root", str(root), "--configure",
+                   "--work-dir", "/project with spaces", "--port", "61234"]
+        result = subprocess.run(command, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), [])
+        opened = registry.Registry(root=str(root))
+        try:
+            self.assertEqual(registry.requested_port(opened, "/project with spaces"), 61234)
+            self.assertEqual(os.fstat(opened.fd).st_mode & 0o777, 0o700)
+            stale = Path(opened.anchor) / ("f" * 32 + ".json")
+            stale.write_text("stale")
+            result = subprocess.run(command, capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(stale.exists())
+        finally:
+            opened.close()
+        result = subprocess.run(command[:-2], capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(list(root.rglob("fixed-port-*.json")))
+
+    def test_token_creation_race_and_symlink_rejection(self):
+        path = self.root / "private" / "bridge_token"
+        source = "import sys; sys.path.insert(0,sys.argv[1]); from ramic_token import read_or_create; print(read_or_create(sys.argv[2]))"
+        processes = [self.spawn(source, path) for _ in range(12)]
+        results = [p.communicate(timeout=10) for p in processes]
+        self.assertTrue(all(p.returncode == 0 for p in processes), results)
+        self.assertEqual(len({out.strip() for out, err in results}), 1)
+        self.assertTrue(all(not err for out, err in results))
+        self.assertEqual(len(results[0][0].strip()), 64)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
+        link = path.parent / "link"
+        link.symlink_to(path)
+        with self.assertRaises(OSError):
+            ramic_token.read_or_create(str(link))
+
+    def test_directory_replacement_cannot_redirect_sweep_or_lease_cleanup(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        victim = outside / ("1" * 32 + ".json")
+        victim.write_text("untouched")
+        opened = registry.Registry(self.directory)
+        os.rename(self.directory, self.directory + "-old")
+        os.symlink(str(outside), self.directory)
+        try:
+            opened.sweep()
+        finally:
+            opened.close()
+        self.assertEqual(victim.read_text(), "untouched")
+        os.unlink(self.directory)
+        os.rename(self.directory + "-old", self.directory)
+        with socket.socket() as listener:
+            lease = registry.bind_instance(listener, "127.0.0.1", directory=self.directory)
+            replacement = outside / (lease.metadata["instance"] + ".json")
+            replacement.write_text("preserve")
+            os.rename(self.directory, self.directory + "-old")
+            os.symlink(str(outside), self.directory)
+            lease.close()
+            self.assertEqual(replacement.read_text(), "preserve")
+
+    def test_automatic_daemon_creates_secret_and_rejects_foreign_credentials(self):
+        token_path = self.root / "private" / "bridge_token"
+        # Redirect only test storage. Run the real standalone daemon and
+        # wire protocol; no Virtuoso process or existing credential is used.
+        source = '''
+import os, runpy, sys
+sys.path.insert(0,sys.argv[1])
+import ramic_registry, ramic_token
+resources, directory, token = sys.argv[1:4]
+ramic_token.default_path = lambda: token
+original = ramic_registry.bind_instance
+def bind(*args, **kwargs):
+    kwargs['directory'] = directory
+    return original(*args, **kwargs)
+ramic_registry.bind_instance = bind
+os.environ['RB_VIRTUOSO_PID'] = str(os.getpid())
+os.environ.pop('RB_VIRTUOSO_BOOT_ID', None)
+os.environ['RB_VIRTUOSO_WORK_DIR'] = '/synthetic/project'
+version = '27' if sys.version_info[0] == 2 else '3'
+sys.argv = [resources + '/ramic_bridge_daemon_' + version + '.py', '127.0.0.1', '0']
+runpy.run_path(sys.argv[0], run_name='__main__')
+'''
+        process = self.spawn(source, self.directory, token_path)
+        record = self.await_rows(1)[0]
+        token = token_path.read_text().strip()
+        self.assertEqual(token, ramic_token.read_or_create(str(token_path)))
+        self.assertEqual(token_path.stat().st_mode & 0o777, 0o600)
+
+        def mac(secret, *parts):
+            frame = b"".join(str(len(p.encode())).encode() + b":" + p.encode() for p in parts)
+            return hmac.new(secret.encode(), frame, hashlib.sha256).hexdigest()
+
+        def request(payload):
+            with socket.create_connection(("127.0.0.1", record["port"]), timeout=3) as channel:
+                channel.sendall(json.dumps(payload).encode())
+                channel.shutdown(socket.SHUT_WR)
+                chunks = []
+                while True:
+                    chunk = channel.recv(65536)
+                    if not chunk:
+                        return b"".join(chunks)
+                    chunks.append(chunk)
+
+        nonce = os.urandom(16).hex()
+        response = request(dict(op="hello", proto=1, nonce=nonce,
+                                mac=mac(token, "vb1-hello", "1", nonce)))
+        self.assertEqual(response[:1], b"\x02")
+        body = response[65:].decode()
+        self.assertEqual(response[1:65].decode(), mac(token, "vb1-response", nonce, "\x02", body))
+        self.assertEqual(json.loads(body)["instance_record"], record)
+        for secret in ("00" * 32, "ff" * 32):
+            nonce = os.urandom(16).hex()
+            response = request(dict(proto=1, nonce=nonce, skill="1+1", timeout=1,
+                                    mac=mac(secret, "vb1-request", "1", nonce, "1.000000", "1+1")))
+            self.assertIn(b"AuthError", response)
+        response = request(dict(skill="1+1", timeout=1))
+        self.assertIn(b"AuthError", response)
+        process.kill()
+        stdout, stderr = process.communicate(timeout=5)
+        self.assertNotIn(token.encode(), stdout + stderr)
+        self.assertEqual(stdout, b"")  # no forged request reached the SKILL IPC lane
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

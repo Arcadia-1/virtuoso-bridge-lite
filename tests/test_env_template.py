@@ -15,6 +15,9 @@ def test_template_renders_home_scratch_guidance_without_enabling_it():
     assert values["VB_REMOTE_USER"] == "designer"
     assert "VB_REMOTE_SCRATCH_ROOT" not in values
     assert "VB_GUI_HOST" not in values
-    assert int(values["VB_LOCAL_PORT"]) == int(values["VB_REMOTE_PORT"]) + 1
+    assert "VB_REMOTE_PORT" not in values
+    assert 65000 <= int(values["VB_LOCAL_PORT"]) <= 65500
+    assert "VB_REMOTE_WORK_DIR" not in values
+    assert "VB_DAEMON_SETUP" not in values
     assert "# VB_REMOTE_SCRATCH_ROOT=/home/username/.virtuoso-bridge" in text
-    assert "Create the root first" in text
+    assert "default: ~/.virtuoso-bridge" in text

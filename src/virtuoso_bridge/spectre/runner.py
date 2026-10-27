@@ -27,6 +27,8 @@ from virtuoso_bridge.spectre.parsers import (
 from virtuoso_bridge.transport.tunnel import _is_localhost
 from virtuoso_bridge.transport.remote_paths import (
     default_remote_spectre_work_dir,
+    private_dir_shell_prelude,
+    remote_scratch_root,
     resolve_client_id,
     resolve_remote_username,
 )
@@ -317,7 +319,7 @@ def _run_spectre_remote(
     run_command = environment.wrap(run_command)
     pid_file = f"{remote_dir}/spectre.pid"
     exec_body = (
-        f"mkdir -p {shlex.quote(remote_raw_dir)} || exit $?; "
+        f"umask 077; mkdir -p {shlex.quote(remote_raw_dir)} || exit $?; "
         f"{run_command} & "
         f'SPID=$!; echo "$SPID" > {shlex.quote(pid_file)}; wait "$SPID"'
     )
@@ -1039,6 +1041,13 @@ class SpectreSimulator:
         overall_started = time.perf_counter()
 
         if not self._remote_work_dir_set:
+            root = remote_scratch_root(runner)
+            result = runner.run_command(
+                private_dir_shell_prelude("Spectre")
+                + f"vb_ensure_root {shlex.quote(root)} || exit $?\n"
+            )
+            if result.returncode:
+                raise RuntimeError(result.stderr.strip() or "Cannot create private Spectre scratch")
             username = resolve_remote_username(
                 configured_user=self._remote_user or runner.user,
                 runner=runner,
@@ -1046,6 +1055,7 @@ class SpectreSimulator:
             self._remote_work_dir = default_remote_spectre_work_dir(
                 username,
                 resolve_client_id(self._profile),
+                runner=runner,
             )
             logger.info("Remote work dir: %s", self._remote_work_dir)
         if self._remote_work_dir is None:

@@ -654,10 +654,8 @@ def check_scratch_dir(ctx: DoctorContext) -> CheckResult:
         default_virtuoso_bridge_dir,
         private_dirs_below,
         remote_scratch_root,
-        resolve_client_id,
         resolve_remote_username,
     )
-    from virtuoso_bridge.transport.tunnel import _profiled_bridge_leaf
 
     host = ctx.roles.deploy_host
     if _is_localhost(host):
@@ -673,10 +671,10 @@ def check_scratch_dir(ctx: DoctorContext) -> CheckResult:
     try:
         # The same directory `start` deploys into (`whoami` without VB_REMOTE_USER).
         user = resolve_remote_username(configured_user=ctx.roles.remote_user, runner=runner)
-        root = remote_scratch_root()
+        root = remote_scratch_root(runner)
         work_dir = default_virtuoso_bridge_dir(
-            user, _profiled_bridge_leaf(ctx.profile), resolve_client_id(ctx.profile))
-        paths = private_dirs_below(root, work_dir)
+            user, "daemon", runner=runner)
+        paths = [root] + private_dirs_below(root, work_dir)
         if not runner.transport_error:
             result = runner.run_command(scratch_inspection_script(paths))
     except Exception:  # noqa: BLE001 - an SSH failure is reported below

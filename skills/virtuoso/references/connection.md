@@ -215,47 +215,56 @@ that file.
 Configured process/version metadata is a declaration, not verified runtime
 CIW identity. Read the checkout's profile documentation for supported fields.
 
-### Two projects under the same account
+### Selecting a running instance
 
-Only use this setup when two Virtuoso processes must run side by side. Changing
-the project working directory does not change a daemon's TCP port. Two processes
-loading the same setup still compete for that port, even under the same account.
-An occupied same-account endpoint may be the session a client intends to reuse;
-`start` therefore does not randomly move it to a new port.
-
-Use two named profiles with distinct unused daemon ports. Add these optional
-entries to the selected `.env`, substituting your existing host/account:
+Daemons use OS-assigned ports. `virtuoso-bridge start` removes stale records,
+then discovers instances belonging to the SSH user. Optionally filter by
+Virtuoso's absolute working directory:
 
 ```dotenv
-VB_REMOTE_HOST_project_a=eda-host
-VB_REMOTE_USER_project_a=eda-user
-VB_REMOTE_PORT_project_a=65101
-VB_REMOTE_HOST_project_b=eda-host
-VB_REMOTE_USER_project_b=eda-user
-VB_REMOTE_PORT_project_b=65102
+VB_REMOTE_WORK_DIR=/projects/project-a
 ```
 
-Keep any required SSH jump or split-host settings consistent with the existing
-connection. For same-machine use, set both profile hosts to `localhost`.
-Profiles isolate generated setup/identity files as well as tunnel state;
-different ports alone do not isolate the generated setup path.
+One match connects. Multiple matches list port/PID/directory and require:
 
-1. Run `virtuoso-bridge start -p project_a --env /path/to/bridge.env` and load
-   its exact printed setup in project A's CIW.
-2. Run the equivalent command with `-p project_b` and load its distinct setup
-   in project B's CIW. If `.cdsinit` autoloads the bridge, make the startup for
-   each project select its own setup instead of loading A's setup in both.
-3. Keep `-p` and `--env` on later commands. Verify each endpoint with
-   `virtuoso-bridge eval 'getWorkingDir()' -p project_a --env /path/to/bridge.env`
-   (then `project_b`) against its intended project directory before editing.
+```bash
+virtuoso-bridge start --port 65123
+```
 
-If a port still conflicts, choose another unused port for that profile and
-regenerate its setup; leave the other session running. For an unresolved error,
-collect the bridge/IC versions, sanitized profile port entries, each startup's
-bridge `load(...)` line and exact error. This isolates an endpoint problem from
-an unrelated failure; authentication and identity checks stay enabled.
+`--port` overrides `VB_REMOTE_PORT`; both also save a fixed-port request for
+future daemons in that directory (or account-wide without a directory filter).
+A requested port must bind successfully; there is no fallback. Existing daemons
+are unaffected. Requests persist until `start` without either selector clears
+that scope. Directory requests override account-wide requests; clear both to
+restore automatic ports.
 
-Check the installed client and running daemon before using newer APIs.
-Files deployed on disk do not upgrade a daemon already running inside CIW.
-For suspected dialogs or uncertain submissions, use
-[shared-ciw-dialogs.md](shared-ciw-dialogs.md) before any restart or retry.
+No match prints a `load("...")` instruction. Load it in the intended idle CIW,
+then rerun `start`. Older daemons need an explicit upgrade before discovery.
+`RBSetPort(N)` switches an idle instance; `RBSetPort(0)` consults saved requests,
+then defaults to automatic allocation. Files uploaded to disk do not replace
+functions already loaded in Virtuoso.
+
+`RBStopAll()` now stops only this CIW's tracked child, like `RBStop()`.
+
+### Shared bootstrap
+
+Install once into a new protected directory on the Cadence host:
+
+```bash
+uv run python tools/install_shared_daemon.py /opt/virtuoso-bridge/v1 --python python3
+```
+
+Use the printed load line in each project's `.cdsinit`. Set
+`VB_DAEMON_SETUP=/opt/virtuoso-bridge/v1/virtuoso_setup.il` on clients to use
+that same path in load instructions. Without it, the bridge generates a
+private bootstrap at `~/.virtuoso-bridge/daemon/virtuoso_setup.il`, shared across projects.
+
+Daemon and client must use the same `VB_REMOTE_SCRATCH_ROOT` (default `~/.virtuoso-bridge`).
+Generated setup includes it; shared setup accepts `--scratch-root` or the
+Virtuoso startup environment. Records are private under
+`<scratch>/runs`; the authentication secret stays in the
+OS-account home. Automatic mode ignores `RB_TOKEN_PATH` and requires auth.
+
+See the [discovery design](../../../docs/adr/0004-instance-discovery.md) for
+locking and security, and [shared-CIW protection](shared-ciw-dialogs.md) before
+recovering an uncertain request.

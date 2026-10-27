@@ -204,9 +204,10 @@ def _remote_private_chain(
 
 def _remote_stage_command(paths: _RemoteExportPaths) -> str:
     commands = [_remote_security_prelude()]
-    for directory in _remote_private_chain(paths):
+    for index, directory in enumerate(_remote_private_chain(paths)):
+        ensure = "vb_ensure_root" if index == 0 else "vb_ensure_dir"
         commands.append(
-            f"vb_ensure_dir {shlex.quote(directory.as_posix())} || exit $?\n"
+            f"{ensure} {shlex.quote(directory.as_posix())} || exit $?\n"
         )
     quoted_run = shlex.quote(paths.run_dir.as_posix())
     commands.extend(
@@ -783,6 +784,7 @@ def _export_gds_remote(
                 username,
                 "xstream",
                 client_id,
+                runner=runner,
             ).replace("\\", "/")
         )
         if not owned_root.is_absolute() or ".." in owned_root.parts:

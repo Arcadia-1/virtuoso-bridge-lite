@@ -193,6 +193,8 @@ class _FakeLocalClient:
 
 
 class _FakeRemoteRunner:
+    _vb_remote_home = "/home/designer"
+
     def __init__(
         self,
         *,
@@ -2629,18 +2631,11 @@ def test_remote_stage_command_secures_private_chain(
     completed = _sh(streamout._remote_stage_command(paths), env=environment)
 
     run_dir = Path(paths.run_dir.as_posix())
-    if scenario != "unsafe_mode":
-        assert completed.returncode != 0
-        assert "VBXSTREAM_STAGE_CREATED" not in completed.stdout
-        assert not run_dir.exists()
-        return
-    assert completed.returncode == 0
-    assert completed.stdout.splitlines() == [
-        "VBXSTREAM_STAGE_CREATED",
-        "VBXSTREAM_STAGE_READY",
-    ]
-    for directory in (user_dir, user_dir / "client", run_dir.parent, run_dir):
-        assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+    assert completed.returncode != 0
+    assert "VBXSTREAM_STAGE_CREATED" not in completed.stdout
+    assert not run_dir.exists()
+    if scenario == "unsafe_mode":
+        assert stat.S_IMODE(user_dir.stat().st_mode) == 0o755
 
 
 @pytest.mark.parametrize("remove_run", [False, True])
@@ -2697,7 +2692,7 @@ def test_remote_export_stages_owned_posix_run_and_all_request_fields(
     run_dir = result.remote_run_dir
     assert run_dir is not None
     assert re.fullmatch(
-        r"/scratch root/virtuoso_bridge_remote_user/client_id/xstream/[0-9a-f]{32}",
+        r"/scratch root/client_id/xstream/[0-9a-f]{32}",
         run_dir,
     )
     stage_command = runner.calls[0][0]
@@ -2741,7 +2736,7 @@ def test_remote_export_budgeted_whoami_is_sanitized_and_runs_once_per_export(
 
     assert first.remote_run_dir is not None
     assert second.remote_run_dir is not None
-    assert "/virtuoso_bridge_cad_user/laptop/xstream/" in first.remote_run_dir
+    assert "/laptop/xstream/" in first.remote_run_dir
     assert first.remote_run_dir != second.remote_run_dir
     assert [command for command, _timeout in runner.calls].count("whoami") == 2
     assert len(client.uploads) == 2

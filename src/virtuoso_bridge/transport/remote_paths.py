@@ -17,10 +17,22 @@ REMOTE_SCRATCH_ROOT_ENV = "VB_REMOTE_SCRATCH_ROOT"
 CLIENT_ID_ENV = "VB_CLIENT_ID"
 
 
-def remote_scratch_root() -> str:
-    """Base directory for remote scratch (default ``/tmp``)."""
+def remote_scratch_root(runner: SSHRunner | None = None) -> str:
+    """Private scratch root; resolve ~ on the SSH host, never on the client."""
     load_vb_env()
-    return os.environ.get(REMOTE_SCRATCH_ROOT_ENV, "/tmp").rstrip("/")
+    root = os.environ.get(REMOTE_SCRATCH_ROOT_ENV, "").strip() or "~/.virtuoso-bridge"
+    if root.startswith("~/") and runner is not None:
+        home = getattr(runner, "_vb_remote_home", None)
+        if not isinstance(home, str):
+            result = runner.run_command('printf %s "$HOME"', timeout=10)
+            home = result.stdout.strip()
+            if result.returncode or not home.startswith("/"):
+                raise ValueError("Cannot resolve the remote account home")
+            runner._vb_remote_home = home
+        root = home.rstrip("/") + root[1:]
+    if not (root.startswith("/") or root.startswith("~/")) or ".." in root.split("/"):
+        raise ValueError("VB_REMOTE_SCRATCH_ROOT must be absolute or start with ~/")
+    return root.rstrip("/") or "/"
 
 
 def sanitize_username_for_path(username: str) -> str:
@@ -102,6 +114,8 @@ def default_virtuoso_bridge_dir(
     username: str,
     leaf: str,
     client_id: str | None = None,
+    *,
+    runner: SSHRunner | None = None,
 ) -> str:
     """Return the default remote scratch directory for bridge artifacts.
 
@@ -109,13 +123,12 @@ def default_virtuoso_bridge_dir(
     remote user/profile pair can safely use a shared scratch root from
     multiple local machines.
     """
-    safe = sanitize_username_for_path(username)
-    root = remote_scratch_root()
+    root = remote_scratch_root(runner)
     leaf_norm = leaf.strip("/").replace("\\", "/")
     if client_id:
         safe_client = sanitize_client_id_for_path(client_id)
-        return f"{root}/virtuoso_bridge_{safe}/{safe_client}/{leaf_norm}"
-    return f"{root}/virtuoso_bridge_{safe}/{leaf_norm}"
+        return f"{root}/{safe_client}/{leaf_norm}"
+    return f"{root}/{leaf_norm}"
 
 def private_dir_shell_prelude(label: str) -> str:
     """POSIX sh functions that create or verify directories private to the user.
@@ -124,6 +137,7 @@ def private_dir_shell_prelude(label: str) -> str:
     DIR only if it is a real directory (not a symlink) owned by the current
     user; a different owner fails, other modes are tightened to 700. On a
     shared /tmp this stops another user from pre-creating the path.
+    ``vb_ensure_root`` instead rejects unsafe existing permissions.
     """
     return rf"""umask 077
 vb_uid=$(id -u) || exit $?
@@ -158,6 +172,18 @@ vb_verify_dir() {{
         fi
     fi
 }}
+vb_ensure_root() {{
+    vb_path=$1
+    if [ ! -e "$vb_path" ] && [ ! -L "$vb_path" ]; then
+        mkdir -m 700 "$vb_path" 2>/dev/null || [ -d "$vb_path" ] || return $?
+    fi
+    [ ! -L "$vb_path" ] && [ -d "$vb_path" ] || return 73
+    vb_read_meta "$vb_path" || return $?
+    if [ "$vb_owner" != "$vb_uid" ] || [ "$vb_mode" != 700 ]; then
+        printf 'scratch root must be owned by this user with mode 700: %s\n' "$vb_path" >&2
+        return 75
+    fi
+}}
 vb_ensure_dir() {{
     vb_path=$1
     if [ -L "$vb_path" ]; then
@@ -165,7 +191,7 @@ vb_ensure_dir() {{
         return 73
     fi
     if [ ! -e "$vb_path" ]; then
-        mkdir -m 700 "$vb_path" || return $?
+        mkdir -m 700 "$vb_path" 2>/dev/null || [ -d "$vb_path" ] || return $?
     fi
     vb_verify_dir "$vb_path"
 }}
@@ -189,6 +215,8 @@ REMOTE_SPECTRE_LEAF = "virtuoso_bridge_spectre"
 def default_remote_spectre_work_dir(
     username: str,
     client_id: str | None = None,
+    *,
+    runner: SSHRunner | None = None,
 ) -> str:
     """Default remote scratch for Spectre simulations."""
-    return default_virtuoso_bridge_dir(username, REMOTE_SPECTRE_LEAF, client_id)
+    return default_virtuoso_bridge_dir(username, REMOTE_SPECTRE_LEAF, client_id, runner=runner)

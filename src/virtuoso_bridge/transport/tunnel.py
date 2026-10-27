@@ -8,6 +8,7 @@ localhost:port TCP endpoint; SSHClient makes that endpoint available.
 from __future__ import annotations
 
 import importlib.resources
+import hashlib
 import json
 import logging
 import os
@@ -132,6 +133,23 @@ def _legacy_state_files(profile: str | None = None) -> list[Path]:
 
 _CONFIGURED: Any = object()
 
+
+def _selection_file(profile: str | None = None) -> Path:
+    roles = remote_host_roles_from_os(profile, load=False)
+    suffix = f"_{profile}" if profile else ""
+    key = json.dumps([roles.daemon_host, roles.remote_user, profile,
+                      str(resolve_env_path() or ""), os.getenv(f"VB_REMOTE_WORK_DIR{suffix}", ""),
+                      os.getenv(f"VB_REMOTE_PORT{suffix}", ""), remote_scratch_root()])
+    return state_dir() / ("instance-" + hashlib.sha256(key.encode()).hexdigest()[:24] + ".json")
+
+
+def _read_selection(profile: str | None = None) -> dict:
+    try:
+        value = json.loads(_selection_file(profile).read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
 # ---------------------------------------------------------------------------
 # Resource helpers (moved from bridge.py)
 # ---------------------------------------------------------------------------
@@ -185,11 +203,15 @@ def _generate_virtuoso_setup_il(
     port: int = 65432,
     identity_path: str | None = None,
     listen_all: bool = False,
+    scratch_root: str | None = None,
 ) -> str:
+    from virtuoso_bridge.virtuoso.ops import escape_skill_string
+    scratch_line = (f'setShellEnvVar("RB_SCRATCH_ROOT" "{escape_skill_string(scratch_root)}")\n'
+                    if scratch_root else "")
     identity_line = (
         f'setShellEnvVar("RB_IDENTITY_PATH" "{identity_path}")\n'
         if identity_path
-        else ""
+        else 'setShellEnvVar("RB_IDENTITY_PATH" "")\n'
     )
     return (
         "; Virtuoso CIW Setup Script - RAMIC Bridge\n"
@@ -200,6 +222,8 @@ def _generate_virtuoso_setup_il(
         f'setShellEnvVar("RB_DAEMON_PATH" "{daemon_path}")\n'
         f'setShellEnvVar("RB_PYTHON_PATH" "{python_cmd}")\n'
         f'setShellEnvVar("RB_PORT" "{port}")\n'
+        f'setShellEnvVar("RB_AUTO_PORT" "{1 if port == 0 else 0}")\n'
+        f"{scratch_line}"
         f'setShellEnvVar("RB_LISTEN_ALL" "{1 if listen_all else 0}")\n'
         f"{identity_line}"
         "\n"
@@ -300,9 +324,18 @@ class SSHClient:
         gui_host: str | None = None,
         spectre_host: str | None = None,
         listen_all: bool = False,
+        discover_instances: bool = False,
+        expected_work_dir: str = "",
+        selected_port: int | None = None,
+        shared_setup: str = "",
     ) -> None:
         self._daemon_host = daemon_host or remote_host
         self._listen_all = listen_all
+        self._discover_instances = discover_instances
+        self._expected_work_dir = expected_work_dir
+        self._selected_port = selected_port
+        self._shared_setup = shared_setup
+        self.instance_record: dict | None = None
         self._gui_host = gui_host or remote_host
         self._deploy_host = deploy_host or self._gui_host
         self._spectre_host = spectre_host or remote_host
@@ -423,10 +456,11 @@ class SSHClient:
 
         # Port
         from virtuoso_bridge.virtuoso.basic.bridge import _default_remote_port
-        try:
-            port = int(os.getenv(f"VB_REMOTE_PORT{suffix}", "").strip() or _default_remote_port(remote_user))
-        except (ValueError, TypeError):
-            port = _default_remote_port(remote_user)
+        configured_port = os.getenv(f"VB_REMOTE_PORT{suffix}", "").strip()
+        selected_port = int(configured_port) if configured_port else None
+        if selected_port is not None and not 1 <= selected_port <= 65535:
+            raise ValueError(f"VB_REMOTE_PORT{suffix} must be between 1 and 65535")
+        port = selected_port or _default_remote_port(remote_user)
 
         # Local port (defaults to remote port if not set)
         local_port_str = os.getenv(f"VB_LOCAL_PORT{suffix}", "").strip()
@@ -437,7 +471,9 @@ class SSHClient:
             except (ValueError, TypeError):
                 pass
 
-        return cls(
+        selection = _read_selection(profile)
+        port = selection.get("port", port)
+        client = cls(
             remote_host=remote_host,
             remote_user=remote_user,
             port=port,
@@ -454,7 +490,13 @@ class SSHClient:
             gui_host=roles.gui_host,
             spectre_host=roles.spectre_host,
             listen_all=os.getenv(f"VB_DAEMON_LISTEN_ALL{suffix}", "").strip() == "1",
+            discover_instances=True,
+            selected_port=selected_port,
+            expected_work_dir=os.getenv(f"VB_REMOTE_WORK_DIR{suffix}", "").strip(),
+            shared_setup=os.getenv(f"VB_DAEMON_SETUP{suffix}", "").strip(),
         )
+        client.instance_record = selection.get("record")
+        return client
 
     # -- properties ---------------------------------------------------------
 
@@ -609,7 +651,11 @@ class SSHClient:
         if self._daemon_token and daemon_auth.is_valid_token(self._daemon_token):
             return self._daemon_token
         if self._ssh_runner is None:
-            self._daemon_token = daemon_auth.local_token_or_raise()
+            if self._discover_instances:
+                from virtuoso_bridge.virtuoso.basic.resources.ramic_token import read_or_create
+                self._daemon_token = read_or_create()
+            else:
+                self._daemon_token = daemon_auth.local_token_or_raise()
             return self._daemon_token
         # A cached copy saves the SSH round trip; a client whose handshake
         # rejects it calls refresh_daemon_token().
@@ -619,6 +665,14 @@ class SSHClient:
             self._daemon_token = cached.lower()
             self._daemon_token_from_cache = True
             return self._daemon_token
+        if self._discover_instances:
+            python, _, _ = self._detect_remote_python(self._ssh_runner)
+            source = _find_ramic_helper("ramic_token.py").read_text(encoding="ascii")
+            result = self._ssh_runner.run_command(shlex.quote(python) + " -c " + shlex.quote(source))
+            token = result.stdout.strip() if result.returncode == 0 else None
+            if not daemon_auth.is_valid_token(token):
+                raise daemon_auth.DaemonTokenError("Cannot read or provision the private daemon credential over SSH")
+            return self._adopt_fetched_token(token)
         runner = self._ssh_runner
         try:
             result = runner.run_command(
@@ -795,13 +849,16 @@ class SSHClient:
 
         runner = self._require_deployment_runner()
         daemon_runner = self._require_runner()
-        self._deconflict_remote_port(daemon_runner)
+        if not self._discover_instances:
+            self._deconflict_remote_port(daemon_runner)
         python_cmd, python_major, _python_minor = self._detect_remote_python()
         daemon_local = _find_ramic_bridge_daemon(
             3 if python_major >= 3 else 2
         )
         recovery_local = _find_ramic_helper("ramic_request_recovery.py")
         owner_local = _find_ramic_helper("ramic_owner.py")
+        registry_local = _find_ramic_helper("ramic_registry.py")
+        token_local = _find_ramic_helper("ramic_token.py")
         il_local = _find_ramic_bridge_il()
         daemon_filename = daemon_local.name
 
@@ -811,8 +868,9 @@ class SSHClient:
         )
         self._remote_work_dir = default_virtuoso_bridge_dir(
             remote_username,
-            _profiled_bridge_leaf(self._profile),
-            resolve_client_id(self._profile),
+            "daemon" if self._discover_instances else _profiled_bridge_leaf(self._profile),
+            None if self._discover_instances else resolve_client_id(self._profile),
+            runner=runner,
         )
 
         remote_daemon = f"{self._remote_work_dir}/{daemon_filename}"
@@ -825,9 +883,10 @@ class SSHClient:
         # The CIW loads (and .cdsinit may autoload) code from this directory,
         # so every level below the scratch root must be ours and private.
         logger.info("Creating remote directory: %s", self._remote_work_dir)
-        scratch_root = remote_scratch_root()
+        scratch_root = remote_scratch_root(runner)
         mkdir_result = runner.run_command(
             private_dir_shell_prelude("bridge")
+            + f"vb_ensure_root {shlex.quote(scratch_root)} || exit $?\n"
             + "".join(
                 f"vb_ensure_dir {shlex.quote(directory)} || exit $?\n"
                 for directory in private_dirs_below(scratch_root, self._remote_work_dir)
@@ -858,6 +917,15 @@ class SSHClient:
         if up.returncode != 0:
             raise RuntimeError(f"Failed to upload owner helper: {up.stderr.strip()}")
 
+        up = runner.upload_text(registry_local.read_text(encoding="ascii"),
+                                f"{self._remote_work_dir}/ramic_registry.py")
+        if up.returncode != 0:
+            raise RuntimeError("Failed to upload instance registry helper")
+
+        up = runner.upload_text(token_local.read_text(encoding="ascii"),
+                                f"{self._remote_work_dir}/ramic_token.py")
+        if up.returncode != 0:
+            raise RuntimeError("Failed to upload credential helper")
         logger.info("Uploading IL script to %s", remote_il)
         il_content = il_local.read_text(encoding="utf-8")
         up = runner.upload_text(il_content, remote_il)
@@ -868,8 +936,9 @@ class SSHClient:
             remote_daemon,
             remote_il,
             python_cmd,
-            port=self._port,
-            identity_path=remote_identity,
+            port=0 if self._discover_instances else self._port,
+            identity_path=None if self._discover_instances else remote_identity,
+            scratch_root=scratch_root if self._discover_instances else None,
             listen_all=self._listen_all,
         )
         previous = runner.run_command(f"cat {shlex.quote(remote_setup)} 2>/dev/null || true")
@@ -925,10 +994,12 @@ class SSHClient:
         daemon_local = _find_ramic_bridge_daemon(python_major)
         recovery_local = _find_ramic_helper("ramic_request_recovery.py")
         owner_local = _find_ramic_helper("ramic_owner.py")
+        registry_local = _find_ramic_helper("ramic_registry.py")
+        token_local = _find_ramic_helper("ramic_token.py")
         il_local = _find_ramic_bridge_il()
 
         # Determine local work directory
-        if self._profile:
+        if self._profile and not self._discover_instances:
             work_dir = state_dir() / f"local_{self._profile}"
         else:
             work_dir = state_dir() / "local"
@@ -945,6 +1016,8 @@ class SSHClient:
         shutil.copy2(daemon_local, local_daemon)
         shutil.copy2(recovery_local, local_recovery)
         shutil.copy2(owner_local, local_owner)
+        shutil.copy2(registry_local, work_dir / registry_local.name)
+        shutil.copy2(token_local, work_dir / token_local.name)
 
         il_content = il_local.read_text(encoding="utf-8")
         local_il.write_text(il_content, encoding="utf-8")
@@ -953,8 +1026,9 @@ class SSHClient:
             str(local_daemon),
             str(local_il),
             python_cmd,
-            port=self._port,
-            identity_path=str(local_identity),
+            port=0 if self._discover_instances else self._port,
+            identity_path=None if self._discover_instances else str(local_identity),
+            scratch_root=remote_scratch_root() if self._discover_instances else None,
             listen_all=self._listen_all,
         )
         self._note_replaced_setup(
@@ -1062,12 +1136,70 @@ class SSHClient:
 
     # -- high-level lifecycle -----------------------------------------------
 
+    def list_instances(self, *, configure: bool = False) -> list[dict]:
+        """Read live records; only start writes fixed-port requests."""
+        from virtuoso_bridge.instance_discovery import InstanceSelectionError
+        if self._ssh_runner is None:
+            from virtuoso_bridge.virtuoso.basic.resources.ramic_registry import configure_port, discover
+            if configure:
+                configure_port(self._selected_port, self._expected_work_dir, root=remote_scratch_root())
+            rows = discover(root=remote_scratch_root())
+        else:
+            python, _, _ = self._detect_remote_python(self._ssh_runner)
+            source = _find_ramic_helper("ramic_registry.py").read_text(encoding="ascii")
+            args = ["--scratch-root", remote_scratch_root()]
+            if configure:
+                args += ["--configure", "--work-dir", self._expected_work_dir]
+                if self._selected_port is not None:
+                    args += ["--port", str(self._selected_port)]
+            result = self._ssh_runner.run_command(
+                shlex.quote(python) + " -c " + shlex.quote(source) + " " + shlex.join(args))
+            if result.returncode:
+                raise InstanceSelectionError("Cannot read instance registry over SSH: " + result.stderr.strip())
+            try:
+                rows = json.loads(result.stdout)
+                if not isinstance(rows, list):
+                    raise ValueError("expected instance list")
+            except ValueError as exc:
+                raise InstanceSelectionError("Invalid instance registry response") from exc
+        return rows
+
+    def discover_instance(self) -> None:
+        from virtuoso_bridge.instance_discovery import InstanceSelectionError, select_instance
+        rows = self.list_instances(configure=True)
+        # No match must still prepare the bootstrap and fixed-port request.
+        # Never connect to another port simply because the requested one is absent.
+        matching = [r for r in rows if self._selected_port is None or r["port"] == self._selected_port]
+        record = select_instance(matching, self._expected_work_dir)
+        if record is None:
+            if self._shared_setup:
+                self._remote_virtuoso_setup_path = self._shared_setup
+            elif self._ssh_runner is None:
+                self.ensure_local_setup()
+            else:
+                self.ensure_remote_setup()
+            fixed_hint = (" A fixed-port request for %d is saved in private scratch; "
+                          "the next matching daemon must bind that port or fail." % self._selected_port
+                          if self._selected_port is not None else "")
+            raise InstanceSelectionError(
+                'No valid Virtuoso instance found.%s Load in the intended CIW: load("%s")\n'
+                'Then run virtuoso-bridge start again.' % (fixed_hint, self.setup_path))
+        self.instance_record = record
+        self._port = record["port"]
+        # A loaded instance needs no deployment, regeneration, or CIW reload.
+        self._remote_setup_done = True
+        self._remote_virtuoso_setup_path = self._shared_setup or None
+        self._daemon_token = self.refresh_daemon_token()
+
     def warm(self, timeout: int = 15) -> None:
-        """Full startup: remote setup + persistent shell + tunnel."""
+        """Full startup: discover, authenticate, and forward the selected instance."""
+        if self._discover_instances:
+            self.discover_instance()
         if _is_localhost(self._remote_host):
             self.ensure_local_setup()
             self._daemon_endpoint_hostname = socket.gethostname()
             self._daemon_token = self.ensure_daemon_token()
+            self._verify_discovered_instance(timeout)
             self.save_state()
             return
         try:
@@ -1079,6 +1211,7 @@ class SSHClient:
                     runner.ensure_persistent_shell(timeout=timeout)
             self._daemon_endpoint_hostname = self.probe_daemon_endpoint_hostname()
             self.ensure_tunnel()
+            self._verify_discovered_instance(timeout)
             self.save_state()
         except Exception:
             try:
@@ -1086,6 +1219,14 @@ class SSHClient:
             except Exception:
                 pass
             raise
+
+    def _verify_discovered_instance(self, timeout: int) -> None:
+        if not self.instance_record:
+            return
+        from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
+        client = VirtuosoClient(host="127.0.0.1", port=self.port, tunnel=self,
+                                daemon_token=self._daemon_token, timeout=timeout)
+        client._ensure_daemon_capabilities(time.monotonic() + timeout)
 
     def stop(self) -> None:
         """Kill the tunnel and clean up."""
@@ -1218,6 +1359,9 @@ class SSHClient:
         # An old-format file for this target is superseded by the new one.
         self._clear_state()
         _state_file(self._profile, self.target).write_text(json.dumps(state, indent=2), encoding="utf-8")
+        if self._discover_instances and self.instance_record:
+            selection = {"target": self.target, "port": self._port, "record": self.instance_record}
+            _selection_file(self._profile).write_text(json.dumps(selection), encoding="utf-8")
 
     @staticmethod
     def read_state(profile: str | None = None, *, target: Any = _CONFIGURED) -> dict[str, Any] | None:
@@ -1228,7 +1372,11 @@ class SSHClient:
         mistaken for this one. ``None`` accepts any old-format state.
         """
         if target is _CONFIGURED:
-            target = _configured_target(profile)
+            target = _read_selection(profile).get("target")
+            suffix = f"_{profile}" if profile else ""
+            if not target and os.getenv(f"VB_REMOTE_WORK_DIR{suffix}", "").strip():
+                return None  # legacy state has no proof of the requested directory
+            target = target or _configured_target(profile)
         if target:
             candidates = [_state_file(profile, target)]
         else:

@@ -32,6 +32,31 @@ The recorder scrubs host names, user names and paths. Data that cannot be
 published (anything from a foundry PDK) is modelled instead and labelled as
 such where it is defined.
 
+## Native Linux instance discovery checks
+
+The stdlib-only harness below runs real temporary daemons, sockets and kernel
+locks without Cadence, a PDK, SSH, pytest or existing credentials:
+
+```bash
+python3 tests/native_instance_registry.py src/virtuoso_bridge/virtuoso/basic/resources
+```
+
+To exercise the same allocation, credential and real-daemon protocol checks
+with Python 2.7 workers, keep the harness on Python 3 and select the interpreter:
+
+```bash
+VB_TEST_WORKER_PYTHON=/path/to/python2.7 python3 tests/native_instance_registry.py src/virtuoso_bridge/virtuoso/basic/resources
+```
+
+It covers twelve concurrent ephemeral allocations, fixed-port races and
+conflicts, request flags and private permissions, SIGKILL/discovery cleanup,
+graceful cleanup, nonblocking liveness checks, symlinks/FIFOs, concurrent
+private credential creation, directory replacement, signed instance identity,
+rejection of missing/foreign credentials, and absence of secrets in output. All files
+are synthetic and temporary. It does not switch Linux UIDs or test native
+SKILL timers, a live CIW, or electrical equivalence. The related pytest cases
+skip Linux-only operations on Windows.
+
 ## Live tests
 
 Use a dedicated Virtuoso session, for example one started under

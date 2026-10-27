@@ -372,6 +372,8 @@ def test_find_x11_env_decodes_pgrep_pid_bytes(monkeypatch) -> None:
 
 
 class _Runner:
+    _vb_remote_home = "/home/designer"
+
     def __init__(self, stdout_by_marker: dict[str, str]) -> None:
         self.commands: list[str] = []
         self.uploads: list[tuple[Path, str]] = []
@@ -379,7 +381,7 @@ class _Runner:
 
     def run_command(self, command: str, timeout=None):
         self.commands.append(command)
-        if command.startswith("mkdir -p "):
+        if command.startswith("umask 077; mkdir -p "):
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         if "python3 --version" in command:
             return SimpleNamespace(returncode=0, stdout='Python 3.9\nCMD:python3\n', stderr="")
