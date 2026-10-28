@@ -42,4 +42,5 @@ virtuoso-bridge status
 
 Setup, configuration, CLI reference, architecture and citation are in the
 **[guide](https://virtuoso-bridge.tokenzhang.com/guide/)**. Coding agents start with [AGENTS.md](AGENTS.md).
-Existing fixed-port deployments should follow the [discovery upgrade note](docs/releases/unreleased.md).
+Existing fixed-port configs and compatible old daemons remain usable through discovery-first fallback.
+See the [compatibility and optional upgrade note](docs/releases/unreleased.md).

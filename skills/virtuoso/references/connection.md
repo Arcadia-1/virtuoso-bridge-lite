@@ -233,9 +233,12 @@ virtuoso-bridge start --port 65123
 
 Use `sessions --json` to list records without selecting or provisioning, and
 `status --port PORT` to check an exact instance. `start --port` overrides
-`VB_REMOTE_PORT`; both are exact selectors only. A miss reports candidates;
-selection never writes or clears allocation requests. Remove an obsolete
-`VB_REMOTE_PORT` from the selected `.env` deliberately before automatic selection.
+`VB_REMOTE_PORT`. CLI `--port` is exact. The environment port prefers a matching
+record but permits a unique new registered session. A successful discovery with no project candidates
+can fall back to that configured old endpoint when no saved registered identity
+or exact CLI selector exists. Authentication remains required. Discovery errors,
+ambiguity and authentication failures never cause fallback. Selection never writes
+or clears allocation requests.
 Profiles remain optional; one host and one `.env` suffice.
 
 For a deliberate persistent allocation request, run the installed helper on the
@@ -254,10 +257,10 @@ scopes to restore automatic allocation. A requested port must bind or startup
 fails; existing daemons are unaffected. Earlier clients may have left these
 requests behind. Ordinary `start`, `status` and `sessions` never repair them.
 
-No match prints a `load("...")` instruction and exits nonzero without a usable
-tunnel. In the intended idle CIW, stop its
+Without a usable registered or configured legacy endpoint, start prints a
+`load("...")` instruction and exits nonzero without a usable tunnel. In the intended idle CIW, stop its
 old child with `RBStop()`, wait for exit, then load the new setup and rerun
-`start`. A legacy daemon without records needs this explicit upgrade. Missing
+`start`. A working old endpoint needs no upgrade simply because it has no record. Missing
 build metadata means unknown compatibility; a different build is informational
 unless a required protocol capability is absent. Never restart another CIW.
 `RBSetPort(N)` switches an idle instance; `RBSetPort(0)` consults saved requests,
@@ -266,6 +269,8 @@ functions already loaded in Virtuoso.
 
 `restart` keeps the saved CIW choice, schedules one bounded stop/wait/start,
 then authenticates its replacement record and reconnects to the new endpoint.
+For an old fixed-port daemon, restart verifies the same authenticated CIW birth
+and a changed daemon identity, using the old loader functions with a bounded wait.
 It restarts the loaded configuration; it does not load newly deployed files.
 A busy lane or mismatched exact selector prevents restart/adoption. After a
 timeout, inspect the original outcome and sessions before any explicit retry;
@@ -313,18 +318,26 @@ uv run python tools/install_shared_daemon.py /opt/virtuoso-bridge/v2 --python /u
 Use the printed load line in each project's `.cdsinit`. Set
 `VB_DAEMON_SETUP=/opt/virtuoso-bridge/v2/virtuoso_setup.il` on clients to use
 that same path in load instructions. Without it, the bridge generates a
-private bootstrap at `~/.virtuoso-bridge/daemon/virtuoso_setup.il`, shared across projects.
+private bootstrap at `/tmp/virtuoso_bridge_<user>/daemon/virtuoso_setup.il`,
+shared across projects by default.
 
-Generated bundles are reused when identical and refused when differing, before
+Generated bundles are reused only when both inventory and bytes match. Automatic
+worker launches disable bytecode writes; inspect and explicitly replace old
+cache-bearing bundles. Unexpected members are refused before
 any existing bundle file is changed. After reviewing the configuration, authorize
 replacement with `start --replace-setup` (Python API: `replace_setup=True`). This
 changes generated account code only and retains the previous complete bundle at
 the printed private backup path. A bounded lock serializes publishers; a staged
 directory and recovery name preserve the old bundle across an interrupted
-directory exchange. Running CIWs need an explicit load to change loaded code.
+directory exchange. The two renames leave a brief availability gap; the next
+publication can recover an interrupted exchange. Post-commit errors report that
+the bundle is active. Backups are retained: inspect exact paths and ensure no
+CIW/job uses them before operator removal. Running CIWs need an explicit load
+to change loaded code.
 This option never overwrites a shared installation: install a new versioned path.
 
-`start` prepares code only when no matching record exists. To stage a generated
+`start` prepares code when neither a registered session nor a usable configured
+legacy endpoint is available. To stage a generated
 remote update while registered CIWs remain running, explicitly call
 `SSHClient.from_env(keep_remote_files=True, read_selection=False, replace_setup=True)`
 and that client's `ensure_remote_setup()`, then `close()` in `finally`.
@@ -338,9 +351,11 @@ refuses overwrite, symlink ancestors, foreign owners and group/other-writable
 ancestors (including `/tmp`). All users loading the bundle trust its installing
 UID, which need not be root. Upgrade into a new versioned path.
 
-Daemon and client must use the same deployment root, defaulting to
-`~/.virtuoso-bridge` in the passwd account home, independent of `$HOME`.
-Explicit `~/` uses that same account home. Generated setup includes the resolved
+General scratch retains the stock `/tmp` parent and
+`virtuoso_bridge_<user>/<client>/<leaf>` workflow layout. The default private
+registry/bundle root is `/tmp/virtuoso_bridge_<user>`; daemon and client must agree
+on this root. Explicit private roots from preview installations remain supported.
+Explicit `~/` uses the target passwd account home, independent of `$HOME`. Generated setup includes the resolved
 root; shared setup takes `--scratch-root`, otherwise daemon `RB_SCRATCH_ROOT`,
 then daemon `VB_REMOTE_SCRATCH_ROOT`, then the default. A stale `RB_SCRATCH_ROOT`
 inside an existing Virtuoso wins over client settings. Client `.env` edits do
@@ -358,8 +373,8 @@ files alone are not authentic proof of daemon identity.
 
 Existing artifacts in old `/tmp/virtuoso_bridge_<user>/...` or client/profile
 directories are not moved or deleted. Durable jobs and other sessions may still
-use them. Account-home defaults consume home quota; choose a safe private root
-explicitly if needed. Discovery also reads the deployed older
+use them. An explicit home-based root consumes home quota; choose a safe private
+root according to site needs. Discovery also reads the deployed older
 `<root>/virtuoso_bridge_<user>/runs` layout with the same ownership and lock
 checks. An already loaded daemon keeps its original record until explicit upgrade;
 loading the new bootstrap places its next record in `<root>/runs`.
@@ -395,11 +410,16 @@ virtuoso-bridge status --inspect-state --env /local/bridge.env
 virtuoso-bridge stop --port 65085 --env /local/bridge.env
 ```
 
-Unsafe files are reported by path without trusting their contents. On Linux,
+Use `remote_port`, not local `port`: for `port=12345, remote_port=23456`, stop with
+`virtuoso-bridge stop --port 23456`. Same-owner historical non-secret 0644 metadata
+in a 0755 application directory remains readable if neither is writable by
+others. Unsafe files are reported by path without trusting their contents. On Linux,
 explicit stop can establish missing birth identity only for a verified same-owner
 standalone forward with `-F /dev/null`, exact endpoints and disabled multiplexing.
-Custom/unknown configuration, extra forwards, PID reuse or unavailable inspection
-requires operator recovery. No unchecked force switch exists. Current verified
+The default old launcher omitted `-F /dev/null`, so ordinary historical forwards
+usually require the operator branch below. Custom/unknown configuration, extra
+forwards, PID reuse or unavailable inspection also require operator recovery.
+Current `ssh -G` output cannot prove a running process's historical configuration. No unchecked force switch exists. Current verified
 birth identities use the normal stop path.
 
 On Linux, substitute the reported PID and inspect the owner, executable, start
@@ -439,8 +459,9 @@ Discovery-mode shared bootstrap files are never removed by CLI or Python `stop()
 
 ### Upgrade an existing fixed-port deployment
 
-Follow the [unreleased upgrade note](../../../docs/releases/unreleased.md): recover
-the old tunnel, deliberately remove obsolete selectors, choose the intended new
+Upgrading is optional for a working old endpoint. To adopt new loaded code,
+follow the [unreleased note](../../../docs/releases/unreleased.md): recover
+the old tunnel, choose the intended new
 setup, update `.cdsinit` only where its path changed, stop/wait/load in each
 intended idle CIW, then run `sessions`, `start`, signed `status` and
 `eval 'getWorkingDir()'`. On fresh setup, load after the first no-record start

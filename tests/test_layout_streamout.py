@@ -34,6 +34,16 @@ from virtuoso_bridge.virtuoso.layout.xstream import XStreamLogResult
 Status = ExecutionStatus
 Reason = GdsExportReason
 
+
+@pytest.fixture(autouse=True)
+def isolated_scratch_configuration(monkeypatch, tmp_path):
+    from virtuoso_bridge import env
+    monkeypatch.delenv("VB_REMOTE_SCRATCH_ROOT", raising=False)
+    monkeypatch.delenv("VB_CLIENT_ID", raising=False)
+    configuration = tmp_path / "offline.env"
+    configuration.write_text("", encoding="utf-8")
+    monkeypatch.setattr(env, "_RUNTIME_ENV_FILE", configuration)
+
 _GDS_EXPORT_RESULT_FIELDS = (
     "status",
     "reason",
@@ -2700,7 +2710,7 @@ def test_remote_export_stages_owned_posix_run_and_all_request_fields(
     run_dir = result.remote_run_dir
     assert run_dir is not None
     assert re.fullmatch(
-        r"/scratch root/client_id/xstream/[0-9a-f]{32}",
+        r"/scratch root/virtuoso_bridge_remote_user/client_id/xstream/[0-9a-f]{32}",
         run_dir,
     )
     stage_command = runner.calls[0][0]
@@ -2724,7 +2734,7 @@ def test_remote_export_stages_owned_posix_run_and_all_request_fields(
     assert str(tmp_path) not in skill
 
 
-def test_remote_export_does_not_probe_unused_username(
+def test_remote_export_resolves_username_for_restored_scratch_layout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     stream_map: Path,
@@ -2744,9 +2754,9 @@ def test_remote_export_does_not_probe_unused_username(
 
     assert first.remote_run_dir is not None
     assert second.remote_run_dir is not None
-    assert "/laptop/xstream/" in first.remote_run_dir
+    assert "/virtuoso_bridge_cad_user/laptop/xstream/" in first.remote_run_dir
     assert first.remote_run_dir != second.remote_run_dir
-    assert "whoami" not in [command for command, _timeout in runner.calls]
+    assert [command for command, _timeout in runner.calls].count("whoami") == 2
     assert len(client.uploads) == 2
 
 

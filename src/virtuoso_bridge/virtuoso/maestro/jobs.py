@@ -292,7 +292,7 @@ class MaestroJobManager:
         )
         observed_host, observed_account = cls._probe_ssh_identity(runner)
         root = remote_root or default_virtuoso_bridge_dir(
-            "", "maestro-jobs", resolve_client_id(profile), runner=runner
+            observed_account, "maestro-jobs", resolve_client_id(profile), runner=runner
         )
         return cls(
             runner,
@@ -367,7 +367,7 @@ class MaestroJobManager:
         roles = remote_host_roles_from_os(profile, load=False)
         observed_host, observed_account = cls._probe_ssh_identity(runner)
         root = remote_root or default_virtuoso_bridge_dir(
-            "", "maestro-jobs", resolve_client_id(profile), runner=runner
+            observed_account, "maestro-jobs", resolve_client_id(profile), runner=runner
         )
         return cls(
             runner,
@@ -871,8 +871,13 @@ class MaestroJobManager:
             return
         assert self._runner is not None
         parent = work_dir.rsplit("/", 1)[0]
+        from virtuoso_bridge.transport.remote_paths import private_staging_script
+        # Explicit job roots are private too; never chmod their shared parent.
+        staging_parent = self._work_root
+        if "/virtuoso_bridge_" in self._work_root:
+            staging_parent = self._work_root.split("/virtuoso_bridge_", 1)[0] or "/"
         result = self._runner.run_command(
-            f"umask 077; mkdir -p {shlex.quote(parent)} && "
+            private_staging_script(staging_parent, parent, "Maestro") +
             f"mkdir {shlex.quote(work_dir)} 2>/dev/null || "
             f"{{ echo 'remote run id already exists or is unavailable' >&2; exit 2; }}; "
             f": > {shlex.quote(work_dir + '/events.log')}"

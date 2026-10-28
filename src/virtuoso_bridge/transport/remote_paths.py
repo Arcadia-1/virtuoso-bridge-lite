@@ -6,6 +6,7 @@ import getpass
 import os
 import re
 import socket
+import time
 from typing import TYPE_CHECKING
 
 from virtuoso_bridge.env import load_vb_env
@@ -17,14 +18,14 @@ REMOTE_SCRATCH_ROOT_ENV = "VB_REMOTE_SCRATCH_ROOT"
 CLIENT_ID_ENV = "VB_CLIENT_ID"
 
 
-def remote_scratch_root(runner: SSHRunner | None = None) -> str:
-    """Private scratch root; resolve ~ on the SSH host, never on the client."""
+def remote_scratch_root(runner: SSHRunner | None = None, *, timeout: float = 10) -> str:
+    """Scratch parent (historically /tmp); expand ~ on the target host."""
     load_vb_env()
-    root = os.environ.get(REMOTE_SCRATCH_ROOT_ENV, "").strip() or "~/.virtuoso-bridge"
+    root = os.environ.get(REMOTE_SCRATCH_ROOT_ENV, "").strip() or "/tmp"
     if root.startswith("~/") and runner is not None:
         home = getattr(runner, "_vb_remote_home", None)
         if not isinstance(home, str):
-            result = runner.run_command('getent passwd "$(id -u)" | cut -d: -f6', timeout=10)
+            result = runner.run_command('getent passwd "$(id -u)" | cut -d: -f6', timeout=timeout)
             home = result.stdout.strip()
             if result.returncode or not home.startswith("/"):
                 raise ValueError("Cannot resolve the remote account home")
@@ -87,13 +88,14 @@ def resolve_remote_username(
     configured_user: str | None,
     runner: SSHRunner | None = None,
     fallback: str = "unknown",
+    timeout: float = 10,
 ) -> str:
     """Resolve SSH username: configured_user > whoami > getpass > fallback."""
     u = (configured_user or "").strip()
     if u:
         return sanitize_username_for_path(u)
     if runner is not None:
-        whoami_result = runner.run_command("whoami")
+        whoami_result = runner.run_command("whoami", timeout=timeout)
         if whoami_result.returncode == 0 and whoami_result.stdout.strip():
             return sanitize_username_for_path(whoami_result.stdout.strip())
         return fallback
@@ -116,20 +118,65 @@ def default_virtuoso_bridge_dir(
     client_id: str | None = None,
     *,
     runner: SSHRunner | None = None,
+    timeout: float = 10,
 ) -> str:
     """Return the default remote scratch directory for bridge artifacts.
 
-    The username argument is retained for source compatibility; account-home
-    roots now provide user isolation. When *client_id* is provided, include it as a path segment so the same
+    When *client_id* is provided, include it as a path segment so the same
     remote user/profile pair can safely use a shared scratch root from
     multiple local machines.
     """
-    root = remote_scratch_root(runner)
+    deadline = time.monotonic() + timeout
+    username = username or resolve_remote_username(
+        configured_user=getattr(runner, "user", getattr(runner, "_user", None)),
+        runner=runner, timeout=timeout)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Scratch path resolution deadline expired")
+    root = remote_scratch_root(runner, timeout=remaining) + "/virtuoso_bridge_" + sanitize_username_for_path(username)
     leaf_norm = leaf.strip("/").replace("\\", "/")
     if client_id:
         safe_client = sanitize_client_id_for_path(client_id)
         return f"{root}/{safe_client}/{leaf_norm}"
     return f"{root}/{leaf_norm}"
+
+
+def instance_scratch_root(runner: SSHRunner | None = None, *, timeout: float = 10) -> str:
+    """Private registry root, independent of the legacy scratch parent.
+
+    Preserve explicitly configured discovery roots from earlier preview builds.
+    The shared /tmp default is only a parent, never a private registry itself.
+    """
+    deadline = time.monotonic() + timeout
+    root = remote_scratch_root(runner, timeout=timeout)
+    if root == "/tmp":
+        if runner is None:
+            user = resolve_remote_username(configured_user=None)
+        else:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Instance root resolution deadline expired")
+            result = runner.run_command("whoami", timeout=remaining)
+            if result.returncode or not result.stdout.strip():
+                raise ValueError("Cannot resolve the remote account for instance discovery")
+            user = result.stdout.strip()
+        return root + "/virtuoso_bridge_" + sanitize_username_for_path(user)
+    return root
+
+
+def private_staging_script(root: str, path: str, label: str) -> str:
+    """Verify private children without changing the shared scratch parent."""
+    import shlex
+
+    directories = private_dirs_below(root, path)
+    if not directories:
+        raise ValueError("Staging needs a private child below the scratch parent")
+    if root != "/tmp":
+        directories.insert(0, root)
+    return private_dir_shell_prelude(label) + "".join(
+        "vb_ensure_root %s || exit $?\n" % shlex.quote(directory)
+        for directory in directories
+    )
 
 def private_dir_shell_prelude(label: str) -> str:
     """POSIX sh functions that create or verify directories private to the user.

@@ -164,7 +164,9 @@ def test_auto_mode_requires_selection_even_if_old_fixed_port_is_live(state_root,
     assert not SSHClient.is_running()
     client = VirtuosoClient.from_env()
     monkeypatch.setattr(client, "_exchange_payload", lambda *a: pytest.fail("stale listener contacted"))
-    with pytest.raises(DaemonAuthError, match="start first"):
+    monkeypatch.setattr(client._tunnel, "list_instances", lambda **kw: [])
+    from virtuoso_bridge.instance_discovery import InstanceSelectionError
+    with pytest.raises(InstanceSelectionError, match="run virtuoso-bridge start"):
         client._ensure_daemon_capabilities(time.monotonic() + 1)
 
 

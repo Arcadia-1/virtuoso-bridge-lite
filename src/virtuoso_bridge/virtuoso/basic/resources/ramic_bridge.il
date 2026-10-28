@@ -287,7 +287,7 @@ procedure(RBStart()
             ; bundled (and often incompatible) copies.
             ; Bind the daemon to this Virtuoso, not the intermediate cdsServIpc.
             RBLaunchedAt = getCurrentTime()
-            RBIpc = ipcBeginProcess(sprintf(nil "/usr/bin/env -u LD_LIBRARY_PATH -u LD_PRELOAD RB_VIRTUOSO_PID=%d RB_VIRTUOSO_BOOT_ID=%s RB_VIRTUOSO_WORK_DIR=%s stdbuf -oL %s -u %L %L %L" ipcGetPid() RBQuoteShellArg(RBOwnerBootId()) RBQuoteShellArg(getWorkingDir()) RBPython RBDPath host RBConfiguredPort) "" 'RBIpcDataHandler 'RBIpcErrHandler 'RBIpcFinishHandler logpath)
+            RBIpc = ipcBeginProcess(sprintf(nil "/usr/bin/env -u LD_LIBRARY_PATH -u LD_PRELOAD RB_VIRTUOSO_PID=%d RB_VIRTUOSO_BOOT_ID=%s RB_VIRTUOSO_WORK_DIR=%s stdbuf -oL %s %s-u %L %L %L" ipcGetPid() RBQuoteShellArg(RBOwnerBootId()) RBQuoteShellArg(getWorkingDir()) RBPython if(getShellEnvVar("RB_AUTO_PORT") == "1" then "-B " else "") RBDPath host RBConfiguredPort) "" 'RBIpcDataHandler 'RBIpcErrHandler 'RBIpcFinishHandler logpath)
         )
         printf("[RAMIC Bridge ipc=%L] launching daemon (bind=%s:%d) at (%s)\n"
             RBIpc

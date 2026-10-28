@@ -68,7 +68,7 @@ class NativeTests(unittest.TestCase):
             time.sleep(.03)
         self.fail("Timed out discovering %d instances" % count)
 
-    def test_private_home_default_and_flat_records(self):
+    def test_stock_scratch_default_and_flat_records(self):
         source = '''
 import os, pwd, sys
 sys.path.insert(0, sys.argv[1])
@@ -77,9 +77,11 @@ for key in ('RB_SCRATCH_ROOT', 'VB_REMOTE_SCRATCH_ROOT'):
     os.environ.pop(key, None)
 class Account(object):
     pw_dir = sys.argv[2]
+    pw_name = 'fixture'
 pwd.getpwuid = lambda uid: Account()
-expected = os.path.join(sys.argv[2], '.virtuoso-bridge')
-assert r.scratch_root() == expected
+assert r.scratch_root() == '/tmp/virtuoso_bridge_fixture'
+expected = os.path.join(sys.argv[2], 'private')
+os.environ['RB_SCRATCH_ROOT'] = expected
 reg = r.Registry()
 reg.close()
 assert os.path.isdir(expected + '/runs')
@@ -99,6 +101,14 @@ destination = sys.argv[2] + '/daemon'
 first = {'setup.il': 'loopback', 'daemon.py': 'old'}
 assert not publish(destination, first)['reused']
 assert publish(destination, first)['reused']
+with open(destination + '/json.py', 'w') as stream:
+    stream.write('raise RuntimeError("unexpected shadow")')
+try:
+    publish(destination, first)
+except RuntimeError:
+    pass
+else:
+    raise AssertionError('unexpected import member accepted')
 try:
     publish(destination, {'setup.il': 'all', 'daemon.py': 'new'})
 except RuntimeError:
@@ -108,6 +118,8 @@ else:
 changed = publish(destination, {'setup.il': 'all', 'daemon.py': 'new'}, replace=True)
 assert open(changed['backup'] + '/setup.il').read() == 'loopback'
 assert open(destination + '/setup.il').read() == 'all'
+assert not os.path.exists(destination + '/json.py')
+assert os.path.exists(changed['backup'] + '/json.py')
 '''
         worker = self.spawn(source, self.root)
         stdout, stderr = worker.communicate(timeout=5)
@@ -202,6 +214,18 @@ assert open(destination + '/setup.il').read() == 'all'
         first.communicate(timeout=5)
         self.await_rows(1)
         self.assertEqual(len(list(Path(self.directory).iterdir())), 1)
+
+    def test_read_only_discovery_preserves_stale_files(self):
+        registry.Registry(self.directory).close()
+        stale = Path(self.directory) / ("3" * 32 + ".json")
+        stale.write_text("stale")
+        stale.chmod(0o600)
+        before = stale.stat()
+        self.assertEqual(registry.discover(self.directory, read_only=True), [])
+        self.assertEqual(stale.read_text(), "stale")
+        self.assertEqual(stale.stat().st_mtime_ns, before.st_mtime_ns)
+        self.assertEqual(registry.discover(self.directory), [])
+        self.assertFalse(stale.exists())
 
     def test_socket_conflict_and_malicious_file_types(self):
         registry.Registry(self.directory).close()

@@ -20,4 +20,4 @@ def test_template_renders_home_scratch_guidance_without_enabling_it():
     assert "VB_REMOTE_WORK_DIR" not in values
     assert "VB_DAEMON_SETUP" not in values
     assert "# VB_REMOTE_SCRATCH_ROOT=/home/username/.virtuoso-bridge" in text
-    assert "default: ~/.virtuoso-bridge" in text
+    assert "Scratch parent defaults to /tmp" in text

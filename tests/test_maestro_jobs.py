@@ -230,7 +230,7 @@ def test_remote_run_id_is_reserved_with_atomic_mkdir(tmp_path) -> None:
 
     reserve = runner.commands[0]
     assert "test -e" not in reserve
-    assert "mkdir -p '/tmp/bridge/maestro jobs/jobs'" in reserve
+    assert "vb_ensure_root '/tmp/bridge/maestro jobs/jobs'" in reserve
     assert "mkdir '/tmp/bridge/maestro jobs/jobs/atomic-run-001'" in reserve
 
 

@@ -1040,18 +1040,16 @@ class SpectreSimulator:
         overall_started = time.perf_counter()
 
         if not self._remote_work_dir_set:
-            root = remote_scratch_root(runner)
-            result = runner.run_command(
-                private_dir_shell_prelude("Spectre")
-                + f"vb_ensure_root {shlex.quote(root)} || exit $?\n"
-            )
-            if result.returncode:
-                raise RuntimeError(result.stderr.strip() or "Cannot create private Spectre scratch")
             self._remote_work_dir = default_remote_spectre_work_dir(
                 "",
                 resolve_client_id(self._profile),
                 runner=runner,
             )
+            from virtuoso_bridge.transport.remote_paths import private_staging_script
+            result = runner.run_command(private_staging_script(
+                remote_scratch_root(runner), self._remote_work_dir, "Spectre"))
+            if result.returncode:
+                raise RuntimeError(result.stderr.strip() or "Cannot create private Spectre scratch")
             logger.info("Remote work dir: %s", self._remote_work_dir)
         if self._remote_work_dir is None:
             return SimulationResult(

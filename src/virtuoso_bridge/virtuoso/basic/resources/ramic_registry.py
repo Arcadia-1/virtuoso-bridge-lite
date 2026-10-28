@@ -39,12 +39,16 @@ def _private_directory(path, create):
     if info.st_uid != os.geteuid() or info.st_mode & 0o077:
         os.close(fd)
         raise RuntimeError("Instance scratch directory must be owned by this UID with mode 0700: %s. "
-                           "Use a private child directory, not /tmp; the default is ~/.virtuoso-bridge." % path)
+                           "Use a private child directory, not /tmp itself." % path)
     return fd
 
 
 def scratch_root():
-    root = os.environ.get("RB_SCRATCH_ROOT") or os.environ.get("VB_REMOTE_SCRATCH_ROOT") or "~/.virtuoso-bridge"
+    import pwd
+    root = os.environ.get("RB_SCRATCH_ROOT") or os.environ.get("VB_REMOTE_SCRATCH_ROOT") or "/tmp"
+    if root.rstrip("/") == "/tmp":
+        user = re.sub(r"[^a-zA-Z0-9._-]", "_", pwd.getpwuid(os.geteuid()).pw_name)[:64]
+        root = "/tmp/virtuoso_bridge_" + user
     return expand_root(root)
 
 
@@ -256,7 +260,7 @@ def bind_instance(sock, host, port=0, directory=None, pid=None, work_dir=None, b
         registry.close()
 
 
-def _discover(directory=None, root=None, legacy=False):
+def _discover(directory=None, root=None, legacy=False, read_only=False):
     """Sweep stale records first, then read only private, locked records."""
     import fcntl
     import pwd
@@ -268,7 +272,8 @@ def _discover(directory=None, root=None, legacy=False):
         raise
     rows = []
     try:
-        registry.sweep()
+        if not read_only:
+            registry.sweep()
         for path in registry.files():
             fd = None
             try:
@@ -281,7 +286,7 @@ def _discover(directory=None, root=None, legacy=False):
                     _flock(fd, fcntl.LOCK_EX)
                     # A daemon can die after sweep. Remove this newly stale
                     # record too, without ever returning it to the selector.
-                    if _same_file(fd, path):
+                    if not read_only and _same_file(fd, path):
                         os.unlink(path)
                     continue
                 except IOError as exc:
@@ -308,12 +313,12 @@ def _discover(directory=None, root=None, legacy=False):
     return sorted(rows, key=lambda row: row["port"])
 
 
-def discover(directory=None, root=None):
-    rows = _discover(directory, root)
+def discover(directory=None, root=None, read_only=False):
+    rows = _discover(directory, root, read_only=read_only)
     # A live deployed daemon was verified using the prior nested layout.
     # Read both during explicit upgrades; never move a live record or lock.
     if directory is None:
-        rows += _discover(root=root, legacy=True)
+        rows += _discover(root=root, legacy=True, read_only=read_only)
     return sorted(rows, key=lambda row: row["port"])
 
 
@@ -322,9 +327,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--scratch-root", default=None)
     parser.add_argument("--configure", action="store_true")
+    parser.add_argument("--read-only", action="store_true")
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--work-dir", default="")
     args = parser.parse_args()
     if args.configure:
         configure_port(args.port, args.work_dir, root=args.scratch_root)
-    print(json.dumps(discover(root=args.scratch_root)))
+    print(json.dumps(discover(root=args.scratch_root, read_only=args.read_only)))

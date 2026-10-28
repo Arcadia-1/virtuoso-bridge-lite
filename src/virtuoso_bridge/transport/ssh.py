@@ -153,6 +153,40 @@ def _process_identity(pid: Any) -> str | None:
         return None
 
 
+def _process_confirmed_gone(pid: int) -> bool:
+    """Positive absence proof; lookup/permission failures remain uncertain."""
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
+        # A terminated adopted child can remain in /proc until its original
+        # parent reaps it. It cannot own a listener or perform further work.
+        try:
+            state = Path('/proc', str(pid), 'stat').read_text().rsplit(')', 1)[1].split()[0]
+            return state in ('Z', 'X')
+        except (OSError, IndexError):
+            return False
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.OpenProcess(0x00100000, False, pid)
+    if not handle:
+        return ctypes.get_last_error() == 87
+    try:
+        return kernel.WaitForSingleObject(handle, 0) == 0
+    finally:
+        kernel.CloseHandle(handle)
+
+
 def _legacy_forward_argv_matches(argv: list[str], destination: str, local_port: int, remote_port: int) -> bool:
     """Recognize only a standalone, configuration-free bridge forward.
 
@@ -737,15 +771,27 @@ class SSHRunner:
             pid = owned.pid
         elif self._tunnel_pid:
             expected = getattr(self, "_saved_tunnel_identity", None)
-            if not expected or _process_identity(self._tunnel_pid) != expected:
+            if (self._tunnel_proc is not None and self._tunnel_proc.pid == self._tunnel_pid
+                    and self._tunnel_proc.poll() is not None):
+                pass  # our original child has already been reaped
+            elif not expected:
                 raise RuntimeError("Refusing to stop an unverified or reused tunnel PID; inspect retained state")
-            pid = self._tunnel_pid
+            else:
+                current = _process_identity(self._tunnel_pid)
+                if current == expected:
+                    pid = self._tunnel_pid
+                elif current is not None or not _process_confirmed_gone(self._tunnel_pid):
+                    raise RuntimeError("Refusing to stop an unverified or reused tunnel PID; inspect retained state")
         if pid:
             logger.info("Terminating SSH tunnel (PID %d)", pid)
             try:
                 os.kill(pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
+            except OSError as exc:
+                if (os.name != "nt" or getattr(exc, "winerror", None) != 87
+                        or not _process_confirmed_gone(pid)):
+                    raise
             # Do not clear retained identity after a denied/uncertain stop.
             deadline = time.monotonic() + 5
             if owned is not None:
@@ -754,7 +800,12 @@ class SSHRunner:
                 except subprocess.TimeoutExpired as exc:
                     raise RuntimeError("SSH tunnel did not exit after termination") from exc
             else:
-                while _process_identity(pid) == expected:
+                while True:
+                    identity = _process_identity(pid)
+                    if identity is not None and identity != expected:
+                        break  # original exited; never signal a replacement
+                    if identity is None and _process_confirmed_gone(pid):
+                        break
                     if time.monotonic() >= deadline:
                         raise RuntimeError("SSH tunnel did not exit after termination; state retained")
                     time.sleep(0.05)

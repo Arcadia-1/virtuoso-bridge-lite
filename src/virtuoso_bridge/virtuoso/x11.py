@@ -14,16 +14,68 @@ import logging
 import os
 import shlex
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
 from virtuoso_bridge.env import load_vb_env
-from virtuoso_bridge.transport.remote_paths import default_virtuoso_bridge_dir, resolve_client_id
+from virtuoso_bridge.transport.remote_paths import (
+    default_virtuoso_bridge_dir, private_staging_script, remote_scratch_root, resolve_client_id,
+)
 from virtuoso_bridge.transport.ssh import SSHRunner
 
 logger = logging.getLogger(__name__)
 
 _HELPER_SCRIPT = Path(__file__).parent.parent / "resources" / "x11_dismiss_dialog.py"
+
+
+def _stage_helper(runner, source: Path, path: str, *, timeout: float = 15, upload: bool = True):
+    """Validate existing staging and content before executing a helper."""
+    deadline = time.monotonic() + timeout
+    def remaining():
+        budget = deadline - time.monotonic()
+        if budget <= 0:
+            raise TimeoutError("X11 helper staging deadline expired")
+        return budget
+    directory = path.rsplit("/", 1)[0]
+    prelude = private_staging_script(remote_scratch_root(runner), directory, "X11")
+    target = shlex.quote(path)
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+
+    def check(candidate):
+        quoted = shlex.quote(candidate)
+        return (f"[ ! -L {quoted} ] && [ -f {quoted} ] || exit 73\n"
+                f"vb_read_meta {quoted} || exit $?\n"
+                '[ "$vb_owner" = "$vb_uid" ] && [ "$vb_mode" = 600 ] || exit 75\n'
+                f"[ \"$(sha256sum {quoted} | cut -d ' ' -f 1)\" = {digest} ] || exit 76\n")
+
+    prepared = runner.run_command(prelude +
+        f"if [ -e {target} ] || [ -L {target} ]; then\n" + check(path) + "fi\n", timeout=remaining())
+    if prepared.returncode:
+        raise RuntimeError(prepared.stderr or "Unsafe X11 helper directory or existing file")
+    if not upload:
+        verified = runner.run_command(prelude + check(path), timeout=remaining())
+        if verified.returncode:
+            raise RuntimeError(verified.stderr or "Cached X11 helper is missing or changed")
+        return
+    temporary = path + ".stage-" + uuid.uuid4().hex
+    try:
+        uploaded = runner.upload(source, temporary, timeout=remaining())
+        if uploaded.returncode:
+            raise RuntimeError(uploaded.stderr or "Cannot upload X11 helper")
+        tmp = shlex.quote(temporary)
+        installed = runner.run_command(prelude +
+            f"[ ! -L {tmp} ] && [ -f {tmp} ] || exit 73\nchmod 600 {tmp} || exit $?\n" +
+            check(temporary) + f"mv -f -- {tmp} {target}\n", timeout=remaining())
+        if installed.returncode:
+            raise RuntimeError(installed.stderr or "Cannot verify/install X11 helper")
+    finally:
+        budget = deadline - time.monotonic()
+        if budget > 0:
+            try:
+                runner.run_command("rm -f -- " + shlex.quote(temporary), timeout=budget)
+            except Exception:
+                logger.warning("X11 helper stage retained at %r", temporary)
 
 
 def _get_display(display: str | None) -> str | None:
@@ -94,9 +146,9 @@ def _ensure_helper(
     if runner is None:
         return str(_HELPER_SCRIPT)
     remote_dir = default_virtuoso_bridge_dir(user, "x11", resolve_client_id(profile), runner=runner)
-    remote_path = f"{remote_dir}/x11_dismiss_dialog.py"
-    runner.run_command(f"umask 077; mkdir -p {shlex.quote(remote_dir)}")
-    runner.upload(_HELPER_SCRIPT, remote_path)
+    digest = hashlib.sha256(_HELPER_SCRIPT.read_bytes()).hexdigest()[:16]
+    remote_path = f"{remote_dir}/{digest}/x11_dismiss_dialog.py"
+    _stage_helper(runner, _HELPER_SCRIPT, remote_path)
     return remote_path
 
 
@@ -189,14 +241,10 @@ def inspect_dialogs(
         else:
             root = default_virtuoso_bridge_dir(user, "x11", resolve_client_id(profile), runner=runner)
             script = f"{root}/dialog_inspect_{digest}.py"
-            made = runner.run_command(f"umask 077; mkdir -p {shlex.quote(root)}", timeout=remaining())
-            if made.returncode != 0:
-                raise RuntimeError(made.stderr or "cannot prepare X11 helper directory")
-            uploaded = runner.upload(_HELPER_SCRIPT, script, timeout=remaining())
-            if uploaded.returncode != 0:
-                raise RuntimeError(uploaded.stderr or "cannot upload X11 inspection helper")
+            _stage_helper(runner, _HELPER_SCRIPT, script, timeout=remaining())
             py = _detect_remote_python(runner, timeout=remaining())
             runner._vb_dialog_helper = (key, script, py)
+        _stage_helper(runner, _HELPER_SCRIPT, script, timeout=remaining(), upload=False)
     cmd = f"{shlex.quote(py)} {shlex.quote(script)} --inspect-dialogs --pid {pid}"
     if ciw_window is not None:
         cmd += f" --ciw-window {shlex.quote(ciw_window)}"
@@ -252,16 +300,14 @@ def dialog_close_exchange(
         else:
             root = default_virtuoso_bridge_dir(user, "x11", resolve_client_id(profile), runner=runner)
             directory = f"{root}/close_{digest}"
-            made = runner.run_command(f"umask 077; mkdir -p {shlex.quote(directory)}", timeout=remaining())
-            if made.returncode:
-                raise RuntimeError(made.stderr or "Cannot prepare dialog action helper")
             for local in (_HELPER_SCRIPT, helper):
-                uploaded = runner.upload(local, f"{directory}/{local.name}", timeout=remaining())
-                if uploaded.returncode:
-                    raise RuntimeError(uploaded.stderr or "Cannot upload dialog action helper")
+                _stage_helper(runner, local, f"{directory}/{local.name}", timeout=remaining())
             script = f"{directory}/{helper.name}"
             py = _detect_remote_python(runner, timeout=remaining())
             runner._vb_dialog_close_helper = (key, script, py)
+        for local in (_HELPER_SCRIPT, helper):
+            _stage_helper(runner, local, script.rsplit("/", 1)[0] + "/" + local.name,
+                          timeout=remaining(), upload=False)
     request = dict(payload, timeout=remaining())
     encoded = base64.b64encode(json.dumps(request, ensure_ascii=True).encode("ascii")).decode("ascii")
     if len(encoded) > 16000:

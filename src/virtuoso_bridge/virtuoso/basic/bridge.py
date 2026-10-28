@@ -268,10 +268,12 @@ class VirtuosoClient(VirtuosoInterface):
                 raise RuntimeError("Tunnel state file is missing or invalid.")
             port = state["port"]
             ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
-            # The token never lives in state.json (world-readable by
-            # design); it is fetched from the daemon host over SSH.
+            # Resolve discovery before choosing a credential mode. Historical
+            # state contains only metadata and must not force registered auth.
+            unresolved = getattr(ssh, "_discover_instances", False) and not getattr(ssh, "instance_record", None)
+            token = None if unresolved else _acquire_daemon_token(ssh)
             client = cls(host="127.0.0.1", port=port, timeout=timeout, tunnel=ssh,
-                         log_to_ciw=log_to_ciw, daemon_token=_acquire_daemon_token(ssh))
+                         log_to_ciw=log_to_ciw, daemon_token=token)
             client._reject_cross_user_daemon_if_reachable(profile=profile, timeout=timeout)
             return client
 
@@ -2122,14 +2124,25 @@ let((result winName ciwNum)
         """
         expected = getattr(self._tunnel, "instance_record", None)
         if getattr(self._tunnel, "_discover_instances", False):
+            if expected is None and not getattr(self, "_selection_reconciled", False):
+                # An existing legacy tunnel is not a reason to skip discovery.
+                # Resolve before transmitting anything, then use the credential
+                # appropriate to the selected registered or legacy endpoint.
+                self._tunnel.discover_instance(provision=False)
+                self._tunnel.ensure_tunnel()
+                self._port = self._tunnel.port
+                self.daemon_token = self._tunnel.ensure_daemon_token()
+                expected = self._tunnel.instance_record
+                self._selection_reconciled = True
             from virtuoso_bridge.instance_discovery import validate_record
             try:
-                validate_record(expected)
+                if not getattr(self._tunnel, "_legacy_fallback", False):
+                    validate_record(expected)
             except ValueError as exc:
                 raise daemon_auth.DaemonAuthError(
                     "No valid Virtuoso instance selected. Run virtuoso-bridge start first: " + str(exc)
                 ) from exc
-            if not getattr(self, "_selection_reconciled", False) and hasattr(self._tunnel, "reconcile_instance"):
+            if expected and not getattr(self, "_selection_reconciled", False) and hasattr(self._tunnel, "reconcile_instance"):
                 changed = self._tunnel.reconcile_instance(max(1, int(deadline - time.monotonic())))
                 if changed:
                     self._port = self._tunnel.port
@@ -2214,6 +2227,10 @@ let((result winName ciwNum)
                 )
 
         expected = getattr(self._tunnel, "instance_record", None)
+        if getattr(self._tunnel, "_legacy_fallback", False) and caps.get("instance_record"):
+            raise daemon_auth.DaemonAuthError(
+                "Registered daemon is absent from discovery; inspect the registry root before connecting"
+            )
         if isinstance(expected, dict) and (
             caps.get("auth") != "on" or caps.get("instance_record") != expected
         ):

@@ -384,6 +384,7 @@ def test_x11_inspection_uses_quoted_content_addressed_helper_and_cache(monkeypat
             uploads.append(remote_path)
             return SimpleNamespace(returncode=0, stderr="")
     monkeypatch.setattr(x11, "default_virtuoso_bridge_dir", lambda *a, **kw: "/shared root/x11")
+    monkeypatch.setattr(x11, "remote_scratch_root", lambda *a: "/shared root")
     monkeypatch.setattr(x11, "resolve_client_id", lambda *a: "test")
     runner = Runner()
     for _ in range(2):

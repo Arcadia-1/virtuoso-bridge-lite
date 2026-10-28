@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import posixpath
 import re
+import unicodedata
 
 DAEMON_BUILD = "instance-discovery-3"
 INSTANCE_COLUMNS = "port / Virtuoso PID / working directory / instance"
@@ -52,12 +53,16 @@ def validate_record(record: object) -> dict:
     return record
 
 
+def display_text(value: str) -> str:
+    """Preserve readable Unicode while making terminal controls explicit."""
+    return "".join(char if char.isprintable() and unicodedata.category(char) != "Cf"
+                   else char.encode("unicode_escape").decode("ascii") for char in value)
+
+
 def format_instances(rows: list[dict]) -> str:
     """Escape terminal control characters without obscuring ordinary paths."""
-    def escaped(value: str) -> str:
-        return value.encode("unicode_escape").decode("ascii")
     return "\n".join("  %s  %s  %s  %s" % (
-        row["port"], row["pid"], escaped(row["work_dir"]), row.get("instance", "")) for row in rows)
+        row["port"], row["pid"], display_text(row["work_dir"]), row.get("instance", "")) for row in rows)
 
 
 class InstanceConnectionError(RuntimeError):

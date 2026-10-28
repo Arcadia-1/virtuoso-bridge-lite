@@ -1,64 +1,69 @@
-# Unreleased instance discovery upgrade
+# Unreleased discovery and compatibility corrections
 
-Automatic discovery introduces a one-time daemon upgrade for pre-discovery
-fixed-port deployments. This is the narrow exception recorded in
-[ADR 0004](../adr/0004-instance-discovery.md) to the earlier Lite migration
-promise. Profiles, multiple hosts and process metadata remain optional. Existing
-explicit legacy Python constructors remain available; the CLI uses discovery.
+Connections now discover registered sessions first, without a mode switch. A
+successful discovery with no project candidates permits fallback to an existing `VB_REMOTE_PORT` and
+compatible old fixed-port daemon using the existing authentication policy.
+Existing users do not need a compulsory daemon/configuration migration.
+Registry errors and authentication failures never trigger fallback.
 
-## Upgrade an existing deployment
+CLI `--port` remains exact. `VB_REMOTE_PORT` prefers a matching record but permits
+a unique new registered session when the old port has no record. Ambiguity needs
+explicit choice; a saved registered identity cannot silently downgrade to a
+legacy endpoint. See the [proposed design](../adr/0004-instance-discovery.md).
 
-1. Use the original `.env` and profile to inspect the old tunnel with
-   `virtuoso-bridge status --inspect-state`. Stop it with `stop --port PORT`.
-   If its process identity cannot be proven, follow the exact-process
-   [legacy recovery procedure](../../skills/virtuoso/references/connection.md#legacy-tunnel-recovery).
-   Deleting JSON alone does not stop SSH or release a listening port.
-2. Remove an obsolete `VB_REMOTE_PORT` deliberately if automatic selection is
-   wanted. A retained value is still an exact selector, not an allocation request.
-   Keep valid private scratch roots and intentional selectors. Clear any saved
-   allocation requests separately using the registry helper's explicit configure
-   operation; ordinary start/list/status commands do not change those requests.
-3. Choose the new generated bootstrap or install a new protected shared bundle.
-   Generated account files are reused when identical. If they differ, inspect
-   the configuration and explicitly authorize replacement with
-   `start --replace-setup`; the old complete bundle is retained in a private
-   backup. The client never overwrites `VB_DAEMON_SETUP` installations.
-4. Update each project's `.cdsinit` only where its setup path changed. In each
-   intended **idle** CIW, call `RBStop()`, wait for that tracked child to exit,
-   then load the intended new `virtuoso_setup.il`. Updating files or client
-   configuration does not upgrade code already loaded by Virtuoso.
-5. Run `sessions --json`, select with `start --port PORT` when necessary, then
-   verify signed `status` and `eval 'getWorkingDir()'` before editing a design.
+## New sessions and scratch paths
 
-The default scratch root is the daemon account's passwd home under
-`~/.virtuoso-bridge`. Explicit private roots remain supported; old scratch data,
-durable jobs and other sessions are not moved or deleted. Shared setup uses
-installer `--scratch-root`, otherwise the daemon's `RB_SCRATCH_ROOT`, then its
-`VB_REMOTE_SCRATCH_ROOT`, then the default. It does not read the client's `.env`.
-Home quotas may warrant a different private root.
+New generated setup uses OS-assigned ports and private records. If no usable
+endpoint exists, `start` prints a setup instruction. Load it in the intended idle
+CIW and run `start` again. Later runs discover that session even with the old
+environment port still present. Client settings do not reload a CIW or rewrite
+`.cdsinit` automatically.
 
-## Command and lifecycle corrections
+The stock scratch parent is `/tmp`; existing workflow paths retain
+`virtuoso_bridge_<user>/<client>/<leaf>`. Default records/bootstrap live under
+private `/tmp/virtuoso_bridge_<user>/runs` and `daemon`. Explicit roots remain
+supported. Preview deployments using a home registry should keep that root
+explicit on both sides until an intentional move. Old artifacts are not moved
+or deleted; never chmod the shared parent.
 
-`sessions --json` produces machine-readable records. On a fresh deployment with
-no record, `start` prints the load instruction and exits nonzero without a usable
-tunnel: load the setup in the intended CIW and run `start` again.
+Bundles are reused only when inventory and bytes match. Differences require
+`start --replace-setup`, retaining the old bundle. Shared `VB_DAEMON_SETUP`
+installations are never overwritten. Automatic workers disable bytecode writes;
+inspect/replace old cache-bearing bundles. Replacement has a recoverable
+exchange gap, not uninterrupted availability for concurrent CIW loads.
 
-`restart` retains the selected CIW, schedules one bounded stop/wait/start, then
-authenticates the replacement record and reconnects to its endpoint. It restarts
-the loaded configuration; it does not deploy or load a new bundle. A busy bridge
-lane, changed CIW birth identity or mismatched exact selector prevents adoption.
-An uncertain restart is reconciled without resending the request.
+## Historical tunnel state and optional upgrades
 
-`RBStopAll()` is now a compatibility alias for this CIW's tracked-child stop.
-It no longer kills all processes under the account. Use the connection guide's
-verified orphan recovery procedure when the child is untracked.
+1. With the original `.env`/profile, run `virtuoso-bridge status --inspect-state`.
+   Same-owner historical non-secret 0755/0644 metadata is readable; writable,
+   foreign and special files remain untrusted.
+2. To stop, use **remote_port**. For `port=12345, remote_port=23456`, run
+   `virtuoso-bridge stop --port 23456`. Ordinary old SSH argv may require
+   [operator recovery](../../skills/virtuoso/references/connection.md#legacy-tunnel-recovery)
+   because inherited configuration cannot be proved from argv. Deleting JSON
+   alone never releases a listener.
+3. If choosing to upgrade, stage a new generated/versioned shared bootstrap.
+   In the intended idle CIW, stop the tracked child, wait for exit, then load
+   the intended new setup. Update `.cdsinit` only when deliberately changing
+   its path. Working old endpoints need no upgrade merely to continue use.
+4. List `sessions --json`, choose `start --port PORT` if ambiguous, then verify
+   signed `status`. Allocation requests are separate from selection; see the
+   [exact helper commands](../../skills/virtuoso/references/connection.md#selecting-a-running-instance).
 
-A fixed port selected by `RBSetPort(N)` remains discovery-managed and uses the
-mandatory per-UID credential. It is distinct from explicit legacy mode, whose
-generated setup sets `RB_AUTO_PORT=0` and can use `RB_TOKEN_PATH`. The signed
-protocol/authentication/full-record checks determine compatibility; the reported
-bundle build is informational. Current bundles advertise `instance-discovery-3`.
+## Other corrections and verification
 
-Local screenshots now resolve/create an absolute local scratch directory before
-calling SKILL and copying the image. Remote home expansion still happens on the
-remote host.
+Restart submits one bounded request and authenticates the replacement in the
+same CIW using loaded code. An uncertain result retains evidence and must not
+be replayed. Polling uses capped backoff. `RBStopAll()` now stops only this CIW's
+tracked child. An untracked daemon needs operator owner/birth/parent verification;
+the SSH tunnel procedure is not a daemon kill procedure.
+
+Windows stop handles confirmed exited-process races without swallowing denied
+or uncertain operations. Helper staging verifies directories/files and transfer
+results before execution. Local screenshots retain absolute path expansion.
+Session listings preserve printable Unicode while escaping terminal controls.
+
+Fresh Linux/native/Python 2.7 and isolated Cadence acceptance remains required
+for this revision. Historical runs are separate evidence. See
+[tests/README.md](../../tests/README.md); offline results do not prove electrical
+equivalence.

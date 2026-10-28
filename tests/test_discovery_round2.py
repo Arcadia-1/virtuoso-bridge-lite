@@ -27,7 +27,7 @@ def test_sessions_dispatch_lists_without_provisioning(monkeypatch, capsys, rows,
     client = tunnel.SSHClient("fixture", discover_instances=True)
     monkeypatch.setattr(cli, "_load_cli_env", lambda: None)
     monkeypatch.setattr(tunnel.SSHClient, "from_env", lambda **kw: client)
-    monkeypatch.setattr(client, "list_instances", lambda: rows)
+    monkeypatch.setattr(client, "list_instances", lambda **kw: rows)
     closed = []
     monkeypatch.setattr(client, "close", lambda: closed.append(True))
     for method in ("warm", "ensure_remote_setup", "ensure_daemon_token", "save_state"):
@@ -168,8 +168,8 @@ def restarting(monkeypatch):
     replacement = dict(row(65002), instance="a" * 32, daemon_pid=12)
     client.instance_record = original
     calls = []
-    monkeypatch.setattr(client, "ciw_process_identity", lambda r: "boot:birth")
-    monkeypatch.setattr(client, "list_instances", lambda: [original, row(65003, 20)] if not calls else [replacement, row(65003, 20)])
+    monkeypatch.setattr(client, "ciw_process_identity", lambda r, **kw: "boot:birth")
+    monkeypatch.setattr(client, "list_instances", lambda **kw: [original, row(65003, 20)] if not calls else [replacement, row(65003, 20)])
     monkeypatch.setattr(client, "read_daemon_token", lambda: "ab" * 32)
     monkeypatch.setattr(client, "verify_instance", lambda timeout: calls.append(("verify", client.remote_port)))
     published = []
@@ -204,7 +204,7 @@ def test_explicit_port_can_replace_a_different_still_live_saved_choice():
 def test_restart_never_relaxes_an_exact_selector(restarting):
     client, original, _, calls, published = restarting
     client._selected_port = original["port"]
-    with pytest.raises(InstanceSelectionError, match="exact VB_REMOTE_PORT"):
+    with pytest.raises(InstanceSelectionError, match="exact --port"):
         client.restart_instance(timeout=3)
     assert not published
     assert len([c for c in calls if c[0] == "request"]) == 1
@@ -213,7 +213,7 @@ def test_restart_never_relaxes_an_exact_selector(restarting):
 def test_restart_refuses_recycled_ciw_before_request(restarting, monkeypatch):
     client, _, _, calls, published = restarting
     identities = iter(["birth1", "birth2"])
-    monkeypatch.setattr(client, "ciw_process_identity", lambda r: next(identities))
+    monkeypatch.setattr(client, "ciw_process_identity", lambda r, **kw: next(identities))
     with pytest.raises(RuntimeError, match="identity changed"):
         client.restart_instance(timeout=3)
     assert not published and not any(c[0] == "request" for c in calls)
@@ -221,7 +221,7 @@ def test_restart_refuses_recycled_ciw_before_request(restarting, monkeypatch):
 
 def test_restart_timeout_does_not_replay_or_publish(restarting, monkeypatch):
     client, original, _, calls, published = restarting
-    monkeypatch.setattr(client, "list_instances", lambda: [original, row(65003, 20)])
+    monkeypatch.setattr(client, "list_instances", lambda **kw: [original, row(65003, 20)])
     with pytest.raises(RuntimeError, match="requested once"):
         client.restart_instance(timeout=0.1)
     assert not published
@@ -255,7 +255,7 @@ def test_no_record_status_explains_where_to_get_load_instruction(monkeypatch, ca
     client = tunnel.SSHClient("fixture", discover_instances=True)
     monkeypatch.setattr(cli, "_load_cli_env", lambda: None)
     monkeypatch.setattr(tunnel.SSHClient, "from_env", lambda **kw: client)
-    monkeypatch.setattr(client, "list_instances", lambda: [])
+    monkeypatch.setattr(client, "list_instances", lambda **kw: [])
     monkeypatch.setattr(tunnel.SSHClient, "running_targets", lambda: [])
     monkeypatch.setattr(cli, "_print_spectre_status", lambda *a: None)
     assert cli._print_status() == 1

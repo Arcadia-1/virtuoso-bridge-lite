@@ -395,8 +395,9 @@ class _Runner:
                 return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    def upload(self, local_path: Path, remote_path: str):
+    def upload(self, local_path: Path, remote_path: str, timeout=None):
         self.uploads.append((local_path, remote_path))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
 
 def test_x11_wrapper_lists_and_dismisses_explicit_window(monkeypatch) -> None:

@@ -88,6 +88,81 @@ def test_publication_lock_timeout_is_bounded(publication):
         os.close(fd)
 
 
+@pytest.mark.parametrize("kind", ["source", "cache", "directory", "symlink", "fifo"])
+def test_extra_members_refuse_reuse_and_are_retained_on_replacement(publication, kind):
+    module, path = publication
+    files = {"daemon.py": "pass"}
+    module.publish(str(path), files)
+    name = "json.py" if kind == "source" else "json.pyc" if kind == "cache" else "extra"
+    extra = path / name
+    if kind == "directory":
+        extra.mkdir()
+    elif kind == "symlink":
+        extra.symlink_to(path / "daemon.py")
+    elif kind == "fifo":
+        os.mkfifo(extra)
+    else:
+        extra.write_text("unexpected import")
+    with pytest.raises(RuntimeError, match="--replace-setup"):
+        module.publish(str(path), files)
+    result = module.publish(str(path), files, replace=True)
+    assert set(p.name for p in path.iterdir()) == set(files)
+    assert os.path.lexists(Path(result["backup"]) / name)
+
+
+def test_backup_failure_reports_committed_publication(publication, monkeypatch):
+    module, path = publication
+    module.publish(str(path), {"a": "old"})
+    rename = module.os.rename
+    def fail_backup(source, destination):
+        if "-recover-" in destination:
+            raise OSError("backup bookkeeping failed")
+        rename(source, destination)
+    monkeypatch.setattr(module.os, "rename", fail_backup)
+    result = module.publish(str(path), {"a": "new"}, replace=True)
+    assert (path / "a").read_text() == "new"
+    assert (Path(result["backup"]) / "a").read_text() == "old"
+    assert "published" in result["warnings"][0]
+
+
+def test_cleanup_failure_preserves_original_error_and_releases_lock(publication, monkeypatch):
+    module, path = publication
+    module.publish(str(path), {"a": "old"})
+    rename, unlink = module.os.rename, module.os.unlink
+    def fail_stage(source, destination):
+        if "-stage-" in source:
+            raise OSError("original publication failure")
+        rename(source, destination)
+    def fail_cleanup(name):
+        if "-stage-" in name:
+            raise OSError("cleanup failure")
+        unlink(name)
+    with monkeypatch.context() as patch:
+        patch.setattr(module.os, "rename", fail_stage)
+        patch.setattr(module.os, "unlink", fail_cleanup)
+        with pytest.raises(OSError, match="original publication failure"):
+            module.publish(str(path), {"a": "new"}, replace=True)
+    assert (path / "a").read_text() == "old"
+    assert module.publish(str(path), {"a": "old"}, timeout=0.1)["reused"]
+
+
+def test_post_commit_fsync_failure_reports_published_output(publication, monkeypatch):
+    module, path = publication
+    module.publish(str(path), {"a": "old"})
+    fsync = module.os.fsync
+    def fail_after_commit(descriptor):
+        if path.exists() and (path / "a").read_text() == "new":
+            raise OSError("durability failure")
+        fsync(descriptor)
+    with monkeypatch.context() as patch:
+        patch.setattr(module.os, "fsync", fail_after_commit)
+        with pytest.raises(RuntimeError, match="Bundle published.*durability"):
+            module.publish(str(path), {"a": "new"}, replace=True)
+    assert (path / "a").read_text() == "new"
+    assert (path.parent / ".daemon-recover" / "a").read_text() == "old"
+    assert module.publish(str(path), {"a": "new"}, timeout=0.1)["reused"]
+
+
 def test_symlink_member_never_followed_or_overwritten(publication):
     module, path = publication
     path.mkdir(mode=0o700)

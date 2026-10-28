@@ -76,6 +76,23 @@ paths with real file copies, build parity, private state reads and restart reque
 ordering. Its Linux registered-entrypoint test uses real temporary locked records.
 Mocked SKILL image output and restart replies are not native Cadence evidence.
 
+`test_discovery_compatibility.py` covers discovery-first use of an old configured
+port, automatic adoption with unchanged configuration, real loopback signed
+hello/authentication refusal, lazy Python connection, bounded restart
+reconciliation without replay, and Windows termination races. Its native POSIX
+metadata case is skipped on Windows. The default SSH adoption test captures
+argv from the real launcher: ordinary inherited SSH configuration is correctly
+refused, while separate restricted-command tests cover eligible adoption.
+
+`test_helper_staging.py` executes bounded Linux shells against real private,
+permissive, symlink and FIFO fixtures and checks failed uploads and changed
+cached content. `test_generated_bundle.py` also covers unexpected inventory,
+clean replacement, backup bookkeeping and cleanup errors. The native registry
+harness checks that read-only discovery leaves stale files intact; daemon-side
+cleanup is tested separately. Windows skips these Linux cases. Both new pytest
+suites are included in the Windows transport job; the full Linux jobs execute
+the native cases. A configured CI job is not evidence that it has passed.
+
 `VB_TEST_DAEMON_RESOURCES=/absolute/resources` selects alternate daemon resources
 for source checks that support it; `test_auto_port_state.py` reports the resolved
 path as the `daemon_resources` test property. Those checks only inspect source.
@@ -131,11 +148,22 @@ The offline generation tests do not substitute for it.
 The lifecycle suite also exercises CLI restart/reconnect with two CIWs in one
 working directory and a shared registry. Set
 `VB_TEST_LEGACY_RESOURCES=/absolute/pre-discovery/resources` to enable a full
-stop/wait/load/start/status upgrade in a separate fixture-owned CIW. Stage that
+old-config start/status/restart, then stop/wait/load/start/status transition in
+a separate fixture-owned CIW. The old port stays configured when the new
+registered session is adopted. Stage that
 baseline bundle from the reviewed Git revision; do not replace supplied user
 daemons to manufacture a migration test. Automatic/fixed-port discovery and legacy
 token modes need distinct verification. Preserve any original request evidence
 after uncertain execution and never retry a restart merely because its reply dropped.
+
+Before acceptance, obtain fresh site evidence for the legacy transition,
+two-CIW isolation, same-CIW restart/reload, fixed-port changes and malformed
+bind banners. Exercise historical state with a fixture-owned SSH forward:
+verify supported restricted adoption and the explicit operator-recovery refusal
+for ordinary inherited configuration. This SSH recovery check is a separate
+operator acceptance step, not automated by the Cadence lifecycle suite. Supply
+isolated CIWs and baseline resources as well as a reachable daemon. Missing
+prerequisites must be reported as skips, not successful live verification.
 
 The default run needs only plain Virtuoso and Spectre. Optional variables
 enable more checks:

@@ -32,6 +32,8 @@ class _FakeRunner:
 
     def run_command(self, command: str, timeout=None) -> CommandResult:
         self.commands.append(command)
+        if command == "whoami":
+            return CommandResult(0, "designer", "")
         if "import fcntl" in command and ".daemon-input-" in command:
             return CommandResult(returncode=0, stdout='{"reused": false}', stderr="")
         return CommandResult(returncode=0, stdout="/home/designer" if command == 'getent passwd "$(id -u)" | cut -d: -f6' else "", stderr="")
@@ -72,14 +74,14 @@ def test_remote_setup_path_and_port_are_profile_scoped(monkeypatch) -> None:
 
     client.ensure_remote_setup()
 
-    assert client.remote_work_dir == "/home/designer/.virtuoso-bridge/90590/virtuoso_bridge_t28_digital"
-    setup_path = "/home/designer/.virtuoso-bridge/90590/virtuoso_bridge_t28_digital/virtuoso_setup.il"
+    assert client.remote_work_dir == "/tmp/virtuoso_bridge_designer/90590/virtuoso_bridge_t28_digital"
+    setup_path = "/tmp/virtuoso_bridge_designer/90590/virtuoso_bridge_t28_digital/virtuoso_setup.il"
     setup = fake.uploads[setup_path]
     assert 'setShellEnvVar("RB_PORT" "65263")' in setup
     assert 'setShellEnvVar("RB_LISTEN_ALL" "0")' in setup
     assert setup.index("RB_LISTEN_ALL") < setup.index("\nload(")
     assert 'setShellEnvVar("RB_IDENTITY_PATH"' in setup
-    assert '/home/designer/.virtuoso-bridge/90590/virtuoso_bridge_t28_digital/ramic_bridge.il' in setup
+    assert '/tmp/virtuoso_bridge_designer/90590/virtuoso_bridge_t28_digital/ramic_bridge.il' in setup
 
 
 def test_automatic_setup_is_shared_across_profiles_and_clients(monkeypatch):
@@ -93,13 +95,13 @@ def test_automatic_setup_is_shared_across_profiles_and_clients(monkeypatch):
         client._ssh_runner = fake
         monkeypatch.setattr(client, "_detect_remote_python", lambda: ("python3", 3, 11))
         client.ensure_remote_setup()
-        path = "/home/designer/.virtuoso-bridge/daemon/virtuoso_setup.il"
+        path = "/tmp/virtuoso_bridge_designer/daemon/virtuoso_setup.il"
         assert client.setup_path == path
         payload = next(json.loads(content) for name, content in fake.uploads.items() if ".daemon-input-" in name)
         assert payload["destination"] == str(Path(path).parent).replace("\\", "/")
         assert payload["replace"] is False
         setup = payload["files"]["virtuoso_setup.il"]
-        assert 'setShellEnvVar("RB_SCRATCH_ROOT" "/home/designer/.virtuoso-bridge")' in setup
+        assert 'setShellEnvVar("RB_SCRATCH_ROOT" "/tmp/virtuoso_bridge_designer")' in setup
         assert 'setShellEnvVar("RB_PORT" "0")' in setup
 
 
@@ -294,7 +296,7 @@ def test_ensure_remote_setup_deploys_shifted_port(monkeypatch) -> None:
 
     client.ensure_remote_setup()
 
-    setup_path = "/home/designer/.virtuoso-bridge/90590/virtuoso_bridge_t28_digital/virtuoso_setup.il"
+    setup_path = "/tmp/virtuoso_bridge_designer/90590/virtuoso_bridge_t28_digital/virtuoso_setup.il"
     setup = fake.uploads[setup_path]
     # 65263 was FOREIGN -> setup must target the next free port, 65264.
     assert 'setShellEnvVar("RB_PORT" "65264")' in setup

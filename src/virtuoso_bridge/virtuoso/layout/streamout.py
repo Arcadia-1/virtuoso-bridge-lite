@@ -756,6 +756,7 @@ def _export_gds_remote(
                 "xstream",
                 client_id,
                 runner=runner,
+                timeout=budget.timeout(finalizing=False),
             ).replace("\\", "/")
         )
         if not owned_root.is_absolute() or ".." in owned_root.parts:

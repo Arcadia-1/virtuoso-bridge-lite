@@ -232,15 +232,25 @@ def test_full_upgrade_from_isolated_legacy_fixed_daemon(sessions, tmp_path, monk
     target = sessions("legacy-upgrade", resource_dir=legacy_resources)
     registry_root = target["work"] / "new-registry"
     config = tmp_path / "upgrade.env"
-    config.write_text("VB_REMOTE_HOST=localhost\nVB_REMOTE_SCRATCH_ROOT=" + str(registry_root) + "\n")
+    config.write_text("VB_REMOTE_HOST=localhost\nVB_REMOTE_SCRATCH_ROOT=" + str(registry_root)
+                      + "\nVB_REMOTE_PORT=" + str(target["client"].port) + "\n")
     monkeypatch.setattr(env, "_RUNTIME_ENV_FILE", config)
     monkeypatch.setenv("VB_STATE_DIR", str(tmp_path / "upgrade-state"))
     monkeypatch.setenv("VB_REMOTE_HOST", "localhost")
     monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", str(registry_root))
-    monkeypatch.delenv("VB_REMOTE_PORT", raising=False)
+    monkeypatch.setenv("VB_REMOTE_PORT", str(target["client"].port))
+    monkeypatch.setenv("VB_BRIDGE_TOKEN", str(target["work"] / "token"))
     transport = tunnel.SSHClient.from_env(keep_remote_files=True, read_selection=False)
     assert not transport.list_instances()
-    assert cli.main(["start", "--env", str(config)]) == 1
+    original_config = config.read_text()
+    assert cli.main(["start", "--env", str(config)]) == 0
+    assert cli.main(["status", "--env", str(config)]) == 0
+    assert cli.main(["restart", "--env", str(config)]) == 0
+    target["pids"].append(int(target["evaluate"]("RBLastPid")))
+    assert target["evaluate"]("6*7") == "42"
+    # Deliberate staging for a later registered session, not a requirement for
+    # connecting to the old endpoint. The old config remains untouched.
+    transport.ensure_local_setup()
     setup = transport.existing_setup_path()
     assert setup
     # Operator stop/wait/load, scheduled once in this fixture-owned CIW.
@@ -257,6 +267,7 @@ def test_full_upgrade_from_isolated_legacy_fixed_daemon(sessions, tmp_path, monk
     assert record["pid"] == target["virtuoso_pid"]
     assert cli.main(["start", "--env", str(config)]) == 0
     assert cli.main(["status", "--env", str(config)]) == 0
+    assert config.read_text() == original_config
     connected = tunnel.SSHClient.from_env(keep_remote_files=True)
     connected.verify_instance()
     connected.stop()

@@ -56,7 +56,8 @@ def test_legacy_env_port_selects_and_scopes_saved_state(tmp_path, monkeypatch):
     monkeypatch.setenv("VB_REMOTE_HOST", "localhost")
     monkeypatch.setenv("VB_REMOTE_PORT", "61234")
     client = SSHClient.from_env()
-    assert client._selected_port == 61234
+    assert client._legacy_port == 61234
+    assert client._selected_port is None
     first = tunnel._selection_file()
     monkeypatch.setenv("VB_REMOTE_PORT", "61235")
     assert tunnel._selection_file() != first
@@ -90,15 +91,15 @@ def test_missing_selected_port_never_writes_allocation_request(monkeypatch):
                        shared_setup="/opt/bridge/virtuoso_setup.il")
     commands = []
     class Runner:
-        def run_command(self, command):
+        def run_command(self, command, **kwargs):
             commands.append(shlex.split(command))
             return CommandResult(0, "[]", "")
     client._ssh_runner = Runner()
-    monkeypatch.setattr(client, "_detect_remote_python", lambda *args: ("python3", 3, 9))
-    monkeypatch.setattr(tunnel, "remote_scratch_root", lambda *args: "/scratch with spaces")
+    monkeypatch.setattr(client, "_detect_remote_python", lambda *args, **kwargs: ("python3", 3, 9))
+    monkeypatch.setattr(tunnel, "instance_scratch_root", lambda *args, **kw: "/scratch with spaces")
     with pytest.raises(InstanceSelectionError, match="VB_REMOTE_PORT 61234"):
         client.discover_instance()
-    assert commands[0][3:] == ["--scratch-root", "/scratch with spaces"]
+    assert commands[0][3:] == ["--scratch-root", "/scratch with spaces", "--read-only"]
 
 
 def test_signed_endpoint_must_match_selected_record():
@@ -231,10 +232,10 @@ def test_discovery_does_not_deploy_or_write_port_config(monkeypatch):
     client = SSHClient(remote_host="host", remote_user="test-user", discover_instances=True)
     class Runner:
         _vb_remote_home = "/home/fixture"
-        def run_command(self, command):
+        def run_command(self, command, **kwargs):
             return CommandResult(0, json.dumps([row()]), "")
     client._ssh_runner = Runner()
-    monkeypatch.setattr(client, "_detect_remote_python", lambda *args: ("python3", 3, 9))
+    monkeypatch.setattr(client, "_detect_remote_python", lambda *args, **kwargs: ("python3", 3, 9))
     monkeypatch.setattr(client, "refresh_daemon_token", lambda: "ab" * 32)
     monkeypatch.setattr(client, "ensure_remote_setup", lambda: pytest.fail("unnecessary deployment"))
     client.discover_instance()
@@ -414,14 +415,14 @@ def test_credential_symlink_is_rejected_without_modifying_target(tmp_path):
 def test_status_discovery_does_not_write_fixed_port_requests(monkeypatch):
     from virtuoso_bridge.transport.ssh import CommandResult
     client = SSHClient(remote_host="host", selected_port=61234)
-    monkeypatch.setattr(client, "_instance_root", lambda: "/private/fixture")
+    monkeypatch.setattr(client, "_instance_root", lambda **kw: "/private/fixture")
     commands = []
     class Runner:
-        def run_command(self, command):
+        def run_command(self, command, **kwargs):
             commands.append(command)
             return CommandResult(0, "[]", "")
     client._ssh_runner = Runner()
-    monkeypatch.setattr(client, "_detect_remote_python", lambda *a: ("python3", 3, 9))
+    monkeypatch.setattr(client, "_detect_remote_python", lambda *a, **kw: ("python3", 3, 9))
     assert client.list_instances() == []
     import shlex
     args = shlex.split(commands[0])[3:]

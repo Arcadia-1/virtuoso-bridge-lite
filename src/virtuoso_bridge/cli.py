@@ -363,6 +363,14 @@ def _stop_one() -> int:
 
     label = f" [{profile}]" if profile else ""
     if not SSHClient.is_running(profile):
+        retained = SSHClient.inspect_states(profile)
+        errors = [item for item in retained if item.get("error")]
+        if errors:
+            print("Cannot establish tunnel state; inspect these retained files:")
+            for item in errors:
+                print(f"  {item['path']!r}: {item['error']}")
+            print("Use status --inspect-state and the connection guide's legacy tunnel recovery procedure.")
+            return 1
         targets = SSHClient.running_targets()
         if targets:
             print("No managed tunnel matches this selection. Other tunnels are retained:")
@@ -374,9 +382,12 @@ def _stop_one() -> int:
         return 0
 
     ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
-    ssh.stop()
-    print(f"Tunnel stopped{label}.")
-    return 0
+    try:
+        ssh.stop(verify_legacy=True)
+        print(f"Tunnel stopped{label}.")
+        return 0
+    finally:
+        ssh.close()
 
 
 def cli_stop(selected_port: int | None = None) -> int:
@@ -502,6 +513,24 @@ def _print_status(selected_port: int | None = None) -> int:
         # and still satisfies the configured directory and port selectors.
         record = ssh.select_record(rows)
         if record is None:
+            if ssh.use_legacy_endpoint(rows):
+                state = SSHClient.read_state(profile, target=ssh.target)
+                if not SSHClient._state_is_live(state):
+                    print("[daemon] No saved connection to the configured legacy endpoint. Run virtuoso-bridge start.")
+                    _print_start_load_line(state)
+                    return 1
+                token = ssh.read_daemon_token()
+                client = VirtuosoClient(host="127.0.0.1", port=state["port"], timeout=5,
+                                        tunnel=ssh, daemon_token=token)
+                client.use_current_selection()
+                caps = client._ensure_daemon_capabilities(time.monotonic() + 5)
+                print(f"[daemon] OK - configured legacy endpoint {ssh.daemon_host}:{ssh.remote_port}")
+                print(f"  authentication: {caps.get('auth')}; Virtuoso PID: {caps.get('virtuoso_pid')}")
+                identity = ssh.read_daemon_identity()
+                if identity:
+                    print(f"  banner host: {identity.get('host')!r}; bind: {identity.get('bind')!r}")
+                _print_start_load_line(state)
+                return 0
             print("\n[daemon] No matching live instance. Run virtuoso-bridge start for the load instruction.")
             return 1
 
@@ -2472,10 +2501,16 @@ def _run_command(parser: argparse.ArgumentParser, args: argparse.Namespace) -> i
             profile=getattr(args, "profile", None),
             json_output=getattr(args, "json", False),
         ),
-        "start": lambda: cli_start(selected_port, replace_setup=True) if getattr(args, "replace_setup", False) else cli_start(selected_port),
+        "start": lambda: (
+            cli_start(selected_port, replace_setup=True)
+            if getattr(args, "replace_setup", False) else cli_start(selected_port)
+        ),
         "stop": lambda: cli_stop(selected_port),
         "restart": cli_restart,
-        "status": lambda: cli_status(selected_port, inspect_state=True) if getattr(args, "inspect_state", False) else cli_status(selected_port),
+        "status": lambda: (
+            cli_status(selected_port, inspect_state=True)
+            if getattr(args, "inspect_state", False) else cli_status(selected_port)
+        ),
         "sessions": lambda: cli_sessions(getattr(args, "json", False)),
         "doctor": lambda: cli_doctor(json_output=getattr(args, "json", False)),
         "license": cli_license,

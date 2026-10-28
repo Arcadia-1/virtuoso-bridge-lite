@@ -7,13 +7,13 @@ from virtuoso_bridge.transport.remote_paths import (
 )
 
 
-def test_default_bridge_dir_uses_private_home_without_username_nesting(monkeypatch) -> None:
+def test_default_bridge_dir_preserves_legacy_username_layout(monkeypatch) -> None:
     monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
     monkeypatch.delenv("VB_REMOTE_SCRATCH_ROOT", raising=False)
 
     assert (
         default_virtuoso_bridge_dir("designer", "virtuoso_bridge_t28_io")
-        == "~/.virtuoso-bridge/virtuoso_bridge_t28_io"
+        == "/tmp/virtuoso_bridge_designer/virtuoso_bridge_t28_io"
     )
 
 
@@ -23,7 +23,7 @@ def test_default_bridge_dir_can_be_client_scoped(monkeypatch) -> None:
 
     assert (
         default_virtuoso_bridge_dir("designer", "virtuoso_bridge_t28_io", "90590")
-        == "~/.virtuoso-bridge/90590/virtuoso_bridge_t28_io"
+        == "/tmp/virtuoso_bridge_designer/90590/virtuoso_bridge_t28_io"
     )
 
 
@@ -33,7 +33,7 @@ def test_default_spectre_dir_can_be_client_scoped(monkeypatch) -> None:
 
     assert (
         default_remote_spectre_work_dir("designer", "lab/pc:1")
-        == "~/.virtuoso-bridge/lab_pc_1/virtuoso_bridge_spectre"
+        == "/tmp/virtuoso_bridge_designer/lab_pc_1/virtuoso_bridge_spectre"
     )
 
 
@@ -50,7 +50,7 @@ def test_home_scratch_root_scopes_bridge_and_spectre_without_new_host_settings(m
     monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
     monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", "/home/designer/.virtuoso-bridge/")
 
-    root = "/home/designer/.virtuoso-bridge/laptop"
+    root = "/home/designer/.virtuoso-bridge/virtuoso_bridge_designer/laptop"
     assert default_virtuoso_bridge_dir("designer", "virtuoso_bridge", "laptop") == (
         root + "/virtuoso_bridge"
     )
@@ -63,7 +63,7 @@ def test_home_is_resolved_on_remote_host_once(monkeypatch):
     from types import SimpleNamespace
     from virtuoso_bridge.transport.remote_paths import remote_scratch_root
     monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
-    monkeypatch.delenv("VB_REMOTE_SCRATCH_ROOT", raising=False)
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", "~/.virtuoso-bridge")
     calls = []
     def run(command, timeout):
         calls.append(command)
@@ -71,7 +71,7 @@ def test_home_is_resolved_on_remote_host_once(monkeypatch):
     runner = SimpleNamespace(run_command=run)
     assert remote_scratch_root(runner) == "/home/remote-user/.virtuoso-bridge"
     assert default_virtuoso_bridge_dir("ignored", "daemon", runner=runner) == (
-        "/home/remote-user/.virtuoso-bridge/daemon")
+        "/home/remote-user/.virtuoso-bridge/virtuoso_bridge_ignored/daemon")
     assert calls == ['getent passwd "$(id -u)" | cut -d: -f6']
 
 
@@ -81,6 +81,7 @@ def test_invalid_home_or_relative_root_is_rejected(monkeypatch):
     from virtuoso_bridge.transport.remote_paths import remote_scratch_root
     monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
     monkeypatch.delenv("VB_REMOTE_SCRATCH_ROOT", raising=False)
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", "~/.virtuoso-bridge")
     runner = SimpleNamespace(run_command=lambda *a, **kw: SimpleNamespace(returncode=0, stdout=""))
     with pytest.raises(ValueError, match="remote account home"):
         remote_scratch_root(runner)

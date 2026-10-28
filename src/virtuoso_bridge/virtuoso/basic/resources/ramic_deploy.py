@@ -83,6 +83,7 @@ def publish(destination, files, replace=False, timeout=10):
         existed = os.path.lexists(destination)
         if existed:
             _private_directory(destination)
+            differences.extend(sorted(set(os.listdir(destination)) - set(files)))
             for name, content in sorted(files.items()):
                 expected = content.encode("utf-8")
                 try:
@@ -99,7 +100,7 @@ def publish(destination, files, replace=False, timeout=10):
                 raise RuntimeError("Generated account bundle differs at %s (%s). "
                                    "Inspect the configuration; use start --replace-setup explicitly, "
                                    "or install a new versioned shared bundle. No bundle file was changed."
-                                   % (destination, ", ".join(differences)))
+                                   % (repr(destination), ", ".join(repr(name) for name in differences)))
         stage = tempfile.mkdtemp(prefix="." + leaf + "-stage-", dir=root)
         for name, content in sorted(files.items()):
             path = os.path.join(stage, name)
@@ -116,32 +117,52 @@ def publish(destination, files, replace=False, timeout=10):
         if existed:
             os.rename(destination, recovery)
             os.fsync(directory_fd)
+        committed = False
         try:
             os.rename(stage, destination)
             stage = None
+            committed = True
             os.fsync(directory_fd)
         except BaseException:
+            if committed:
+                raise RuntimeError("Bundle published at %r but durability could not be confirmed; "
+                                   "inspect active and recovery paths before retrying" % destination)
             if existed and not os.path.lexists(destination):
                 os.rename(recovery, destination)
                 os.fsync(directory_fd)
             raise
         backup = None
+        warnings = []
         if existed:
-            backup = recovery + "-" + uuid.uuid4().hex
-            os.rename(recovery, backup)
-            os.fsync(directory_fd)
-        return {"reused": False, "path": destination, "backup": backup, "changed": differences}
+            backup = recovery
+            try:
+                retained = recovery + "-" + uuid.uuid4().hex
+                os.rename(recovery, retained)
+                backup = retained
+                os.fsync(directory_fd)
+            except OSError as exc:
+                warnings.append("Bundle published; inspect retained backup %r: %s" % (backup, exc))
+        return {"reused": False, "path": destination, "backup": backup,
+                "changed": differences, "warnings": warnings}
     finally:
-        if stage is not None:
-            # Only unpublished files created by this invocation are removed.
-            for name in files:
-                path = os.path.join(stage, name)
-                if os.path.lexists(path):
-                    os.unlink(path)
-            os.rmdir(stage)
-        if directory_fd is not None:
-            os.close(directory_fd)
-        os.close(fd)
+        try:
+            if stage is not None:
+                # Preserve the primary error and leave failed cleanup inspectable.
+                try:
+                    for name in files:
+                        path = os.path.join(stage, name)
+                        if os.path.lexists(path):
+                            os.unlink(path)
+                    os.rmdir(stage)
+                except OSError as exc:
+                    sys.stderr.write("Unpublished stage retained at %r: %s\n" % (stage, exc))
+        finally:
+            for descriptor in (directory_fd, fd):
+                if descriptor is not None:
+                    try:
+                        os.close(descriptor)
+                    except OSError as exc:
+                        sys.stderr.write("Deployment descriptor cleanup failed: %s\n" % exc)
 
 
 if __name__ == "__main__":

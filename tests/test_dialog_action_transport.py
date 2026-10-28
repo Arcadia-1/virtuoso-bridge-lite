@@ -19,7 +19,7 @@ class Runner:
 
     def run_command(self, command, timeout=None):
         self.commands.append((command, timeout))
-        if command.startswith("umask 077; mkdir"):
+        if command.startswith(("umask 077", "rm -f")):
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         if "CMD:python" in command:
             return SimpleNamespace(returncode=0, stdout="CMD:python\n", stderr="")
@@ -38,6 +38,7 @@ def setup(monkeypatch, tmp_path):
     monkeypatch.setattr(x11, "_HELPER_SCRIPT", old)
     monkeypatch.setattr(x11, "default_virtuoso_bridge_dir", lambda *a, **kw: "/scratch/space name")
     monkeypatch.setattr(x11, "resolve_client_id", lambda *a: "scope")
+    monkeypatch.setattr(x11, "remote_scratch_root", lambda *a: "/scratch")
     return Runner(), new
 
 

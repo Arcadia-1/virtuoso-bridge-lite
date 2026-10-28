@@ -36,6 +36,7 @@ def test_stop_verified_adopted_pid_and_clear_identity(monkeypatch):
     runner._saved_tunnel_identity = "birth1"
     identities = iter(["birth1", None])
     monkeypatch.setattr(ssh, "_process_identity", lambda pid: next(identities))
+    monkeypatch.setattr(ssh, "_process_confirmed_gone", lambda pid: True)
     calls = []
     monkeypatch.setattr(ssh.os, "kill", lambda *a: calls.append(a))
     runner.stop_port_forward()
@@ -56,6 +57,7 @@ def test_stop_waits_for_adopted_pid_instead_of_an_old_exited_child(monkeypatch):
     runner._saved_tunnel_identity = "birth1"
     identities = iter(["birth1", None])
     monkeypatch.setattr(ssh, "_process_identity", lambda pid: next(identities))
+    monkeypatch.setattr(ssh, "_process_confirmed_gone", lambda pid: True)
     signals = []
     monkeypatch.setattr(ssh.os, "kill", lambda *args: signals.append(args))
     runner.stop_port_forward()
@@ -271,6 +273,12 @@ def test_windows_exited_process_is_not_alive(monkeypatch):
         proc.wait(timeout=5)
         monkeypatch.setattr(os, "kill", _forbid_signals)
         assert not tunnel._pid_is_alive(proc.pid)
+        assert ssh._process_confirmed_gone(proc.pid)
+        runner = ssh.SSHRunner("fixture")
+        runner._tunnel_proc = proc
+        runner._tunnel_pid = proc.pid
+        runner.stop_port_forward()
+        assert runner.tunnel_pid is None
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires native POSIX signal-zero semantics")

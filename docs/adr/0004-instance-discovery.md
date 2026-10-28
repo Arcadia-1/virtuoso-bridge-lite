@@ -1,140 +1,128 @@
-# Discover Virtuoso instances through private records
+# Discover Virtuoso instances with fixed port compatibility
 
-- Status: Accepted
-- Date: 2026-10-27
+- Status: Proposed; local implementation authorized, upstream design review pending
+- Date: 2026-10-29
 - Related: Issue #265
 
-This is a narrow exception to [ADR 0003](0003-lite-default-optional-advanced-config.md):
-automatic discovery requires an upgraded daemon. Profiles, multiple hosts and
-process metadata remain optional; explicit legacy constructors remain available.
+## Compatibility contract
 
-## Context
+[ADR 0003](0003-lite-default-optional-advanced-config.md) promises no mandatory
+migration of existing one-host configuration and Python calls. Connections read
+the registry first, with no discovery gate. A successful empty result may fall
+back to an existing configured `VB_REMOTE_PORT`, using the existing authentication
+policy. Missing records alone do not require upgrading a working old daemon.
 
-Several CIWs may share one Linux account. A preselected fixed port can collide
-or address the wrong CIW. Configuration metadata does not establish which
-instance a TCP endpoint serves. The accepted discovery default needs signed
-identity verification and a deliberate upgrade path for older daemons.
+The earlier default-off recommendation is superseded locally by the user's
+explicit discovery-first compatibility instruction. This authorization does not
+establish upstream design acceptance.
 
-## Decision
+## Records and selection
 
-### Records and selection
+A **record** is private candidate metadata published by a running daemon. A
+**selection** is a saved choice of an authenticated record. **Registered sessions**
+use the new publication scheme; older fixed-port sessions can serve authenticated
+requests without records.
 
-Daemons bind `127.0.0.1:0`, read `getsockname()` and retain the socket. The explicit
-listen-all option remains. A locked 0600 record in private 0700 `<root>/runs`
-contains port, Virtuoso PID, daemon PID, UID, user, working directory and random
-instance ID. Nonblocking locks and inode checks clean stale records and abandoned
-temporary files while preserving active writers. Linux directory descriptors and
-`/proc/self/fd` resist path replacement.
+New generated bootstraps bind `127.0.0.1:0`, read `getsockname()` and hold the socket
+before publishing a locked 0600 record under a private 0700 `runs/`. Metadata
+contains port, Virtuoso PID, daemon PID, UID, user, work directory and random
+instance ID. The explicit listen-all option remains. Locks establish liveness;
+opened descriptors and inodes anchor filesystem checks.
 
-`start` filters by account, optional absolute `VB_REMOTE_WORK_DIR`, and exact
-port. One match connects; ambiguity lists candidates and requires `--port`.
-`--port` overrides `VB_REMOTE_PORT`. Neither selector writes or clears allocation
-requests. Explicit helper `--configure` operations control durable requests;
-directory scope overrides account scope. `RBSetPort(N)` changes an idle CIW's
-child; `RBSetPort(0)` consults requests then defaults to bind zero. The
-[connection guide](../../skills/virtuoso/references/connection.md#selecting-a-running-instance)
-documents clearing both scopes of pins left by earlier clients.
+Client discovery reads without creating directories, provisioning credentials,
+writing allocation requests or removing stale files. Daemon publication retains
+its own stale-record cleanup. CLI `--port` is exact. `VB_REMOTE_PORT` prefers a
+matching record, otherwise permitting a unique registered session under the
+configured account/directory. An unchanged old configuration can therefore adopt
+a new registered session on later runs. A live saved choice is retained;
+ambiguity requires explicit selection.
 
-### Trust and connection state
+Fallback requires a successful discovery with no project candidates, a configured old port, no saved
+registered identity and no exact CLI selector. Registry errors, ambiguity, exact
+selector misses and authentication failures never cause fallback. A registered
+peer absent from discovery cannot be accepted as a legacy endpoint. A vanished
+saved record can follow a replacement only within an explicit project constraint.
+Uncertain application work is never replayed.
 
-Records are candidates, not proof of identity. Mandatory per-UID HMAC and signed
-comparison of the complete record precede application work. Automatic mode ignores
-token-path and unauthenticated overrides. One UID is one trust boundary.
-Selection and state are validated, atomically published and configuration scoped.
-Forward reuse requires matching endpoints; stopping an adopted PID also requires
-matching SSH executable and process birth identity. `status --inspect-state`
-reports retained local paths/endpoints without discovery or a daemon. State
-readers reject unsafe POSIX ownership, modes and special files. Windows ACLs,
-not POSIX mode bits, protect local state.
+## Authentication and state
 
-Before application transmission, a fresh client checks its saved record. Only an
-explicit project constraint with one replacement permits reconciliation after
-that record vanishes. Exact ports remain exact. Ambiguity, identity mismatch and
-authentication failure stop the connection; uncertain application work is never
-replayed.
+Record files are candidates, not authentication. Registered connections require
+the per-UID credential and a signed handshake matching the full record. One UID
+is one trust boundary; filters prevent mistakes rather than isolate hostile
+same-UID processes. Registered sessions ignore token-path and unauthenticated
+overrides. Legacy connections retain the existing token and identity checks.
 
-`sessions [--json]` lists without selecting, provisioning or changing allocation.
-`status [--port PORT]` reads existing credentials, checks signed identity without
-SKILL, reports roles/endpoints/retained tunnels, and attempts independent Spectre
-diagnostics after bridge failure. An unverified bridge remains nonzero. Automatic
-mode does not generate the legacy CIW banner identity file.
-`stop --port PORT` targets a retained managed tunnel through its original
-configuration, without selecting another CIW or sending SKILL.
+Current state and selections are published atomically with private permissions.
+Historical non-secret connection metadata may be read from same-owner 0755
+application directories/0644 regular files, provided neither is writable by
+others. New identity/selection fields do not receive this exception. Type,
+owner, size, inode and schema checks remain. Windows relies on user ACLs.
 
-`restart` preserves the authenticated selected CIW and its Linux process birth
-identity. It schedules one bounded stop/wait/start, discovers only that CIW's
-replacement child, authenticates the new full record and republishes state.
-It does not load newly deployed code. Exact selectors remain exact; uncertain
-requests are reconciled without replay. A listening forward is not proof that
-the new daemon is reachable.
+Metadata alone never authorizes a signal. The saved process identity must match.
+Legacy automatic adoption is limited to independently proven standalone forwards;
+ordinary historical SSH argv may inherit additional work from configuration and
+needs [operator recovery](../../skills/virtuoso/references/connection.md#legacy-tunnel-recovery).
+Untrusted retained state is reported instead of a successful no-op stop.
+`stop --port` names the retained **remote_port**, not the local listener.
+`status --inspect-state` requires no daemon.
 
-### Bootstrap and scratch roots
+## Paths and publication
 
-The default root and explicit `~/` use the daemon account's passwd home. Generated
-setup is `<root>/daemon/virtuoso_setup.il`; `VB_DAEMON_SETUP` selects an existing
-protected shared installation. Shared setup uses the installer's explicit root,
-otherwise daemon `RB_SCRATCH_ROOT`, then daemon `VB_REMOTE_SCRATCH_ROOT`, then the
-account default. Client `.env` changes do not alter a loaded CIW. Both sides must
-agree on the root. Older artifacts are neither moved nor deleted. Live verification
-confirmed a deployed daemon holding its record in the older
-`<root>/virtuoso_bridge_<user>/runs` directory. Discovery therefore retains the
-anchored, private-owner scan of that layout alongside `<root>/runs` until an
-explicit upgrade. Repository commit history alone did not establish deployment.
+General scratch retains the stock `/tmp` parent and
+`virtuoso_bridge_<user>/<client>/<leaf>` layout. Default records and generated
+bootstrap use the private `/tmp/virtuoso_bridge_<user>` child, with `runs/` and
+`daemon/`. Explicit private discovery roots remain supported; alternate workflow
+parents retain username/client nesting. Explicit `~/` expands in the target
+account's passwd home. Never chmod `/tmp` or an account home.
 
-Generated account bundles are compared before mutation under a bounded lock.
-Identical files are reused; differing files require explicit `start --replace-setup`.
-The complete new bundle is staged before publication, and the prior directory
-is retained privately on replacement. Directory renames have a short exchange
-gap; a durable recovery directory permits restoration after interruption.
-`stop()` never removes discovery-mode shared code. This policy also applies
-to local generated bundles. A no-record `start` prints the load instruction
-and exits nonzero; the user loads it in the intended idle CIW and runs `start`
-again. It does not silently upgrade another running daemon.
+Generated setup embeds the daemon registry root. Deployment/GUI hosts must see
+the bundle. Shared setup uses installer `--scratch-root`, otherwise daemon
+`RB_SCRATCH_ROOT`, then `VB_REMOTE_SCRATCH_ROOT`, then the default private child.
+Client settings do not change a loaded CIW. The older nested registry layout
+remains readable. No existing job or record is moved automatically.
 
-Shared installation is Linux-only, exclusive and versioned. Every ancestor must
-be a real directory owned by root or the trusted installing UID, without group
-or other write permission. Completed files are published together. Loading
-accounts trust the installer; its ownership need not be root ownership.
+A working old endpoint is connected without rewriting its setup. New generated
+setup uses registration: load the printed path in the intended idle CIW and run
+`start` again. Existing `.cdsinit` files are not silently changed. Differing
+generated bundles need `--replace-setup`; `VB_DAEMON_SETUP` installations require
+a new protected version rather than in-place client replacement.
 
-### Compatibility and lifecycle
+Reuse checks both inventory and bytes. Unexpected files, including old bytecode
+caches, require inspection/replacement. Automatic worker launches disable bytecode
+writes. Replacement stages a clean bundle and retains its predecessor. The
+two-rename exchange has a documented gap; recovery can restore a complete old
+bundle on the next publication, but does not provide uninterrupted availability.
+Post-commit errors identify committed output and backup paths. Cleanup preserves
+primary errors and closes descriptors. Retained backups are not automatically
+pruned; inspect exact paths and establish that no CIW/job uses them before removal.
+Stop never deletes shared code.
 
-Signed capabilities report the build. Missing metadata means unknown; differing
-builds produce informational guidance. Actual rejection checks protocol version,
-authentication and signed record identity; build equality is not a gate.
-Upgrade by stopping the intended idle CIW's tracked child, waiting for exit, then
-loading the intended new bootstrap. Never replace a shared daemon automatically.
-`RBStopAll` is tracked-child-only. Monitor changes use bounded stop/wait/start;
-malformed bind banners leave the runtime port unchanged.
+## Lifecycle and diagnostics
 
-`RBSetPort(N)` keeps the instance discovery-managed even when N is nonzero;
-its per-UID token remains mandatory. Explicit legacy setup sets `RB_AUTO_PORT=0`
-and retains legacy token-path behavior. Allocation and authentication mode
-must not be conflated by clearing the discovery flag on every fixed-port request.
+Registered restart authenticates the selected CIW, verifies its Linux birth
+identity, sends one bounded timer request and authenticates the replacement.
+Legacy restart uses old RBStop/RBStart with a bounded exit wait and verifies the
+same CIW birth/PID and a changed authenticated daemon identity. Neither reloads
+newly staged code or retries an uncertain request. Polling uses bounded backoff;
+busy lanes and identity changes refuse restart.
 
-## Alternatives
+`RBStopAll()` remains tracked-child-only, an explicitly reviewed safety change.
+An untracked daemon needs operator identity investigation, not a broad process
+sweep. `RBSetPort(N)` in the new loader remains registered even for fixed ports;
+explicit legacy setup is a distinct credential mode.
 
-Fixed-port defaults avoid an upgrade but retain collision and wrong-instance
-risks. Mandatory profiles conflict with Lite. Extra UUID/PID selectors add surface
-without fixing the immediate defects. Disabling authentication or trusting record
-files alone is unsuitable on shared hosts.
+Status sends a signed handshake and reports roles/endpoints; legacy status also
+retains banner/load diagnostics. Independent Spectre diagnostics still run after
+bridge failure. Local discovery requires Linux; Windows/macOS clients use SSH
+to Linux. Build labels are informational; actual protocol/auth/record checks
+establish compatibility.
 
-## Consequences and verification
+## Verification
 
-Pre-discovery fixed-port daemons require one explicit upgrade for the CLI:
-the narrow ADR 0003 exception described in the
-[unreleased upgrade note](../releases/unreleased.md). Recover old tunnel state,
-remove obsolete exact selectors intentionally, update setup paths where needed,
-stop/wait/load in each intended idle CIW, then select and verify again. Existing
-valid roots/selectors remain supported. One host and one `.env` remain sufficient.
-Home quotas may motivate a private alternate root.
-Shared-account users can access each other's records and credentials. Local
-discovery requires Linux; Windows/macOS clients use SSH to Linux.
-
-The [native harness](../../tests/native_instance_registry.py) tests real sockets,
-locks, private tokens and signed protocol with Python 3 and actual Python 2.7
-workers in Linux CI. [Test instructions](../../tests/README.md#native-linux-instance-discovery-checks)
-require both Linux matrix jobs and the actual Python 2.7 worker lane before merge,
-and separate these tests from Cadence execution. `test_auto_port_state.py` is a
-source-shape guard, not SKILL behavior proof. Live restart/reload/monitor checks
-require an isolated CIW and must preserve other instances. Infrastructure results
-do not establish electrical equivalence.
+The [native harness](../../tests/native_instance_registry.py) exercises sockets,
+locks and publication with Python 3 and actual Python 2.7 workers.
+[Test instructions](../../tests/README.md#native-linux-instance-discovery-checks)
+separate hosted tests from isolated Cadence lifecycle acceptance. Historical site
+runs informed prior fixes; fresh evidence for this revision is still required.
+Source-shape tests do not establish SKILL behavior, and offline infrastructure
+results do not establish GUI-equivalent electrical results.

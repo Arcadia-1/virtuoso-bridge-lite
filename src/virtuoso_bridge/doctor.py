@@ -455,11 +455,15 @@ def check_daemon(ctx: DoctorContext) -> CheckResult:
     if automatic:
         from virtuoso_bridge.instance_discovery import validate_record
         try:
-            record = validate_record(ctx.ssh.instance_record)
-            if record not in ctx.ssh.list_instances():
-                raise ValueError("saved instance is no longer live")
-            if record["port"] != (ctx.state or {}).get("remote_port"):
-                raise ValueError("saved endpoint differs from selected instance")
+            rows = ctx.ssh.list_instances()
+            if ctx.ssh.use_legacy_endpoint(rows):
+                automatic = False
+            else:
+                record = validate_record(ctx.ssh.instance_record)
+                if record not in rows:
+                    raise ValueError("saved instance is no longer live")
+                if record["port"] != (ctx.state or {}).get("remote_port"):
+                    raise ValueError("saved endpoint differs from selected instance")
         except (ValueError, RuntimeError) as exc:
             ctx.skill_blocker = "selected instance is not verified"
             return CheckResult(name, FAIL, str(exc),
@@ -693,10 +697,15 @@ def check_scratch_dir(ctx: DoctorContext) -> CheckResult:
         from virtuoso_bridge.transport.tunnel import _profiled_bridge_leaf
         from virtuoso_bridge.transport.remote_paths import resolve_client_id
         automatic = getattr(ctx.ssh, "_discover_instances", False)
-        root = remote_scratch_root(runner)
-        work_dir = default_virtuoso_bridge_dir(
-            "", "daemon" if automatic else _profiled_bridge_leaf(ctx.profile),
-            None if automatic else resolve_client_id(ctx.profile), runner=runner)
+        if automatic:
+            from virtuoso_bridge.transport.remote_paths import instance_scratch_root
+            root = instance_scratch_root(runner)
+            work_dir = root + "/daemon"
+        else:
+            work_dir = default_virtuoso_bridge_dir(
+                ctx.roles.remote_user or "", _profiled_bridge_leaf(ctx.profile),
+                resolve_client_id(ctx.profile), runner=runner)
+            root = work_dir.rsplit("/", 2)[0]
         paths = [root] + private_dirs_below(root, work_dir)
         if not runner.transport_error:
             result = runner.run_command(scratch_inspection_script(paths))

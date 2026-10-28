@@ -236,7 +236,7 @@ def _context(monkeypatch, tmp_path, *, runner=None, client=None, running=True, s
     if deployed:
         path = scratch
         from virtuoso_bridge.transport.tunnel import _profiled_bridge_leaf
-        for part in ("client1", _profiled_bridge_leaf(profile)):
+        for part in ("virtuoso_bridge_designer", "client1", _profiled_bridge_leaf(profile)):
             path = path / part
             path.mkdir(mode=0o700, exist_ok=True)
             path.chmod(0o700)
@@ -545,7 +545,7 @@ def test_bind_falls_back_to_the_ciw_variable(monkeypatch, tmp_path):
 # -- 4. remote scratch directory ------------------------------------------------------
 
 def _chain(tmp_path):
-    top = tmp_path / "scratch"
+    top = tmp_path / "scratch" / "virtuoso_bridge_designer"
     return [top, top / "client1" / "virtuoso_bridge"]
 
 
@@ -572,8 +572,9 @@ def test_scratch_symlink_fails(monkeypatch, tmp_path):
     ctx, runner, _ = _context(monkeypatch, tmp_path, deployed=False)
     planted = tmp_path / "planted"
     planted.mkdir()
-    (tmp_path / "scratch" / "client1").mkdir(mode=0o700)
-    (tmp_path / "scratch" / "client1" / "virtuoso_bridge").symlink_to(planted)
+    _chain(tmp_path)[0].mkdir(mode=0o700)
+    _chain(tmp_path)[1].parent.mkdir(mode=0o700)
+    _chain(tmp_path)[1].symlink_to(planted)
 
     result = doctor.check_scratch_dir(_configured(ctx))
 

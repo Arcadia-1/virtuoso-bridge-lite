@@ -130,7 +130,7 @@ def test_build_report_preserves_compatible_old_daemons(caps, fragment):
 def test_shared_setup_no_match_does_not_deploy(monkeypatch):
     client = tunnel.SSHClient(remote_host="fixture", discover_instances=True, shared_setup="/opt/shared/setup.il")
     monkeypatch.setattr(client, "list_instances", lambda: [])
-    monkeypatch.setattr(client, "_instance_root", lambda: "/private")
+    monkeypatch.setattr(client, "_instance_root", lambda **kw: "/private")
     monkeypatch.setattr(client, "ensure_remote_setup", lambda: pytest.fail("deployment"))
     with pytest.raises(InstanceSelectionError, match='/opt/shared/setup.il'):
         client.discover_instance()
