@@ -102,12 +102,12 @@ def test_stopping_one_tunnel_leaves_the_other(state_root, monkeypatch, other):
 
 
 def test_an_old_state_file_is_used_only_for_its_own_host(state_root, monkeypatch):
-    state_root.mkdir(parents=True)
+    from virtuoso_bridge.transport.tunnel import _write_private_json
     legacy = state_root / "state.json"
-    legacy.write_text(json.dumps({
+    _write_private_json(legacy, {
         "mode": "remote", "port": 65100, "remote_port": 65100,
         "daemon_host": "eda-a", "tunnel_pid": 111,
-    }), encoding="utf-8")
+    })
 
     _configure(monkeypatch, *B)
     assert SSHClient.read_state() is None

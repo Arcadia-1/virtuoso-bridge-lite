@@ -4,7 +4,8 @@ from __future__ import annotations
 import posixpath
 import re
 
-DAEMON_BUILD = "instance-discovery-2"
+DAEMON_BUILD = "instance-discovery-3"
+INSTANCE_COLUMNS = "port / Virtuoso PID / working directory / instance"
 
 
 def compatibility_message(caps: dict) -> str:
@@ -71,7 +72,7 @@ def select_instance(rows: list[dict], work_dir: str = "", port: int | None = Non
     if len(selected) > 1:
         listing = format_instances(selected)
         raise InstanceSelectionError(
-            "Multiple Virtuoso instances match (port / Virtuoso PID / working directory / instance):\n"
+            "Multiple Virtuoso instances match (" + INSTANCE_COLUMNS + "):\n"
             + listing + "\nRun virtuoso-bridge start --port PORT to select exactly one instance."
         )
     if not selected and port is not None:

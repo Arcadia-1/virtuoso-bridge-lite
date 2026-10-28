@@ -122,7 +122,7 @@ def test_unique_project_replacement_is_verified_before_state_publication(monkeyp
 
 
 @pytest.mark.parametrize("caps,fragment", [({}, "unknown (older daemon)"), ({"build": "older"}, "differs"),
-                                          ({"build": "instance-discovery-2"}, "daemon build:")])
+                                          ({"build": "instance-discovery-3"}, "daemon build:")])
 def test_build_report_preserves_compatible_old_daemons(caps, fragment):
     assert fragment in compatibility_message(caps)
 
@@ -138,7 +138,7 @@ def test_shared_setup_no_match_does_not_deploy(monkeypatch):
 
 def test_explicit_stop_targets_saved_endpoint_without_discovery(monkeypatch):
     calls = []
-    client = SimpleNamespace(target="fixture@host:65002", stop=lambda: calls.append("stop"),
+    client = SimpleNamespace(target="fixture@host:65002", stop=lambda **kw: calls.append("stop") if kw == {"verify_legacy": True} else pytest.fail("legacy proof disabled"),
                              close=lambda: calls.append("close"))
     monkeypatch.setattr(cli, "_load_cli_env", lambda: None)
     monkeypatch.setattr(cli, "_get_cli_profile", lambda: "fixture")

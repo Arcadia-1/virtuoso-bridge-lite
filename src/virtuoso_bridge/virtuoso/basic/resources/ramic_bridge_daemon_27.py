@@ -353,7 +353,7 @@ def _capabilities_body():
             "proto": _PROTO,
             "auth": "on" if BRIDGE_TOKEN else "off",
             "daemon": "ramic-bridge",
-            "build": "instance-discovery-2",
+            "build": "instance-discovery-3",
             "virtuoso_pid": virtuoso_pid,
             "instance_record": _INSTANCE_LEASE.metadata if _INSTANCE_LEASE else None,
             "recoverable_requests": 1 if BRIDGE_TOKEN else 0,

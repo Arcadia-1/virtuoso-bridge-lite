@@ -254,7 +254,8 @@ scopes to restore automatic allocation. A requested port must bind or startup
 fails; existing daemons are unaffected. Earlier clients may have left these
 requests behind. Ordinary `start`, `status` and `sessions` never repair them.
 
-No match prints a `load("...")` instruction. In the intended idle CIW, stop its
+No match prints a `load("...")` instruction and exits nonzero without a usable
+tunnel. In the intended idle CIW, stop its
 old child with `RBStop()`, wait for exit, then load the new setup and rerun
 `start`. A legacy daemon without records needs this explicit upgrade. Missing
 build metadata means unknown compatibility; a different build is informational
@@ -263,7 +264,43 @@ unless a required protocol capability is absent. Never restart another CIW.
 then defaults to automatic allocation. Files uploaded to disk do not replace
 functions already loaded in Virtuoso.
 
-`RBStopAll()` now stops only this CIW's tracked child, like `RBStop()`.
+`restart` keeps the saved CIW choice, schedules one bounded stop/wait/start,
+then authenticates its replacement record and reconnects to the new endpoint.
+It restarts the loaded configuration; it does not load newly deployed files.
+A busy lane or mismatched exact selector prevents restart/adoption. After a
+timeout, inspect the original outcome and sessions before any explicit retry;
+an uncertain restart is never replayed.
+
+`RBSetPort(N)` keeps a fixed-port instance discovery-managed with mandatory
+per-UID authentication. It does not enable a custom `RB_TOKEN_PATH`. Explicit
+legacy generated setup sets `RB_AUTO_PORT=0` for legacy token behavior.
+
+`RBStopAll()` now stops only this CIW's tracked child, like `RBStop()`, rather
+than every daemon under the account. For an untracked child, inspect out of band
+and verify its owner, command, birth identity and exact parent/CIW association
+before an operator terminates it. A saved PID or port alone is insufficient.
+Preserve other CIWs and leave unknown-origin dialogs alone.
+
+### Two projects under the same account
+
+Keep separate `.env` files with the same host/user and each project's absolute
+`VB_REMOTE_WORK_DIR`. Named profiles (`-p NAME`, using case-sensitive
+`VB_*_NAME` suffixes) remain optional. Replace sample ports with listed records:
+
+```bash
+virtuoso-bridge sessions --json --env /local/project-a.env
+virtuoso-bridge start --port 65123 --env /local/project-a.env
+virtuoso-bridge status --env /local/project-a.env
+virtuoso-bridge eval 'getWorkingDir()' --env /local/project-a.env
+virtuoso-bridge start --port 65124 --env /local/project-b.env
+virtuoso-bridge status --env /local/project-b.env
+virtuoso-bridge eval 'getWorkingDir()' --env /local/project-b.env
+```
+
+Check the actual working directory before editing. Two CIWs may share one
+directory, so select an exact port when needed. One match connects automatically;
+without a project constraint on a shared UID, it could be a colleague's CIW.
+Project filters prevent mistakes; they are not a separate access boundary.
 
 ### Shared bootstrap
 
@@ -277,6 +314,22 @@ Use the printed load line in each project's `.cdsinit`. Set
 `VB_DAEMON_SETUP=/opt/virtuoso-bridge/v2/virtuoso_setup.il` on clients to use
 that same path in load instructions. Without it, the bridge generates a
 private bootstrap at `~/.virtuoso-bridge/daemon/virtuoso_setup.il`, shared across projects.
+
+Generated bundles are reused when identical and refused when differing, before
+any existing bundle file is changed. After reviewing the configuration, authorize
+replacement with `start --replace-setup` (Python API: `replace_setup=True`). This
+changes generated account code only and retains the previous complete bundle at
+the printed private backup path. A bounded lock serializes publishers; a staged
+directory and recovery name preserve the old bundle across an interrupted
+directory exchange. Running CIWs need an explicit load to change loaded code.
+This option never overwrites a shared installation: install a new versioned path.
+
+`start` prepares code only when no matching record exists. To stage a generated
+remote update while registered CIWs remain running, explicitly call
+`SSHClient.from_env(keep_remote_files=True, read_selection=False, replace_setup=True)`
+and that client's `ensure_remote_setup()`, then `close()` in `finally`.
+Alternatively install a new versioned shared bundle. Neither staging operation
+loads or restarts a CIW; coordinate the subsequent stop/wait/load separately.
 
 Order: prepare the Linux host and an absolute Python interpreter; have a trusted
 installer create a new protected bundle; add its load line to project `.cdsinit`;
@@ -319,8 +372,8 @@ vanished instance only within an explicit project constraint and before sending
 work; an exact port remains exact. Uncertain application requests are never
 replayed. Stop a retained tunnel using its original `--env`/profile and
 `stop --port PORT`; this targets saved endpoint state without rediscovery.
-Legacy state without process-birth identity cannot authorize a
-stop; inspect it manually. Windows ACLs, rather than POSIX mode bits, protect
+Legacy state without process-birth identity needs the
+[recovery procedure](#legacy-tunnel-recovery). Windows ACLs, rather than POSIX mode bits, protect
 local state. `bootstrap --window` needs an existing generated setup or
 `VB_DAEMON_SETUP`; it never proves completion by finding an unrelated instance.
 
@@ -331,3 +384,65 @@ independent Spectre workflows and explicit legacy APIs retain their own support.
 See the [discovery design](../../../docs/adr/0004-instance-discovery.md) for
 locking and security, and [shared-CIW protection](shared-ciw-dialogs.md) before
 recovering an uncertain request.
+
+### Legacy tunnel recovery
+
+Use the original `.env`/profile. Inspect exact local state paths, endpoints and
+PIDs without SSH or a running daemon, then try explicit stop:
+
+```bash
+virtuoso-bridge status --inspect-state --env /local/bridge.env
+virtuoso-bridge stop --port 65085 --env /local/bridge.env
+```
+
+Unsafe files are reported by path without trusting their contents. On Linux,
+explicit stop can establish missing birth identity only for a verified same-owner
+standalone forward with `-F /dev/null`, exact endpoints and disabled multiplexing.
+Custom/unknown configuration, extra forwards, PID reuse or unavailable inspection
+requires operator recovery. No unchecked force switch exists. Current verified
+birth identities use the normal stop path.
+
+On Linux, substitute the reported PID and inspect the owner, executable, start
+time and full argv. Recheck immediately before terminating that exact process:
+
+```bash
+cat -- /absolute/reported/state-user@host_port.json  # inspect retained JSON as untrusted data
+ps -p 12345 -o pid=,user=,lstart=,args=
+readlink /proc/12345/exe
+tr '\0' '\n' < /proc/12345/cmdline
+# Only after verifying this standalone user-owned forward serves no other work:
+kill -TERM 12345
+ps -p 12345 -o pid=,lstart=,args=  # wait for the original process to exit
+# Then remove only the exact reported stale state file:
+rm -- /absolute/reported/state-user@host_port.json
+```
+
+On Windows PowerShell, inspect the command, creation time and owner:
+
+```powershell
+Get-Content -LiteralPath 'C:\absolute\reported\state-user@host_port.json'
+Get-CimInstance Win32_Process -Filter 'ProcessId = 12345' |
+    Select-Object ProcessId,ExecutablePath,CreationDate,CommandLine
+Get-CimInstance Win32_Process -Filter 'ProcessId = 12345' |
+    Invoke-CimMethod -MethodName GetOwner
+# Recheck identity and ensure this process serves no other forwards, then:
+Stop-Process -Id 12345
+Wait-Process -Id 12345 -Timeout 5 -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath 'C:\absolute\reported\state-user@host_port.json'
+```
+
+Use verified values and literal paths only. Remove a selection pointer only after
+confirming it names that stopped target. Retain evidence after an uncertain stop.
+Deleting JSON alone does not release a listener. A cleanup failure after verified
+termination reports a warning with the exact path; inspect it before restarting.
+Discovery-mode shared bootstrap files are never removed by CLI or Python `stop()`.
+
+### Upgrade an existing fixed-port deployment
+
+Follow the [unreleased upgrade note](../../../docs/releases/unreleased.md): recover
+the old tunnel, deliberately remove obsolete selectors, choose the intended new
+setup, update `.cdsinit` only where its path changed, stop/wait/load in each
+intended idle CIW, then run `sessions`, `start`, signed `status` and
+`eval 'getWorkingDir()'`. On fresh setup, load after the first no-record start
+and run `start` again. Keep valid private roots and exact selectors. Client
+configuration edits do not alter running CIWs; preserve old job artifacts.

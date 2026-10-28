@@ -33,8 +33,13 @@ uv venv .venv && source .venv/bin/activate
 uv pip install -e .
 
 virtuoso-bridge init user@host   # write ~/.virtuoso-bridge/.env
-virtuoso-bridge start            # SSH tunnel; prints the load("...") line for your CIW
+virtuoso-bridge start            # select an instance, or print its required load("...") line
+# On a fresh host this exits nonzero without a usable tunnel.
+# Paste the printed load("...") into the intended idle CIW, then:
+virtuoso-bridge start
+virtuoso-bridge status
 ```
 
 Setup, configuration, CLI reference, architecture and citation are in the
 **[guide](https://virtuoso-bridge.tokenzhang.com/guide/)**. Coding agents start with [AGENTS.md](AGENTS.md).
+Existing fixed-port deployments should follow the [discovery upgrade note](docs/releases/unreleased.md).

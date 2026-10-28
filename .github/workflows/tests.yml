@@ -27,8 +27,10 @@ jobs:
       - name: Build distributions
         run: uv build
       - name: Run native instance registry and daemon protocol checks
+        timeout-minutes: 5
         run: uv run --python ${{ matrix.python-version }} --extra dev python tests/native_instance_registry.py src/virtuoso_bridge/virtuoso/basic/resources
       - name: Build pinned isolated Python 2.7 test worker
+        timeout-minutes: 15
         if: matrix.python-version == '3.13'
         shell: bash
         run: |
@@ -40,6 +42,7 @@ jobs:
           make -j2 > build.log 2>&1
           make install > install.log 2>&1
       - name: Run native checks with actual Python 2.7 workers
+        timeout-minutes: 5
         if: matrix.python-version == '3.13'
         env:
           VB_TEST_WORKER_PYTHON: ${{ runner.temp }}/python27/bin/python2.7
@@ -69,3 +72,4 @@ jobs:
           tests/test_instance_discovery.py
           tests/test_discovery_audit_regressions.py
           tests/test_discovery_status.py
+          tests/test_discovery_round2.py

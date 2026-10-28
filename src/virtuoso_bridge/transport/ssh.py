@@ -153,6 +153,51 @@ def _process_identity(pid: Any) -> str | None:
         return None
 
 
+def _legacy_forward_argv_matches(argv: list[str], destination: str, local_port: int, remote_port: int) -> bool:
+    """Recognize only a standalone, configuration-free bridge forward.
+
+    An arbitrary ssh config can add invisible forwards or multiplexing. Such
+    legacy processes require operator inspection instead of automatic adoption.
+    """
+    if not argv or Path(argv[0]).name != "ssh" or argv[-1] != destination:
+        return False
+    options: dict[str, str] = {}
+    forwards = []
+    config = None
+    no_command = False
+    index = 1
+    while index < len(argv) - 1:
+        flag = argv[index]
+        if flag == "-N" and not no_command:
+            no_command = True
+            index += 1
+            continue
+        if flag not in ("-o", "-L", "-F", "-i", "-J") or index + 1 >= len(argv) - 1:
+            return False
+        value = argv[index + 1]
+        if flag == "-L":
+            forwards.append(value)
+        elif flag == "-F":
+            if config is not None:
+                return False
+            config = value
+        elif flag == "-o":
+            key, separator, setting = value.partition("=")
+            key = key.lower()
+            if not separator or key in options or key not in {
+                "batchmode", "connecttimeout", "gssapiauthentication", "hostbasedauthentication",
+                "controlmaster", "controlpath", "controlpersist", "exitonforwardfailure",
+            }:
+                return False
+            options[key] = setting.lower()
+        index += 2
+    return (no_command and config == "/dev/null"
+            and forwards == [f"{local_port}:127.0.0.1:{remote_port}"]
+            and options.get("controlmaster") == "no"
+            and options.get("controlpath") == "none"
+            and options.get("controlpersist") == "no")
+
+
 def _windows_no_window_kwargs(
     *,
     detached: bool = False,
@@ -664,11 +709,32 @@ class SSHRunner:
         self._tunnel_pid = proc.pid
         return proc  # running
 
+    def adopt_legacy_forward(self, local_port: int, remote_port: int) -> None:
+        """Establish missing birth identity only from a narrowly proven process."""
+        pid = self.tunnel_pid
+        if not sys.platform.startswith("linux") or not pid:
+            raise RuntimeError("Native legacy forward verification is unavailable; inspect the process manually")
+        before = _process_identity(pid)
+        proc = Path("/proc") / str(pid)
+        try:
+            if proc.stat().st_uid != os.geteuid():
+                raise ValueError("process belongs to another user")
+            argv = [os.fsdecode(part) for part in (proc / "cmdline").read_bytes().split(b"\0") if part]
+            destination = f"{self._user}@{self._host}" if self._user else self._host
+            if not _legacy_forward_argv_matches(argv, destination, local_port, remote_port):
+                raise ValueError("command/configuration does not prove one exact standalone forward")
+            if not before or _process_identity(pid) != before:
+                raise ValueError("process identity changed")
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(f"Cannot verify legacy SSH process: {exc}") from exc
+        self._saved_tunnel_identity = before
+
     def stop_port_forward(self) -> None:
         """Stop the standalone port-forwarding process by PID."""
         pid = None
-        if self._tunnel_proc is not None and self._tunnel_proc.poll() is None:
-            pid = self._tunnel_proc.pid
+        owned = self._tunnel_proc if self._tunnel_proc is not None and self._tunnel_proc.poll() is None else None
+        if owned is not None:
+            pid = owned.pid
         elif self._tunnel_pid:
             expected = getattr(self, "_saved_tunnel_identity", None)
             if not expected or _process_identity(self._tunnel_pid) != expected:
@@ -678,8 +744,20 @@ class SSHRunner:
             logger.info("Terminating SSH tunnel (PID %d)", pid)
             try:
                 os.kill(pid, signal.SIGTERM)
-            except (OSError, PermissionError):
+            except ProcessLookupError:
                 pass
+            # Do not clear retained identity after a denied/uncertain stop.
+            deadline = time.monotonic() + 5
+            if owned is not None:
+                try:
+                    owned.wait(timeout=5)
+                except subprocess.TimeoutExpired as exc:
+                    raise RuntimeError("SSH tunnel did not exit after termination") from exc
+            else:
+                while _process_identity(pid) == expected:
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("SSH tunnel did not exit after termination; state retained")
+                    time.sleep(0.05)
         self._tunnel_proc = None
         self._tunnel_pid = None
         self._tunnel_using_external = False

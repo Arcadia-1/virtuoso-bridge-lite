@@ -203,7 +203,7 @@ class DoctorContext:
         )
         if getattr(self.ssh, "_discover_instances", False):
             client._tunnel = self.ssh
-            client._selection_reconciled = True  # check_daemon validates without retargeting
+            client.use_current_selection()
         return client
 
     def make_docs_client(self) -> Any:

@@ -44,6 +44,6 @@ def test_verbose_flag_turns_echoes_on_for_the_command(monkeypatch):
 
     monkeypatch.delenv("VB_VERBOSE", raising=False)
     seen = {}
-    monkeypatch.setattr(cli, "cli_status", lambda: seen.setdefault("verbose", verbose_from_env()) and 0)
+    monkeypatch.setattr(cli, "cli_status", lambda *a: seen.setdefault("verbose", verbose_from_env()) and 0)
     cli.main(["status", "--verbose"])
     assert seen == {"verbose": True}

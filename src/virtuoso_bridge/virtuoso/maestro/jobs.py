@@ -26,7 +26,6 @@ from virtuoso_bridge.runtime_paths import artifact_dir, tmp_dir
 from virtuoso_bridge.transport.remote_paths import (
     default_virtuoso_bridge_dir,
     resolve_client_id,
-
 )
 from virtuoso_bridge.transport.remote_roles import remote_host_roles_from_os
 from virtuoso_bridge.transport.ssh import (
@@ -291,10 +290,9 @@ class MaestroJobManager:
             proxy_url=ssh_proxy_url_from_os(profile),
             verbose=verbose_from_env(),
         )
-        username = ""  # compatibility argument; account-home paths supply isolation
         observed_host, observed_account = cls._probe_ssh_identity(runner)
         root = remote_root or default_virtuoso_bridge_dir(
-            username, "maestro-jobs", resolve_client_id(profile), runner=runner
+            "", "maestro-jobs", resolve_client_id(profile), runner=runner
         )
         return cls(
             runner,
@@ -367,10 +365,9 @@ class MaestroJobManager:
         profile = connected_profile
         load_vb_env()
         roles = remote_host_roles_from_os(profile, load=False)
-        username = ""  # compatibility argument; account-home paths supply isolation
         observed_host, observed_account = cls._probe_ssh_identity(runner)
         root = remote_root or default_virtuoso_bridge_dir(
-            username, "maestro-jobs", resolve_client_id(profile), runner=runner
+            "", "maestro-jobs", resolve_client_id(profile), runner=runner
         )
         return cls(
             runner,

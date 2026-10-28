@@ -46,17 +46,20 @@ def _alive(pid):
 def sessions(tmp_path):
     owned = []
 
-    def launch(name, automatic=False):
+    def launch(name, automatic=False, working_dir=None, registry_name=None, resource_dir=None, graphical=False):
         work = tmp_path / name
         work.mkdir()
+        cwd = tmp_path / working_dir if working_dir else work
+        cwd.mkdir(exist_ok=True)
         # Keep any library creation in this private session, not a site cds.lib.
-        (work / "cds.lib").write_text("")
-        resource = resources.files("virtuoso_bridge.virtuoso.basic.resources")
+        (cwd / "cds.lib").write_text("")
+        resource = Path(resource_dir) if resource_dir else resources.files("virtuoso_bridge.virtuoso.basic.resources")
         skill = str(resource.joinpath("ramic_bridge.il"))
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
         token = secrets.token_hex(32)
+        legacy_token = token
         token_path = work / "token"
         token_path.write_text(token)
         token_path.chmod(0o600)
@@ -70,20 +73,33 @@ def sessions(tmp_path):
         env["RB_AUTO_PORT"] = "1" if automatic else "0"
         if automatic:
             env["RB_PORT"] = "0"
-            env["RB_SCRATCH_ROOT"] = str(work / "private")
+            registry_root = tmp_path / registry_name if registry_name else work / "private"
+            env["RB_SCRATCH_ROOT"] = str(registry_root)
+            from virtuoso_bridge.virtuoso.basic.resources import ramic_registry
+            prior = {r["instance"] for r in ramic_registry.discover(root=str(registry_root))}
+        display = None
+        if graphical:
+            from tests.test_x11_dialog_close_native import Display, XVFB
+            if not XVFB:
+                pytest.skip("isolated native screenshot requires Xvfb")
+            display = Display()
+            env["DISPLAY"] = display.name
         output = (work / "stdout.log").open("w")
         proc = subprocess.Popen(
-            [os.environ["VB_TEST_VIRTUOSO"], "-nograph", "-nocdsinit", "-restore",
+            [os.environ["VB_TEST_VIRTUOSO"], *([] if graphical else ["-nograph"]), "-nocdsinit", "-restore",
              str(startup), "-log", str(work / "CDS.log")],
-            cwd=work, env=env, stdin=subprocess.DEVNULL, stdout=output,
+            cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=output,
             stderr=subprocess.STDOUT, start_new_session=True,
         )
-        item = dict(proc=proc, output=output, pids=[], work=work)
+        item = dict(proc=proc, output=output, pids=[], work=work, cwd=cwd, display=display)
         owned.append(item)
         if automatic:
             from virtuoso_bridge.virtuoso.basic.resources import ramic_registry, ramic_token
             def records():
-                return ramic_registry.discover(root=str(work / "private"))
+                rows = ramic_registry.discover(root=str(registry_root))
+                if item.get("virtuoso_pid"):
+                    return [r for r in rows if r["pid"] == item["virtuoso_pid"]]
+                return [r for r in rows if r["instance"] not in prior]
             _wait(lambda: len(records()) == 1)
             record = records()[0]
             daemon_pid, port = record["daemon_pid"], record["port"]
@@ -96,11 +112,18 @@ def sessions(tmp_path):
         client = VirtuosoClient(port=port, daemon_token=token, timeout=5, log_to_ciw=False)
         if automatic:
             from types import SimpleNamespace
-            client._tunnel = SimpleNamespace(_discover_instances=True, instance_record=record)
+            client._tunnel = SimpleNamespace(_discover_instances=True, instance_record=record, _ssh_runner=None)
 
             def refresh_after_restart(previous):
-                _wait(lambda: len(records()) == 1 and records()[0]["instance"] != previous["instance"])
-                fresh = records()[0]
+                found = []
+                def ready():
+                    snapshot = records()
+                    if len(snapshot) == 1 and snapshot[0]["instance"] != previous["instance"]:
+                        found[:] = snapshot
+                        return True
+                    return False
+                _wait(ready)
+                fresh = found[0]
                 assert fresh["pid"] == previous["pid"]
                 client._port = fresh["port"]
                 client._daemon_caps = None
@@ -108,7 +131,7 @@ def sessions(tmp_path):
                 item["pids"].append(fresh["daemon_pid"])
                 item["record"] = fresh
                 return fresh
-            item.update(record=record, refresh=refresh_after_restart, client=client)
+            item.update(record=record, refresh=refresh_after_restart, registry_root=registry_root)
 
         def evaluate(code):
             result = client.execute_skill(code)
@@ -119,14 +142,14 @@ def sessions(tmp_path):
         item["pids"].append(virtuoso_pid)
         assert client.remote_virtuoso_pid == virtuoso_pid
         item.update(evaluate=evaluate, virtuoso_pid=virtuoso_pid, daemon_pid=daemon_pid,
-                    ipc_pid=ipc_pid, port=port, skill=skill)
+                    ipc_pid=ipc_pid, port=port, skill=skill, client=client, legacy_token=legacy_token)
         return item
 
     yield launch
     for item in reversed(owned):
         # Assertion failures still clean only this fixture's recorded PIDs.
         for pid in item["pids"]:
-            if _alive(pid) and Path(f"/proc/{pid}/cwd").resolve() == item["work"]:
+            if _alive(pid) and Path(f"/proc/{pid}/cwd").resolve() == item["cwd"]:
                 os.kill(pid, signal.SIGKILL)
         try:
             os.killpg(item["proc"].pid, signal.SIGKILL)
@@ -134,6 +157,8 @@ def sessions(tmp_path):
             pass
         item["proc"].wait(timeout=5)
         item["output"].close()
+        if item["display"] is not None:
+            item["display"].close()
 
 
 @pytest.mark.parametrize("shutdown", ["exit", "kill", "abort"])
@@ -168,6 +193,75 @@ def test_owner_exit_releases_only_its_daemon(sessions, shutdown):
     _wait(lambda: not _alive(keeper["daemon_pid"]) and not _alive(keeper["ipc_pid"]), timeout=3)
 
 
+def test_cli_restart_reconnects_same_ciw_with_same_directory_peer(sessions, tmp_path, monkeypatch):
+    from virtuoso_bridge import cli
+    from virtuoso_bridge.transport import tunnel
+    target = sessions("restart-target", automatic=True, working_dir="shared-project", registry_name="registry")
+    keeper = sessions("restart-keeper", automatic=True, working_dir="shared-project", registry_name="registry")
+    config = tmp_path / "restart.env"
+    config.write_text("VB_REMOTE_HOST=localhost\nVB_REMOTE_SCRATCH_ROOT=" + str(target["registry_root"]) + "\n")
+    monkeypatch.setenv("VB_STATE_DIR", str(tmp_path / "client-state"))
+    from virtuoso_bridge import env
+    monkeypatch.setattr(env, "_RUNTIME_ENV_FILE", config)
+    monkeypatch.delenv("VB_REMOTE_PORT", raising=False)
+    monkeypatch.setenv("VB_REMOTE_HOST", "localhost")
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", str(target["registry_root"]))
+    transport = tunnel.SSHClient.from_env(keep_remote_files=True, read_selection=False)
+    original = target["record"]
+    transport.connect_instance(original)
+    assert cli.main(["restart", "--env", str(config)]) == 0
+    fresh_transport = tunnel.SSHClient.from_env(keep_remote_files=True)
+    fresh = fresh_transport.instance_record
+    target["pids"].append(fresh["daemon_pid"])
+    assert fresh["pid"] == original["pid"] and fresh["instance"] != original["instance"]
+    assert cli.main(["status", "--env", str(config)]) == 0
+    fresh_transport.verify_instance()
+    assert keeper["evaluate"]("40+2") == "42"
+    assert int(keeper["evaluate"]("RBLastPid")) == keeper["daemon_pid"]
+    fresh_transport.stop()
+
+
+def test_full_upgrade_from_isolated_legacy_fixed_daemon(sessions, tmp_path, monkeypatch):
+    legacy_resources = os.getenv("VB_TEST_LEGACY_RESOURCES")
+    if not legacy_resources:
+        pytest.skip("set VB_TEST_LEGACY_RESOURCES to the pre-discovery resource bundle")
+    from virtuoso_bridge import cli
+    from virtuoso_bridge import env
+    from virtuoso_bridge.transport import tunnel
+    from virtuoso_bridge.virtuoso.basic.resources import ramic_registry
+    target = sessions("legacy-upgrade", resource_dir=legacy_resources)
+    registry_root = target["work"] / "new-registry"
+    config = tmp_path / "upgrade.env"
+    config.write_text("VB_REMOTE_HOST=localhost\nVB_REMOTE_SCRATCH_ROOT=" + str(registry_root) + "\n")
+    monkeypatch.setattr(env, "_RUNTIME_ENV_FILE", config)
+    monkeypatch.setenv("VB_STATE_DIR", str(tmp_path / "upgrade-state"))
+    monkeypatch.setenv("VB_REMOTE_HOST", "localhost")
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", str(registry_root))
+    monkeypatch.delenv("VB_REMOTE_PORT", raising=False)
+    transport = tunnel.SSHClient.from_env(keep_remote_files=True, read_selection=False)
+    assert not transport.list_instances()
+    assert cli.main(["start", "--env", str(config)]) == 1
+    setup = transport.existing_setup_path()
+    assert setup
+    # Operator stop/wait/load, scheduled once in this fixture-owned CIW.
+    target["evaluate"]('procedure(VBUpgradeWait(n) '
+                       'if(ipcIsAliveProcess(RBIpc) then '
+                       'when(n > 0 hiRegTimer(sprintf(nil "VBUpgradeWait(%%d)" n-1) 1)) '
+                       'else load(%s)))' % json.dumps(setup))
+    target["evaluate"]('hiRegTimer("RBStop() hiRegTimer(\\\"VBUpgradeWait(50)\\\" 1)" 2)')
+    def records():
+        return ramic_registry.discover(root=str(registry_root))
+    _wait(lambda: len(records()) == 1)
+    record = records()[0]
+    target["pids"].append(record["daemon_pid"])
+    assert record["pid"] == target["virtuoso_pid"]
+    assert cli.main(["start", "--env", str(config)]) == 0
+    assert cli.main(["status", "--env", str(config)]) == 0
+    connected = tunnel.SSHClient.from_env(keep_remote_files=True)
+    connected.verify_instance()
+    connected.stop()
+
+
 def test_automatic_reload_banner_and_bounded_restart_preserve_other_ciw(sessions):
     keeper = sessions("automatic-keeper", automatic=True)
     target = sessions("automatic-target", automatic=True)
@@ -175,7 +269,7 @@ def test_automatic_reload_banner_and_bounded_restart_preserve_other_ciw(sessions
     original = target["record"]
     assert evaluate(f'load({json.dumps(target["skill"])})') == "t"
     assert int(evaluate("RBPort")) == original["port"]
-    assert target["client"]._ensure_daemon_capabilities(time.monotonic() + 5)["build"] == "instance-discovery-2"
+    assert target["client"]._ensure_daemon_capabilities(time.monotonic() + 5)["build"] == "instance-discovery-3"
     for value in ("", "oops", "-1", "65536", "12oops"):
         banner = "[RB-banner] pid=123 bind=127.0.0.1:" + value + "\n"
         evaluate("RBIpcErrHandler(RBIpc %s)" % json.dumps(banner))
@@ -206,3 +300,47 @@ def test_automatic_reload_banner_and_bounded_restart_preserve_other_ciw(sessions
     evaluate('hiRegTimer("RBStopAll()" 2)')
     _wait(lambda: not _alive(monitored["daemon_pid"]))
     assert keeper["evaluate"]("40+2") == "42"
+
+
+def test_fixed_discovery_port_and_explicit_legacy_mode_reset(sessions):
+    from virtuoso_bridge.transport.tunnel import _generate_virtuoso_setup_il
+    target = sessions("mode-transition", automatic=True)
+    evaluate = target["evaluate"]
+    original = target["record"]
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        fixed = probe.getsockname()[1]
+    evaluate('hiRegTimer("RBSetPort(%d)" 2)' % fixed)
+    pinned = target["refresh"](original)
+    assert pinned["port"] == fixed
+    assert evaluate('getShellEnvVar("RB_AUTO_PORT")').strip('"') == "1"
+    identity = target["work"] / "legacy-identity"
+    setup = target["work"] / "legacy-setup.il"
+    resource = Path(target["skill"]).parent
+    setup.write_text(_generate_virtuoso_setup_il(
+        str(resource / "ramic_bridge_daemon_3.py"), target["skill"], sys.executable,
+        port=fixed, identity_path=str(identity)))
+    evaluate('procedure(VBModeWait(n) if(ipcIsAliveProcess(RBIpc) then '
+             'when(n > 0 hiRegTimer(sprintf(nil "VBModeWait(%%d)" n-1) 1)) '
+             'else load(%s)))' % json.dumps(str(setup)))
+    evaluate('hiRegTimer("RBStop() hiRegTimer(\\\"VBModeWait(50)\\\" 1)" 2)')
+    _wait(lambda: identity.exists() and "pid=" in identity.read_text())
+    child = int(dict(line.split("=", 1) for line in identity.read_text().splitlines())["pid"])
+    target["pids"].append(child)
+    legacy = VirtuosoClient(port=fixed, daemon_token=target["legacy_token"], timeout=5)
+    caps = legacy._ensure_daemon_capabilities(time.monotonic() + 5)
+    assert caps["auth"] == "on" and not caps.get("instance_record")
+    result = legacy.execute_skill('getShellEnvVar("RB_AUTO_PORT")', retry_connect=False)
+    assert not result.errors and result.output.strip('"') == "0"
+
+
+def test_local_screenshot_on_fixture_owned_graphical_ciw(sessions, tmp_path, monkeypatch):
+    target = sessions("screenshot-capture", automatic=True, graphical=True)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", "~/screen capture")
+    monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
+    output = tmp_path / "captured.png"
+    result = target["client"].screenshot(output)
+    assert not result.errors, result
+    assert output.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    assert list((tmp_path / "screen capture").rglob("*.png"))

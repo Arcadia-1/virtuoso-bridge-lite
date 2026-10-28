@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -31,6 +32,8 @@ class _FakeRunner:
 
     def run_command(self, command: str, timeout=None) -> CommandResult:
         self.commands.append(command)
+        if "import fcntl" in command and ".daemon-input-" in command:
+            return CommandResult(returncode=0, stdout='{"reused": false}', stderr="")
         return CommandResult(returncode=0, stdout="/home/designer" if command == 'getent passwd "$(id -u)" | cut -d: -f6' else "", stderr="")
 
     def upload_text(self, text: str, remote_path: str, timeout=None) -> CommandResult:
@@ -92,8 +95,12 @@ def test_automatic_setup_is_shared_across_profiles_and_clients(monkeypatch):
         client.ensure_remote_setup()
         path = "/home/designer/.virtuoso-bridge/daemon/virtuoso_setup.il"
         assert client.setup_path == path
-        assert 'setShellEnvVar("RB_SCRATCH_ROOT" "/home/designer/.virtuoso-bridge")' in fake.uploads[path]
-        assert 'setShellEnvVar("RB_PORT" "0")' in fake.uploads[path]
+        payload = next(json.loads(content) for name, content in fake.uploads.items() if ".daemon-input-" in name)
+        assert payload["destination"] == str(Path(path).parent).replace("\\", "/")
+        assert payload["replace"] is False
+        setup = payload["files"]["virtuoso_setup.il"]
+        assert 'setShellEnvVar("RB_SCRATCH_ROOT" "/home/designer/.virtuoso-bridge")' in setup
+        assert 'setShellEnvVar("RB_PORT" "0")' in setup
 
 
 
@@ -132,83 +139,26 @@ def test_same_account_profiles_do_not_overwrite_each_others_setup(tmp_path, monk
 
 
 
-def test_restart_daemon_loads_current_setup_and_accepts_disconnect(monkeypatch, capsys) -> None:
-    class _FakeSSHClient:
-        @staticmethod
-        def read_state(profile=None):
-            assert profile == "t28_io"
-            return {
-                "port": 65271,
-                "setup_path": '/tmp/bridge path/virtuoso"setup.il',
-            }
-
-    class _FakeVirtuosoClient:
-        instances: list["_FakeVirtuosoClient"] = []
-
-        def __init__(self, host, port, timeout, log_to_ciw=True):
-            self.host = host
-            self.port = port
-            self.timeout = timeout
-            self.log_to_ciw = log_to_ciw
-            self.skill: str | None = None
-            _FakeVirtuosoClient.instances.append(self)
-
-        def execute_skill(self, skill: str, timeout=5):
-            self.skill = skill
-            return VirtuosoResult(
-                status=ExecutionStatus.ERROR,
-                errors=["Empty response from daemon"],
-            )
-
-    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHClient", _FakeSSHClient)
-    monkeypatch.setattr("virtuoso_bridge.virtuoso.basic.bridge.VirtuosoClient", _FakeVirtuosoClient)
-    monkeypatch.setattr(
-        "virtuoso_bridge.daemon_guard.check_daemon_user",
-        lambda client, profile, timeout=5: type("Check", (), {"ok": True, "error": ""})(),
-    )
-
+def test_restart_cli_reports_verified_replacement_and_closes(monkeypatch, capsys) -> None:
+    calls = []
+    client = SimpleNamespace(remote_port=65271, restart_instance=lambda: calls.append("restart"),
+                             close=lambda: calls.append("close"))
+    monkeypatch.setattr(SSHClient, "from_env", lambda **kw: client)
     assert cli._restart_daemon_one("t28_io") is True
-
-    out = capsys.readouterr().out
-    client = _FakeVirtuosoClient.instances[0]
-    assert client.host == "127.0.0.1"
-    assert client.port == 65271
-    assert client.log_to_ciw is False
-    assert client.skill == 'RBStop()\nload("/tmp/bridge path/virtuoso\\"setup.il")'
-    assert "Restarting daemon [t28_io]" in out
-    assert "old daemon closed the connection while restarting" in out
+    assert calls == ["restart", "close"]
+    assert "replacement instance authenticated" in capsys.readouterr().out
 
 
-def test_restart_daemon_refuses_cross_user_daemon(monkeypatch, capsys) -> None:
-    class _FakeSSHClient:
-        @staticmethod
-        def read_state(profile=None):
-            return {"port": 65271, "setup_path": "/tmp/virtuoso_setup.il"}
-
-    class _FakeVirtuosoClient:
-        def __init__(self, host, port, timeout, log_to_ciw=True):
-            pass
-
-        def execute_skill(self, skill: str, timeout=5):
-            raise AssertionError("restart must not be sent after identity mismatch")
-
-    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.SSHClient", _FakeSSHClient)
-    monkeypatch.setattr("virtuoso_bridge.virtuoso.basic.bridge.VirtuosoClient", _FakeVirtuosoClient)
-    monkeypatch.setattr(
-        "virtuoso_bridge.daemon_guard.check_daemon_user",
-        lambda client, profile, timeout=5: type(
-            "Check",
-            (),
-            {"ok": False, "error": "daemon Unix user 'alice' does not match configured VB_REMOTE_USER 'bob'"},
-        )(),
-    )
-
+def test_restart_cli_reports_identity_refusal_and_closes(monkeypatch, capsys) -> None:
+    calls = []
+    def refuse():
+        raise RuntimeError("signed instance differs: alice versus bob")
+    client = SimpleNamespace(restart_instance=refuse, close=lambda: calls.append("close"))
+    monkeypatch.setattr(SSHClient, "from_env", lambda **kw: client)
     assert cli._restart_daemon_one(None) is False
-
     out = capsys.readouterr().out
-    assert "Refusing to restart daemon" in out
-    assert "alice" in out
-    assert "bob" in out
+    assert "alice versus bob" in out
+    assert calls == ["close"]
 
 
 

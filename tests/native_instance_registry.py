@@ -90,6 +90,29 @@ assert os.listdir(expected) == ['runs']
         stdout, stderr = worker.communicate(timeout=5)
         self.assertEqual(worker.returncode, 0, stderr)
 
+    def test_bundle_publisher_with_actual_worker(self):
+        source = '''
+import os, sys
+sys.path.insert(0, sys.argv[1])
+from ramic_deploy import publish
+destination = sys.argv[2] + '/daemon'
+first = {'setup.il': 'loopback', 'daemon.py': 'old'}
+assert not publish(destination, first)['reused']
+assert publish(destination, first)['reused']
+try:
+    publish(destination, {'setup.il': 'all', 'daemon.py': 'new'})
+except RuntimeError:
+    pass
+else:
+    raise AssertionError('differing bundle replaced without authorization')
+changed = publish(destination, {'setup.il': 'all', 'daemon.py': 'new'}, replace=True)
+assert open(changed['backup'] + '/setup.il').read() == 'loopback'
+assert open(destination + '/setup.il').read() == 'all'
+'''
+        worker = self.spawn(source, self.root)
+        stdout, stderr = worker.communicate(timeout=5)
+        self.assertEqual(worker.returncode, 0, stderr)
+
     def test_abandoned_temporary_cleanup_preserves_live_writers(self):
         import fcntl
         opened = registry.Registry(self.directory)
@@ -376,15 +399,29 @@ runpy.run_path(path, run_name='__main__')
         self.assertNotIn(('ab' * 32).encode(), stdout + stderr)
 
     def test_automatic_daemon_creates_secret_and_rejects_foreign_credentials(self):
+        self.check_discovery_daemon()
+
+    def test_discovery_fixed_port_ignores_legacy_token_override(self):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            fixed = probe.getsockname()[1]
+        self.check_discovery_daemon(fixed)
+
+    def check_discovery_daemon(self, fixed=0):
         token_path = self.root / "private" / "bridge_token"
+        override = self.root / "legacy-token"
+        override.write_text("00" * 32)
+        override.chmod(0o600)
         # Redirect only test storage. Run the real standalone daemon and
         # wire protocol; no Virtuoso process or existing credential is used.
         source = '''
 import os, runpy, sys
 sys.path.insert(0,sys.argv[1])
 import ramic_registry, ramic_token
-resources, directory, token = sys.argv[1:4]
+resources, directory, token, port, override = sys.argv[1:6]
 ramic_token.default_path = lambda: token
+os.environ['RB_AUTO_PORT'] = '1'
+os.environ['RB_TOKEN_PATH'] = override
 original = ramic_registry.bind_instance
 def bind(*args, **kwargs):
     kwargs['directory'] = directory
@@ -394,11 +431,13 @@ os.environ['RB_VIRTUOSO_PID'] = str(os.getpid())
 os.environ.pop('RB_VIRTUOSO_BOOT_ID', None)
 os.environ['RB_VIRTUOSO_WORK_DIR'] = '/synthetic/project'
 version = '27' if sys.version_info[0] == 2 else '3'
-sys.argv = [resources + '/ramic_bridge_daemon_' + version + '.py', '127.0.0.1', '0']
+sys.argv = [resources + '/ramic_bridge_daemon_' + version + '.py', '127.0.0.1', port]
 runpy.run_path(sys.argv[0], run_name='__main__')
 '''
-        process = self.spawn(source, self.directory, token_path)
+        process = self.spawn(source, self.directory, token_path, fixed, override)
         record = self.await_rows(1)[0]
+        if fixed:
+            self.assertEqual(record["port"], fixed)
         token = token_path.read_text().strip()
         self.assertEqual(token, ramic_token.read_or_create(str(token_path)))
         self.assertEqual(token_path.stat().st_mode & 0o777, 0o600)
@@ -425,7 +464,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         body = response[65:].decode()
         self.assertEqual(response[1:65].decode(), mac(token, "vb1-response", nonce, "\x02", body))
         self.assertEqual(json.loads(body)["instance_record"], record)
-        self.assertEqual(json.loads(body)["build"], "instance-discovery-2")
+        self.assertEqual(json.loads(body)["build"], "instance-discovery-3")
         for secret in ("00" * 32, "ff" * 32):
             nonce = os.urandom(16).hex()
             response = request(dict(proto=1, nonce=nonce, skill="1+1", timeout=1,

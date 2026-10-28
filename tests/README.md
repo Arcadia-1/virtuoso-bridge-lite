@@ -63,6 +63,19 @@ SHA256, installs it under runner temporary storage, then selects that actual
 worker with `VB_TEST_WORKER_PYTHON`. The harness itself stays on Python 3.
 Non-Linux invocation exits with an explicit skip before creating fixtures.
 
+Both Linux matrix jobs (Python 3.9 and 3.13), including actual Python 2.7 worker
+execution on the 3.13 lane, are required acceptance evidence for instance
+discovery. Windows cannot establish registry lock liveness, POSIX ownership,
+`/proc` identity or shell behavior. Obtain a green run on the current hosted
+runner image before merge; a successful local build is separate evidence.
+
+`test_generated_bundle.py` exercises real Linux locked publication, competing
+publishers, refusal before replacement, staging rollback and interrupted-exchange
+recovery. `test_discovery_round2.py` covers CLI output/routing, local screenshot
+paths with real file copies, build parity, private state reads and restart request
+ordering. Its Linux registered-entrypoint test uses real temporary locked records.
+Mocked SKILL image output and restart replies are not native Cadence evidence.
+
 `VB_TEST_DAEMON_RESOURCES=/absolute/resources` selects alternate daemon resources
 for source checks that support it; `test_auto_port_state.py` reports the resolved
 path as the `daemon_resources` test property. Those checks only inspect source.
@@ -114,6 +127,15 @@ uv run --extra dev pytest tests/test_layout_read_lifecycle_live.py -v
 
 This is native OA lifecycle coverage, not PDK or electrical-equivalence testing.
 The offline generation tests do not substitute for it.
+
+The lifecycle suite also exercises CLI restart/reconnect with two CIWs in one
+working directory and a shared registry. Set
+`VB_TEST_LEGACY_RESOURCES=/absolute/pre-discovery/resources` to enable a full
+stop/wait/load/start/status upgrade in a separate fixture-owned CIW. Stage that
+baseline bundle from the reviewed Git revision; do not replace supplied user
+daemons to manufacture a migration test. Automatic/fixed-port discovery and legacy
+token modes need distinct verification. Preserve any original request evidence
+after uncertain execution and never retry a restart merely because its reply dropped.
 
 The default run needs only plain Virtuoso and Spectre. Optional variables
 enable more checks:
