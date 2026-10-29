@@ -22,6 +22,15 @@ and retains its predecessor. `VB_DAEMON_SETUP` selects a versioned shared
 installation, which clients never overwrite. Running CIWs need an explicit load
 to use newly staged code.
 
+Shared bundle installation is now packaged as
+`virtuoso-bridge install-daemon DESTINATION --python /usr/bin/python3`, run on
+the Linux Cadence host. This replaces `tools/install_shared_daemon.py` and
+retains its protected-directory and no-overwrite checks. New registered setup
+files preserve `RB_PORT` set before loading; a nonzero value overrides persistent
+fixed-port requests, while zero consults those requests before OS allocation.
+Existing generated files need explicit replacement or a new shared bundle to
+gain this behavior. See [fixed-port setup](../../skills/virtuoso/references/connection.md#connecting-on-a-fixed-port).
+
 Local screenshots now create and expand their destination directory. Session
 listings preserve printable Unicode while escaping terminal controls.
 

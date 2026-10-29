@@ -330,6 +330,11 @@ def _generate_virtuoso_setup_il(
     scratch_root: str | None = None,
 ) -> str:
     from virtuoso_bridge.virtuoso.ops import escape_skill_string
+    port_line = f'setShellEnvVar("RB_PORT" "{port}")\n'
+    if port == 0:
+        # Registered bootstraps accept a per-CIW request before consulting saved
+        # directory/account requests. Keep legacy fixed-port generation unchanged.
+        port_line = 'unless(getShellEnvVar("RB_PORT")\n' + port_line + ')\n'
     scratch_line = (f'setShellEnvVar("RB_SCRATCH_ROOT" "{escape_skill_string(scratch_root)}")\n'
                     if scratch_root else "")
     identity_line = (
@@ -345,7 +350,7 @@ def _generate_virtuoso_setup_il(
         "; Set environment variables\n"
         f'setShellEnvVar("RB_DAEMON_PATH" "{daemon_path}")\n'
         f'setShellEnvVar("RB_PYTHON_PATH" "{python_cmd}")\n'
-        f'setShellEnvVar("RB_PORT" "{port}")\n'
+        f"{port_line}"
         f'setShellEnvVar("RB_AUTO_PORT" "{1 if port == 0 else 0}")\n'
         f"{scratch_line}"
         f'setShellEnvVar("RB_LISTEN_ALL" "{1 if listen_all else 0}")\n'

@@ -2049,6 +2049,18 @@ def build_parser() -> argparse.ArgumentParser:
         if action == "reconcile":
             sub.add_argument("--receipt", required=True,
                              help="Prior unknown SOS JSON result")
+    sp_install = subparsers.add_parser(
+        "install-daemon", help="Install a shared daemon bundle on this Linux Cadence host",
+        description="Run on the Linux Cadence host with the bridge installed. Creates a new "
+                    "protected bundle and prints its CIW load line; never overwrites or starts a daemon.",
+    )
+    sp_install.add_argument("destination", type=Path,
+                            help="New protected directory, e.g. /opt/virtuoso-bridge/v2")
+    sp_install.add_argument("--python", default="python3",
+                            help="Daemon Python executable on the Cadence host (default: python3)")
+    sp_install.add_argument("--scratch-root",
+                            help="Registry root shared with clients; default: daemon environment, then /tmp/virtuoso_bridge_<user>")
+
     sp_init = subparsers.add_parser("init", help="Create a starter .env")
     sp_init.add_argument(
         "remote", nargs="?", default=None,
@@ -2506,6 +2518,9 @@ def _run_command(parser: argparse.ArgumentParser, args: argparse.Namespace) -> i
         parser.error("--port must be between 1 and 65535")
     if getattr(args, "verbose", False):
         os.environ["VB_VERBOSE"] = "1"
+    if args.command == "install-daemon":
+        from virtuoso_bridge.daemon_setup import cli_install_daemon
+        return cli_install_daemon(args.destination, args.python, args.scratch_root)
     if args.command == "sos" and getattr(args, "json", False):
         import sys
         from contextlib import redirect_stdout

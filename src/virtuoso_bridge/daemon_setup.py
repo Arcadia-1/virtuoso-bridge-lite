@@ -1,11 +1,11 @@
 """Install a new, administrator-owned shared bootstrap on the Cadence host.
 
-Run with the project's Python environment. Never overwrites an installation;
+Called by ``virtuoso-bridge install-daemon`` on the Linux Cadence host.
+Never overwrites an installation;
 use a new versioned destination for upgrades, then update .cdsinit explicitly.
 """
 from __future__ import annotations
 
-import argparse
 import os
 from pathlib import Path
 import stat
@@ -50,12 +50,10 @@ def install(destination: Path, python: str = "python3", scratch_root: str | None
     return setup.resolve()
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("destination", type=Path, help="New protected directory, e.g. /opt/virtuoso-bridge/v1")
-    parser.add_argument("--python", default="python3", help="Python executable on the Cadence host")
-    parser.add_argument("--scratch-root", help="Same scratch root as clients; defaults to daemon environment or ~/.virtuoso-bridge")
-    args = parser.parse_args()
+def cli_install_daemon(destination: Path, python: str = "python3", scratch_root: str | None = None) -> int:
+    setup = install(destination, python, scratch_root)
     print("Trusted installer owns this bundle; all loading accounts trust that account.")
-    print("Scratch root: " + (args.scratch_root or "daemon environment, then each UID's passwd home/.virtuoso-bridge"))
-    print('load("%s")' % install(args.destination, args.python, args.scratch_root).as_posix())
+    print("Scratch root: " + (scratch_root or "daemon environment, then /tmp/virtuoso_bridge_<user>"))
+    from virtuoso_bridge.virtuoso.ops import escape_skill_string
+    print('load("%s")' % escape_skill_string(setup.as_posix()))
+    return 0

@@ -1,16 +1,84 @@
 """Real Linux publication/mode checks; ownership rejection is separately mocked."""
-import importlib.util
 import os
 from pathlib import Path
 import sys
 import tempfile
+import shutil
+import subprocess
 from types import SimpleNamespace
 
 import pytest
 
-spec = importlib.util.spec_from_file_location("shared_installer", Path(__file__).parents[1] / "tools/install_shared_daemon.py")
-installer = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(installer)
+from virtuoso_bridge import daemon_setup as installer
+
+
+def _cli(*args):
+    script = shutil.which("virtuoso-bridge", path=str(Path(sys.executable).parent))
+    assert script, "Install the project in its virtualenv before running CLI tests"
+    return subprocess.run([script, *args], capture_output=True, text=True, timeout=30)
+
+
+def test_installed_command_help():
+    result = _cli("install-daemon", "--help")
+    assert result.returncode == 0, result.stderr
+    assert "--python" in result.stdout
+    assert "--scratch-root" in result.stdout
+    assert "Linux Cadence host" in result.stdout
+
+
+def test_cli_dispatch_without_connection_configuration(monkeypatch, tmp_path, capsys):
+    from virtuoso_bridge.cli import main
+
+    destination = tmp_path / "bundle"
+    calls = []
+    def install(path, python, scratch_root):
+        calls.append((path, python, scratch_root))
+        return path / "virtuoso_setup.il"
+    monkeypatch.setattr(installer, "install", install)
+    def unexpected(*args, **kwargs):
+        pytest.fail("installation must not resolve a client connection")
+    monkeypatch.setattr("virtuoso_bridge.cli.set_runtime_env_file", unexpected)
+    monkeypatch.setattr("virtuoso_bridge.profile.resolve_profile", unexpected)
+    assert main(["install-daemon", str(destination), "--python", "/usr/bin/python3",
+                 "--scratch-root", "~/bridge"]) == 0
+    assert calls == [(destination, "/usr/bin/python3", "~/bridge")]
+    assert 'load("' + (destination / "virtuoso_setup.il").as_posix() + '")' in capsys.readouterr().out
+
+
+def test_cli_publish_and_refuse_overwrite(private_parent, monkeypatch):
+    monkeypatch.setenv("VB_LOG_DIR", str(private_parent / "logs"))
+    destination = private_parent / "cli-bundle"
+    result = _cli("install-daemon", str(destination), "--python", sys.executable,
+                  "--scratch-root", str(private_parent))
+    assert result.returncode == 0, result.stderr
+    assert 'load("%s/virtuoso_setup.il")' % destination.as_posix() in result.stdout
+    before = {p.name: p.read_bytes() for p in destination.iterdir()}
+    result = _cli("install-daemon", str(destination))
+    assert result.returncode == 1
+    assert "ERROR:" in result.stderr and "Traceback" not in result.stderr
+    assert {p.name: p.read_bytes() for p in destination.iterdir()} == before
+
+
+@pytest.mark.skipif(sys.platform.startswith("linux"), reason="unsupported host check")
+def test_cli_rejects_unsupported_host(tmp_path, monkeypatch):
+    monkeypatch.setenv("VB_LOG_DIR", str(tmp_path / "logs"))
+    destination = tmp_path / "bundle"
+    result = _cli("install-daemon", str(destination))
+    assert result.returncode == 1
+    assert "Linux Cadence host" in result.stderr
+    assert not destination.exists()
+
+
+def test_registered_setup_preserves_preload_port_and_registration():
+    from virtuoso_bridge.transport.tunnel import _generate_virtuoso_setup_il
+
+    setup = _generate_virtuoso_setup_il("/bundle/daemon.py", "/bundle/ramic_bridge.il", port=0)
+    assert 'unless(getShellEnvVar("RB_PORT")\nsetShellEnvVar("RB_PORT" "0")\n)' in setup
+    assert 'setShellEnvVar("RB_AUTO_PORT" "1")' in setup
+    legacy = _generate_virtuoso_setup_il("/bundle/daemon.py", "/bundle/ramic_bridge.il", port=65123)
+    assert 'unless(getShellEnvVar("RB_PORT")' not in legacy
+    assert 'setShellEnvVar("RB_PORT" "65123")' in legacy
+    assert 'setShellEnvVar("RB_AUTO_PORT" "0")' in legacy
 
 
 def test_unsupported_platform(monkeypatch, tmp_path):
