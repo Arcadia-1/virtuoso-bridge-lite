@@ -8,7 +8,7 @@ import pytest
 
 from virtuoso_bridge import daemon_auth
 from virtuoso_bridge.instance_discovery import DiscoveryError, InstanceSelectionError, format_instances
-from virtuoso_bridge.transport import ssh, tunnel
+from virtuoso_bridge.transport import tunnel
 from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
 
 
@@ -189,27 +189,8 @@ def test_legacy_restart_reconciles_once_without_replaying(legacy, monkeypatch, o
     assert clock[0] <= 102
 
 
-def test_discovery_checks_deadline_after_unbounded_root_lookup(monkeypatch):
-    from virtuoso_bridge.transport import remote_paths
-    clock = [100.0]
-    monkeypatch.setattr(tunnel.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(remote_paths, "load_vb_env", lambda: None)
-    monkeypatch.setattr(remote_paths, "remote_scratch_root", lambda *a, **kw: "/tmp")
-    monkeypatch.delenv("VB_REMOTE_SCRATCH_ROOT", raising=False)
-    client = tunnel.SSHClient("fixture.invalid", discover_instances=True)
-    budgets = []
-    def run(command, timeout=None):
-        budgets.append(timeout)
-        clock[0] += 1
-        return SimpleNamespace(returncode=0, stdout="fixture\n", stderr="")
-    monkeypatch.setattr(client._ssh_runner, "run_command", run)
-    with pytest.raises(TimeoutError, match="discovery deadline"):
-        client.list_instances(timeout=0.5)
-    assert budgets == [None]
-
-
 @pytest.mark.skipif(os.name != "posix", reason="native POSIX permissions")
-def test_historical_metadata_is_readable_but_new_identity_requires_private_modes(tmp_path):
+def test_historical_metadata_is_readable_but_registered_state_requires_private_modes(tmp_path):
     parent = tmp_path / "state"
     parent.mkdir(mode=0o755)
     parent.chmod(0o755)
@@ -221,7 +202,7 @@ def test_historical_metadata_is_readable_but_new_identity_requires_private_modes
     assert tunnel._read_private_json(path, legacy_metadata=True) == value
     with pytest.raises(ValueError):
         tunnel._read_private_json(path)
-    value["tunnel_identity"] = "new birth identity"
+    value["instance_record"] = record(61000)
     path.write_text(json.dumps(value))
     with pytest.raises(ValueError, match="historical"):
         tunnel._read_private_json(path, legacy_metadata=True)

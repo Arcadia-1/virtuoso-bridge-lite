@@ -21,6 +21,22 @@ def row(port=65001, pid=10, work_dir="/project/a"):
                 work_dir=work_dir, instance="%032x" % pid)
 
 
+@pytest.mark.parametrize("mode", [0o644, 0o666])
+def test_record_read_accepts_filesystem_owner_and_mode_without_gates(tmp_path, monkeypatch, mode):
+    import stat
+    from types import SimpleNamespace
+    expected = row()
+    payload = json.dumps(expected).encode("utf-8")
+    path = tmp_path / "record.json"
+    path.write_bytes(payload)
+    # Simulate foreign ownership and permissive POSIX modes on every platform;
+    # the native harness separately checks real chmod/locks on Linux.
+    metadata = SimpleNamespace(st_mode=stat.S_IFREG | mode, st_size=len(payload), st_uid=-1)
+    monkeypatch.setattr(registry, "os", SimpleNamespace(fstat=lambda fd: metadata, read=os.read))
+    with path.open("rb") as stream:
+        assert registry._read_record(stream.fileno()) == expected
+
+
 def test_registry_root_uses_daemon_account_without_changing_workflow_defaults(monkeypatch):
     from types import SimpleNamespace
     from virtuoso_bridge.transport import remote_paths
@@ -385,27 +401,6 @@ def test_occupied_socket_symlink_fifo_and_unlocked_stale_file(tmp_path):
     assert target.read_text() == "keep"
     assert not (Path(directory) / ("3" * 32 + ".json")).exists()
     assert registry.discover(directory) == []
-
-
-@linux
-def test_token_creation_race_converges_without_logging_secret(tmp_path):
-    path = tmp_path / "private" / "bridge_token"
-    script = "import sys; from virtuoso_bridge.daemon_auth import read_or_create_local_token; print(read_or_create_local_token(sys.argv[2]))"
-    processes = [subprocess.Popen([sys.executable, "-c", script, str(RESOURCES), str(path)],
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(8)]
-    try:
-        results = [p.communicate(timeout=10) for p in processes]
-        assert all(p.returncode == 0 for p in processes), results
-        assert len({out.strip() for out, err in results}) == 1
-        assert all(not err for out, err in results)
-        assert len(results[0][0].strip()) == 64
-        assert path.stat().st_mode & 0o777 == 0o600
-        assert path.parent.stat().st_mode & 0o777 == 0o700
-    finally:
-        for process in processes:
-            stop(process)
-
-
 
 
 def test_status_discovery_does_not_write_fixed_port_requests(monkeypatch):

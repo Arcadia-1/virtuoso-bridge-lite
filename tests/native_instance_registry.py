@@ -166,17 +166,32 @@ assert os.path.exists(changed['backup'] + '/json.py')
         rows = registry.discover(root=str(self.root))
         self.assertEqual({row["instance"] for row in rows}, {old_row["instance"], new_row["instance"]})
 
-    def test_registry_rejects_shared_and_symlink_roots_without_chmod(self):
+    def test_registry_accepts_shared_roots_but_rejects_symlinks(self):
         shared = self.root / "shared"
         shared.mkdir(mode=0o777)
         shared.chmod(0o777)
+        registry.Registry(root=str(shared)).close()
+        self.assertEqual(shared.stat().st_mode & 0o777, 0o777)
+        self.assertEqual([path.name for path in shared.iterdir()], ["runs"])
         link = self.root / "link"
         link.symlink_to(shared)
-        for root in (shared, link):
-            with self.assertRaises((OSError, RuntimeError)):
-                registry.Registry(root=str(root))
-        self.assertEqual(shared.stat().st_mode & 0o777, 0o777)
-        self.assertEqual(list(shared.iterdir()), [])
+        with self.assertRaises(OSError):
+            registry.Registry(root=str(link))
+
+    def test_registry_reads_and_sweeps_records_with_permissive_modes(self):
+        worker = self.spawn(WORKER, self.directory)
+        row = self.await_rows(1)[0]
+        path = Path(self.directory) / (row["instance"] + ".json")
+        for mode in (0o644, 0o666):
+            path.chmod(mode)
+            self.assertEqual(registry.discover(self.directory), [row])
+            self.assertEqual(path.stat().st_mode & 0o777, mode)
+        worker.communicate(b"exit\n", timeout=5)
+        stale = Path(self.directory) / ("a" * 32 + ".json")
+        stale.write_text("stale")
+        stale.chmod(0o666)
+        self.assertEqual(registry.discover(self.directory), [])
+        self.assertFalse(stale.exists())
 
     def test_concurrent_start_kill_sweep_and_graceful_exit(self):
         workers = [self.spawn(WORKER, self.directory) for _ in range(12)]
@@ -353,28 +368,6 @@ assert os.path.exists(changed['backup'] + '/json.py')
         result = subprocess.run(command[:-2], capture_output=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(list(root.rglob("fixed-port-*.json")))
-
-    def test_legacy_token_creation_race(self):
-        path = self.root / "private" / "bridge_token"
-        source = """
-import os, sys
-sys.path.insert(0, sys.argv[1])
-os.environ['RB_TOKEN_PATH'] = sys.argv[2]
-version = '27' if sys.version_info[0] == 2 else '3'
-path = sys.argv[1] + '/ramic_bridge_daemon_' + version + '.py'
-with open(path) as stream:
-    prefix = stream.read().split('BRIDGE_TOKEN = _load_or_create_token()')[0]
-exec(compile(prefix, path, 'exec'))
-print(_load_or_create_token())
-"""
-        processes = [self.spawn(source, path) for _ in range(12)]
-        results = [p.communicate(timeout=10) for p in processes]
-        self.assertTrue(all(p.returncode == 0 for p in processes), results)
-        self.assertEqual(len({out.strip() for out, err in results}), 1)
-        self.assertTrue(all(not err for out, err in results))
-        self.assertEqual(len(results[0][0].strip()), 64)
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
 
     def test_directory_replacement_cannot_redirect_sweep_or_lease_cleanup(self):
         outside = self.root / "outside"

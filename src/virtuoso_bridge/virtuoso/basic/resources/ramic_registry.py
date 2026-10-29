@@ -1,4 +1,4 @@
-"""Private Linux instance discovery; OS sockets alone allocate ports.
+"""Linux instance discovery; OS sockets alone allocate ports.
 
 Python 2.7/3. Record locks mark liveness only; no directory/allocation lock.
 Locked records are atomically published so sweepers never see an unlocked
@@ -27,7 +27,7 @@ def _same_file(fd, path):
     return (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino)
 
 
-def _private_directory(path, create):
+def _directory(path, create):
     if create:
         try:
             os.mkdir(path, 0o700)
@@ -61,21 +61,21 @@ class Registry(object):
         if path is None:
             import pwd
             root = expand_root(root) if root else scratch_root()
-            root_fd = _private_directory(root, create)
+            root_fd = _directory(root, create)
             try:
                 if legacy:
                     username = re.sub(r"[^a-zA-Z0-9._-]", "_", pwd.getpwuid(os.geteuid()).pw_name)[:64]
-                    parent_fd = _private_directory("/proc/self/fd/%d/virtuoso_bridge_%s" % (root_fd, username), False)
+                    parent_fd = _directory("/proc/self/fd/%d/virtuoso_bridge_%s" % (root_fd, username), False)
                     try:
-                        self.fd = _private_directory("/proc/self/fd/%d/runs" % parent_fd, False)
+                        self.fd = _directory("/proc/self/fd/%d/runs" % parent_fd, False)
                     finally:
                         os.close(parent_fd)
                 else:
-                    self.fd = _private_directory("/proc/self/fd/%d/runs" % root_fd, create)
+                    self.fd = _directory("/proc/self/fd/%d/runs" % root_fd, create)
             finally:
                 os.close(root_fd)
         else:
-            self.fd = _private_directory(path, create)
+            self.fd = _directory(path, create)
         self.anchor = "/proc/self/fd/%d" % self.fd
 
     def close(self):
@@ -94,7 +94,7 @@ class Registry(object):
             try:
                 fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
                 info = os.fstat(fd)
-                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+                if not stat.S_ISREG(info.st_mode):
                     continue
                 # Give a newly created temporary time to acquire its lock.
                 # Age is only a grace period: the lock and inode checks below
@@ -113,9 +113,8 @@ class Registry(object):
 
 def _read_record(fd):
     info = os.fstat(fd)
-    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
-            or info.st_mode & 0o077 or info.st_size > 16384):
-        raise ValueError("Invalid private metadata file")
+    if not stat.S_ISREG(info.st_mode) or info.st_size > 16384:
+        raise ValueError("Invalid instance metadata file")
     return json.loads(os.read(fd, 16384).decode("utf-8"))
 
 
@@ -207,7 +206,7 @@ class Lease(object):
 
 
 def bind_instance(sock, host, port=0, directory=None, pid=None, work_dir=None, backlog=8):
-    """Bind once (zero means OS ephemeral), then publish a private live record."""
+    """Bind once (zero means OS ephemeral), then publish a live record."""
     import fcntl
     import pwd
     work_dir = work_dir or os.getcwd()
@@ -256,7 +255,7 @@ def bind_instance(sock, host, port=0, directory=None, pid=None, work_dir=None, b
 
 
 def _discover(directory=None, root=None, legacy=False, read_only=False):
-    """Sweep stale records first, then read only private, locked records."""
+    """Sweep stale records first, then read locked records for this account."""
     import fcntl
     import pwd
     try:
@@ -274,8 +273,7 @@ def _discover(directory=None, root=None, legacy=False, read_only=False):
             try:
                 fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
                 info = os.fstat(fd)
-                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
-                        or info.st_mode & 0o077 or info.st_size > 16384):
+                if not stat.S_ISREG(info.st_mode) or info.st_size > 16384:
                     continue
                 try:
                     _flock(fd, fcntl.LOCK_EX)

@@ -18,16 +18,19 @@ establish upstream design acceptance.
 
 ## Records and selection
 
-A **record** is private candidate metadata published by a running daemon. A
+A **record** is candidate metadata published by a running daemon. A
 **selection** is a saved choice of an authenticated record. **Registered sessions**
 use the new publication scheme; older fixed-port sessions can serve authenticated
 requests without records.
 
 New generated bootstraps bind `127.0.0.1:0`, read `getsockname()` and hold the socket
-before publishing a locked 0600 record under a private 0700 `runs/`. Metadata
+before publishing a locked record (created with mode 0600 under a 0700 `runs/`). Metadata
 contains port, Virtuoso PID, daemon PID, UID, user, work directory and random
 instance ID. The explicit listen-all option remains. Locks establish liveness;
 opened descriptors and inodes anchor filesystem checks.
+Registry reads and cleanup do not enforce filesystem owners or permission modes;
+record selection still checks the account metadata and connections authenticate
+the complete selected record.
 
 Client discovery reads without creating directories, provisioning credentials,
 writing allocation requests or removing stale files. Daemon publication retains
@@ -71,18 +74,16 @@ suspect state using the [recovery procedure](../../skills/virtuoso/references/co
 
 General scratch retains the stock `/tmp` parent and
 `virtuoso_bridge_<user>/<client>/<leaf>` layout. Default records and generated
-bootstrap use the private `/tmp/virtuoso_bridge_<user>` child, with `runs/` and
-`daemon/`. Explicit private discovery roots remain supported; alternate workflow
+bootstrap use the `/tmp/virtuoso_bridge_<user>` child, with `runs/` and
+`daemon/`. Explicit discovery roots remain supported; alternate workflow
 parents retain username/client nesting. Workflow path helpers retain their
 original literal-root behavior; use absolute paths for remote staging. Registry
 helpers can expand `~/` on the daemon host. Never chmod `/tmp` or an account home.
-Scratch-parent ownership/mode gates are removed; existing private-child checks
-from the main branch and private registry-record checks remain. Scratch username
-resolution has no added deadline.
+Existing workflow private-child checks from the main branch remain.
 
 Generated setup embeds the daemon registry root. Deployment/GUI hosts must see
 the bundle. Shared setup uses installer `--scratch-root`, otherwise daemon
-`RB_SCRATCH_ROOT`, then `VB_REMOTE_SCRATCH_ROOT`, then the default private child.
+`RB_SCRATCH_ROOT`, then `VB_REMOTE_SCRATCH_ROOT`, then the default per-account child.
 Client settings do not change a loaded CIW. The older nested registry layout
 remains readable. No existing job or record is moved automatically.
 

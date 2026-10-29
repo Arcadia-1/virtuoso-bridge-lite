@@ -217,254 +217,111 @@ CIW identity. Read the checkout's profile documentation for supported fields.
 
 ### Selecting a running instance
 
-Daemons use OS-assigned ports. `virtuoso-bridge start` removes stale records,
-then discovers instances belonging to the SSH user. Optionally filter by
-Virtuoso's absolute working directory:
+New bootstraps use OS-assigned ports. `start` discovers live instances for the
+SSH user without changing allocation requests. Optionally select a project:
 
 ```dotenv
 VB_REMOTE_WORK_DIR=/projects/project-a
 ```
 
-One match connects. Multiple matches list port/PID/directory and require:
+One matching instance connects automatically. Multiple matches require an exact
+remote port, which must also match the configured working directory:
 
 ```bash
+virtuoso-bridge sessions --json
 virtuoso-bridge start --port 65123
+virtuoso-bridge status --port 65123
 ```
 
-Use `sessions --json` to list records without selecting or provisioning, and
-`status --port PORT` to check an exact instance. `start --port` overrides
-`VB_REMOTE_PORT`. CLI `--port` is exact. The environment port prefers a matching
-record but permits a unique new registered session. A successful discovery with no project candidates
-can fall back to that configured old endpoint when no saved registered identity
-or exact CLI selector exists. Authentication remains required. Discovery errors,
-ambiguity and authentication failures never cause fallback. Selection never writes
-or clears allocation requests.
-Profiles remain optional; one host and one `.env` suffice.
+`VB_REMOTE_PORT` prefers a matching record. If discovery succeeds with no project
+candidates, it can use the configured fixed-port endpoint. Discovery errors,
+ambiguity, authentication failures and a saved registered selection do not fall
+back. Existing fixed-port configuration remains supported.
 
-For a deliberate persistent allocation request, run the installed helper on the
-daemon host (replace paths and project directory):
+If no endpoint is available, `start` prints a `load("...")` instruction. Load it
+in the intended idle CIW, then rerun `start`. Add the load line to `.cdsinit` for
+future sessions. Uploaded code takes effect only after it is loaded in Virtuoso.
+
+For a persistent fixed-port request, run the installed helper on the daemon host:
 
 ```bash
 /usr/bin/python3 /opt/virtuoso-bridge/v2/ramic_registry.py --scratch-root /home/user/.virtuoso-bridge --configure --work-dir /projects/project-a --port 65123
-# Clear that directory's request by omitting --port:
+# Clear the request by omitting --port:
 /usr/bin/python3 /opt/virtuoso-bridge/v2/ramic_registry.py --scratch-root /home/user/.virtuoso-bridge --configure --work-dir /projects/project-a
-# Clear the separate account-wide request by omitting --work-dir too:
-/usr/bin/python3 /opt/virtuoso-bridge/v2/ramic_registry.py --scratch-root /home/user/.virtuoso-bridge --configure
 ```
 
-Directory requests take precedence over account requests. Clear both applicable
-scopes to restore automatic allocation. A requested port must bind or startup
-fails; existing daemons are unaffected. Earlier clients may have left these
-requests behind. Ordinary `start`, `status` and `sessions` never repair them.
-
-Without a usable registered or configured legacy endpoint, start prints a
-`load("...")` instruction and exits nonzero without a usable tunnel. In the intended idle CIW, stop its
-old child with `RBStop()`, wait for exit, then load the new setup and rerun
-`start`. A working old endpoint needs no upgrade simply because it has no record. Missing
-build metadata means unknown compatibility; a different build is informational
-unless a required protocol capability is absent. Never restart another CIW.
-`RBSetPort(N)` switches an idle instance; `RBSetPort(0)` consults saved requests,
-then defaults to automatic allocation. Files uploaded to disk do not replace
-functions already loaded in Virtuoso.
-
-`restart` keeps the saved CIW choice, schedules one bounded stop/wait/start,
-then authenticates its replacement record and reconnects to the new endpoint.
-For an old fixed-port daemon, restart verifies the same authenticated CIW birth
-and a changed daemon identity, using the old loader functions with a bounded wait.
-It restarts the loaded configuration; it does not load newly deployed files.
-A busy lane or mismatched exact selector prevents restart/adoption. After a
-timeout, inspect the original outcome and sessions before any explicit retry;
-an uncertain restart is never replayed.
-
-`RBSetPort(N)` keeps a fixed-port instance discovery-managed. Token generation
-uses the original daemon logic, including `RB_TOKEN_PATH`. Registered clients
-still require an authenticated handshake matching the selected record.
-
-`RBStopAll()` now stops only this CIW's tracked child, like `RBStop()`, rather
-than every daemon under the account. For an untracked child, inspect out of band
-and verify its owner, command, birth identity and exact parent/CIW association
-before an operator terminates it. A saved PID or port alone is insufficient.
-Preserve other CIWs and leave unknown-origin dialogs alone.
+Directory requests take precedence over account-wide requests, which omit
+`--work-dir`. Requests affect future starts; an occupied requested port fails.
+`RBSetPort(N)` switches an idle instance. `RBSetPort(0)` consults saved requests
+before using an OS-assigned port.
 
 ### Two projects under the same account
 
 Keep separate `.env` files with the same host/user and each project's absolute
-`VB_REMOTE_WORK_DIR`. Named profiles (`-p NAME`, using case-sensitive
-`VB_*_NAME` suffixes) remain optional. Replace sample ports with listed records:
+`VB_REMOTE_WORK_DIR`. Named profiles remain optional:
 
 ```bash
-virtuoso-bridge sessions --json --env /local/project-a.env
-virtuoso-bridge start --port 65123 --env /local/project-a.env
-virtuoso-bridge status --env /local/project-a.env
+virtuoso-bridge start --env /local/project-a.env
 virtuoso-bridge eval 'getWorkingDir()' --env /local/project-a.env
-virtuoso-bridge start --port 65124 --env /local/project-b.env
-virtuoso-bridge status --env /local/project-b.env
+virtuoso-bridge start --env /local/project-b.env
 virtuoso-bridge eval 'getWorkingDir()' --env /local/project-b.env
 ```
 
-Check the actual working directory before editing. Two CIWs may share one
-directory, so select an exact port when needed. One match connects automatically;
-without a project constraint on a shared UID, it could be a colleague's CIW.
-Project filters prevent mistakes; they are not a separate access boundary.
+Use `--port` when more than one CIW shares the selected directory. Check the
+working directory before editing; project filters distinguish sessions within
+an account, not access by another process using that account.
 
 ### Shared bootstrap
 
-Install once into a new protected directory on the Cadence host:
+Install a new versioned bundle on the Linux Cadence host:
 
 ```bash
 uv run python tools/install_shared_daemon.py /opt/virtuoso-bridge/v2 --python /usr/bin/python3
 ```
 
-Use the printed load line in each project's `.cdsinit`. Set
-`VB_DAEMON_SETUP=/opt/virtuoso-bridge/v2/virtuoso_setup.il` on clients to use
-that same path in load instructions. Without it, the bridge generates a
-private bootstrap at `/tmp/virtuoso_bridge_<user>/daemon/virtuoso_setup.il`,
-shared across projects by default.
+Use the printed load line in project `.cdsinit` files and set
+`VB_DAEMON_SETUP=/opt/virtuoso-bridge/v2/virtuoso_setup.il` on clients. The installer
+requires a new protected destination; install upgrades into a new versioned path.
 
-Generated bundles are reused only when both inventory and bytes match. Automatic
-worker launches disable bytecode writes; inspect and explicitly replace old
-cache-bearing bundles. Unexpected members are refused before
-any existing bundle file is changed. After reviewing the configuration, authorize
-replacement with `start --replace-setup` (Python API: `replace_setup=True`). This
-changes generated account code only and retains the previous complete bundle at
-the printed private backup path. A bounded lock serializes publishers; a staged
-directory and recovery name preserve the old bundle across an interrupted
-directory exchange. The two renames leave a brief availability gap; the next
-publication can recover an interrupted exchange. Post-commit errors report that
-the bundle is active. Backups are retained: inspect exact paths and ensure no
-CIW/job uses them before operator removal. Running CIWs need an explicit load
-to change loaded code.
-This option never overwrites a shared installation: install a new versioned path.
+Without `VB_DAEMON_SETUP`, `start` prepares
+`/tmp/virtuoso_bridge_<user>/daemon/virtuoso_setup.il` when no endpoint is available.
+Generated bundles are reused when their inventory and content match. To replace
+a differing bundle, use `start --replace-setup`; the previous bundle is retained
+at the printed backup path. Shared installations are never replaced by clients.
+Load the new setup explicitly to update a running CIW.
 
-`start` prepares code when neither a registered session nor a usable configured
-legacy endpoint is available. To stage a generated
-remote update while registered CIWs remain running, explicitly call
-`SSHClient.from_env(keep_remote_files=True, read_selection=False, replace_setup=True)`
-and that client's `ensure_remote_setup()`, then `close()` in `finally`.
-Alternatively install a new versioned shared bundle. Neither staging operation
-loads or restarts a CIW; coordinate the subsequent stop/wait/load separately.
+The registry uses `<root>/runs`, with `/tmp/virtuoso_bridge_<user>` as its default
+root. Set `VB_REMOTE_SCRATCH_ROOT` on clients and the matching `RB_SCRATCH_ROOT`
+on daemons, or pass `--scratch-root` to the shared installer. Generated setup
+embeds this root. Deployment, GUI and daemon hosts must see the same files;
+client configuration edits do not update an already loaded CIW.
 
-Order: prepare the Linux host and an absolute Python interpreter; have a trusted
-installer create a new protected bundle; add its load line to project `.cdsinit`;
-configure the client; list/select an instance; check signed status. Installation
-refuses overwrite, symlink ancestors, foreign owners and group/other-writable
-ancestors (including `/tmp`). All users loading the bundle trust its installing
-UID, which need not be root. Upgrade into a new versioned path.
+### Status and restart
 
-General scratch retains the stock `/tmp` parent and
-`virtuoso_bridge_<user>/<client>/<leaf>` workflow layout. The default private
-registry/bundle root is `/tmp/virtuoso_bridge_<user>`; daemon and client must agree
-on this root. Explicit private roots from preview installations remain supported.
-Use absolute scratch paths for remote workflow staging; the original path helpers
-do not expand `~/`. The registry helper can expand it on the daemon host.
-Generated setup includes the registry root; shared setup takes `--scratch-root`, otherwise daemon `RB_SCRATCH_ROOT`,
-then daemon `VB_REMOTE_SCRATCH_ROOT`, then the default. A stale `RB_SCRATCH_ROOT`
-inside an existing Virtuoso wins over client settings. Client `.env` edits do
-not update a running CIW. The absolute project directory filter is not this root.
-Use a private child instead of `/tmp`; do not chmod `/tmp` or the account home.
-All relevant hosts must see the chosen files.
+`status` authenticates the selected instance without sending SKILL and checks
+Spectre independently. `restart` schedules one stop/wait/start in the selected
+idle CIW, then authenticates its replacement. It uses the loaded configuration;
+it does not load newly deployed files. After an uncertain result, inspect the
+original outcome before requesting another restart.
 
-Records are private under `<root>/runs`; the authentication secret uses the
-original home-based path or configured override. Local clients honor
-`VB_BRIDGE_TOKEN`, daemons honor `RB_TOKEN_PATH`, and SSH clients use the original
-remote home token path. Keep those paths aligned. An unauthenticated daemon
-cannot satisfy registered clients' signed record check. A shared UID is one
-trust boundary: project and port filters prevent mistakes, not access by another
-process using that UID. A signed response must match the whole record; record
-files alone are not authentic proof of daemon identity.
-
-Existing artifacts in old `/tmp/virtuoso_bridge_<user>/...` or client/profile
-directories are not moved or deleted. Durable jobs and other sessions may still
-use them. An explicit home-based root consumes home quota; choose a safe private
-root according to site needs. Discovery also reads the deployed older
-`<root>/virtuoso_bridge_<user>/runs` layout with the same ownership and lock
-checks. An already loaded daemon keeps its original record until explicit upgrade;
-loading the new bootstrap places its next record in `<root>/runs`.
-
-`status` reports host roles, endpoints and other managed tunnels, uses no SKILL,
-and reads existing credentials without creating them. Spectre is checked even
-if discovery fails; bridge status remains nonzero until authenticated. Automatic
-mode has no legacy CIW banner identity file. A fresh client can reconcile a
-vanished instance only within an explicit project constraint and before sending
-work; an exact port remains exact. Uncertain application requests are never
-replayed. Stop a retained tunnel using its original `--env`/profile and
-`stop --port PORT`; this targets saved endpoint state without rediscovery.
-Tunnel stop uses the saved PID without process-birth or argv verification;
-inspect suspect state using the [recovery procedure](#legacy-tunnel-recovery).
-Windows ACLs, rather than POSIX mode bits, protect
-local state. `bootstrap --window` needs an existing generated setup or
-`VB_DAEMON_SETUP`; it never proves completion by finding an unrelated instance.
-
-Automatic local discovery and daemon installation require Linux (`flock`, UID
-ownership and `/proc/self/fd`). Windows/macOS clients can use SSH to Linux;
-independent Spectre workflows and explicit legacy APIs retain their own support.
-
-See the [discovery design](../../../docs/adr/0004-instance-discovery.md) for
-locking and security, and [shared-CIW protection](shared-ciw-dialogs.md) before
-recovering an uncertain request.
+`RBStopAll()` stops only the current CIW's tracked child.
+`bootstrap --window` requires an existing generated setup or `VB_DAEMON_SETUP`
+and confirms completion against the selected CIW's record and signed reply.
 
 ### Legacy tunnel recovery
 
-Use the original `.env`/profile. Inspect exact local state paths, endpoints and
-PIDs without SSH or a running daemon, then try explicit stop:
+Inspect retained state and stop its remote endpoint using the original config:
 
 ```bash
 virtuoso-bridge status --inspect-state --env /local/bridge.env
 virtuoso-bridge stop --port 65085 --env /local/bridge.env
 ```
 
-Use `remote_port`, not local `port`: for `port=12345, remote_port=23456`, stop with
-`virtuoso-bridge stop --port 23456`. Same-owner historical non-secret 0644 metadata
-in a 0755 application directory remains readable if neither is writable by
-others. Unsafe files are reported by path without trusting their contents.
-Stop uses the original saved-PID behavior on all platforms: it does not verify
-the executable, birth time, SSH argv or inherited configuration, and does not
-wait for exit. A reused PID may terminate unrelated work, and a denied signal
-may still clear state. Inspect suspect PIDs before stopping them. Current
-`ssh -G` output cannot prove a running process's historical configuration.
+Use the reported `remote_port`, not the local forwarded `port`. Deleting a state
+file does not stop its listener. See [shared-CIW protection](shared-ciw-dialogs.md)
+before recovering an uncertain request.
 
-On Linux, substitute the reported PID and inspect the owner, executable, start
-time and full argv. Recheck immediately before terminating that exact process:
-
-```bash
-cat -- /absolute/reported/state-user@host_port.json  # inspect retained JSON as untrusted data
-ps -p 12345 -o pid=,user=,lstart=,args=
-readlink /proc/12345/exe
-tr '\0' '\n' < /proc/12345/cmdline
-# Only after verifying this standalone user-owned forward serves no other work:
-kill -TERM 12345
-ps -p 12345 -o pid=,lstart=,args=  # wait for the original process to exit
-# Then remove only the exact reported stale state file:
-rm -- /absolute/reported/state-user@host_port.json
-```
-
-On Windows PowerShell, inspect the command, creation time and owner:
-
-```powershell
-Get-Content -LiteralPath 'C:\absolute\reported\state-user@host_port.json'
-Get-CimInstance Win32_Process -Filter 'ProcessId = 12345' |
-    Select-Object ProcessId,ExecutablePath,CreationDate,CommandLine
-Get-CimInstance Win32_Process -Filter 'ProcessId = 12345' |
-    Invoke-CimMethod -MethodName GetOwner
-# Recheck identity and ensure this process serves no other forwards, then:
-Stop-Process -Id 12345
-Wait-Process -Id 12345 -Timeout 5 -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath 'C:\absolute\reported\state-user@host_port.json'
-```
-
-Use verified values and literal paths only. Remove a selection pointer only after
-confirming it names that stopped target. Retain evidence after an uncertain stop.
-Deleting JSON alone does not release a listener. A cleanup failure after verified
-termination reports a warning with the exact path; inspect it before restarting.
-Discovery-mode shared bootstrap files are never removed by CLI or Python `stop()`.
-
-### Upgrade an existing fixed-port deployment
-
-Upgrading is optional for a working old endpoint. To adopt new loaded code,
-follow the [unreleased note](../../../docs/releases/unreleased.md): recover
-the old tunnel, choose the intended new
-setup, update `.cdsinit` only where its path changed, stop/wait/load in each
-intended idle CIW, then run `sessions`, `start`, signed `status` and
-`eval 'getWorkingDir()'`. On fresh setup, load after the first no-record start
-and run `start` again. Keep valid private roots and exact selectors. Client
-configuration edits do not alter running CIWs; preserve old job artifacts.
+Local discovery requires Linux (`flock` and `/proc/self/fd`); Windows/macOS
+clients can use SSH to the Linux daemon host. See the
+[discovery design](../../../docs/adr/0004-instance-discovery.md) for record
+publication, selection and lifecycle details.

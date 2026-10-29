@@ -16,7 +16,7 @@ import pytest
 from virtuoso_bridge import cli
 from virtuoso_bridge.instance_discovery import DAEMON_BUILD, InstanceSelectionError
 from virtuoso_bridge.models import ExecutionStatus, VirtuosoResult
-from virtuoso_bridge.transport import ssh, tunnel
+from virtuoso_bridge.transport import tunnel
 from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
 from tests.test_instance_discovery import row
 

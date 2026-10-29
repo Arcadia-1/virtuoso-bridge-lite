@@ -34,76 +34,25 @@ such where it is defined.
 
 ## Native Linux instance discovery checks
 
-The stdlib-only harness below runs real temporary daemons, sockets and kernel
-locks without Cadence, a PDK, SSH, pytest or existing credentials:
+Run the stdlib-only harness with temporary daemons, sockets and kernel locks:
 
 ```bash
 python3 tests/native_instance_registry.py src/virtuoso_bridge/virtuoso/basic/resources
-```
-
-To exercise the same allocation, credential and real-daemon protocol checks
-with Python 2.7 workers, keep the harness on Python 3 and select the interpreter:
-
-```bash
+# Optional actual Python 2.7 workers; the harness stays on Python 3:
 VB_TEST_WORKER_PYTHON=/path/to/python2.7 python3 tests/native_instance_registry.py src/virtuoso_bridge/virtuoso/basic/resources
 ```
 
-It covers twelve concurrent ephemeral allocations, fixed-port races and
-conflicts, request flags and private permissions, SIGKILL/discovery cleanup,
-graceful cleanup, nonblocking liveness checks, symlinks/FIFOs, concurrent
-legacy credential creation and overrides, directory replacement, signed instance identity,
-rejection of invalid/foreign credentials, and absence of secrets in output. All files
-are synthetic and temporary. It does not switch Linux UIDs or test native
-SKILL timers, a live CIW, or electrical equivalence. The related pytest cases
-skip Linux-only operations on Windows.
+It covers concurrent allocation, fixed-port requests, record liveness and cleanup,
+filesystem edge cases, bundle publication and signed daemon authentication.
+Fixtures are synthetic; it needs no Cadence, PDK, SSH or existing credentials.
+Non-Linux runs skip before creating fixtures.
 
-Linux CI runs the harness on both supported Python matrix lanes. Its Python
-3.13 lane builds CPython 2.7.18 from the pinned python.org source and verified
-SHA256, installs it under runner temporary storage, then selects that actual
-worker with `VB_TEST_WORKER_PYTHON`. The harness itself stays on Python 3.
-Non-Linux invocation exits with an explicit skip before creating fixtures.
-
-Both Linux matrix jobs (Python 3.9 and 3.13), including actual Python 2.7 worker
-execution on the 3.13 lane, are required acceptance evidence for instance
-discovery. Windows cannot establish registry lock liveness, POSIX ownership,
-`/proc` identity or shell behavior. Obtain a green run on the current hosted
-runner image before merge; a successful local build is separate evidence.
-
-`test_generated_bundle.py` exercises real Linux locked publication, competing
-publishers, refusal before replacement, staging rollback and interrupted-exchange
-recovery. `test_discovery_round2.py` covers CLI output/routing, local screenshot
-paths with real file copies, build parity, private state reads and restart request
-ordering. Its Linux registered-entrypoint test uses real temporary locked records.
-Mocked SKILL image output and restart replies are not native Cadence evidence.
-
-`test_discovery_compatibility.py` covers discovery-first use of an old configured
-port, automatic adoption with unchanged configuration, real loopback signed
-hello/authentication refusal, lazy Python connection, bounded restart
-reconciliation without replay, and the removal of scratch-resolution deadlines. Its native POSIX
-metadata case is skipped on Windows. SSH stopping uses the original saved-PID
-behavior; executable/birth/argv verification is not part of this revision.
-
-`test_remote_deploy_dirs.py` executes bounded POSIX shells against real private,
-permissive and symlink fixtures for the original deployment checks.
-`test_generated_bundle.py` also covers unexpected inventory,
-clean replacement, backup bookkeeping and cleanup errors. The native registry
-harness checks that read-only discovery leaves stale files intact; daemon-side
-cleanup is tested separately. Windows skips these Linux cases. The generated-bundle
-suite is included in the Windows transport job; the full Linux jobs execute
-the native cases. A configured CI job is not evidence that it has passed.
-
-`VB_TEST_DAEMON_RESOURCES=/absolute/resources` selects alternate daemon resources
-for source checks that support it; `test_auto_port_state.py` reports the resolved
-path as the `daemon_resources` test property. Those checks only inspect source.
-Do not present them as SKILL execution or silently test an installed old bundle.
-The native harness takes its resource path explicitly and exercises startup,
-publication, active-writer protection, stale cleanup and authentication.
-
-Use the project virtualenv and registered `virtuoso-bridge` entrypoint for CLI
-subprocess tests. Keep live `.env` settings out of offline test runs. Linux shell
-tests must actually execute a bounded shell, including successful private staging
-and failure cases; Windows/source-only assertions do not replace these checks.
-Report Windows, native Linux, Python 2.7 and Cadence results separately.
+Linux CI runs Python 3.9 and 3.13; the latter also builds pinned CPython 2.7.18
+for worker checks. Obtain green Linux results before merge. Windows cannot
+verify POSIX permissions, `flock` or `/proc` behavior. Offline checks do not
+establish native SKILL, CIW or electrical equivalence; report live results
+separately. `VB_TEST_DAEMON_RESOURCES` selects alternate resources for source
+checks, while the native harness takes its resource path explicitly.
 
 ## Live tests
 
