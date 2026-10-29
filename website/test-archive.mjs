@@ -78,7 +78,9 @@ try {
   });
   const card=page.locator('.wf-column[data-set="1"][data-group="2"] .wf-record').nth(hit.i).locator('.wf-card');
   const before=await card.boundingBox();
-  await page.mouse.move(hit.x,hit.y);await page.waitForTimeout(650);
+  await page.mouse.move(hit.x,hit.y);
+  assert.equal(await page.locator('.wf-detail-title').textContent(),await card.locator('.wf-title').textContent(),'Pointer entry updates details immediately, before the lift transition');
+  await page.waitForTimeout(300);
   const after=await card.boundingBox();
   assert.equal(after.width,before.width,'Hover must not enlarge card');
   assert.equal(after.height,before.height,'Hover must not enlarge card');
@@ -188,5 +190,5 @@ try {
   assert.notDeepEqual(await touchPositions(),touchHeld,'Touch resumes scrolling');
   await touchContext.close();
   console.log('PASS: persistent Pause/Resume via Enter, Space and touch; category/language/visibility changes; reduced-motion preference changes.');
-  console.log('PASS: 53 matching destinations; five collection pans and side arrows; downward flow; stationary dwell selects without enlargement; real GitHub card clicks from all three columns; bilingual section hint; resume; keyboard; Chinese index and counts; reduced motion; mobile widths.');
+  console.log('PASS: 53 matching destinations; five collection pans and side arrows; downward flow; immediate hover details without enlargement; real GitHub card clicks from all three columns; bilingual section hint; resume; keyboard; Chinese index and counts; reduced motion; mobile widths.');
 } finally {await browser.close();}

@@ -34,7 +34,9 @@ try {
       const label = lang + " / " + width;
       await page.setViewportSize({ width, height: 900 });
       await page.goto(new URL("/?lang=" + lang, base).href, { waitUntil: "networkidle" });
+      await page.locator('#ecosystem').scrollIntoViewIfNeeded();
       await page.locator(".archive").waitFor({ state: "visible" });
+      await page.evaluate(()=>scrollTo({top:0,behavior:'instant'}));
       const metrics = await page.evaluate(() => {
         const primary = document.querySelector(".intro .primary");
         const guide = document.querySelector("#docs .links a");

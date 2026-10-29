@@ -16,12 +16,9 @@
 .hero-flow svg text{fill:#172b38}
 .hero-flow svg .system-caption{fill:#425563}
 .hero-flow .system-routes{stroke:#172b38}
-.hero-flow .system-signals{stroke:#d65328}
 .hero-flow .system-guides{stroke:#93a3aa}
 .hero-flow .companion-white{stroke:#fff}
 .hero-flow circle{stroke:#d65328;fill:#fff}
-@keyframes system-junction{0%,20%,34%,100%{fill:#fff}24%,29%{fill:#d65328}}
-@keyframes system-arrival{0%,53%,72%,100%{fill:#fff}60%,66%{fill:#d65328}}
 
 /* Crisp paper, with a restrained blue tint identifying the VB column. */
 .band-skillbridge{background:#f0f6fa;border-top-color:#c7d9e4}
