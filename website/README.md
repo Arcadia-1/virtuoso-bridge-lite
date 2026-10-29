@@ -11,7 +11,9 @@ Durable Object storage. It does not connect to Cadence.
 The homepage uses a cool paper archive layout, a staggered two-line headline,
 and a signal diagram from AI agent through the bridge to three tools. Python labels
 the agent input; SKILL/CLI sits with the bridge. Spectre, Maestro and Virtuoso appear
-from left to right, with local/remote and non-live illustration captions. Its first screen names the Lite core:
+from left to right, with local/remote and non-live illustration captions. Signal
+geometry is sampled once; small transform/opacity layers animate over the static
+SVG, pausing offscreen or in a hidden tab and respecting reduced motion. Its first screen names the Lite core:
 Spectre simulation and PDK/CDF callbacks, everyday schematic/symbol/GDS operations,
 and raw SKILL for the rest. Advanced configuration remains optional.
 All pages keep the same product links, language switch and analytics footer,
@@ -21,13 +23,14 @@ dependency. Edit `docs/index.html` directly. The complete ecosystem index is ope
 by default and works without JavaScript. It is the single content source for
 the waterfall browser; five category links immediately below the index summary
 jump to the original groups. No search controls are needed. The waterfall
-appears only after initialization. Five collection buttons and small previous/next
+initializes when its section approaches the viewport, keeping offscreen card
+construction out of the hero entrance. Five collection buttons and small previous/next
 arrows pan the three-column view, with graduated blur confined to the outer edges
 and project details alongside. Side arrows stop at the first and last collection.
-Hovering a card pauses the downward flow; a brief stationary dwell selects and lifts
+Hovering a card immediately selects its details, pauses the downward flow and lifts
 it without enlargement. Keyboard focus selects immediately. The chosen project stays
 in the detail panel until another card is deliberately selected or a category changes.
-Brief crossings do not select a card; dwelling on another card changes the preview.
+Entering another card changes the preview without a hover delay.
 The detail panel does not pause the flow. Cards link directly to GitHub; the section
 introduction explains this in both languages, and the detail panel has no separate
 changing link. A compact Pause/Resume button beside the collection tabs supports
@@ -40,10 +43,11 @@ preferences. The complete index remains available independently of the animation
 records original destinations
 and section text hashes to prevent accidental omissions during layout changes;
 update it deliberately when changing actual product content.
-Run `node test-header.mjs [site URL]`, `node test-homepage.mjs [site URL]`
-and `node test-archive.mjs [site URL]`
-for browser regressions, with Playwright available via `PLAYWRIGHT_MODULE_PATH`
-if it is not installed locally. These checks opt out of visitor tracking.
+Run `node test-header.mjs [site URL]`, `node test-homepage.mjs [site URL]`,
+`node test-archive.mjs [site URL]` and `node test-home-motion.mjs [site URL]`
+for browser regressions. The motion check covers signal lifecycle and route
+alignment. Set `PLAYWRIGHT_MODULE_PATH` if Playwright is not installed locally.
+These checks opt out of visitor tracking.
 `docs/favicon.svg` and `docs/assets/mark.svg` hold the italic VB mark (the favicon
 turns white in dark browser tabs); the PNG icons and social preview
 are derived assets and must be regenerated when the mark changes.

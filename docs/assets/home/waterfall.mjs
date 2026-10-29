@@ -14,8 +14,7 @@ export function createWaterfall(root, groups, language) {
   let selected = 2, paused = false, hovered = null, focused = null;
   let visible = false, frame = 0, last = 0, panning = false, panTimer;
   let detailGroup = 2, detailItem = 0, detailTime = 0, leaveTimer;
-  let detailHovered = false, userSelected = false, hoverTimer;
-  let hoverX = 0, hoverY = 0;
+  let detailHovered = false, userSelected = false;
   const readingDetails = () => detailHovered || detail.contains(document.activeElement);
 
   // Repeat only the presentation, keeping the five real collection counts intact.
@@ -118,21 +117,12 @@ export function createWaterfall(root, groups, language) {
     panorama.style.transform = `translateX(${viewport.clientWidth/2-column.offsetLeft-column.offsetWidth/2}px)`;
   }
   function clearHover() {
-    clearTimeout(hoverTimer);
     hovered?.classList.remove('is-hovered');
     hovered = null;
   }
   function selectCard(card) {
     userSelected = true;
     showDetails(Number(card.closest('.wf-column').dataset.group), Number(card.dataset.item));
-  }
-  function settleHover(card) {
-    clearTimeout(hoverTimer);
-    hoverTimer = setTimeout(() => {
-      if (hovered !== card) return;
-      selectCard(card);
-      card.classList.add('is-hovered');
-    }, 240);
   }
   function choose(i) {
     clearTimeout(leaveTimer);
@@ -151,7 +141,8 @@ export function createWaterfall(root, groups, language) {
   }
   function measure() {
     viewport.style.setProperty('--wf-column-width', `${Math.max(174,(viewport.clientWidth-44)/3)}px`);
-    lanes.forEach(lane => {lane.period = lane.columns[1].querySelector('.wf-copy').offsetHeight; paint(lane);});
+    const periods = lanes.map(lane => lane.columns[1].querySelector('.wf-copy').offsetHeight);
+    lanes.forEach((lane, i) => {lane.period = periods[i]; paint(lane);});
     position(false);
   }
   function translate() {
@@ -183,26 +174,19 @@ export function createWaterfall(root, groups, language) {
   detail.addEventListener('pointerdown', () => {userSelected = true;});
   cards.forEach(card => {
     card.addEventListener('pointerenter', event => {
-      if (event.pointerType !== 'mouse' || panning) return;
+      if (event.pointerType !== 'mouse') return;
       clearTimeout(leaveTimer);
       clearHover(); hovered = card;
-      hoverX = event.clientX; hoverY = event.clientY;
-      settleHover(card); sync();
-    });
-    // Wait for a stationary pointer instead of selecting on brief crossings.
-    card.addEventListener('pointermove', event => {
-      if (hovered !== card || card.classList.contains('is-hovered')) return;
-      if (Math.hypot(event.clientX-hoverX, event.clientY-hoverY) < 4) return;
-      hoverX = event.clientX; hoverY = event.clientY;
-      settleHover(card);
+      selectCard(card);
+      card.classList.add('is-hovered');
+      sync();
     });
     card.addEventListener('pointerleave', () => {
       if (hovered === card) {
-        clearTimeout(hoverTimer);
         leaveTimer = setTimeout(() => {clearHover(); sync();}, 180);
       }
     });
-    card.addEventListener('pointerdown', () => {clearTimeout(hoverTimer); selectCard(card);});
+    card.addEventListener('pointerdown', () => selectCard(card));
     card.addEventListener('focus', () => {
       if (!card.matches(':focus-visible')) return;
       focused = card;

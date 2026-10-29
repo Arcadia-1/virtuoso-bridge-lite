@@ -83,28 +83,22 @@
 
 /* Transit curves: motion follows the topology; names sit outside every path. */
 .hero-flow{pointer-events:none;user-select:none}
-.system-signals path{stroke-dasharray:13 100;stroke-dashoffset:16;opacity:0;animation:system-packet 7s 1.8s linear infinite;animation-play-state:paused}
-.system-signals .signal-output{animation-name:system-branch-packet}
-.system-signals .signal-center{animation-delay:1.92s}
-.system-signals .signal-right{animation-delay:2.04s}
-.node-bridge{animation:system-junction 7s 1.8s linear infinite;animation-play-state:paused}
-.node-tool{animation:system-arrival 7s 1.8s linear infinite;animation-play-state:paused}
-.node-center{animation-delay:1.92s}.node-right{animation-delay:2.04s}
+/* Constant-time compositor animation: no per-frame SVG stroke/fill changes. */
+.system-motion{position:absolute;left:0;top:0;width:720px;height:775px;transform-origin:0 0;pointer-events:none}
+.system-packet,.system-node-light{position:absolute;display:block;margin:0;border:0;border-radius:50%;background:#d65328;opacity:0;will-change:transform,opacity}
+.system-packet{width:9px;height:9px;left:0;top:0}
+.system-reduced .system-motion{display:none}
 .system-enter .system-routes>.route-draw{stroke-dasharray:100;animation:system-route-reveal .65s ease-out both;animation-play-state:paused}
 .system-enter .system-routes>.route-output{animation-duration:1.1s;animation-delay:.65s}
 .system-enter .system-guides path{stroke-dasharray:100;animation:system-route-reveal .65s ease-out both;animation-play-state:paused}
 .system-enter .system-guides .companion-output{animation-duration:1.4s;animation-delay:.35s}
-.system-running .system-signals path,.system-running .node-bridge,.system-running .node-tool,.system-running .system-routes>.route-draw,.system-running .system-guides path{animation-play-state:running}
+.system-running .system-routes>.route-draw,.system-running .system-guides path{animation-play-state:running}
 @keyframes system-route-reveal{from{stroke-dashoffset:100}to{stroke-dashoffset:0}}
 
 
 
-@keyframes system-packet{0%{stroke-dashoffset:16;opacity:0}3%{opacity:1}24%{stroke-dashoffset:-100;opacity:1}25%,100%{stroke-dashoffset:-100;opacity:0}}
-@keyframes system-branch-packet{0%,23%{stroke-dashoffset:16;opacity:0}25%{opacity:1}60%{stroke-dashoffset:-100;opacity:1}62%,100%{stroke-dashoffset:-100;opacity:0}}
-@keyframes system-junction{0%,20%,34%,100%{fill:#f4f3ec}24%,29%{fill:#c15b29}}
-@keyframes system-arrival{0%,53%,72%,100%{fill:#f4f3ec}60%,66%{fill:#c15b29}}
 @media(max-width:760px){.hero-flow{margin-bottom:24px}.hero-flow .system-tool{font-size:41px}}
-@media(prefers-reduced-motion:reduce){.system-signals{display:none}}
+.system-reduced .system-routes>.route-draw,.system-reduced .system-guides path{animation:none;stroke-dasharray:none}
 .type-study .intro-actions{margin-top:18px}
 .type-study .intro-license{font-size:11px}
 
@@ -130,17 +124,17 @@
 @media(max-width:1100px){.hero-summary p{font-size:15px;line-height:1.65}}
 
 /* Bring Difference directly under the hero with a full-width archival green band. */
-.intro{min-height:min(800px,calc(73.2vw - 40px));padding-bottom:22px}
+.intro{min-height:min(760px,calc(70vw - 40px));padding-bottom:22px}
 .band-skillbridge{background:#e5eadc;padding-block:0 8px;border-top:1px solid #d1d9c6}
 .refined .band-skillbridge .block{padding-top:27px;padding-bottom:28px}
-@media(min-width:1400px){.intro{min-height:850px}}
-@media(max-width:1100px) and (min-width:761px){.intro{min-height:calc(66.4vw + 20px)}}
+@media(min-width:1400px){.intro{min-height:810px}}
+@media(max-width:1100px) and (min-width:761px){.intro{min-height:calc(63.5vw + 20px)}}
 @media(max-width:760px){.intro{min-height:0;padding-bottom:6px}.hero-flow{margin-bottom:0}.refined .band-skillbridge .block{padding-top:24px}}
 
 /* Shared interface labels and an explicit non-live architecture caption. */
 .hero-flow svg :is(.interface-label,.system-caption){font-size:18px;font-weight:600;letter-spacing:1px;fill:#425563}
 .hero-flow svg .diagram-footer{fill:#627984;letter-spacing:.6px;font-weight:500}
-@media(max-width:760px){.hero-flow svg :is(.interface-label,.system-caption){font-size:21px}.hero-flow svg .diagram-footer{font-size:16px}}
+@media(max-width:760px){.hero-flow svg :is(.interface-label,.system-caption){font-size:21px}.hero-flow svg .diagram-footer{font-size:12px}.hero-flow svg .diagram-footer:first-of-type{font-size:14px}}
 
 /* Index context and navigation remain part of the archive's paper typography. */
 .refined #ecosystem-index>p{display:block;font-size:13px;line-height:1.65;color:#65715b;margin:16px 0}
