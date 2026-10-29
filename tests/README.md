@@ -51,8 +51,8 @@ VB_TEST_WORKER_PYTHON=/path/to/python2.7 python3 tests/native_instance_registry.
 It covers twelve concurrent ephemeral allocations, fixed-port races and
 conflicts, request flags and private permissions, SIGKILL/discovery cleanup,
 graceful cleanup, nonblocking liveness checks, symlinks/FIFOs, concurrent
-private credential creation, directory replacement, signed instance identity,
-rejection of missing/foreign credentials, and absence of secrets in output. All files
+legacy credential creation and overrides, directory replacement, signed instance identity,
+rejection of invalid/foreign credentials, and absence of secrets in output. All files
 are synthetic and temporary. It does not switch Linux UIDs or test native
 SKILL timers, a live CIW, or electrical equivalence. The related pytest cases
 skip Linux-only operations on Windows.
@@ -79,18 +79,17 @@ Mocked SKILL image output and restart replies are not native Cadence evidence.
 `test_discovery_compatibility.py` covers discovery-first use of an old configured
 port, automatic adoption with unchanged configuration, real loopback signed
 hello/authentication refusal, lazy Python connection, bounded restart
-reconciliation without replay, and Windows termination races. Its native POSIX
-metadata case is skipped on Windows. The default SSH adoption test captures
-argv from the real launcher: ordinary inherited SSH configuration is correctly
-refused, while separate restricted-command tests cover eligible adoption.
+reconciliation without replay, and the removal of scratch-resolution deadlines. Its native POSIX
+metadata case is skipped on Windows. SSH stopping uses the original saved-PID
+behavior; executable/birth/argv verification is not part of this revision.
 
-`test_helper_staging.py` executes bounded Linux shells against real private,
-permissive, symlink and FIFO fixtures and checks failed uploads and changed
-cached content. `test_generated_bundle.py` also covers unexpected inventory,
+`test_remote_deploy_dirs.py` executes bounded POSIX shells against real private,
+permissive and symlink fixtures for the original deployment checks.
+`test_generated_bundle.py` also covers unexpected inventory,
 clean replacement, backup bookkeeping and cleanup errors. The native registry
 harness checks that read-only discovery leaves stale files intact; daemon-side
-cleanup is tested separately. Windows skips these Linux cases. Both new pytest
-suites are included in the Windows transport job; the full Linux jobs execute
+cleanup is tested separately. Windows skips these Linux cases. The generated-bundle
+suite is included in the Windows transport job; the full Linux jobs execute
 the native cases. A configured CI job is not evidence that it has passed.
 
 `VB_TEST_DAEMON_RESOURCES=/absolute/resources` selects alternate daemon resources
@@ -159,8 +158,8 @@ after uncertain execution and never retry a restart merely because its reply dro
 Before acceptance, obtain fresh site evidence for the legacy transition,
 two-CIW isolation, same-CIW restart/reload, fixed-port changes and malformed
 bind banners. Exercise historical state with a fixture-owned SSH forward:
-verify supported restricted adoption and the explicit operator-recovery refusal
-for ordinary inherited configuration. This SSH recovery check is a separate
+verify saved-PID stopping and inspect suspect historical processes before
+signalling them. This SSH recovery check is a separate
 operator acceptance step, not automated by the Cadence lifecycle suite. Supply
 isolated CIWs and baseline resources as well as a reachable daemon. Missing
 prerequisites must be reported as skips, not successful live verification.

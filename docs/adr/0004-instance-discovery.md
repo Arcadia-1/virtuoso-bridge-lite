@@ -47,10 +47,12 @@ Uncertain application work is never replayed.
 ## Authentication and state
 
 Record files are candidates, not authentication. Registered connections require
-the per-UID credential and a signed handshake matching the full record. One UID
+the existing bridge token and a signed handshake matching the full record. One UID
 is one trust boundary; filters prevent mistakes rather than isolate hostile
-same-UID processes. Registered sessions ignore token-path and unauthenticated
-overrides. Legacy connections retain the existing token and identity checks.
+same-UID processes. Token provisioning uses the original home-based path and
+token-path overrides. Registered clients still require a signed record match;
+an unauthenticated daemon cannot satisfy that check. Legacy connections retain
+the existing token and identity checks.
 
 Current state and selections are published atomically with private permissions.
 Historical non-secret connection metadata may be read from same-owner 0755
@@ -58,11 +60,10 @@ application directories/0644 regular files, provided neither is writable by
 others. New identity/selection fields do not receive this exception. Type,
 owner, size, inode and schema checks remain. Windows relies on user ACLs.
 
-Metadata alone never authorizes a signal. The saved process identity must match.
-Legacy automatic adoption is limited to independently proven standalone forwards;
-ordinary historical SSH argv may inherit additional work from configuration and
-needs [operator recovery](../../skills/virtuoso/references/connection.md#legacy-tunnel-recovery).
-Untrusted retained state is reported instead of a successful no-op stop.
+Tunnel stop uses the original saved-PID behavior, without executable, birth-time
+or argv verification and without waiting for exit. A reused PID can therefore
+target an unrelated process; denied signals can still clear state. Inspect
+suspect state using the [recovery procedure](../../skills/virtuoso/references/connection.md#legacy-tunnel-recovery).
 `stop --port` names the retained **remote_port**, not the local listener.
 `status --inspect-state` requires no daemon.
 
@@ -72,8 +73,12 @@ General scratch retains the stock `/tmp` parent and
 `virtuoso_bridge_<user>/<client>/<leaf>` layout. Default records and generated
 bootstrap use the private `/tmp/virtuoso_bridge_<user>` child, with `runs/` and
 `daemon/`. Explicit private discovery roots remain supported; alternate workflow
-parents retain username/client nesting. Explicit `~/` expands in the target
-account's passwd home. Never chmod `/tmp` or an account home.
+parents retain username/client nesting. Workflow path helpers retain their
+original literal-root behavior; use absolute paths for remote staging. Registry
+helpers can expand `~/` on the daemon host. Never chmod `/tmp` or an account home.
+Scratch-parent ownership/mode gates are removed; existing private-child checks
+from the main branch and private registry-record checks remain. Scratch username
+resolution has no added deadline.
 
 Generated setup embeds the daemon registry root. Deployment/GUI hosts must see
 the bundle. Shared setup uses installer `--scratch-root`, otherwise daemon

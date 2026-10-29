@@ -680,6 +680,7 @@ def check_scratch_dir(ctx: DoctorContext) -> CheckResult:
         default_virtuoso_bridge_dir,
         private_dirs_below,
         remote_scratch_root,
+        resolve_remote_username,
     )
 
     host = ctx.roles.deploy_host
@@ -702,11 +703,11 @@ def check_scratch_dir(ctx: DoctorContext) -> CheckResult:
             root = instance_scratch_root(runner)
             work_dir = root + "/daemon"
         else:
+            user = resolve_remote_username(configured_user=ctx.roles.remote_user, runner=runner)
+            root = remote_scratch_root()
             work_dir = default_virtuoso_bridge_dir(
-                ctx.roles.remote_user or "", _profiled_bridge_leaf(ctx.profile),
-                resolve_client_id(ctx.profile), runner=runner)
-            root = work_dir.rsplit("/", 2)[0]
-        paths = [root] + private_dirs_below(root, work_dir)
+                user, _profiled_bridge_leaf(ctx.profile), resolve_client_id(ctx.profile))
+        paths = private_dirs_below(root, work_dir)
         if not runner.transport_error:
             result = runner.run_command(scratch_inspection_script(paths))
     except Exception:  # noqa: BLE001 - an SSH failure is reported below

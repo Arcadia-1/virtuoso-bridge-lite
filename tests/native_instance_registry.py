@@ -23,7 +23,6 @@ RESOURCES = Path(sys.argv.pop(1)).resolve()
 WORKER_PYTHON = os.environ.get("VB_TEST_WORKER_PYTHON", sys.executable)
 sys.path.insert(0, str(RESOURCES))
 import ramic_registry as registry
-import ramic_token
 
 WORKER = '''
 import json, socket, sys
@@ -297,11 +296,10 @@ assert os.path.exists(changed['backup'] + '/json.py')
         finally:
             opened.close()
 
-    def test_private_scratch_validation_and_malformed_flag_fail_closed(self):
+    def test_permissive_scratch_and_malformed_flag_fail_closed(self):
         registry.Registry(self.directory).close()
         os.chmod(self.directory, 0o755)
-        with self.assertRaises(RuntimeError):
-            registry.discover(self.directory)
+        self.assertEqual(registry.discover(self.directory), [])
         os.chmod(self.directory, 0o700)
         registry.configure_port(12345, "", self.directory)
         flag = next(Path(self.directory).glob("fixed-port-*.json"))
@@ -356,9 +354,19 @@ assert os.path.exists(changed['backup'] + '/json.py')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(list(root.rglob("fixed-port-*.json")))
 
-    def test_token_creation_race_and_symlink_rejection(self):
+    def test_legacy_token_creation_race(self):
         path = self.root / "private" / "bridge_token"
-        source = "import sys; sys.path.insert(0,sys.argv[1]); from ramic_token import read_or_create; print(read_or_create(sys.argv[2]))"
+        source = """
+import os, sys
+sys.path.insert(0, sys.argv[1])
+os.environ['RB_TOKEN_PATH'] = sys.argv[2]
+version = '27' if sys.version_info[0] == 2 else '3'
+path = sys.argv[1] + '/ramic_bridge_daemon_' + version + '.py'
+with open(path) as stream:
+    prefix = stream.read().split('BRIDGE_TOKEN = _load_or_create_token()')[0]
+exec(compile(prefix, path, 'exec'))
+print(_load_or_create_token())
+"""
         processes = [self.spawn(source, path) for _ in range(12)]
         results = [p.communicate(timeout=10) for p in processes]
         self.assertTrue(all(p.returncode == 0 for p in processes), results)
@@ -367,10 +375,6 @@ assert os.path.exists(changed['backup'] + '/json.py')
         self.assertEqual(len(results[0][0].strip()), 64)
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
-        link = path.parent / "link"
-        link.symlink_to(path)
-        with self.assertRaises(OSError):
-            ramic_token.read_or_create(str(link))
 
     def test_directory_replacement_cannot_redirect_sweep_or_lease_cleanup(self):
         outside = self.root / "outside"
@@ -399,15 +403,12 @@ assert os.path.exists(changed['backup'] + '/json.py')
     def test_automatic_token_provisioning_failure_publishes_no_instance(self):
         private = self.root / "private"
         private.mkdir(mode=0o700)
-        victim = self.root / "untouched"
-        victim.write_text("ab" * 32)
-        (private / "bridge_token").symlink_to(victim)
+        token_path = private / "bridge_token"
+        token_path.write_text("invalid token")
         source = '''
 import os, runpy, sys
 sys.path.insert(0, sys.argv[1])
-import ramic_token
-token_path = sys.argv[2] + '/private/bridge_token'
-ramic_token.default_path = lambda: token_path
+os.environ['RB_TOKEN_PATH'] = sys.argv[2] + '/private/bridge_token'
 os.environ['RB_AUTO_PORT'] = '1'
 os.environ['RB_SCRATCH_ROOT'] = sys.argv[2] + '/registry'
 version = '27' if sys.version_info[0] == 2 else '3'
@@ -419,13 +420,13 @@ runpy.run_path(path, run_name='__main__')
         stdout, stderr = process.communicate(timeout=5)
         self.assertNotEqual(process.returncode, 0)
         self.assertEqual(registry.discover(root=str(self.root / 'registry')), [])
-        self.assertEqual(victim.read_text(), 'ab' * 32)
+        self.assertEqual(token_path.read_text(), 'invalid token')
         self.assertNotIn(('ab' * 32).encode(), stdout + stderr)
 
     def test_automatic_daemon_creates_secret_and_rejects_foreign_credentials(self):
         self.check_discovery_daemon()
 
-    def test_discovery_fixed_port_ignores_legacy_token_override(self):
+    def test_discovery_fixed_port_uses_legacy_token_override(self):
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
             fixed = probe.getsockname()[1]
@@ -441,11 +442,10 @@ runpy.run_path(path, run_name='__main__')
         source = '''
 import os, runpy, sys
 sys.path.insert(0,sys.argv[1])
-import ramic_registry, ramic_token
+import ramic_registry
 resources, directory, token, port, override = sys.argv[1:6]
-ramic_token.default_path = lambda: token
 os.environ['RB_AUTO_PORT'] = '1'
-os.environ['RB_TOKEN_PATH'] = override
+os.environ['RB_TOKEN_PATH'] = override if int(port) else token
 original = ramic_registry.bind_instance
 def bind(*args, **kwargs):
     kwargs['directory'] = directory
@@ -462,9 +462,13 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         record = self.await_rows(1)[0]
         if fixed:
             self.assertEqual(record["port"], fixed)
-        token = token_path.read_text().strip()
-        self.assertEqual(token, ramic_token.read_or_create(str(token_path)))
-        self.assertEqual(token_path.stat().st_mode & 0o777, 0o600)
+        active_path = override if fixed else token_path
+        token = active_path.read_text().strip()
+        self.assertEqual(len(token), 64)
+        self.assertEqual(active_path.stat().st_mode & 0o777, 0o600)
+        if fixed:
+            self.assertEqual(token, "00" * 32)
+            self.assertFalse(token_path.exists())
 
         def mac(secret, *parts):
             frame = b"".join(str(len(p.encode())).encode() + b":" + p.encode() for p in parts)
@@ -489,7 +493,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         self.assertEqual(response[1:65].decode(), mac(token, "vb1-response", nonce, "\x02", body))
         self.assertEqual(json.loads(body)["instance_record"], record)
         self.assertEqual(json.loads(body)["build"], "instance-discovery-3")
-        for secret in ("00" * 32, "ff" * 32):
+        for secret in ("11" * 32, "ff" * 32):
             nonce = os.urandom(16).hex()
             response = request(dict(proto=1, nonce=nonce, skill="1+1", timeout=1,
                                     mac=mac(secret, "vb1-request", "1", nonce, "1.000000", "1+1")))

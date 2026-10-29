@@ -79,14 +79,13 @@ def test_concurrent_state_writes_publish_only_complete_json(tmp_path):
     assert list(path.parent.iterdir()) == [path]
 
 
-def test_readonly_token_helper_is_used_and_never_logs_invalid_stdout(monkeypatch):
+def test_readonly_token_read_uses_legacy_path_and_never_logs_invalid_stdout(monkeypatch):
     from virtuoso_bridge.transport.ssh import CommandResult
     client = tunnel.SSHClient(remote_host="fixture", discover_instances=True)
     calls = []
     client._ssh_runner = SimpleNamespace(run_command=lambda command: calls.append(command) or CommandResult(0, "invalid-secret", ""))
-    monkeypatch.setattr(client, "_detect_remote_python", lambda *a: ("python3", 3, 9))
     assert client.read_daemon_token() is None
-    assert calls[0].endswith(" --read-only")
+    assert calls == ["cat ~/.virtuoso-bridge/bridge_token 2>/dev/null"]
     assert "invalid-secret" not in calls[0]
 
 
@@ -138,7 +137,7 @@ def test_shared_setup_no_match_does_not_deploy(monkeypatch):
 
 def test_explicit_stop_targets_saved_endpoint_without_discovery(monkeypatch):
     calls = []
-    client = SimpleNamespace(target="fixture@host:65002", stop=lambda **kw: calls.append("stop") if kw == {"verify_legacy": True} else pytest.fail("legacy proof disabled"),
+    client = SimpleNamespace(target="fixture@host:65002", stop=lambda: calls.append("stop"),
                              close=lambda: calls.append("close"))
     monkeypatch.setattr(cli, "_load_cli_env", lambda: None)
     monkeypatch.setattr(cli, "_get_cli_profile", lambda: "fixture")
@@ -157,15 +156,13 @@ def test_explicit_stop_targets_saved_endpoint_without_discovery(monkeypatch):
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX credential permissions")
 def test_read_existing_token_never_creates_or_chmods(tmp_path):
-    from virtuoso_bridge.virtuoso.basic.resources import ramic_token
+    from virtuoso_bridge import daemon_auth
     parent = tmp_path / "credential"
     parent.mkdir(mode=0o700)
     token = parent / "token"
-    with pytest.raises(OSError):
-        ramic_token.read_existing(str(token))
+    assert daemon_auth.read_local_token(token) is None
     assert not token.exists()
     token.write_text("ab" * 32)
     token.chmod(0o644)
-    with pytest.raises(OSError):
-        ramic_token.read_existing(str(token))
+    assert daemon_auth.read_local_token(token) == "ab" * 32
     assert token.stat().st_mode & 0o777 == 0o644

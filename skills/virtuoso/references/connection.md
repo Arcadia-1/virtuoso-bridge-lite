@@ -276,9 +276,9 @@ A busy lane or mismatched exact selector prevents restart/adoption. After a
 timeout, inspect the original outcome and sessions before any explicit retry;
 an uncertain restart is never replayed.
 
-`RBSetPort(N)` keeps a fixed-port instance discovery-managed with mandatory
-per-UID authentication. It does not enable a custom `RB_TOKEN_PATH`. Explicit
-legacy generated setup sets `RB_AUTO_PORT=0` for legacy token behavior.
+`RBSetPort(N)` keeps a fixed-port instance discovery-managed. Token generation
+uses the original daemon logic, including `RB_TOKEN_PATH`. Registered clients
+still require an authenticated handshake matching the selected record.
 
 `RBStopAll()` now stops only this CIW's tracked child, like `RBStop()`, rather
 than every daemon under the account. For an untracked child, inspect out of band
@@ -355,18 +355,20 @@ General scratch retains the stock `/tmp` parent and
 `virtuoso_bridge_<user>/<client>/<leaf>` workflow layout. The default private
 registry/bundle root is `/tmp/virtuoso_bridge_<user>`; daemon and client must agree
 on this root. Explicit private roots from preview installations remain supported.
-Explicit `~/` uses the target passwd account home, independent of `$HOME`. Generated setup includes the resolved
-root; shared setup takes `--scratch-root`, otherwise daemon `RB_SCRATCH_ROOT`,
+Use absolute scratch paths for remote workflow staging; the original path helpers
+do not expand `~/`. The registry helper can expand it on the daemon host.
+Generated setup includes the registry root; shared setup takes `--scratch-root`, otherwise daemon `RB_SCRATCH_ROOT`,
 then daemon `VB_REMOTE_SCRATCH_ROOT`, then the default. A stale `RB_SCRATCH_ROOT`
 inside an existing Virtuoso wins over client settings. Client `.env` edits do
 not update a running CIW. The absolute project directory filter is not this root.
 Use a private child instead of `/tmp`; do not chmod `/tmp` or the account home.
 All relevant hosts must see the chosen files.
 
-Records are private under `<root>/runs`; the authentication secret remains in
-the passwd account home. Automatic mode requires per-UID authentication and
-ignores `RB_TOKEN_PATH` and unauthenticated overrides. Explicit legacy clients
-retain their documented token-path/unauthenticated settings. A shared UID is one
+Records are private under `<root>/runs`; the authentication secret uses the
+original home-based path or configured override. Local clients honor
+`VB_BRIDGE_TOKEN`, daemons honor `RB_TOKEN_PATH`, and SSH clients use the original
+remote home token path. Keep those paths aligned. An unauthenticated daemon
+cannot satisfy registered clients' signed record check. A shared UID is one
 trust boundary: project and port filters prevent mistakes, not access by another
 process using that UID. A signed response must match the whole record; record
 files alone are not authentic proof of daemon identity.
@@ -387,8 +389,9 @@ vanished instance only within an explicit project constraint and before sending
 work; an exact port remains exact. Uncertain application requests are never
 replayed. Stop a retained tunnel using its original `--env`/profile and
 `stop --port PORT`; this targets saved endpoint state without rediscovery.
-Legacy state without process-birth identity needs the
-[recovery procedure](#legacy-tunnel-recovery). Windows ACLs, rather than POSIX mode bits, protect
+Tunnel stop uses the saved PID without process-birth or argv verification;
+inspect suspect state using the [recovery procedure](#legacy-tunnel-recovery).
+Windows ACLs, rather than POSIX mode bits, protect
 local state. `bootstrap --window` needs an existing generated setup or
 `VB_DAEMON_SETUP`; it never proves completion by finding an unrelated instance.
 
@@ -413,14 +416,12 @@ virtuoso-bridge stop --port 65085 --env /local/bridge.env
 Use `remote_port`, not local `port`: for `port=12345, remote_port=23456`, stop with
 `virtuoso-bridge stop --port 23456`. Same-owner historical non-secret 0644 metadata
 in a 0755 application directory remains readable if neither is writable by
-others. Unsafe files are reported by path without trusting their contents. On Linux,
-explicit stop can establish missing birth identity only for a verified same-owner
-standalone forward with `-F /dev/null`, exact endpoints and disabled multiplexing.
-The default old launcher omitted `-F /dev/null`, so ordinary historical forwards
-usually require the operator branch below. Custom/unknown configuration, extra
-forwards, PID reuse or unavailable inspection also require operator recovery.
-Current `ssh -G` output cannot prove a running process's historical configuration. No unchecked force switch exists. Current verified
-birth identities use the normal stop path.
+others. Unsafe files are reported by path without trusting their contents.
+Stop uses the original saved-PID behavior on all platforms: it does not verify
+the executable, birth time, SSH argv or inherited configuration, and does not
+wait for exit. A reused PID may terminate unrelated work, and a denied signal
+may still clear state. Inspect suspect PIDs before stopping them. Current
+`ssh -G` output cannot prove a running process's historical configuration.
 
 On Linux, substitute the reported PID and inspect the owner, executable, start
 time and full argv. Recheck immediately before terminating that exact process:

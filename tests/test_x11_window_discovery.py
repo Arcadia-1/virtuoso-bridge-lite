@@ -386,7 +386,7 @@ class _Runner:
 
     def run_command(self, command: str, timeout=None):
         self.commands.append(command)
-        if command.startswith("umask 077; mkdir -p "):
+        if command.startswith("mkdir -p "):
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         if "python3 --version" in command:
             return SimpleNamespace(returncode=0, stdout='Python 3.9\nCMD:python3\n', stderr="")

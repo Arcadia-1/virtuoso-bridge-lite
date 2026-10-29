@@ -18,8 +18,8 @@ import uuid
 
 def _private_directory(path):
     info = os.lstat(path)
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
-        raise ValueError("Deployment directory must be real, private and owned by this user: " + path)
+    if not stat.S_ISDIR(info.st_mode):
+        raise ValueError("Deployment directory must be a real directory: " + path)
 
 
 def _read(path):

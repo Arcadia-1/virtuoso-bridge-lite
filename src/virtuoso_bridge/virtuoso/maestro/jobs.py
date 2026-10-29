@@ -26,6 +26,7 @@ from virtuoso_bridge.runtime_paths import artifact_dir, tmp_dir
 from virtuoso_bridge.transport.remote_paths import (
     default_virtuoso_bridge_dir,
     resolve_client_id,
+    resolve_remote_username,
 )
 from virtuoso_bridge.transport.remote_roles import remote_host_roles_from_os
 from virtuoso_bridge.transport.ssh import (
@@ -290,9 +291,13 @@ class MaestroJobManager:
             proxy_url=ssh_proxy_url_from_os(profile),
             verbose=verbose_from_env(),
         )
+        username = resolve_remote_username(
+            configured_user=roles.remote_user or runner.user,
+            runner=runner,
+        )
         observed_host, observed_account = cls._probe_ssh_identity(runner)
         root = remote_root or default_virtuoso_bridge_dir(
-            observed_account, "maestro-jobs", resolve_client_id(profile), runner=runner
+            username, "maestro-jobs", resolve_client_id(profile)
         )
         return cls(
             runner,
@@ -365,9 +370,13 @@ class MaestroJobManager:
         profile = connected_profile
         load_vb_env()
         roles = remote_host_roles_from_os(profile, load=False)
+        username = resolve_remote_username(
+            configured_user=roles.remote_user or getattr(runner, "user", None),
+            runner=runner,
+        )
         observed_host, observed_account = cls._probe_ssh_identity(runner)
         root = remote_root or default_virtuoso_bridge_dir(
-            observed_account, "maestro-jobs", resolve_client_id(profile), runner=runner
+            username, "maestro-jobs", resolve_client_id(profile)
         )
         return cls(
             runner,
@@ -871,13 +880,8 @@ class MaestroJobManager:
             return
         assert self._runner is not None
         parent = work_dir.rsplit("/", 1)[0]
-        from virtuoso_bridge.transport.remote_paths import private_staging_script
-        # Explicit job roots are private too; never chmod their shared parent.
-        staging_parent = self._work_root
-        if "/virtuoso_bridge_" in self._work_root:
-            staging_parent = self._work_root.split("/virtuoso_bridge_", 1)[0] or "/"
         result = self._runner.run_command(
-            private_staging_script(staging_parent, parent, "Maestro") +
+            f"mkdir -p {shlex.quote(parent)} && "
             f"mkdir {shlex.quote(work_dir)} 2>/dev/null || "
             f"{{ echo 'remote run id already exists or is unavailable' >&2; exit 2; }}; "
             f": > {shlex.quote(work_dir + '/events.log')}"

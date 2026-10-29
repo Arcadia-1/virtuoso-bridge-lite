@@ -94,7 +94,7 @@ def sessions(tmp_path):
         item = dict(proc=proc, output=output, pids=[], work=work, cwd=cwd, display=display)
         owned.append(item)
         if automatic:
-            from virtuoso_bridge.virtuoso.basic.resources import ramic_registry, ramic_token
+            from virtuoso_bridge.virtuoso.basic.resources import ramic_registry
             def records():
                 rows = ramic_registry.discover(root=str(registry_root))
                 if item.get("virtuoso_pid"):
@@ -103,7 +103,7 @@ def sessions(tmp_path):
             _wait(lambda: len(records()) == 1)
             record = records()[0]
             daemon_pid, port = record["daemon_pid"], record["port"]
-            token = ramic_token.read_existing()
+            token = daemon_auth.read_local_token()
         else:
             _wait(lambda: identity.exists() and "pid=" in identity.read_text())
             daemon_pid = int(dict(line.split("=", 1) for line in identity.read_text().splitlines())["pid"])

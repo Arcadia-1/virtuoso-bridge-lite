@@ -189,7 +189,7 @@ def test_legacy_restart_reconciles_once_without_replaying(legacy, monkeypatch, o
     assert clock[0] <= 102
 
 
-def test_discovery_root_lookup_consumes_the_poll_budget(monkeypatch):
+def test_discovery_checks_deadline_after_unbounded_root_lookup(monkeypatch):
     from virtuoso_bridge.transport import remote_paths
     clock = [100.0]
     monkeypatch.setattr(tunnel.time, "monotonic", lambda: clock[0])
@@ -200,12 +200,12 @@ def test_discovery_root_lookup_consumes_the_poll_budget(monkeypatch):
     budgets = []
     def run(command, timeout=None):
         budgets.append(timeout)
-        clock[0] += timeout
+        clock[0] += 1
         return SimpleNamespace(returncode=0, stdout="fixture\n", stderr="")
     monkeypatch.setattr(client._ssh_runner, "run_command", run)
     with pytest.raises(TimeoutError, match="discovery deadline"):
         client.list_instances(timeout=0.5)
-    assert budgets == [0.5]
+    assert budgets == [None]
 
 
 @pytest.mark.skipif(os.name != "posix", reason="native POSIX permissions")
@@ -243,37 +243,3 @@ def test_unicode_paths_remain_readable_with_controls_escaped():
     assert "/设计/模块" in output
     assert "\\n\\x1b\\u202e" in output
     assert "\x1b" not in output
-
-
-def test_legacy_matcher_exercises_the_real_default_forward_command(monkeypatch):
-    monkeypatch.delenv("VB_SSH_CONFIG", raising=False)
-    runner = ssh.SSHRunner("fixture.invalid", user="fixture")
-    captured = []
-    proc = SimpleNamespace(pid=123, poll=lambda: None, stderr=None)
-    monkeypatch.setattr(ssh.subprocess, "Popen", lambda argv, **kw: captured.append(argv) or proc)
-    monkeypatch.setattr(ssh.time, "sleep", lambda *a: None)
-    monkeypatch.setattr(runner, "can_reach_port", lambda port, **kw: True)
-    runner.start_port_forward(61001, remote_port=61000)
-    argv = captured[-1]
-    assert "-F" not in argv and "61001:127.0.0.1:61000" in argv
-    assert not ssh._legacy_forward_argv_matches(argv, "fixture@fixture.invalid", 61001, 61000)
-    runner.detach_port_forward()
-
-
-@pytest.mark.parametrize("error,gone", [(87, True), (87, False), (5, True)])
-def test_windows_kill_race_requires_positive_absence(monkeypatch, error, gone):
-    runner = ssh.SSHRunner("fixture.invalid")
-    runner._tunnel_proc = SimpleNamespace(pid=123, poll=lambda: None, wait=lambda **kw: 0)
-    runner._tunnel_pid = 123
-    failure = OSError("Windows kill race")
-    failure.winerror = error
-    monkeypatch.setattr(ssh, "os", SimpleNamespace(name="nt", kill=lambda *a: (_ for _ in ()).throw(failure)))
-    monkeypatch.setattr(ssh, "_process_confirmed_gone", lambda pid: gone)
-    if error == 87 and gone:
-        runner.stop_port_forward()
-        assert runner.tunnel_pid is None
-    else:
-        with pytest.raises(OSError):
-            runner.stop_port_forward()
-        assert runner.tunnel_pid == 123
-    runner.detach_port_forward()

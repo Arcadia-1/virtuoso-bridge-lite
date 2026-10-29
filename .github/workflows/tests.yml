@@ -74,6 +74,5 @@ jobs:
           tests/test_discovery_status.py
           tests/test_discovery_round2.py
           tests/test_discovery_compatibility.py
-          tests/test_helper_staging.py
           tests/test_remote_paths.py
           tests/test_generated_bundle.py

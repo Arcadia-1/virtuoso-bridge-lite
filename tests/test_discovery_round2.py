@@ -109,16 +109,6 @@ def test_daemon_build_literals_match_client_without_importing_workers():
         assert builds == [DAEMON_BUILD]
 
 
-def test_legacy_forward_parser_rejects_extra_work_and_config():
-    args = ["ssh", "-F", "/dev/null", "-o", "ControlMaster=no", "-o", "ControlPath=none",
-            "-o", "ControlPersist=no", "-N", "-L", "12345:127.0.0.1:23456", "user@host"]
-    assert ssh._legacy_forward_argv_matches(args, "user@host", 12345, 23456)
-    for changed in (args[:-1] + ["other@host"], args[:2] + ["custom.conf"] + args[3:],
-                    args[:-1] + ["-L", "34567:127.0.0.1:45678", args[-1]],
-                    args[:-1] + ["-R", "34567:127.0.0.1:45678", args[-1]],
-                    args[:-1] + ["-o", "ProxyCommand=arbitrary", args[-1]],
-                    args + ["echo", "unsafe"]):
-        assert not ssh._legacy_forward_argv_matches(changed, "user@host", 12345, 23456)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX owner/mode and special files")

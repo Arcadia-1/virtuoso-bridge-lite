@@ -113,125 +113,6 @@ def _pid_is_alive(pid: Any) -> bool:
         return False
 
 
-def _process_identity(pid: Any) -> str | None:
-    """Read executable and birth time; a reused PID must not authorize a stop."""
-    if type(pid) is not int or pid <= 0 or (os.name == "nt" and pid > 0xFFFFFFFF):
-        return None
-    try:
-        if os.name != "nt":
-            proc = Path("/proc") / str(pid)
-            fields = (proc / "stat").read_text().rsplit(")", 1)[1].split()
-            executable = os.readlink(proc / "exe")
-            if Path(executable).name != "ssh":
-                return None
-            return executable + ":" + fields[19]  # field 22 (starttime)
-        import ctypes
-        from ctypes import wintypes
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel.OpenProcess.restype = wintypes.HANDLE
-        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        kernel.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
-        kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
-        handle = kernel.OpenProcess(0x1000, False, pid)  # query limited information
-        if not handle:
-            return None
-        try:
-            size = wintypes.DWORD(32768)
-            name = ctypes.create_unicode_buffer(size.value)
-            times = [wintypes.FILETIME() for _ in range(4)]
-            if not kernel.QueryFullProcessImageNameW(handle, 0, name, ctypes.byref(size)):
-                return None
-            if Path(name.value).name.lower() != "ssh.exe":
-                return None
-            if not kernel.GetProcessTimes(handle, *(ctypes.byref(value) for value in times)):
-                return None
-            return name.value.lower() + ":" + str((times[0].dwHighDateTime << 32) | times[0].dwLowDateTime)
-        finally:
-            kernel.CloseHandle(handle)
-    except (OSError, ValueError, IndexError, OverflowError):
-        return None
-
-
-def _process_confirmed_gone(pid: int) -> bool:
-    """Positive absence proof; lookup/permission failures remain uncertain."""
-    if os.name != "nt":
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return True
-        except OSError:
-            return False
-        # A terminated adopted child can remain in /proc until its original
-        # parent reaps it. It cannot own a listener or perform further work.
-        try:
-            state = Path('/proc', str(pid), 'stat').read_text().rsplit(')', 1)[1].split()[0]
-            return state in ('Z', 'X')
-        except (OSError, IndexError):
-            return False
-    import ctypes
-    from ctypes import wintypes
-
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    kernel.OpenProcess.restype = wintypes.HANDLE
-    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-    kernel.WaitForSingleObject.restype = wintypes.DWORD
-    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-    handle = kernel.OpenProcess(0x00100000, False, pid)
-    if not handle:
-        return ctypes.get_last_error() == 87
-    try:
-        return kernel.WaitForSingleObject(handle, 0) == 0
-    finally:
-        kernel.CloseHandle(handle)
-
-
-def _legacy_forward_argv_matches(argv: list[str], destination: str, local_port: int, remote_port: int) -> bool:
-    """Recognize only a standalone, configuration-free bridge forward.
-
-    An arbitrary ssh config can add invisible forwards or multiplexing. Such
-    legacy processes require operator inspection instead of automatic adoption.
-    """
-    if not argv or Path(argv[0]).name != "ssh" or argv[-1] != destination:
-        return False
-    options: dict[str, str] = {}
-    forwards = []
-    config = None
-    no_command = False
-    index = 1
-    while index < len(argv) - 1:
-        flag = argv[index]
-        if flag == "-N" and not no_command:
-            no_command = True
-            index += 1
-            continue
-        if flag not in ("-o", "-L", "-F", "-i", "-J") or index + 1 >= len(argv) - 1:
-            return False
-        value = argv[index + 1]
-        if flag == "-L":
-            forwards.append(value)
-        elif flag == "-F":
-            if config is not None:
-                return False
-            config = value
-        elif flag == "-o":
-            key, separator, setting = value.partition("=")
-            key = key.lower()
-            if not separator or key in options or key not in {
-                "batchmode", "connecttimeout", "gssapiauthentication", "hostbasedauthentication",
-                "controlmaster", "controlpath", "controlpersist", "exitonforwardfailure",
-            }:
-                return False
-            options[key] = setting.lower()
-        index += 2
-    return (no_command and config == "/dev/null"
-            and forwards == [f"{local_port}:127.0.0.1:{remote_port}"]
-            and options.get("controlmaster") == "no"
-            and options.get("controlpath") == "none"
-            and options.get("controlpersist") == "no")
-
-
 def _windows_no_window_kwargs(
     *,
     detached: bool = False,
@@ -743,76 +624,22 @@ class SSHRunner:
         self._tunnel_pid = proc.pid
         return proc  # running
 
-    def adopt_legacy_forward(self, local_port: int, remote_port: int) -> None:
-        """Establish missing birth identity only from a narrowly proven process."""
-        pid = self.tunnel_pid
-        if not sys.platform.startswith("linux") or not pid:
-            raise RuntimeError("Native legacy forward verification is unavailable; inspect the process manually")
-        before = _process_identity(pid)
-        proc = Path("/proc") / str(pid)
-        try:
-            if proc.stat().st_uid != os.geteuid():
-                raise ValueError("process belongs to another user")
-            argv = [os.fsdecode(part) for part in (proc / "cmdline").read_bytes().split(b"\0") if part]
-            destination = f"{self._user}@{self._host}" if self._user else self._host
-            if not _legacy_forward_argv_matches(argv, destination, local_port, remote_port):
-                raise ValueError("command/configuration does not prove one exact standalone forward")
-            if not before or _process_identity(pid) != before:
-                raise ValueError("process identity changed")
-        except (OSError, ValueError) as exc:
-            raise RuntimeError(f"Cannot verify legacy SSH process: {exc}") from exc
-        self._saved_tunnel_identity = before
-
     def stop_port_forward(self) -> None:
         """Stop the standalone port-forwarding process by PID."""
         pid = None
-        owned = self._tunnel_proc if self._tunnel_proc is not None and self._tunnel_proc.poll() is None else None
-        if owned is not None:
-            pid = owned.pid
+        if self._tunnel_proc is not None and self._tunnel_proc.poll() is None:
+            pid = self._tunnel_proc.pid
         elif self._tunnel_pid:
-            expected = getattr(self, "_saved_tunnel_identity", None)
-            if (self._tunnel_proc is not None and self._tunnel_proc.pid == self._tunnel_pid
-                    and self._tunnel_proc.poll() is not None):
-                pass  # our original child has already been reaped
-            elif not expected:
-                raise RuntimeError("Refusing to stop an unverified or reused tunnel PID; inspect retained state")
-            else:
-                current = _process_identity(self._tunnel_pid)
-                if current == expected:
-                    pid = self._tunnel_pid
-                elif current is not None or not _process_confirmed_gone(self._tunnel_pid):
-                    raise RuntimeError("Refusing to stop an unverified or reused tunnel PID; inspect retained state")
+            pid = self._tunnel_pid
         if pid:
             logger.info("Terminating SSH tunnel (PID %d)", pid)
             try:
                 os.kill(pid, signal.SIGTERM)
-            except ProcessLookupError:
+            except (OSError, PermissionError):
                 pass
-            except OSError as exc:
-                if (os.name != "nt" or getattr(exc, "winerror", None) != 87
-                        or not _process_confirmed_gone(pid)):
-                    raise
-            # Do not clear retained identity after a denied/uncertain stop.
-            deadline = time.monotonic() + 5
-            if owned is not None:
-                try:
-                    owned.wait(timeout=5)
-                except subprocess.TimeoutExpired as exc:
-                    raise RuntimeError("SSH tunnel did not exit after termination") from exc
-            else:
-                while True:
-                    identity = _process_identity(pid)
-                    if identity is not None and identity != expected:
-                        break  # original exited; never signal a replacement
-                    if identity is None and _process_confirmed_gone(pid):
-                        break
-                    if time.monotonic() >= deadline:
-                        raise RuntimeError("SSH tunnel did not exit after termination; state retained")
-                    time.sleep(0.05)
         self._tunnel_proc = None
         self._tunnel_pid = None
         self._tunnel_using_external = False
-        self._saved_tunnel_identity = None
 
     @property
     def is_tunnel_alive(self) -> bool:
@@ -827,7 +654,6 @@ class SSHRunner:
         self._tunnel_proc = None
         self._tunnel_pid = None
         self._tunnel_using_external = False
-        self._saved_tunnel_identity = None
 
     @property
     def tunnel_pid(self) -> int | None:
@@ -837,7 +663,6 @@ class SSHRunner:
 
     @tunnel_pid.setter
     def tunnel_pid(self, value: int | None) -> None:
-        self._saved_tunnel_identity = None
         self._tunnel_pid = value
         if value is not None:
             self._tunnel_using_external = True

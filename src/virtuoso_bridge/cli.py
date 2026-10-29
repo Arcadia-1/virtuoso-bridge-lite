@@ -383,7 +383,7 @@ def _stop_one() -> int:
 
     ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
     try:
-        ssh.stop(verify_legacy=True)
+        ssh.stop()
         print(f"Tunnel stopped{label}.")
         return 0
     finally:
@@ -406,7 +406,7 @@ def cli_stop(selected_port: int | None = None) -> int:
                 print(f"No live managed tunnel for exact target {ssh.target!r}.")
                 print("Use status --inspect-state with the original --env/profile to inspect retained or unsafe legacy files.")
                 return 1
-            ssh.stop(verify_legacy=True)  # exact endpoint/process proof, no discovery or SKILL
+            ssh.stop()  # exact saved endpoint, no discovery or SKILL
             print(f"Tunnel stopped for {ssh.target!r}.")
             return 0
         finally:
@@ -485,6 +485,34 @@ def _describe_lane(caps: dict | None) -> str:
     return text
 
 
+def _print_load_hint(setup_path: str) -> None:
+    """Print CIW load command and .cdsinit auto-load suggestion."""
+    print("\n  Load in Virtuoso CIW:")
+    print(f"    load(\"{setup_path}\")")
+    if setup_path.startswith("/tmp/"):
+        print("\n  If CIW reports `load: can't access file`, its /tmp is isolated from SSH.")
+        print("  Set VB_REMOTE_SCRATCH_ROOT to a shared home/scratch directory, then restart.")
+    print("\n  To auto-load on every Virtuoso startup, add to your .cdsinit:")
+    print(f"    load(\"{setup_path}\")")
+
+
+def _print_stale_daemon_hint() -> None:
+    """Print recovery guidance for a CIW daemon left from another setup."""
+    print("\n  If CIW says \"already running\", load() did not replace the existing daemon.")
+    print("  To switch profile/port, run in CIW:")
+    print("    RBStop()")
+    print("    load(\".../virtuoso_setup.il\")")
+    print("  If that does not clear it, use RBStopAll() before loading again.")
+
+
+def _print_cross_user_daemon_failure(error: str) -> None:
+    from virtuoso_bridge.daemon_guard import OVERRIDE_ENV
+
+    print("\n[daemon identity] FAILED")
+    print(f"  {error}")
+    print(f"  Set {OVERRIDE_ENV}=1 only if this cross-user connection is intentional.")
+
+
 def _print_status(selected_port: int | None = None) -> int:
     """Discover first; probe only a saved connection to the same live instance."""
     import time
@@ -499,8 +527,10 @@ def _print_status(selected_port: int | None = None) -> int:
     label = f" [{profile}]" if profile else ""
     print(f"  Virtuoso Bridge v{__version__}{label}")
     ssh = None
+    state = None
     try:
         ssh = SSHClient.from_env(keep_remote_files=True, profile=profile, selected_port=selected_port)
+        state = SSHClient.read_state(profile)
         print(f"  daemon host : {ssh.daemon_host!r}; user: {ssh.remote_user!r}")
         print(f"  deploy      : {ssh.deploy_host!r}; GUI: {ssh.gui_host!r}; Spectre: {ssh.spectre_host!r}")
         print(f"  SSH backend : {ssh.ssh_backend}; jump host: {ssh.jump_host!r}")
@@ -517,7 +547,8 @@ def _print_status(selected_port: int | None = None) -> int:
                 state = SSHClient.read_state(profile, target=ssh.target)
                 if not SSHClient._state_is_live(state):
                     print("[daemon] No saved connection to the configured legacy endpoint. Run virtuoso-bridge start.")
-                    _print_start_load_line(state)
+                    if (state or {}).get("setup_path"):
+                        _print_load_hint(state["setup_path"])
                     return 1
                 token = ssh.read_daemon_token()
                 client = VirtuosoClient(host="127.0.0.1", port=state["port"], timeout=5,
@@ -532,6 +563,8 @@ def _print_status(selected_port: int | None = None) -> int:
                 _print_start_load_line(state)
                 return 0
             print("\n[daemon] No matching live instance. Run virtuoso-bridge start for the load instruction.")
+            if (state or {}).get("setup_path"):
+                _print_load_hint(state["setup_path"])
             return 1
 
         print("\n[instance] " + INSTANCE_COLUMNS)
@@ -561,6 +594,10 @@ def _print_status(selected_port: int | None = None) -> int:
         return 0
     except Exception as exc:
         print(f"\n[status] {exc}")
+        from virtuoso_bridge.instance_discovery import InstanceSelectionError
+        if not isinstance(exc, InstanceSelectionError) and (state or {}).get("setup_path"):
+            _print_load_hint(state["setup_path"])
+            _print_stale_daemon_hint()
         return 1
     finally:
         if ssh is not None:

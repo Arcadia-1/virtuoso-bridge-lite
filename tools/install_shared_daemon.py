@@ -29,7 +29,7 @@ def install(destination: Path, python: str = "python3", scratch_root: str | None
     destination.mkdir(mode=0o700)  # exclusive; keep incomplete contents private
     destination.chmod(0o700)
     for name in ("ramic_bridge.il", "ramic_bridge_daemon_3.py", "ramic_bridge_daemon_27.py",
-                 "ramic_owner.py", "ramic_request_recovery.py", "ramic_registry.py", "ramic_token.py"):
+                 "ramic_owner.py", "ramic_request_recovery.py", "ramic_registry.py"):
         target = destination / name
         fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "wb") as stream:

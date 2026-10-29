@@ -1,25 +1,20 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 from virtuoso_bridge.virtuoso import x11
 
 
 class _FakeRunner:
-    _vb_remote_home = "/home/designer"
-
     def __init__(self) -> None:
         self.commands: list[str] = []
         self.uploads: list[tuple[Path, str]] = []
 
     def run_command(self, command: str, timeout=None):
         self.commands.append(command)
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    def upload(self, local_path: Path, remote_path: str, timeout=None):
+    def upload(self, local_path: Path, remote_path: str):
         self.uploads.append((local_path, remote_path))
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
 
 def test_x11_helper_uses_client_scoped_bridge_dir(monkeypatch) -> None:
@@ -31,10 +26,9 @@ def test_x11_helper_uses_client_scoped_bridge_dir(monkeypatch) -> None:
 
     remote_path = x11._ensure_helper(runner, "designer")
 
-    assert remote_path.startswith("/tmp/virtuoso_bridge_designer/90590/x11/")
-    assert remote_path.endswith("/x11_dismiss_dialog.py")
-    assert "vb_ensure_root" in runner.commands[0]
-    assert runner.uploads[0][1].startswith(remote_path + ".stage-")
+    assert remote_path == "/tmp/virtuoso_bridge_designer/90590/x11/x11_dismiss_dialog.py"
+    assert runner.commands == ["mkdir -p /tmp/virtuoso_bridge_designer/90590/x11"]
+    assert runner.uploads[0][1] == remote_path
 
 
 def test_x11_helper_uses_profile_scoped_client_id(monkeypatch) -> None:
@@ -46,7 +40,6 @@ def test_x11_helper_uses_profile_scoped_client_id(monkeypatch) -> None:
 
     remote_path = x11._ensure_helper(runner, "designer", profile="t28_io")
 
-    assert remote_path.startswith("/tmp/virtuoso_bridge_designer/workstation_a/x11/")
-    assert remote_path.endswith("/x11_dismiss_dialog.py")
-    assert "vb_ensure_root" in runner.commands[0]
-    assert runner.uploads[0][1].startswith(remote_path + ".stage-")
+    assert remote_path == "/tmp/virtuoso_bridge_designer/workstation_a/x11/x11_dismiss_dialog.py"
+    assert runner.commands == ["mkdir -p /tmp/virtuoso_bridge_designer/workstation_a/x11"]
+    assert runner.uploads[0][1] == remote_path

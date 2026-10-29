@@ -4,102 +4,14 @@ from __future__ import annotations
 
 import ctypes
 import os
-import shutil
-import socket
 import subprocess
 import sys
-import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
 from virtuoso_bridge.transport import ssh, tunnel
-
-
-@pytest.mark.parametrize("saved,current", [(None, "birth2"), ("birth1", "birth2")])
-def test_stop_rejects_unverified_or_reused_adopted_pid(monkeypatch, saved, current):
-    runner = ssh.SSHRunner("fixture")
-    runner.tunnel_pid = 42
-    runner._saved_tunnel_identity = saved
-    monkeypatch.setattr(ssh, "_process_identity", lambda pid: current)
-    monkeypatch.setattr(ssh.os, "kill", lambda *a: pytest.fail("must not signal"))
-    with pytest.raises(RuntimeError, match="unverified or reused"):
-        runner.stop_port_forward()
-    assert runner.tunnel_pid == 42
-    runner.detach_port_forward()
-
-
-def test_stop_verified_adopted_pid_and_clear_identity(monkeypatch):
-    runner = ssh.SSHRunner("fixture")
-    runner.tunnel_pid = 42
-    runner._saved_tunnel_identity = "birth1"
-    identities = iter(["birth1", None])
-    monkeypatch.setattr(ssh, "_process_identity", lambda pid: next(identities))
-    monkeypatch.setattr(ssh, "_process_confirmed_gone", lambda pid: True)
-    calls = []
-    monkeypatch.setattr(ssh.os, "kill", lambda *a: calls.append(a))
-    runner.stop_port_forward()
-    assert calls == [(42, ssh.signal.SIGTERM)]
-    assert runner.tunnel_pid is None
-    assert runner._saved_tunnel_identity is None
-
-
-def test_process_identity_rejects_current_non_ssh_process():
-    assert ssh._process_identity(os.getpid()) is None
-
-
-def test_stop_waits_for_adopted_pid_instead_of_an_old_exited_child(monkeypatch):
-    runner = ssh.SSHRunner("fixture")
-    runner._tunnel_proc = SimpleNamespace(pid=41, poll=lambda: 0,
-                                         wait=lambda **kw: pytest.fail("waited for unrelated old child"))
-    runner.tunnel_pid = 42
-    runner._saved_tunnel_identity = "birth1"
-    identities = iter(["birth1", None])
-    monkeypatch.setattr(ssh, "_process_identity", lambda pid: next(identities))
-    monkeypatch.setattr(ssh, "_process_confirmed_gone", lambda pid: True)
-    signals = []
-    monkeypatch.setattr(ssh.os, "kill", lambda *args: signals.append(args))
-    runner.stop_port_forward()
-    assert signals == [(42, ssh.signal.SIGTERM)]
-
-
-@pytest.mark.skipif(sys.platform != "linux", reason="native Linux SSH argv/UID/birth verification")
-def test_legacy_adoption_and_stop_of_fixture_owned_native_ssh():
-    executable = shutil.which("ssh")
-    if not executable:
-        pytest.skip("requires OpenSSH")
-    # A private loopback stub holds the proxy handshake, so this real ssh
-    # process never reaches credentials, a remote host or a user CIW.
-    with socket.socket() as stub:
-        stub.bind(("127.0.0.1", 0))
-        stub.listen()
-        args = [executable, "-F", "/dev/null", "-o", "ControlMaster=no", "-o", "ControlPath=none",
-                "-o", "ControlPersist=no", "-o", "ConnectTimeout=5", "-J",
-                "127.0.0.1:%d" % stub.getsockname()[1], "-N", "-L", "12345:127.0.0.1:23456",
-                "fixture@fixture.example.invalid"]
-        proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, start_new_session=True)
-        runner = ssh.SSHRunner("fixture.example.invalid", user="fixture")
-        try:
-            deadline = time.monotonic() + 3
-            while not ssh._process_identity(proc.pid) and time.monotonic() < deadline:
-                time.sleep(0.01)
-            assert proc.poll() is None
-            runner.tunnel_pid = proc.pid
-            runner.adopt_legacy_forward(12345, 23456)
-            assert runner._saved_tunnel_identity == ssh._process_identity(proc.pid)
-            runner.stop_port_forward()
-            proc.wait(timeout=5)
-            assert runner.tunnel_pid is None
-        finally:
-            runner.detach_port_forward()
-            runner.close()
-            try:
-                os.killpg(proc.pid, ssh.signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            proc.wait(timeout=5)
 
 
 def _forbid_signals(*_args):
@@ -273,12 +185,6 @@ def test_windows_exited_process_is_not_alive(monkeypatch):
         proc.wait(timeout=5)
         monkeypatch.setattr(os, "kill", _forbid_signals)
         assert not tunnel._pid_is_alive(proc.pid)
-        assert ssh._process_confirmed_gone(proc.pid)
-        runner = ssh.SSHRunner("fixture")
-        runner._tunnel_proc = proc
-        runner._tunnel_pid = proc.pid
-        runner.stop_port_forward()
-        assert runner.tunnel_pid is None
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires native POSIX signal-zero semantics")

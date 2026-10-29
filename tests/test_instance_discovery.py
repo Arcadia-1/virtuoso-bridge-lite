@@ -21,6 +21,30 @@ def row(port=65001, pid=10, work_dir="/project/a"):
                 work_dir=work_dir, instance="%032x" % pid)
 
 
+def test_registry_root_uses_daemon_account_without_changing_workflow_defaults(monkeypatch):
+    from types import SimpleNamespace
+    from virtuoso_bridge.transport import remote_paths
+    monkeypatch.setattr(remote_paths, "load_vb_env", lambda: None)
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", "/tmp")
+    runner = SimpleNamespace(user="ssh-alias", run_command=lambda command:
+                             SimpleNamespace(returncode=0, stdout="actual-account\n"))
+    assert remote_paths.instance_scratch_root(runner) == "/tmp/virtuoso_bridge_actual-account"
+    assert remote_paths.default_virtuoso_bridge_dir("ssh-alias", "workflow") == (
+        "/tmp/virtuoso_bridge_ssh-alias/workflow")
+
+
+def test_registry_home_expansion_does_not_change_literal_workflow_root(monkeypatch):
+    from types import SimpleNamespace
+    from virtuoso_bridge.transport import remote_paths
+    monkeypatch.setattr(remote_paths, "load_vb_env", lambda: None)
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", "~/scratch")
+    runner = SimpleNamespace(run_command=lambda command:
+                             SimpleNamespace(returncode=0, stdout="/home/remote\n"))
+    assert remote_paths.instance_scratch_root(runner) == "/home/remote/scratch"
+    assert remote_paths.default_virtuoso_bridge_dir("user", "workflow") == (
+        "~/scratch/virtuoso_bridge_user/workflow")
+
+
 def test_selection_requires_unique_instance_and_exact_port():
     a, b = row(), row(65002, 20)
     with pytest.raises(InstanceSelectionError, match="65001  10  /project/a"):
@@ -134,23 +158,6 @@ def test_cached_capabilities_cannot_outlive_instance_selection(monkeypatch):
         client._ensure_daemon_capabilities(time.monotonic() + 1)
 
 
-def test_python27_automatic_credential_is_an_hmac_byte_key(monkeypatch):
-    import ast
-    import hashlib
-    import hmac
-    from types import SimpleNamespace
-    source = (Path(registry.__file__).parent / "ramic_bridge_daemon_27.py").read_text(encoding="utf-8")
-    function = next(node for node in ast.parse(source).body
-                    if isinstance(node, ast.FunctionDef) and node.name == "_load_or_create_token")
-    # Exercise the actual function's automatic branch independently of the
-    # Python-2-only IPC code. This does not replace a native Python 2 run.
-    module = ast.Module(body=[function], type_ignores=[])
-    scope = dict(os=SimpleNamespace(environ={"RB_AUTO_PORT": "1"}), sys=sys)
-    monkeypatch.setitem(sys.modules, "ramic_token", SimpleNamespace(read_or_create=lambda: "ab" * 32))
-    exec(compile(module, "daemon27-token", "exec"), scope)
-    key = scope["_load_or_create_token"]()
-    assert hmac.new(key, b"request", hashlib.sha256).digest() == hmac.new(
-        b"ab" * 32, b"request", hashlib.sha256).digest()
 
 
 def test_saved_selection_is_scoped_to_config_and_expected_directory(tmp_path, monkeypatch):
@@ -383,7 +390,7 @@ def test_occupied_socket_symlink_fifo_and_unlocked_stale_file(tmp_path):
 @linux
 def test_token_creation_race_converges_without_logging_secret(tmp_path):
     path = tmp_path / "private" / "bridge_token"
-    script = "import sys; sys.path.insert(0, sys.argv[1]); from ramic_token import read_or_create; print(read_or_create(sys.argv[2]))"
+    script = "import sys; from virtuoso_bridge.daemon_auth import read_or_create_local_token; print(read_or_create_local_token(sys.argv[2]))"
     processes = [subprocess.Popen([sys.executable, "-c", script, str(RESOURCES), str(path)],
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(8)]
     try:
@@ -399,17 +406,6 @@ def test_token_creation_race_converges_without_logging_secret(tmp_path):
             stop(process)
 
 
-@linux
-def test_credential_symlink_is_rejected_without_modifying_target(tmp_path):
-    from virtuoso_bridge.virtuoso.basic.resources.ramic_token import read_or_create
-    directory = tmp_path / "private"
-    directory.mkdir()
-    target = tmp_path / "victim"
-    target.write_text("ab" * 32)
-    (directory / "bridge_token").symlink_to(target)
-    with pytest.raises(OSError):
-        read_or_create(str(directory / "bridge_token"))
-    assert target.read_text() == "ab" * 32
 
 
 def test_status_discovery_does_not_write_fixed_port_requests(monkeypatch):

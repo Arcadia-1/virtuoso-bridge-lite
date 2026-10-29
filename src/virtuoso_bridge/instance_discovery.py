@@ -14,8 +14,8 @@ def compatibility_message(caps: dict) -> str:
     if build == DAEMON_BUILD:
         return "daemon build: " + DAEMON_BUILD
     return ("Daemon build %r differs from client bundle %s; compatibility is determined by "
-            "signed protocol/capabilities. To upgrade, RBStop() in the intended idle CIW, "
-            "wait for its child to exit, then load the new bootstrap. No automatic replacement."
+            "signed protocol/capabilities. Run `virtuoso-bridge restart` "
+            "(or re-load virtuoso_setup.il in the CIW) to upgrade it."
             % (build if build is not None else "unknown (older daemon)", DAEMON_BUILD))
 
 

@@ -38,10 +38,10 @@ exchange gap, not uninterrupted availability for concurrent CIW loads.
    Same-owner historical non-secret 0755/0644 metadata is readable; writable,
    foreign and special files remain untrusted.
 2. To stop, use **remote_port**. For `port=12345, remote_port=23456`, run
-   `virtuoso-bridge stop --port 23456`. Ordinary old SSH argv may require
-   [operator recovery](../../skills/virtuoso/references/connection.md#legacy-tunnel-recovery)
-   because inherited configuration cannot be proved from argv. Deleting JSON
-   alone never releases a listener.
+   `virtuoso-bridge stop --port 23456`. Stop uses the saved PID without process
+   identity or argv checks. Inspect suspect state with the
+   [recovery procedure](../../skills/virtuoso/references/connection.md#legacy-tunnel-recovery).
+   Deleting JSON alone never releases a listener.
 3. If choosing to upgrade, stage a new generated/versioned shared bootstrap.
    In the intended idle CIW, stop the tracked child, wait for exit, then load
    the intended new setup. Update `.cdsinit` only when deliberately changing
@@ -58,9 +58,11 @@ be replayed. Polling uses capped backoff. `RBStopAll()` now stops only this CIW'
 tracked child. An untracked daemon needs operator owner/birth/parent verification;
 the SSH tunnel procedure is not a daemon kill procedure.
 
-Windows stop handles confirmed exited-process races without swallowing denied
-or uncertain operations. Helper staging verifies directories/files and transfer
-results before execution. Local screenshots retain absolute path expansion.
+SSH stop and workflow staging retain their original behavior. Stop does not
+wait for exit and ignores signal errors; workflow scratch paths have no added
+ownership gates or umask. Original private deployment/XStream child checks remain.
+Token generation uses the existing client/daemon implementation and overrides,
+without the separate credential helper. Local screenshots retain absolute path expansion.
 Session listings preserve printable Unicode while escaping terminal controls.
 
 Fresh Linux/native/Python 2.7 and isolated Cadence acceptance remains required

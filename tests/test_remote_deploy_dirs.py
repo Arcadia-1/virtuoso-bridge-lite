@@ -69,7 +69,7 @@ def test_deploy_creates_every_directory_private(monkeypatch, tmp_path):
     client = _deploy(monkeypatch, tmp_path, runner)
 
     assert client.remote_work_dir == str(_chain(tmp_path)[-1])
-    assert [_mode(path) for path in _chain(tmp_path)] == [0o700] * 3
+    assert [_mode(path) for path in _chain(tmp_path)] == [0o700, 0o700, 0o700]
     assert f"{client.remote_work_dir}/virtuoso_setup.il" in runner.uploads
 
 
@@ -83,31 +83,28 @@ def test_deploy_in_existing_home_scratch_root(monkeypatch, tmp_path, dirname):
     client = _deploy(monkeypatch, root, runner)
 
     assert client.remote_work_dir == str(_chain(root)[-1])
-    assert [_mode(path) for path in _chain(root)] == [0o700] * 3
+    assert [_mode(path) for path in _chain(root)] == [0o700, 0o700, 0o700]
     assert f"{client.remote_work_dir}/virtuoso_setup.il" in runner.uploads
     assert all(path.startswith(str(root) + "/") for path in runner.uploads)
 
 
-def test_deploy_refuses_existing_nonprivate_directories(monkeypatch, tmp_path):
+def test_deploy_tightens_an_existing_directory_of_the_user(monkeypatch, tmp_path):
     for path in _chain(tmp_path):
         path.mkdir()
         path.chmod(0o755)
 
-    runner = _LocalShellRunner()
-    with pytest.raises(RuntimeError, match="mode 700"):
-        _deploy(monkeypatch, tmp_path, runner)
+    _deploy(monkeypatch, tmp_path, _LocalShellRunner())
 
-    assert [_mode(path) for path in _chain(tmp_path)] == [0o755] * 3
-    assert not runner.uploads
+    assert [_mode(path) for path in _chain(tmp_path)] == [0o700, 0o700, 0o700]
 
 
 def test_deploy_refuses_a_symlinked_directory(monkeypatch, tmp_path):
     planted = tmp_path / "planted"
     planted.mkdir()
-    _chain(tmp_path)[0].symlink_to(planted)
+    (tmp_path / "virtuoso_bridge_designer").symlink_to(planted)
     runner = _LocalShellRunner()
 
-    with pytest.raises(RuntimeError, match="Refusing to deploy.*VB_REMOTE_SCRATCH_ROOT"):
+    with pytest.raises(RuntimeError, match="Refusing to deploy.*symlink.*VB_REMOTE_SCRATCH_ROOT"):
         _deploy(monkeypatch, tmp_path, runner)
 
     assert list(planted.iterdir()) == []
@@ -123,11 +120,11 @@ def test_deploy_refuses_a_directory_owned_by_someone_else(monkeypatch, tmp_path)
     fake_id.chmod(0o755)
     scratch = tmp_path / "scratch"
     scratch.mkdir()
-    (scratch / "client1").mkdir(mode=0o777)
+    (scratch / "virtuoso_bridge_designer").mkdir(mode=0o777)
     runner = _LocalShellRunner(env={**os.environ, "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}"})
 
-    with pytest.raises(RuntimeError, match="Refusing to deploy.*(wrong owner|must be owned by this user)"):
+    with pytest.raises(RuntimeError, match="Refusing to deploy.*wrong owner"):
         _deploy(monkeypatch, scratch, runner)
 
     assert runner.uploads == {}
-    assert not (scratch / "client1" / "virtuoso_bridge").exists()
+    assert not (scratch / "virtuoso_bridge_designer" / "client1").exists()

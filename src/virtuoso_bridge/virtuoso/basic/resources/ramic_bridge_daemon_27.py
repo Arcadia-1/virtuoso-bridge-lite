@@ -134,17 +134,6 @@ def _load_or_create_token():
     Unusable token files are FATAL unless RB_ALLOW_UNAUTHENTICATED=1 was
     explicitly set.
     """
-    if os.environ.get("RB_AUTO_PORT") == "1" or (len(sys.argv) > 2 and sys.argv[2] == "0"):
-        try:
-            try:
-                from ramic_token import read_or_create
-            except ImportError:
-                from virtuoso_bridge.virtuoso.basic.resources.ramic_token import read_or_create
-            # Python 2 hmac requires a byte-string key, not unicode.
-            return read_or_create().encode("ascii")
-        except (IOError, OSError, ValueError):
-            sys.stderr.write("[RB-auth] Cannot provision private per-user credential; refusing startup\n")
-            sys.exit(1)
     path = _token_file_path()
     try:
         with open(path, "r") as handle:

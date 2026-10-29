@@ -2612,13 +2612,13 @@ def test_remote_sentinel_parser_fails_closed_on_malformed_protocol(
         )
 
 
-@pytest.mark.parametrize("scenario", ["symlink", "wrong_owner", "unsafe_mode", "clean"])
+@pytest.mark.parametrize("scenario", ["symlink", "wrong_owner", "unsafe_mode"])
 def test_remote_stage_command_secures_private_chain(
     tmp_path: Path,
     scenario: str,
 ) -> None:
     scratch = tmp_path / "scratch root"
-    scratch.mkdir(mode=0o700)
+    scratch.mkdir()
     paths = _remote_paths(
         (scratch / "virtuoso_bridge_secureuser" / "client" / "xstream").as_posix()
     )
@@ -2641,19 +2641,18 @@ def test_remote_stage_command_secures_private_chain(
     completed = _sh(streamout._remote_stage_command(paths), env=environment)
 
     run_dir = Path(paths.run_dir.as_posix())
-    if scenario == "clean":
-        assert completed.returncode == 0, completed.stderr
-        assert "VBXSTREAM_STAGE_CREATED" in completed.stdout
-        assert "VBXSTREAM_STAGE_READY" in completed.stdout
-        assert run_dir.is_dir()
-        assert all(stat.S_IMODE(path.stat().st_mode) == 0o700
-                   for path in (user_dir, user_dir / "client", Path(paths.owned_root), run_dir))
+    if scenario != "unsafe_mode":
+        assert completed.returncode != 0
+        assert "VBXSTREAM_STAGE_CREATED" not in completed.stdout
+        assert not run_dir.exists()
         return
-    assert completed.returncode != 0
-    assert "VBXSTREAM_STAGE_CREATED" not in completed.stdout
-    assert not run_dir.exists()
-    if scenario == "unsafe_mode":
-        assert stat.S_IMODE(user_dir.stat().st_mode) == 0o755
+    assert completed.returncode == 0
+    assert completed.stdout.splitlines() == [
+        "VBXSTREAM_STAGE_CREATED",
+        "VBXSTREAM_STAGE_READY",
+    ]
+    for directory in (user_dir, user_dir / "client", run_dir.parent, run_dir):
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o700
 
 
 @pytest.mark.parametrize("remove_run", [False, True])

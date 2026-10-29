@@ -42,6 +42,16 @@ def test_available_instance_is_not_a_connection(status, monkeypatch, capsys, sav
     assert "AVAILABLE" in capsys.readouterr().out
 
 
+def test_status_restores_load_and_autoload_hints_for_missing_instance(status, monkeypatch, capsys):
+    client, state = status
+    state["setup_path"] = "/tmp/bridge/virtuoso_setup.il"
+    monkeypatch.setattr(client, "list_instances", lambda: [])
+    assert cli._print_status() == 1
+    output = capsys.readouterr().out
+    assert 'load("/tmp/bridge/virtuoso_setup.il")' in output
+    assert "isolated from SSH" in output and ".cdsinit" in output
+
+
 def test_status_respects_directory_and_port(status, monkeypatch, capsys):
     client, _ = status
     client._expected_work_dir = "/project/b"

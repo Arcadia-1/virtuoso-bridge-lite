@@ -930,6 +930,7 @@ let((result winName ciwNum)
         """
         from virtuoso_bridge.transport.remote_paths import (
             default_virtuoso_bridge_dir,
+            resolve_remote_username,
         )
 
         effective_timeout = timeout if timeout is not None else self._timeout
@@ -952,17 +953,19 @@ let((result winName ciwNum)
             )
 
         # Remote path
+        username = resolve_remote_username(
+            configured_user=self._tunnel._remote_user if self._tunnel else None,
+            runner=self._tunnel._ssh_runner if self._tunnel else None,
+        )
         from virtuoso_bridge.transport.remote_paths import resolve_client_id
 
         client_id = resolve_client_id(getattr(self._tunnel, '_profile', None)) if self._tunnel else None
-        screenshot_dir = default_virtuoso_bridge_dir("", "screenshots", client_id, runner=self.ssh_runner)
+        screenshot_dir = default_virtuoso_bridge_dir(username, "screenshots", client_id)
         if self._tunnel and self._tunnel._ssh_runner:
-            self._tunnel._ssh_runner.run_command(f"umask 077; mkdir -p {shlex.quote(screenshot_dir)}")
+            self._tunnel._ssh_runner.run_command(f"mkdir -p {shlex.quote(screenshot_dir)}")
         elif self.ssh_runner is None:
-            # Configuration may contain a remote-style ~. A local CIW and
-            # shutil must receive the same absolute, existing directory.
             local_dir = Path(screenshot_dir).expanduser().resolve()
-            local_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            local_dir.mkdir(parents=True, exist_ok=True)
             screenshot_dir = local_dir.as_posix()
 
         from datetime import datetime
@@ -1996,15 +1999,19 @@ let((result winName ciwNum)
             from virtuoso_bridge.transport.remote_paths import (
                 default_virtuoso_bridge_dir,
                 resolve_client_id,
+                resolve_remote_username,
             )
             from virtuoso_bridge.transport.tunnel import _profiled_bridge_leaf
             work_dir = self._tunnel.remote_work_dir
             if not work_dir:
+                remote_username = resolve_remote_username(
+                    configured_user=getattr(self._tunnel, '_remote_user', None),
+                    runner=self._tunnel.ssh_runner,
+                )
                 work_dir = default_virtuoso_bridge_dir(
-                    "",
+                    remote_username,
                     _profiled_bridge_leaf(getattr(self._tunnel, '_profile', None)),
                     resolve_client_id(getattr(self._tunnel, '_profile', None)),
-                    runner=self._tunnel.ssh_runner,
                 )
             remote_dir = work_dir.rstrip("/")
             remote_path = f"{remote_dir}/{p.name}"
@@ -2081,8 +2088,8 @@ let((result winName ciwNum)
         except json.JSONDecodeError:
             raise daemon_auth.DaemonAuthError(
                 "daemon sent an unparseable capability payload — it predates "
-                "bridge token auth; in the intended idle CIW, RBStop(), wait "
-                "for the child to exit, then load the intended new virtuoso_setup.il"
+                "bridge token auth; run `virtuoso-bridge restart` (or re-load "
+                "virtuoso_setup.il in the CIW) to upgrade it"
             )
         if not isinstance(caps, dict):
             raise daemon_auth.DaemonAuthError(
@@ -2167,9 +2174,9 @@ let((result winName ciwNum)
                 raise daemon_auth.DaemonAuthError(message)
             raise daemon_auth.DaemonAuthError(
                 "daemon did not answer the bridge capability handshake — it "
-                    "predates bridge token auth or runs with auth disabled; "
-                    "in the intended idle CIW, RBStop(), wait for the child "
-                    "to exit, then load the intended new virtuoso_setup.il"
+                "predates bridge token auth or runs with auth disabled; run "
+                "`virtuoso-bridge restart` (or re-load virtuoso_setup.il in "
+                "the CIW) to upgrade it"
             )
         if raw[:1] != b"\x02":
             raise daemon_auth.DaemonAuthError(
@@ -2192,8 +2199,8 @@ let((result winName ciwNum)
             if caps.get("auth") != "off":
                 raise daemon_auth.DaemonAuthError(
                     "daemon did not authenticate its handshake response — "
-                    "in the intended idle CIW, RBStop(), wait for the child "
-                    "to exit, then load the intended new virtuoso_setup.il"
+                    "run `virtuoso-bridge restart` (or re-load "
+                    "virtuoso_setup.il in the CIW) to upgrade it"
                 )
             if not daemon_auth.allow_unauthenticated():
                 raise daemon_auth.DaemonAuthError(

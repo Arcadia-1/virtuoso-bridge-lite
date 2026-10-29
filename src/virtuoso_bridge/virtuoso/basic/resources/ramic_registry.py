@@ -35,11 +35,6 @@ def _private_directory(path, create):
             if exc.errno != errno.EEXIST:
                 raise
     fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    info = os.fstat(fd)
-    if info.st_uid != os.geteuid() or info.st_mode & 0o077:
-        os.close(fd)
-        raise RuntimeError("Instance scratch directory must be owned by this UID with mode 0700: %s. "
-                           "Use a private child directory, not /tmp itself." % path)
     return fd
 
 
