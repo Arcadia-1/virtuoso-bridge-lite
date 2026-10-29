@@ -34,7 +34,7 @@ try {
       const label = lang + " / " + width;
       await page.setViewportSize({ width, height: 900 });
       await page.goto(new URL("/?lang=" + lang, base).href, { waitUntil: "networkidle" });
-      await page.locator("#eco-search-controls").waitFor({ state: "visible" });
+      await page.locator(".archive").waitFor({ state: "visible" });
       const metrics = await page.evaluate(() => {
         const primary = document.querySelector(".intro .primary");
         const guide = document.querySelector("#docs .links a");
@@ -52,6 +52,8 @@ try {
           start: document.querySelector("#start").getBoundingClientRect().top + scrollY,
           comparisonCell: getComputedStyle(document.querySelector(".compare td")).display,
           diagramLoaded: document.querySelectorAll(".hero-flow svg .system-routes path").length > 0,
+          diagramCaptionVisible: document.querySelector('.diagram-footer:last-child').getBoundingClientRect().bottom <= document.querySelector('.intro-stage').getBoundingClientRect().bottom,
+          interfaceFonts: [...new Set([...document.querySelectorAll('.hero-flow .interface-label,.hero-flow .system-caption')].map(e => {const s=getComputedStyle(e); return `${s.fontSize}/${s.fontWeight}/${s.letterSpacing}`;}))],
         };
       });
       assert(!metrics.overflow, "Page overflow: " + label);
@@ -63,6 +65,8 @@ try {
       assert.equal(metrics.guideZhFont, metrics.guideFont, "Chinese link font: " + label);
       assert.equal(metrics.guideZhColor, metrics.guideColor, "Chinese link contrast: " + label);
       assert(metrics.diagramLoaded, "Missing bridge signal diagram: " + label);
+      assert(metrics.diagramCaptionVisible, "Non-live diagram caption clipped: " + label);
+      assert.equal(metrics.interfaceFonts.length, 1, "Interface labels must share typography: " + label);
       if (width >= 1280) assert(metrics.start < 2100, "Quick start pushed down: " + label);
       if (width <= 640) assert.equal(metrics.comparisonCell, "block", "Mobile comparison: " + label);
       assert.equal(await page.locator("#ecosystem-index li:visible").count(), 53, label);
@@ -77,39 +81,18 @@ try {
   }
 
   const visibleProjects = page.locator("#ecosystem-index li:visible");
-  const input = page.locator("#search");
-  await input.fill("  PANDA   layout ");
-  assert.equal(await visibleProjects.count(), 1);
-  assert((await visibleProjects.first().textContent()).includes("PKU-IDEA/PANDA"));
-  assert.equal(await page.locator("#search-status").textContent(), "1 个匹配项目");
-  await page.locator("[data-language-toggle]").click();
-  await page.waitForFunction(() => document.querySelector("#search-status").textContent === "1 matching projects");
-  assert.equal(await visibleProjects.count(), 1);
-  assert.equal(await input.inputValue(), "  PANDA   layout ");
-  await input.fill("版图");
-  assert((await visibleProjects.count()) > 0, "Chinese search must work in English too");
-  await input.fill("no-such-project-<script>");
-  assert.equal(await visibleProjects.count(), 0);
-  assert.equal(await page.locator("#eco-empty").isVisible(), true);
-  await page.locator("#index-clear").click();
+  assert.equal(await page.locator('#search,#search-status,#index-clear').count(), 0);
+  assert.equal(await page.locator('#full-index summary + .eco-categories a').count(), 5);
+  await page.locator('[data-language-toggle]').click();
+  await page.waitForFunction(() => document.documentElement.dataset.lang === 'en');
   assert.equal(await visibleProjects.count(), 53);
-  assert.equal(await input.evaluate(el => el === document.activeElement), true);
-  assert.equal(await page.locator("#eco-empty").isVisible(), false);
-  await input.fill("no-such-project");
   await page.locator('.eco-categories a[href="#eco-tools"]').click();
-  assert.equal(await input.inputValue(), "");
   assert.equal(await visibleProjects.count(), 53);
-  assert.equal(await page.locator("#eco-tools").isVisible(), true);
-  assert.equal(new URL(page.url()).hash, "#eco-tools");
-  // Search works via keyboard alone, and its focus is visibly indicated.
-  await input.focus();
-  assert.equal(await input.evaluate(el => getComputedStyle(el).outlineStyle), "solid");
-  await page.keyboard.type("mock-virtuoso");
-  assert.equal(await visibleProjects.count(), 1);
-  await page.keyboard.press("Tab");
-  assert.equal(await page.locator("#index-clear").evaluate(el => el === document.activeElement), true);
-  await page.keyboard.press("Enter");
-  assert.equal(await visibleProjects.count(), 53);
+  assert.equal(await page.locator('#eco-tools').isVisible(), true);
+  assert.equal(new URL(page.url()).hash, '#eco-tools');
+  await page.locator('.eco-categories a[href="#eco-agents"]').focus();
+  await page.keyboard.press('Enter');
+  assert.equal(new URL(page.url()).hash, '#eco-agents');
   await active.close();
 
   const plain = await context({ javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
@@ -117,7 +100,7 @@ try {
   await noJs.goto(base.href);
   assert.equal(await noJs.locator("#ecosystem-index li:visible").count(), 53);
   assert.equal(await noJs.locator(".eco-categories a:visible").count(), 5);
-  assert.equal(await noJs.locator("#eco-search-controls").isVisible(), false);
+  assert.equal(await noJs.locator("#eco-search-controls").count(), 0);
   assert.equal(await noJs.locator(".intro .primary").isVisible(), true);
   assert.equal(await noJs.locator(".archive").isVisible(), false);
   await plain.close();
@@ -127,11 +110,11 @@ try {
   const withoutModule = await blocked.newPage();
   await withoutModule.goto(base.href);
   assert.equal(await withoutModule.locator("#ecosystem-index li:visible").count(), 53);
-  assert.equal(await withoutModule.locator("#eco-search-controls").isVisible(), false);
+  assert.equal(await withoutModule.locator("#eco-search-controls").count(), 0);
   assert.equal(await withoutModule.locator(".archive").isVisible(), false);
   await blocked.close();
   assert.deepEqual(errors, []);
-  console.log("PASS: 14 responsive/language layouts; search, categories, keyboard, language switch and no-script fallbacks.");
+  console.log("PASS: 14 responsive/language layouts; complete index, categories, keyboard, language switch and no-script fallbacks.");
 } finally {
   await browser.close();
 }

@@ -9,7 +9,9 @@ website package. `npm run preview` serves the full site with local Cloudflare
 Durable Object storage. It does not connect to Cadence.
 
 The homepage uses a cool paper archive layout, a staggered two-line headline,
-and a signal diagram from AI agent through the bridge to three tools. Its first screen names the Lite core:
+and a signal diagram from AI agent through the bridge to three tools. Python labels
+the agent input; SKILL/CLI sits with the bridge. Spectre, Maestro and Virtuoso appear
+from left to right, with local/remote and non-live illustration captions. Its first screen names the Lite core:
 Spectre simulation and PDK/CDF callbacks, everyday schematic/symbol/GDS operations,
 and raw SKILL for the rest. Advanced configuration remains optional.
 All pages keep the same product links, language switch and analytics footer,
@@ -17,12 +19,22 @@ checked by `chrome.test.ts`. Homepage-only styles and modules live in
 `docs/assets/home/` and are copied by the regular build, with no prototype
 dependency. Edit `docs/index.html` directly. The complete ecosystem index is open
 by default and works without JavaScript. It is the single content source for
-the waterfall browser and bilingual, multi-term name/keyword search; category links
-jump to the original groups and clear any active search. The waterfall and search
-controls appear only after initialization. Five collection buttons pan the three-column
-view, with graduated blur confined to the outer edges and project details alongside.
-Hovering or focusing a card pauses the downward flow and lifts it without enlargement;
-the detail panel does not pause the flow. Motion pauses offscreen and honors reduced-motion
+the waterfall browser; five category links immediately below the index summary
+jump to the original groups. No search controls are needed. The waterfall
+appears only after initialization. Five collection buttons and small previous/next
+arrows pan the three-column view, with graduated blur confined to the outer edges
+and project details alongside. Side arrows stop at the first and last collection.
+Hovering a card pauses the downward flow; a brief stationary dwell selects and lifts
+it without enlargement. Keyboard focus selects immediately. The chosen project stays
+in the detail panel until another card is deliberately selected or a category changes.
+Brief crossings do not select a card; dwelling on another card changes the preview.
+The detail panel does not pause the flow. Cards link directly to GitHub; the section
+introduction explains this in both languages, and the detail panel has no separate
+changing link. A compact Pause/Resume button beside the collection tabs supports
+mouse, touch and keyboard. Explicit pause persists after leaving cards, changing
+collections or languages, and scrolling away and back; only Resume restarts it.
+Reduced-motion preferences disable automatic scrolling and its control without
+clearing an explicit pause. Motion pauses offscreen and honors reduced-motion
 preferences. The complete index remains available independently of the animation.
 `homepage-content.json`
 records original destinations

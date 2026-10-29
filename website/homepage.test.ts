@@ -55,9 +55,8 @@ describe("archive production homepage", () => {
     expect(html).toContain('<section class="block ecosystem" id="ecosystem-index">');
     expect(html).toContain('<details id="full-index" open>');
     expect(html).toContain('<section hidden class="archive"');
-    expect(html).toContain('<div id="eco-search-controls" hidden>');
-    expect(html).toContain('aria-controls="ecosystem-index"');
-    expect(html).toContain('id="search-status" role="status"');
+    expect(html).not.toMatch(/id="(?:eco-search-controls|search|search-status|index-clear|eco-empty)"/);
+    expect(html).toMatch(/<\/summary><nav class="eco-categories"/);
     for (const id of ["forks", "tools", "agents", "skills", "mentions"]) {
       expect(html).toContain(`href="#eco-${id}"`);
       expect(html).toContain(`<h3 id="eco-${id}">`);

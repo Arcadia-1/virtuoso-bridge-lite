@@ -3,15 +3,20 @@ export function createWaterfall(root, groups, language) {
   const viewport = root.querySelector('.wf-window');
   const panorama = root.querySelector('.wf-panorama');
   const nav = root.querySelector('#categories');
+  const steps = [...root.querySelectorAll('[data-wf-step]')];
+  const motion = root.querySelector('[data-wf-motion]');
   const detail = root.querySelector('.wf-detail');
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const types = ['registry', 'tool', 'project', 'manual', 'citation'];
   const labels = {en:['REGISTRY','TOOL','PROJECT','REFERENCE','SOURCE'], zh:['项目档案','工具','设计项目','参考资料','收录来源']};
   const escape = value => value.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const lanes = groups.map((group, i) => ({group, columns:[], phase:[25,115,0,75,155][i], period:1}));
-  let selected = 2, paused = reduced.matches, hovered = null, focused = null;
+  let selected = 2, paused = false, hovered = null, focused = null;
   let visible = false, frame = 0, last = 0, panning = false, panTimer;
   let detailGroup = 2, detailItem = 0, detailTime = 0, leaveTimer;
+  let detailHovered = false, userSelected = false, hoverTimer;
+  let hoverX = 0, hoverY = 0;
+  const readingDetails = () => detailHovered || detail.contains(document.activeElement);
 
   // Repeat only the presentation, keeping the five real collection counts intact.
   for (let set = 0; set < 3; set++) {
@@ -36,6 +41,35 @@ export function createWaterfall(root, groups, language) {
     button.addEventListener('click', () => choose(i));
     nav.append(button);
   });
+  steps.forEach(button => button.addEventListener('click', () => {
+    choose(Math.max(0, Math.min(groups.length-1, selected+Number(button.dataset.wfStep))));
+  }));
+  // Explicit pause is independent of temporary hover/focus and category changes.
+  motion.addEventListener('click', () => {
+    paused = !paused;
+    updateMotion();
+    sync();
+  });
+  function updateMotion() {
+    const zh = language() === 'zh';
+    motion.disabled = reduced.matches;
+    motion.dataset.paused = String(paused || reduced.matches);
+    motion.querySelector('span').textContent = reduced.matches
+      ? (zh ? '动态已关闭' : 'Motion off')
+      : paused ? (zh ? '继续' : 'Resume') : (zh ? '暂停' : 'Pause');
+    motion.setAttribute('aria-label', reduced.matches
+      ? (zh ? '已按减少动态效果偏好关闭项目滚动' : 'Project scrolling is off: reduced motion enabled')
+      : paused ? (zh ? '继续项目滚动' : 'Resume project scrolling') : (zh ? '暂停项目滚动' : 'Pause project scrolling'));
+  }
+  function updateSteps() {
+    steps.forEach(button => {
+      const previous = Number(button.dataset.wfStep) < 0;
+      button.disabled = previous ? selected === 0 : selected === groups.length-1;
+      button.setAttribute('aria-label', language() === 'zh'
+        ? (previous ? '上一个分类' : '下一个分类')
+        : (previous ? 'Previous collection' : 'Next collection'));
+    });
+  }
   function paint(lane, normalize = true) {
     if (normalize) lane.phase = ((lane.phase % lane.period) + lane.period) % lane.period;
     for (const column of lane.columns) column.firstElementChild.style.transform = `translateY(${-lane.period + lane.phase}px)`;
@@ -49,11 +83,12 @@ export function createWaterfall(root, groups, language) {
     detail.querySelector('.wf-detail-title').textContent = record.name.slice(slash+1);
     detail.querySelector('.wf-detail-description').textContent = record.description[language()];
     detail.querySelector('.wf-detail-category').textContent = groups[group].title[language()];
-    detail.querySelector('.wf-detail-link').href = record.url;
     detail.querySelector('.wf-detail-position').textContent = `${String(item+1).padStart(2,'0')} / ${String(groups[group].items.length).padStart(2,'0')}`;
     cards.forEach(card => card.classList.toggle('is-current', Number(card.closest('.wf-column').dataset.group) === group && Number(card.dataset.item) === item));
   }
   function nearest() {
+    // Automatic centering is only a preview, never a replacement for user selection.
+    if (userSelected || readingDetails() || hovered || focused) return;
     const bounds = viewport.getBoundingClientRect(), center = bounds.top + bounds.height / 2;
     const records = [...lanes[selected].columns[1].querySelectorAll('.wf-record')];
     let best = null, distance = Infinity;
@@ -63,7 +98,7 @@ export function createWaterfall(root, groups, language) {
     });
     if (best) showDetails(selected, Number(best.dataset.item));
   }
-  const running = () => !paused && !hovered && !focused && visible && !document.hidden;
+  const running = () => !paused && !reduced.matches && !hovered && !focused && visible && !document.hidden;
   function tick(time) {
     frame = 0;
     if (!running()) return;
@@ -83,13 +118,28 @@ export function createWaterfall(root, groups, language) {
     panorama.style.transform = `translateX(${viewport.clientWidth/2-column.offsetLeft-column.offsetWidth/2}px)`;
   }
   function clearHover() {
+    clearTimeout(hoverTimer);
     hovered?.classList.remove('is-hovered');
     hovered = null;
+  }
+  function selectCard(card) {
+    userSelected = true;
+    showDetails(Number(card.closest('.wf-column').dataset.group), Number(card.dataset.item));
+  }
+  function settleHover(card) {
+    clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(() => {
+      if (hovered !== card) return;
+      selectCard(card);
+      card.classList.add('is-hovered');
+    }, 240);
   }
   function choose(i) {
     clearTimeout(leaveTimer);
     clearHover();
+    userSelected = false;
     selected = i;
+    updateSteps();
     lanes.forEach((lane, j) => lane.columns.forEach(column => column.classList.toggle('is-center', j === i)));
     nav.querySelectorAll('button').forEach((button, j) => button.setAttribute('aria-pressed', String(j === i)));
     clearTimeout(panTimer);
@@ -106,6 +156,8 @@ export function createWaterfall(root, groups, language) {
   }
   function translate() {
     const lang = language();
+    updateSteps();
+    updateMotion();
     nav.querySelectorAll('button').forEach((button, i) => {
       button.textContent = groups[i].title[lang];
       const count = document.createElement('small');
@@ -123,16 +175,34 @@ export function createWaterfall(root, groups, language) {
     measure(); showDetails(detailGroup, detailItem, true); sync();
   }
   // A stable hit area prevents the lifted paper from repeatedly entering/leaving.
+  // Lock only the details: reading on the right must not stop the left-hand flow.
+  detail.addEventListener('pointerenter', event => {
+    if (event.pointerType !== 'touch') detailHovered = true;
+  });
+  detail.addEventListener('pointerleave', () => {detailHovered = false;});
+  detail.addEventListener('pointerdown', () => {userSelected = true;});
   cards.forEach(card => {
     card.addEventListener('pointerenter', event => {
       if (event.pointerType !== 'mouse' || panning) return;
       clearTimeout(leaveTimer);
-      clearHover(); hovered = card; card.classList.add('is-hovered');
-      showDetails(Number(card.closest('.wf-column').dataset.group), Number(card.dataset.item)); sync();
+      clearHover(); hovered = card;
+      hoverX = event.clientX; hoverY = event.clientY;
+      settleHover(card); sync();
+    });
+    // Wait for a stationary pointer instead of selecting on brief crossings.
+    card.addEventListener('pointermove', event => {
+      if (hovered !== card || card.classList.contains('is-hovered')) return;
+      if (Math.hypot(event.clientX-hoverX, event.clientY-hoverY) < 4) return;
+      hoverX = event.clientX; hoverY = event.clientY;
+      settleHover(card);
     });
     card.addEventListener('pointerleave', () => {
-      if (hovered === card) leaveTimer = setTimeout(() => {clearHover(); sync();}, 180);
+      if (hovered === card) {
+        clearTimeout(hoverTimer);
+        leaveTimer = setTimeout(() => {clearHover(); sync();}, 180);
+      }
     });
+    card.addEventListener('pointerdown', () => {clearTimeout(hoverTimer); selectCard(card);});
     card.addEventListener('focus', () => {
       if (!card.matches(':focus-visible')) return;
       focused = card;
@@ -144,7 +214,7 @@ export function createWaterfall(root, groups, language) {
       position(false);
       const lane = lanes[selected];
       lane.phase += viewport.getBoundingClientRect().top + 65 - card.getBoundingClientRect().top;
-      paint(lane, false); showDetails(selected, Number(card.dataset.item)); sync();
+      paint(lane, false); selectCard(card); sync();
     });
     card.addEventListener('blur', () => {focused = null; lanes.forEach(lane => paint(lane)); sync();});
   });
@@ -153,7 +223,7 @@ export function createWaterfall(root, groups, language) {
   });
   document.addEventListener('visibilitychange', () => {if (document.hidden) clearHover(); sync();});
   addEventListener('blur', () => {clearHover(); sync();});
-  reduced.addEventListener('change', () => {paused = reduced.matches; sync();});
+  reduced.addEventListener('change', () => {updateMotion(); sync();});
   new IntersectionObserver(([entry]) => {visible = entry.isIntersecting; if (!visible) clearHover(); sync();}, {threshold:.05}).observe(viewport);
   new ResizeObserver(() => {measure(); sync();}).observe(viewport);
   root.hidden = false;

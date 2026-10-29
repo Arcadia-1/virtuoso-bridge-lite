@@ -1,9 +1,3 @@
-// Preserve literal, case-insensitive, multi-term search across both languages.
-export function matchesQuery(content, query) {
-  const haystack = content.toLowerCase();
-  return query.trim().toLowerCase().split(/\s+/).every(term => haystack.includes(term));
-}
-
 if (typeof document !== "undefined") {
 // SVG strokes animate; labels and layout never move. Stop when offscreen.
 const figure = document.querySelector('.hero-flow');

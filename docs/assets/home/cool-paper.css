@@ -66,36 +66,11 @@
 .refined #docs .links li:hover,.refined #docs .links li:focus-within{box-shadow:inset 0 0 0 3px #ffffffb3,inset 0 0 0 4px #aac0ce80,2px 3px #b3c8d480,5px 9px 12px #172b381c}
 .refined #docs .links li>a{color:#172b38}
 .refined #docs .links li>span{color:#52616a}
-
-/* The archive keeps its physical folders; no grey-green wash remains. */
 .ecosystem-heading p{color:#52616a}
 .refined .ecosystem-area .archive{background:#fff;border-color:#b8cbd5}
 .refined .ecosystem-area .collection-bar{background:#f0f6fa;border-color:#c7d9e4}
 .refined .ecosystem-area #categories button{color:#425563}
 .refined .ecosystem-area #categories button[aria-pressed=true]{background:#c24620;color:#fff}
-.refined .ecosystem-area .visual{--archive-scene-height:425px;background:#f0f6fa}
-/* Keep the hint attached to the fixed rack, independent of reader text height. */
-.refined .ecosystem-area .scene{height:var(--archive-scene-height)}
-.refined .ecosystem-area .stage-bottom{top:calc(var(--archive-scene-height) - 26px);bottom:auto;line-height:14px}
-.refined .ecosystem-area .stage-top,.refined .ecosystem-area .stage-bottom{color:#58666b}
-.refined .ecosystem-area .reader{background:#fff;border-color:#c7d9e4}
-.refined .ecosystem-area .reader #description{color:#425563}
-.refined .ecosystem-area .case-back,.refined .ecosystem-area .case-back:before{background:#f1dfb5;border-color:#baa77b}
-.refined .ecosystem-area .case-back{box-shadow:3px 4px 4px #172b3814}
-.refined .ecosystem-area .sleeve,.refined .ecosystem-area .active .sleeve{background:#fff9e9;border-color:#798891;box-shadow:inset 0 1px #fff,3px 3px #d8c9a5}
-.refined .ecosystem-area .case-back:before,.refined .ecosystem-area .active .case-back:before{background:#d65328;border-color:#d65328}
-.refined .ecosystem-area .sleeve:after{background:repeating-linear-gradient(90deg,#596a71 0 1px,transparent 1px 3px,#596a71 3px 5px,transparent 5px 8px)}
-.refined .ecosystem-area .case-id,.refined .ecosystem-area .case-subtitle{color:#58666b}
-.refined .ecosystem-area .case-id,.refined .ecosystem-area .active .case-id{color:#ae3d1b}
-.refined .ecosystem-area .document{background:#fff;border-color:#b5c5cd;color:#172b38;box-shadow:2px 2px #f3f2ea,3px 3px #b5c5cd}
-.refined .ecosystem-area .document-top{color:#58666b;border-color:#d3d6ce}
-.refined .ecosystem-area .document-lines{background:repeating-linear-gradient(transparent 0 7px,#c4cbc9 7px 8px)}
-.refined .ecosystem-area .document-stamp{color:#58666b;border-color:#aeb8b8}
-.refined .ecosystem-area .rail{background:repeating-linear-gradient(90deg,#6679852b 0 1px,transparent 1px 33px);border-bottom-color:#a3b6c0;box-shadow:none}
-.refined .ecosystem-area .reader-actions #repository{background:#c24620;color:#fff}
-.refined .ecosystem-area .browse button:hover{background:#e6edf0}
-.refined .ecosystem-area .scene:before{color:#b6421e;background:linear-gradient(90deg,#f0f6faef,transparent)}
-.refined .ecosystem-area .scene:after{color:#b6421e;background:linear-gradient(270deg,#f0f6faef,transparent)}
 
 /* Paper-bound index; the spine and numbered tabs are uncoated card stock. */
 .refined .ecosystem-area #full-index{background:linear-gradient(90deg,#dce4e7 0 30px,#b4c1c8 30px 31px,#f8fbfc 31px);box-shadow:3px 4px #dce4e8,5px 6px #f8fbfc,6px 7px #bcc9cf}
@@ -110,12 +85,11 @@
 .refined #ecosystem-index .eco li:before{color:#647985}
 .refined #ecosystem-index .eco li:hover,.refined #ecosystem-index .eco li:focus-within{background:#eaf1f5;border-color:#b4c0c2;box-shadow:inset 2px 0 #d65328}
 .refined #ecosystem-index .eco a{color:#172b38}
-.refined #ecosystem-index .eco li>span,.refined #ecosystem-index>p,.refined #search-status{color:#52616a}
-.refined #index-clear,.refined .eco-categories a{color:#294e63}
+.refined #ecosystem-index .eco li>span,.refined #ecosystem-index>p{color:#52616a}
+.refined .eco-categories a{color:#294e63}
 .refined .eco-categories{border-color:#d7dedc}
-.refined #eco-empty{color:#a93b19}
+
 @media(max-width:760px){
-  .refined .ecosystem-area .visual{--archive-scene-height:402px}
   .refined .ecosystem-area #full-index{background:linear-gradient(90deg,#dce4e7 0 20px,#b4c1c8 20px 21px,#f8fbfc 21px)}
 }
 @media(prefers-reduced-motion:reduce){.refined #docs .links li:hover,.refined #docs .links li:focus-within{transform:none}}
