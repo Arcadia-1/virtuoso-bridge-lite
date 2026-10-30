@@ -395,6 +395,7 @@ def test_occupied_socket_symlink_fifo_and_unlocked_stale_file(tmp_path):
     (Path(directory) / ("1" * 32 + ".json")).symlink_to(target)
     os.mkfifo(str(Path(directory) / ("2" * 32 + ".json")))
     (Path(directory) / ("3" * 32 + ".json")).write_text("stale")
+    (Path(directory) / ("3" * 32 + ".json")).chmod(0o600)
     with socket.socket() as occupied, socket.socket() as candidate:
         occupied.bind(("127.0.0.1", 0))
         occupied.listen(1)

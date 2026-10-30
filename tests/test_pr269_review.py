@@ -87,7 +87,7 @@ def test_explicit_port_reselects_reused_endpoint(configuration, monkeypatch):
     original, replacement = row(61000), row(61000, 20)
     monkeypatch.setattr(tunnel, "_read_selection", lambda *a: dict(record=original, port=61000))
     client = tunnel.SSHClient.from_env(selected_port=61000)
-    assert client.instance_record is None
+    assert client.instance_record == original  # status can still compare saved identity
     assert client.select_record([replacement]) == replacement
 
 

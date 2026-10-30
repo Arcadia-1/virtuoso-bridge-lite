@@ -218,12 +218,13 @@ def test_cli_restart_reconnects_same_ciw_with_same_directory_peer(sessions, tmp_
     target = sessions("restart-target", automatic=True, working_dir="shared-project", registry_name="registry")
     keeper = sessions("restart-keeper", automatic=True, working_dir="shared-project", registry_name="registry")
     config = tmp_path / "restart.env"
-    config.write_text("VB_REMOTE_HOST=localhost\nVB_REMOTE_SCRATCH_ROOT=" + str(target["registry_root"]) + "\n")
+    config.write_text("VB_REMOTE_HOST=localhost\nVB_AUTO_SESSIONS=1\nVB_REMOTE_SCRATCH_ROOT=" + str(target["registry_root"]) + "\n")
     monkeypatch.setenv("VB_STATE_DIR", str(tmp_path / "client-state"))
     from virtuoso_bridge import env
     monkeypatch.setattr(env, "_RUNTIME_ENV_FILE", config)
     monkeypatch.delenv("VB_REMOTE_PORT", raising=False)
     monkeypatch.setenv("VB_REMOTE_HOST", "localhost")
+    monkeypatch.setenv("VB_AUTO_SESSIONS", "1")
     monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", str(target["registry_root"]))
     monkeypatch.setenv("VB_BRIDGE_TOKEN", str(target["token_path"]))
     transport = tunnel.SSHClient.from_env(keep_remote_files=True, read_selection=False)
@@ -268,8 +269,14 @@ def test_full_upgrade_from_isolated_legacy_fixed_daemon(sessions, tmp_path, monk
     assert cli.main(["restart", "--env", str(config)]) == 0
     target["pids"].append(int(target["evaluate"]("RBLastPid")))
     assert target["evaluate"]("6*7") == "42"
-    # Deliberate staging for a later registered session, not a requirement for
-    # connecting to the old endpoint. The old config remains untouched.
+    assert config.read_text() == original_config
+    # Deliberately opt into a registered session and remove the old fixed
+    # endpoint constraint. A normal reconnect never performs this migration.
+    config.write_text("VB_REMOTE_HOST=localhost\nVB_AUTO_SESSIONS=1\nVB_REMOTE_SCRATCH_ROOT="
+                      + str(registry_root) + "\n")
+    monkeypatch.delenv("VB_REMOTE_PORT", raising=False)
+    monkeypatch.setenv("VB_AUTO_SESSIONS", "1")
+    transport = tunnel.SSHClient.from_env(keep_remote_files=True, read_selection=False)
     transport.ensure_local_setup()
     setup = transport.existing_setup_path()
     assert setup
@@ -287,7 +294,8 @@ def test_full_upgrade_from_isolated_legacy_fixed_daemon(sessions, tmp_path, monk
     assert record["pid"] == target["virtuoso_pid"]
     assert cli.main(["start", "--env", str(config)]) == 0
     assert cli.main(["status", "--env", str(config)]) == 0
-    assert config.read_text() == original_config
+    assert "VB_AUTO_SESSIONS=1" in config.read_text()
+    assert "VB_REMOTE_PORT=" not in config.read_text()
     connected = tunnel.SSHClient.from_env(keep_remote_files=True)
     connected.verify_instance()
     connected.stop()

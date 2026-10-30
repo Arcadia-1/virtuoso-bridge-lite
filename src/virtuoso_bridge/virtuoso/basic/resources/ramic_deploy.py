@@ -56,8 +56,12 @@ def publish(destination, files, replace=False, timeout=10):
         return result
     except Exception as exc:
         # Never report a closed /proc descriptor as an operator recovery path.
-        if anchor in str(exc):
-            raise RuntimeError(str(exc).replace(anchor, root))
+        exc.args = tuple(arg.replace(anchor, root) if isinstance(arg, str) else arg for arg in exc.args)
+        if isinstance(exc, OSError):
+            for name in ("filename", "filename2"):
+                value = getattr(exc, name, None)
+                if isinstance(value, str):
+                    setattr(exc, name, value.replace(anchor, root))
         raise
     finally:
         os.close(root_fd)

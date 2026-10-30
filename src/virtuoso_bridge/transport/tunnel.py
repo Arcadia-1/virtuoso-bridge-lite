@@ -630,10 +630,6 @@ class SSHClient:
                 pass
 
         selection = _read_selection(profile) if read_selection and discover_instances else {}
-        # An explicit endpoint is a new choice, not permission to retain an old
-        # record at a reused port. Its full identity is authenticated below.
-        if selected_port is not None:
-            selection = {}
         if selected_port is None or selection.get("port") == selected_port:
             port = selection.get("port", port)
         client = cls(

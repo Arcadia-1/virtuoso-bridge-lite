@@ -138,8 +138,9 @@ The lifecycle suite also exercises CLI restart/reconnect with two CIWs in one
 working directory and a shared registry. Set
 `VB_TEST_LEGACY_RESOURCES=/absolute/pre-discovery/resources` to enable a full
 old-config start/status/restart, then stop/wait/load/start/status transition in
-a separate fixture-owned CIW. The old port stays configured when the new
-registered session is adopted. Stage that
+a separate fixture-owned CIW. The migration explicitly enables `VB_AUTO_SESSIONS=1`
+and removes the old fixed-port constraint before adopting the new registered
+session; an unchanged legacy configuration never migrates. Stage that
 baseline bundle from the reviewed Git revision; do not replace supplied user
 daemons to manufacture a migration test. Automatic/fixed-port discovery and legacy
 token modes need distinct verification. Preserve any original request evidence
