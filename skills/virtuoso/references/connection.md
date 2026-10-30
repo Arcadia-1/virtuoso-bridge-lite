@@ -217,10 +217,12 @@ CIW identity. Read the checkout's profile documentation for supported fields.
 
 ### Selecting a running instance
 
-New bootstraps use OS-assigned ports. `start` discovers live instances for the
-SSH user without changing allocation requests. Optionally select a project:
+Legacy fixed-port setup remains the default, including when only a remote
+working directory is set. Enable automatic sessions explicitly to use
+OS-assigned ports and discover instances for the SSH account:
 
 ```dotenv
+VB_AUTO_SESSIONS=1
 VB_REMOTE_WORK_DIR=/projects/project-a
 ```
 
@@ -233,10 +235,19 @@ virtuoso-bridge start --port 65123
 virtuoso-bridge status --port 65123
 ```
 
-`VB_REMOTE_PORT` prefers a matching record. If discovery succeeds with no project
-candidates, it can use the configured fixed-port endpoint. Discovery errors,
-ambiguity, authentication failures and a saved registered selection do not fall
-back. Existing fixed-port configuration remains supported.
+`VB_REMOTE_PORT` is an exact endpoint constraint. If discovery succeeds but has
+no record at that port, only that same legacy endpoint can be authenticated;
+other discovered instances never replace it. Discovery errors, ambiguity and
+authentication failures do not cause fallback. A saved registered identity that
+disappears requires explicit reselection, even within the same project.
+
+With no port configured, legacy mode uses the existing username-derived default
+(65432 without a username), prepares/reuses its setup, establishes the tunnel,
+and authenticates the endpoint when queried. In automatic mode, the loaded daemon
+binds and holds an OS-assigned port before publishing a private record. The bridge
+filters by working directory, selects one instance, establishes the tunnel, and
+authenticates the complete record before saving the choice. Multiple instances
+in one directory require `start --port PORT`.
 
 If no endpoint is available, `start` prints a `load("...")` instruction. Load it
 in the intended idle CIW, then rerun `start`. Add the load line to `.cdsinit` for
@@ -244,7 +255,9 @@ future sessions. Uploaded code takes effect only after it is loaded in Virtuoso.
 
 ### Connecting on a fixed port
 
-Choose an unused port from 1–65535 and use either method below before loading
+For legacy mode, set `VB_REMOTE_PORT`, run `start`, and load its printed setup.
+For a registered daemon in automatic mode, choose an unused port from 1–65535
+and use either method below before loading
 the daemon. `VB_REMOTE_PORT` is a client selector, not a daemon allocation setting.
 
 #### Persistent fixed-port token (request file)
@@ -292,6 +305,7 @@ For either method, configure the client and connect after the CIW reports the
 port is listening:
 
 ```dotenv
+VB_AUTO_SESSIONS=1
 VB_REMOTE_PORT=65123
 # Only if a custom root was used above:
 VB_REMOTE_SCRATCH_ROOT=/home/user/.virtuoso-bridge
@@ -315,20 +329,22 @@ existing connection. Both cases use the normal bridge setup in each project's CI
 
 #### Case 1: Two remote working directories
 
-Set each profile's absolute Virtuoso working directory and leave its remote port
-unset so the daemon can use an OS-assigned port:
+Enable automatic sessions for each profile, set its absolute Virtuoso working
+directory, and leave its remote port unset so the daemon uses an OS-assigned port:
 
 ```dotenv
 VB_REMOTE_HOST_project_a=eda-host
 VB_REMOTE_USER_project_a=eda-user
+VB_AUTO_SESSIONS_project_a=1
 VB_REMOTE_WORK_DIR_project_a=/projects/project-a
 VB_REMOTE_HOST_project_b=eda-host
 VB_REMOTE_USER_project_b=eda-user
+VB_AUTO_SESSIONS_project_b=1
 VB_REMOTE_WORK_DIR_project_b=/projects/project-b
 ```
 
 1. Start Virtuoso in `/projects/project-a` and `/projects/project-b`, with the
-   normal bootstrap loaded in each CIW. No extra project-specific SKILL or port
+   automatic bootstrap loaded in each CIW. No extra project-specific SKILL or port
    setup is needed.
 2. Start each profile, then verify its working directory before editing:
 
@@ -344,8 +360,8 @@ it, select the intended instance with `--port`.
 
 #### Case 2: Two remote ports
 
-Choose two distinct unused ports. This case can distinguish the projects even
-when their Virtuoso processes share a working directory:
+Choose two distinct unused ports. The default legacy mode distinguishes the
+projects even when their Virtuoso processes share a working directory:
 
 ```dotenv
 VB_REMOTE_HOST_project_a=eda-host
@@ -356,25 +372,13 @@ VB_REMOTE_USER_project_b=eda-user
 VB_REMOTE_PORT_project_b=65102
 ```
 
-1. In each project's idle CIW, manually paste the generated `load("...")` command
-   from normal setup. Then paste the matching port command below. The generated
-   bootstrap is shared by the account; the port command configures that CIW's child.
-
-   Project A:
-
-   ```skill
-   RBSetPort(65101)
-   ```
-
-   Project B:
-
-   ```skill
-   RBSetPort(65102)
-   ```
+1. Run `start -p project_a` and `start -p project_b`. In each project's idle CIW,
+   paste that profile's printed `load("...")` command. Each profile has its own
+   generated setup containing the configured fixed port.
 
 2. Wait for each CIW to report its requested port is listening. If a port is
-   occupied, choose another unused port and update both its dotenv value and
-   `RBSetPort(...)` command; leave the other project running.
+   occupied, choose another unused port, update that profile's dotenv value,
+   rerun its setup and load the printed file; leave the other project running.
 3. Connect to each exact port and verify the project before editing:
 
 ```bash
@@ -384,10 +388,9 @@ virtuoso-bridge start -p project_b --port 65102 --env /path/to/bridge.env
 virtuoso-bridge eval 'getWorkingDir()' -p project_b --env /path/to/bridge.env
 ```
 
-`VB_REMOTE_PORT` selects a preferred endpoint; changing it does not reconfigure a
-running daemon. Keep `--port` on `start` when an exact port is required, and keep
-`-p` and `--env` on subsequent commands. After a CIW is relaunched, apply its port
-command again after the normal setup load.
+`VB_REMOTE_PORT` constrains the endpoint; changing it does not reconfigure a
+running daemon. Keep `-p` and `--env` on subsequent commands. After a CIW is
+relaunched, load its own generated setup again.
 
 ### Shared bootstrap
 
@@ -402,13 +405,15 @@ separate installer script is needed. Run it on the Linux Cadence host in a
 bridge virtual environment (or use `uv run virtuoso-bridge install-daemon ...`
 from a checkout). It installs files locally on that host and does not start
 Virtuoso or connect over SSH. For ordinary client-side deployment, `start`
-continues to prepare the account bootstrap automatically.
+prepares the account bootstrap only with `VB_AUTO_SESSIONS=1`; default legacy
+deployment retains the per-client/profile setup layout.
 
 Use the printed load line in project `.cdsinit` files and set
+`VB_AUTO_SESSIONS=1` and
 `VB_DAEMON_SETUP=/opt/virtuoso-bridge/v2/virtuoso_setup.il` on clients. The installer
 requires a new protected destination; install upgrades into a new versioned path.
 
-Without `VB_DAEMON_SETUP`, `start` prepares
+In automatic mode without `VB_DAEMON_SETUP`, `start` prepares
 `/tmp/virtuoso_bridge_<user>/daemon/virtuoso_setup.il` when no endpoint is available.
 Generated bundles are reused when their inventory and content match. To replace
 a differing bundle, use `start --replace-setup`; the previous bundle is retained
@@ -420,6 +425,14 @@ root. Set `VB_REMOTE_SCRATCH_ROOT` on clients and the matching `RB_SCRATCH_ROOT`
 on daemons, or pass `--scratch-root` to the shared installer. Generated setup
 embeds this root. Deployment, GUI and daemon hosts must see the same files;
 client configuration edits do not update an already loaded CIW.
+
+Private roots and `runs/` require the current account's ownership and mode 0700;
+records require mode 0600. Existing unsafe paths are rejected, not chmodded.
+Ancestors must be real directories owned by root or the current account and
+not writable by other accounts. Root-owned sticky parents such as `/tmp` are
+allowed above the private account directory. Do not use a shared writable root
+for generated programs or registry state; the shared installer has its own
+trusted-program-directory policy.
 
 ### Status and restart
 

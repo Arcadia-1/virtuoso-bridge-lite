@@ -11,6 +11,11 @@ def _isolated_connection_state(monkeypatch, tmp_path, request):
     if request.module.__name__.endswith("test_runtime_paths"):
         return
     monkeypatch.setenv("VB_STATE_DIR", str(tmp_path / "bridge-state"))
+    def legacy_state(profile=None):
+        name = "state_%s.json" % profile if profile else "state.json"
+        return tmp_path / "legacy-state" / name
+    monkeypatch.setattr("virtuoso_bridge.runtime_paths.legacy_cache_state_file", legacy_state)
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.legacy_cache_state_file", legacy_state)
 
 
 @pytest.fixture(autouse=True)

@@ -47,12 +47,53 @@ filesystem edge cases, bundle publication and signed daemon authentication.
 Fixtures are synthetic; it needs no Cadence, PDK, SSH or existing credentials.
 Non-Linux runs skip before creating fixtures.
 
+`test_instance_binding.py` uses real localhost sockets and the shipped Python 3
+handler with synthetic CIW responses. It checks cached/fresh clients after
+same-port replacement, replacement between hello and execution, signed instance
+and request fields, replay rejection, the standalone client, and legacy fallback.
+It runs on Windows too; it does not require Cadence.
+
+Run the full-daemon startup harness separately:
+
+```bash
+python3 tests/native_daemon_concurrency.py src/virtuoso_bridge/virtuoso/basic/resources
+```
+
+Workers wait at a startup barrier before importing the actual daemon. The tests
+exercise first credential creation, automatic/fixed port contention, signed
+execution over synthetic IPC, same-project records, and killed-worker cleanup.
+By default these use the current UID; two-account cases explicitly skip.
+For a disposable Linux test runner, provision two non-root fixture logins and run
+the harness as root with `VB_TEST_ACCOUNT_USERS=login_a,login_b`. It drops each
+worker to its real UID/GID, clears supplementary groups, and uses private temporary
+homes, credentials and registries. It never creates accounts or reads their real
+home directories. Two-account cases also check token access denial, cross-token
+rejection and cleanup isolation. `VB_TEST_WORKER_PYTHON` selects actual Python 2.7
+workers for the same cases. Linux CI provisions and removes its fixture accounts
+and runs both worker versions; account/root prerequisites are not simulated.
+
+| Required regression | Coverage |
+|---|---|
+| Same-account and different-account concurrent startup | `native_daemon_concurrency.py`: barrier-synchronized workers, automatic and fixed ports; different accounts require real fixture UIDs |
+| Multiple instances in one project | Native startup harness plus `test_daemon_lifecycle_live.py`: shared project, independent records and surviving peer |
+| Exit and abnormal leftovers | Live legacy/registered exit, kill and abort; native killed-worker stale-record exclusion and sweep |
+| Wrong connection after port reuse | `test_instance_binding.py`: real sockets, cached/fresh clients, replacement between handshake and execution, same/different tokens |
+| Default single-session compatibility | `test_discovery_compatibility.py` and legacy request tests; live fixed-port connection, restart and pre-discovery upgrade |
+| GUI/daemon/deployment host separation | `test_remote_host_roles.py`: distinct host runners/interpreters, bundle visibility, discovery/restart routing and native GUI process identity; separate physical hosts need site acceptance |
+
 Linux CI runs Python 3.9 and 3.13; the latter also builds pinned CPython 2.7.18
 for worker checks. Obtain green Linux results before merge. Windows cannot
 verify POSIX permissions, `flock` or `/proc` behavior. Offline checks do not
 establish native SKILL, CIW or electrical equivalence; report live results
 separately. `VB_TEST_DAEMON_RESOURCES` selects alternate resources for source
 checks, while the native harness takes its resource path explicitly.
+
+`test_pr269_review.py` covers default-off mode (including workdir-only config),
+exact fixed endpoints, expired selections across CLI/Python paths, and isolated
+historical state. `test_private_instance_paths.py` runs real bounded Linux shell
+commands and descriptor operations for unsafe roots/ancestors and path swaps.
+The two-account startup harness also rejects foreign-owned pre-created deployment
+and registry paths using actual UIDs, with both Python 3 and Python 2.7 workers.
 
 ## Live tests
 
@@ -120,9 +161,13 @@ enable more checks:
 `tests/test_daemon_lifecycle_live.py`. Its automatic-port case launches two
 private headless CIWs and checks signed build/record identity, reload, malformed
 bind banners, bounded restart and timeout, monitor changes and tracked-child-only
-stop. It uses the existing account credential in automatic mode and never loads
-code into existing user CIWs. This verifies native SKILL behavior on the installed
-Cadence build; it is not cross-version or electrical-equivalence evidence.
+stop. It never loads code into existing user CIWs. Exit/kill/abort cases run in both
+legacy and registered modes with two CIWs sharing a project and registry, checking listener release,
+read-only stale-record exclusion, explicit sweep cleanup and peer survival.
+The lifecycle fixtures use private temporary credentials, including a shared
+fixture credential for automatic sessions. This verifies native SKILL behavior on
+the installed Cadence build; it is not cross-version or electrical-equivalence
+evidence.
 
 | Variable | Enables |
 |---|---|

@@ -34,13 +34,13 @@ def test_empty_discovery_uses_old_port_without_provisioning(legacy):
     assert legacy.instance_record is None
 
 
-def test_new_session_is_adopted_with_unchanged_old_config(legacy, monkeypatch):
+def test_new_session_cannot_replace_unchanged_old_endpoint(legacy, monkeypatch):
     legacy.discover_instance()
     new = record()
     monkeypatch.setattr(legacy, "list_instances", lambda **kw: [new])
     legacy.discover_instance()
-    assert not legacy._legacy_fallback
-    assert legacy.instance_record == new and legacy.remote_port == new["port"]
+    assert legacy._legacy_fallback
+    assert legacy.instance_record is None and legacy.remote_port == 61000
 
 
 def test_other_project_records_do_not_prevent_old_endpoint_use(legacy, monkeypatch):
@@ -64,6 +64,7 @@ def test_fallback_never_hides_discovery_failures(legacy, monkeypatch, kind):
             raise DiscoveryError("registry unreadable")
         monkeypatch.setattr(legacy, "list_instances", failed)
     elif kind == "ambiguous":
+        legacy._legacy_port = None
         monkeypatch.setattr(legacy, "list_instances", lambda **kw: [record(), record(61002, 20)])
     elif kind == "explicit":
         legacy._selected_port = 61003

@@ -34,7 +34,7 @@ class _FakeRunner:
         self.commands.append(command)
         if command == "whoami":
             return CommandResult(0, "designer", "")
-        if "import fcntl" in command and ".daemon-input-" in command:
+        if "VB_BUNDLE_" in command:
             return CommandResult(returncode=0, stdout='{"reused": false}', stderr="")
         return CommandResult(returncode=0, stdout="/home/designer" if command == 'getent passwd "$(id -u)" | cut -d: -f6' else "", stderr="")
 
@@ -97,7 +97,8 @@ def test_automatic_setup_is_shared_across_profiles_and_clients(monkeypatch):
         client.ensure_remote_setup()
         path = "/tmp/virtuoso_bridge_designer/daemon/virtuoso_setup.il"
         assert client.setup_path == path
-        payload = next(json.loads(content) for name, content in fake.uploads.items() if ".daemon-input-" in name)
+        payload = json.loads(next(command for command in fake.commands if "VB_BUNDLE_" in command).splitlines()[-2])
+        assert not fake.uploads
         assert payload["destination"] == str(Path(path).parent).replace("\\", "/")
         assert payload["replace"] is False
         setup = payload["files"]["virtuoso_setup.il"]

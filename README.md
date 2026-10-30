@@ -33,12 +33,13 @@ uv venv .venv && source .venv/bin/activate
 uv pip install -e .
 
 virtuoso-bridge init user@host   # write ~/.virtuoso-bridge/.env
-virtuoso-bridge start            # select an instance, or print its required load("...") line
-# On a fresh host this exits nonzero without a usable tunnel.
-# Paste the printed load("...") into the intended idle CIW, then:
-virtuoso-bridge start
+virtuoso-bridge start            # prepare fixed-port setup and the SSH tunnel
+# Paste the printed load("...") into the intended idle CIW.
 virtuoso-bridge status
 ```
 
 Setup, configuration, CLI reference, architecture and citation are in the
 **[guide](https://virtuoso-bridge.tokenzhang.com/guide/)**. Coding agents start with [AGENTS.md](AGENTS.md).
+Automatic sessions are opt-in: set `VB_AUTO_SESSIONS=1` and optionally
+`VB_REMOTE_WORK_DIR=/projects/example` to discover a registered daemon using an
+OS-assigned port. A working directory alone keeps the legacy fixed-port mode.

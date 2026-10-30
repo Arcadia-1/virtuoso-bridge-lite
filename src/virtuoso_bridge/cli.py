@@ -537,13 +537,13 @@ def _print_status(selected_port: int | None = None) -> int:
         targets = SSHClient.running_targets()
         if targets:
             print("  managed tunnels: " + ", ".join(repr(target) for _, target in targets))
-        rows = ssh.list_instances()
+        rows = ssh.list_instances() if ssh._discover_instances else []
         saved = ssh.instance_record
         # A saved choice is valid only while its complete identity is still live
         # and still satisfies the configured directory and port selectors.
         record = ssh.select_record(rows)
         if record is None:
-            if ssh.use_legacy_endpoint(rows):
+            if not ssh._discover_instances or ssh.use_legacy_endpoint(rows):
                 state = SSHClient.read_state(profile, target=ssh.target)
                 if not SSHClient._state_is_live(state):
                     print("[daemon] No saved connection to the configured legacy endpoint. Run virtuoso-bridge start.")

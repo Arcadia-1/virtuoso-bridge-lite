@@ -94,7 +94,7 @@ def test_stale_unscoped_selection_never_retargets(monkeypatch):
         client.reconcile_instance()
 
 
-def test_unique_project_replacement_is_verified_before_state_publication(monkeypatch):
+def test_unique_project_replacement_requires_explicit_selection(monkeypatch):
     client = tunnel.SSHClient(remote_host="fixture", discover_instances=True, expected_work_dir="/project/a")
     client.instance_record = row()
     replacement = row(65002, 20)
@@ -104,9 +104,10 @@ def test_unique_project_replacement_is_verified_before_state_publication(monkeyp
     monkeypatch.setattr(client, "ensure_tunnel", lambda: actions.append("forward"))
     monkeypatch.setattr(client, "_verify_discovered_instance", lambda *a: actions.append("verify"))
     monkeypatch.setattr(client, "save_state", lambda: actions.append("save"))
-    assert client.reconcile_instance()
-    assert client.instance_record == replacement
-    assert actions == ["forward", "verify", "save"]
+    with pytest.raises(InstanceSelectionError, match="select explicitly"):
+        client.reconcile_instance()
+    assert client.instance_record == row()
+    assert actions == []
 
 
 @pytest.mark.parametrize("caps,fragment", [({}, "unknown (older daemon)"), ({"build": "older"}, "differs"),

@@ -194,7 +194,7 @@ def test_explicit_port_can_replace_a_different_still_live_saved_choice():
 def test_restart_never_relaxes_an_exact_selector(restarting):
     client, original, _, calls, published = restarting
     client._selected_port = original["port"]
-    with pytest.raises(InstanceSelectionError, match="exact --port"):
+    with pytest.raises(InstanceSelectionError, match="fixed-port"):
         client.restart_instance(timeout=3)
     assert not published
     assert len([c for c in calls if c[0] == "request"]) == 1

@@ -15,11 +15,15 @@ import tempfile
 import time
 import uuid
 
+try:
+    from .ramic_paths import private_directory, check_private
+except (ImportError, ValueError):
+    from ramic_paths import private_directory, check_private
+
 
 def _private_directory(path):
     info = os.lstat(path)
-    if not stat.S_ISDIR(info.st_mode):
-        raise ValueError("Deployment directory must be a real directory: " + path)
+    check_private(info, path)
 
 
 def _read(path):
@@ -38,6 +42,28 @@ def _read(path):
 
 
 def publish(destination, files, replace=False, timeout=10):
+    root, leaf = os.path.split(destination.rstrip("/"))
+    if not leaf or leaf in (".", ".."):
+        raise ValueError("Invalid deployment destination")
+    root_fd = private_directory(root, create=True)
+    anchor = "/proc/self/fd/%d" % root_fd
+    try:
+        result = _publish_at(anchor + "/" + leaf, files, replace, timeout, root_fd)
+        for key in ("path", "backup"):
+            if result.get(key):
+                result[key] = root + result[key][len(anchor):]
+        result["warnings"] = [warning.replace(anchor, root) for warning in result.get("warnings", [])]
+        return result
+    except Exception as exc:
+        # Never report a closed /proc descriptor as an operator recovery path.
+        if anchor in str(exc):
+            raise RuntimeError(str(exc).replace(anchor, root))
+        raise
+    finally:
+        os.close(root_fd)
+
+
+def _publish_at(destination, files, replace, timeout, root_fd):
     """Compare before mutation; stage all files, then publish under one lock.
 
     Directory rename is atomic per step, not a multi-directory transaction.
@@ -45,7 +71,6 @@ def publish(destination, files, replace=False, timeout=10):
     exchange gap. The next invocation restores it if publication was interrupted.
     """
     root, leaf = os.path.split(destination.rstrip("/"))
-    _private_directory(root)
     if not leaf or leaf in (".", ".."):
         raise ValueError("Invalid deployment destination")
     for name in files:
@@ -70,7 +95,7 @@ def publish(destination, files, replace=False, timeout=10):
                 if exc.errno not in (errno.EAGAIN, errno.EACCES) or clock() >= deadline:
                     raise RuntimeError("Timed out waiting for deployment lock: " + lock)
                 time.sleep(0.05)
-        directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        directory_fd = os.dup(root_fd)
         recovery = os.path.join(root, "." + leaf + "-recover")
         if os.path.lexists(recovery):
             _private_directory(recovery)
@@ -167,7 +192,7 @@ def publish(destination, files, replace=False, timeout=10):
 
 if __name__ == "__main__":
     try:
-        payload = json.loads(_read(sys.argv[1]).decode("utf-8"))
+        payload = json.loads(_read(sys.argv[1]).decode("utf-8")) if len(sys.argv) > 1 else json.load(sys.stdin)
         print(json.dumps(publish(payload["destination"], payload["files"], payload.get("replace", False))))
     except Exception as exc:
         sys.stderr.write(str(exc) + "\n")

@@ -16,6 +16,11 @@ import stat
 import time
 import uuid
 
+try:
+    from .ramic_paths import private_directory, private_child
+except (ImportError, ValueError):
+    from ramic_paths import private_directory, private_child
+
 
 def _flock(fd, operation):
     import fcntl
@@ -28,14 +33,7 @@ def _same_file(fd, path):
 
 
 def _directory(path, create):
-    if create:
-        try:
-            os.mkdir(path, 0o700)
-        except OSError as exc:
-            if exc.errno != errno.EEXIST:
-                raise
-    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    return fd
+    return private_directory(path, create)
 
 
 def scratch_root():
@@ -65,13 +63,13 @@ class Registry(object):
             try:
                 if legacy:
                     username = re.sub(r"[^a-zA-Z0-9._-]", "_", pwd.getpwuid(os.geteuid()).pw_name)[:64]
-                    parent_fd = _directory("/proc/self/fd/%d/virtuoso_bridge_%s" % (root_fd, username), False)
+                    parent_fd = private_child(root_fd, "virtuoso_bridge_%s" % username)
                     try:
-                        self.fd = _directory("/proc/self/fd/%d/runs" % parent_fd, False)
+                        self.fd = private_child(parent_fd, "runs")
                     finally:
                         os.close(parent_fd)
                 else:
-                    self.fd = _directory("/proc/self/fd/%d/runs" % root_fd, create)
+                    self.fd = private_child(root_fd, "runs", create)
             finally:
                 os.close(root_fd)
         else:
@@ -94,7 +92,8 @@ class Registry(object):
             try:
                 fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
                 info = os.fstat(fd)
-                if not stat.S_ISREG(info.st_mode):
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                        or info.st_mode & 0o077 or info.st_nlink != 1):
                     continue
                 # Give a newly created temporary time to acquire its lock.
                 # Age is only a grace period: the lock and inode checks below
@@ -113,7 +112,8 @@ class Registry(object):
 
 def _read_record(fd):
     info = os.fstat(fd)
-    if not stat.S_ISREG(info.st_mode) or info.st_size > 16384:
+    if (not stat.S_ISREG(info.st_mode) or info.st_size > 16384
+            or info.st_uid != os.geteuid() or info.st_mode & 0o077 or info.st_nlink != 1):
         raise ValueError("Invalid instance metadata file")
     return json.loads(os.read(fd, 16384).decode("utf-8"))
 
@@ -273,7 +273,8 @@ def _discover(directory=None, root=None, legacy=False, read_only=False):
             try:
                 fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
                 info = os.fstat(fd)
-                if not stat.S_ISREG(info.st_mode) or info.st_size > 16384:
+                if (not stat.S_ISREG(info.st_mode) or info.st_size > 16384
+                        or info.st_uid != os.geteuid() or info.st_mode & 0o077 or info.st_nlink != 1):
                     continue
                 try:
                     _flock(fd, fcntl.LOCK_EX)

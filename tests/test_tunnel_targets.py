@@ -158,6 +158,7 @@ def test_auto_mode_requires_selection_even_if_old_fixed_port_is_live(state_root,
     from virtuoso_bridge.daemon_auth import DaemonAuthError
     import time
     _configure(monkeypatch, *A)
+    monkeypatch.setenv("VB_AUTO_SESSIONS", "1")
     _started(*A, local_port=65082, pid=111)
     monkeypatch.delenv("VB_REMOTE_PORT")
     assert SSHClient.read_state() is None

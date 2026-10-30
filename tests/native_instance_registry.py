@@ -166,32 +166,33 @@ assert os.path.exists(changed['backup'] + '/json.py')
         rows = registry.discover(root=str(self.root))
         self.assertEqual({row["instance"] for row in rows}, {old_row["instance"], new_row["instance"]})
 
-    def test_registry_accepts_shared_roots_but_rejects_symlinks(self):
+    def test_registry_rejects_shared_roots_and_symlinks(self):
         shared = self.root / "shared"
         shared.mkdir(mode=0o777)
         shared.chmod(0o777)
-        registry.Registry(root=str(shared)).close()
+        with self.assertRaises(ValueError):
+            registry.Registry(root=str(shared))
         self.assertEqual(shared.stat().st_mode & 0o777, 0o777)
-        self.assertEqual([path.name for path in shared.iterdir()], ["runs"])
+        self.assertEqual(list(shared.iterdir()), [])
         link = self.root / "link"
         link.symlink_to(shared)
         with self.assertRaises(OSError):
             registry.Registry(root=str(link))
 
-    def test_registry_reads_and_sweeps_records_with_permissive_modes(self):
+    def test_registry_ignores_and_preserves_records_with_unsafe_modes(self):
         worker = self.spawn(WORKER, self.directory)
         row = self.await_rows(1)[0]
         path = Path(self.directory) / (row["instance"] + ".json")
         for mode in (0o644, 0o666):
             path.chmod(mode)
-            self.assertEqual(registry.discover(self.directory), [row])
+            self.assertEqual(registry.discover(self.directory), [])
             self.assertEqual(path.stat().st_mode & 0o777, mode)
         worker.communicate(b"exit\n", timeout=5)
         stale = Path(self.directory) / ("a" * 32 + ".json")
         stale.write_text("stale")
         stale.chmod(0o666)
         self.assertEqual(registry.discover(self.directory), [])
-        self.assertFalse(stale.exists())
+        self.assertTrue(stale.exists())
 
     def test_concurrent_start_kill_sweep_and_graceful_exit(self):
         workers = [self.spawn(WORKER, self.directory) for _ in range(12)]

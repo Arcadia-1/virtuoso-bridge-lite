@@ -17,7 +17,7 @@ import time
 
 import pytest
 
-from virtuoso_bridge import VirtuosoClient
+from virtuoso_bridge import VirtuosoClient, daemon_auth
 
 
 pytestmark = pytest.mark.skipif(
@@ -59,9 +59,13 @@ def sessions(tmp_path):
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
         token = secrets.token_hex(32)
+        token_path = tmp_path / "account" / "bridge_token" if automatic else work / "token"
+        token_path.parent.mkdir(exist_ok=True)
+        if token_path.exists():
+            token = token_path.read_text()
+        else:
+            token_path.write_text(token)
         legacy_token = token
-        token_path = work / "token"
-        token_path.write_text(token)
         token_path.chmod(0o600)
         identity = work / "identity"
         startup = work / "startup.il"
@@ -103,7 +107,7 @@ def sessions(tmp_path):
             _wait(lambda: len(records()) == 1)
             record = records()[0]
             daemon_pid, port = record["daemon_pid"], record["port"]
-            token = daemon_auth.read_local_token()
+            token = daemon_auth.read_local_token(token_path)
         else:
             _wait(lambda: identity.exists() and "pid=" in identity.read_text())
             daemon_pid = int(dict(line.split("=", 1) for line in identity.read_text().splitlines())["pid"])
@@ -112,7 +116,10 @@ def sessions(tmp_path):
         client = VirtuosoClient(port=port, daemon_token=token, timeout=5, log_to_ciw=False)
         if automatic:
             from types import SimpleNamespace
-            client._tunnel = SimpleNamespace(_discover_instances=True, instance_record=record, _ssh_runner=None)
+            client._tunnel = SimpleNamespace(
+                _discover_instances=True, instance_record=record,
+                _ssh_runner=None, _remote_user=None,
+            )
 
             def refresh_after_restart(previous):
                 found = []
@@ -142,7 +149,8 @@ def sessions(tmp_path):
         item["pids"].append(virtuoso_pid)
         assert client.remote_virtuoso_pid == virtuoso_pid
         item.update(evaluate=evaluate, virtuoso_pid=virtuoso_pid, daemon_pid=daemon_pid,
-                    ipc_pid=ipc_pid, port=port, skill=skill, client=client, legacy_token=legacy_token)
+                    ipc_pid=ipc_pid, port=port, skill=skill, client=client, legacy_token=legacy_token,
+                    token_path=token_path)
         return item
 
     yield launch
@@ -162,9 +170,10 @@ def sessions(tmp_path):
 
 
 @pytest.mark.parametrize("shutdown", ["exit", "kill", "abort"])
-def test_owner_exit_releases_only_its_daemon(sessions, shutdown):
-    keeper = sessions("keeper")
-    target = sessions("target")
+@pytest.mark.parametrize("automatic", [False, True], ids=["legacy", "registered"])
+def test_owner_exit_releases_only_its_daemon(sessions, shutdown, automatic):
+    keeper = sessions("keeper", automatic=automatic, working_dir="shared-project", registry_name="registry")
+    target = sessions("target", automatic=automatic, working_dir="shared-project", registry_name="registry")
     evaluate = target["evaluate"]
     # Reload does not add an exit hook or replace a healthy daemon.
     assert evaluate(f'load({json.dumps(target["skill"])})') == "t"
@@ -184,6 +193,12 @@ def test_owner_exit_releases_only_its_daemon(sessions, shutdown):
     with socket.socket() as probe:
         assert probe.connect_ex(("127.0.0.1", target["port"])) != 0
     assert keeper["evaluate"]("40+2") == "42"
+    if automatic:
+        from virtuoso_bridge.virtuoso.basic.resources import ramic_registry
+        root = str(target["registry_root"])
+        assert ramic_registry.discover(root=root, read_only=True) == [keeper["record"]]
+        assert ramic_registry.discover(root=root) == [keeper["record"]]
+        assert not (target["registry_root"] / "runs" / (target["record"]["instance"] + ".json")).exists()
     if shutdown == "exit":
         log = (target["work"] / "stdout.log").read_text()
         assert log.count("] stopping") == 1, log
@@ -191,6 +206,10 @@ def test_owner_exit_releases_only_its_daemon(sessions, shutdown):
     keeper["evaluate"]('hiRegTimer("exit()" 2)')
     keeper["proc"].wait(timeout=15)
     _wait(lambda: not _alive(keeper["daemon_pid"]) and not _alive(keeper["ipc_pid"]), timeout=3)
+    if automatic:
+        assert ramic_registry.discover(root=root, read_only=True) == []
+        assert ramic_registry.discover(root=root) == []
+        assert not list((target["registry_root"] / "runs").glob("*.json"))
 
 
 def test_cli_restart_reconnects_same_ciw_with_same_directory_peer(sessions, tmp_path, monkeypatch):
@@ -206,6 +225,7 @@ def test_cli_restart_reconnects_same_ciw_with_same_directory_peer(sessions, tmp_
     monkeypatch.delenv("VB_REMOTE_PORT", raising=False)
     monkeypatch.setenv("VB_REMOTE_HOST", "localhost")
     monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", str(target["registry_root"]))
+    monkeypatch.setenv("VB_BRIDGE_TOKEN", str(target["token_path"]))
     transport = tunnel.SSHClient.from_env(keep_remote_files=True, read_selection=False)
     original = target["record"]
     transport.connect_instance(original)

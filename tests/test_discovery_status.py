@@ -39,7 +39,7 @@ def test_available_instance_is_not_a_connection(status, monkeypatch, capsys, sav
     client.instance_record = saved
     monkeypatch.setattr(client, "list_instances", lambda: [row()])
     assert cli._print_status() == 1
-    assert "AVAILABLE" in capsys.readouterr().out
+    assert ("AVAILABLE" if saved is None else "select explicitly") in capsys.readouterr().out
 
 
 def test_status_restores_load_and_autoload_hints_for_missing_instance(status, monkeypatch, capsys):

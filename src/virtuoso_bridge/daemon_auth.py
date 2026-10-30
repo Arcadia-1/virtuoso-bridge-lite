@@ -25,6 +25,9 @@ Scheme (wire protocol v1)
   Request:  ``mac = HMAC(token, frame("vb1-request", proto, nonce,
   timeout, skill))`` — the whole request is authenticated, not just the
   nonce, so no field can be swapped in flight.
+  Instance-bound execution: ``op=execute`` uses ``frame("vb1-execute",
+  proto, nonce, daemon_instance, timeout, skill)``. The daemon checks its
+  instance before dispatch, including when a port was reused after hello.
   Response: ``mac = HMAC(token, frame("vb1-response", nonce, marker,
   body))`` — the status marker *and* the full body are authenticated.
   Handshake: ``mac = HMAC(token, frame("vb1-hello", proto, nonce))``.
@@ -347,6 +350,17 @@ def request_mac(
 def hello_mac(token: str, *, nonce: str, proto: int = PROTOCOL_VERSION) -> str:
     """MAC authenticating a capability-handshake (hello) request."""
     return _mac_hex(token, _HELLO_DOMAIN, str(int(proto)), nonce)
+
+
+def bound_request_mac(
+    token: str, *, nonce: str, daemon_instance: str, skill: str,
+    timeout: float, proto: int = PROTOCOL_VERSION,
+) -> str:
+    """Bind ordinary execution to the daemon authenticated by hello."""
+    return _mac_hex(
+        token, "vb1-execute", str(int(proto)), nonce, daemon_instance,
+        format_timeout(timeout), skill,
+    )
 
 
 def recoverable_mac(

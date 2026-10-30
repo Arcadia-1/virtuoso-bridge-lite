@@ -2260,7 +2260,20 @@ let((result winName ciwNum)
     ) -> str:
         # Handshake first: authentication failures must never cost an
         # execution on a foreign or outdated daemon.
-        self._ensure_daemon_capabilities(deadline)
+        caps = self._ensure_daemon_capabilities(deadline)
+        binding = caps.get("instance_bound_requests")
+        if binding is not None and (type(binding) is not int or binding not in (0, 1)):
+            raise daemon_auth.DaemonAuthError("Invalid instance-bound execution capabilities")
+        bound = type(binding) is int and binding == 1
+        if caps.get("instance_record") and not bound:
+            raise daemon_auth.DaemonAuthError(
+                "Registered daemon lacks instance-bound execution; load an updated "
+                "bridge bundle in the intended idle CIW before executing"
+            )
+        if bound and (caps.get("auth") != "on" or not self._daemon_token
+                      or not isinstance(caps.get("daemon_instance"), str)
+                      or not re.fullmatch(r"[0-9a-f]{32}", caps["daemon_instance"])):
+            raise daemon_auth.DaemonAuthError("Invalid instance-bound execution capabilities")
         request_timeout = min(timeout, self._remaining_timeout(deadline))
         payload: dict[str, Any] = {
             "proto": daemon_auth.PROTOCOL_VERSION,
@@ -2271,11 +2284,17 @@ let((result winName ciwNum)
         if self._daemon_token:
             nonce = secrets.token_hex(16)
             payload["nonce"] = nonce
-            payload["mac"] = daemon_auth.request_mac(
+            binding_fields = {}
+            if bound:
+                payload.update(op="execute", daemon_instance=caps["daemon_instance"])
+                binding_fields["daemon_instance"] = caps["daemon_instance"]
+            sign = daemon_auth.bound_request_mac if bound else daemon_auth.request_mac
+            payload["mac"] = sign(
                 self._daemon_token,
                 nonce=nonce,
                 skill=skill_code,
                 timeout=request_timeout,
+                **binding_fields,
             )
         self._pending_nonce = nonce
         raw = self._exchange_payload(payload, deadline)

@@ -1,20 +1,18 @@
 # Discover Virtuoso instances with fixed port compatibility
 
-- Status: Proposed; local implementation authorized, upstream design review pending
+- Status: Proposed; revised to match the default-off scope in issue #265
 - Date: 2026-10-29
 - Related: Issue #265
 
 ## Compatibility contract
 
 [ADR 0003](0003-lite-default-optional-advanced-config.md) promises no mandatory
-migration of existing one-host configuration and Python calls. Connections read
-the registry first, with no discovery gate. A successful empty result may fall
-back to an existing configured `VB_REMOTE_PORT`, using the existing authentication
-policy. Missing records alone do not require upgrading a working old daemon.
-
-The earlier default-off recommendation is superseded locally by the user's
-explicit discovery-first compatibility instruction. This authorization does not
-establish upstream design acceptance.
+migration of existing one-host configuration and Python calls. Automatic sessions
+are explicitly enabled with `VB_AUTO_SESSIONS=1`, including profile suffixes.
+Unset or zero retains the legacy setup, default-port calculation, state lookup,
+and Python connection path without consulting the registry. A work directory
+alone does not select the new mode. Future default changes need a separate
+upstream design decision; contributor-local authorization does not replace it.
 
 ## Records and selection
 
@@ -23,28 +21,29 @@ A **record** is candidate metadata published by a running daemon. A
 use the new publication scheme; older fixed-port sessions can serve authenticated
 requests without records.
 
-New generated bootstraps bind `127.0.0.1:0`, read `getsockname()` and hold the socket
+Automatic bootstraps bind `127.0.0.1:0`, read `getsockname()` and hold the socket
 before publishing a locked record (created with mode 0600 under a 0700 `runs/`). Metadata
 contains port, Virtuoso PID, daemon PID, UID, user, work directory and random
 instance ID. The explicit listen-all option remains. Locks establish liveness;
 opened descriptors and inodes anchor filesystem checks.
-Registry reads and cleanup do not enforce filesystem owners or permission modes;
-record selection still checks the account metadata and connections authenticate
-the complete selected record.
+Registry reads and cleanup enforce account ownership, private modes and regular
+single-link record files. Record selection checks account metadata; connections
+authenticate the complete selected record.
 
 Client discovery reads without creating directories, provisioning credentials,
 writing allocation requests or removing stale files. Daemon publication retains
-its own stale-record cleanup. CLI `--port` is exact. `VB_REMOTE_PORT` prefers a
-matching record, otherwise permitting a unique registered session under the
-configured account/directory. An unchanged old configuration can therefore adopt
-a new registered session on later runs. A live saved choice is retained;
-ambiguity requires explicit selection.
+its own stale-record cleanup. CLI `--port` explicitly selects an exact endpoint
+and supersedes a saved choice. `VB_REMOTE_PORT` is also an exact constraint,
+never a preference that permits migration. A live saved choice is retained;
+ambiguity or an expired saved identity requires explicit selection.
 
-Fallback requires a successful discovery with no project candidates, a configured old port, no saved
+Fallback requires successful discovery with no record at the configured port, a configured old port, no saved
 registered identity and no exact CLI selector. Registry errors, ambiguity, exact
 selector misses and authentication failures never cause fallback. A registered
 peer absent from discovery cannot be accepted as a legacy endpoint. A vanished
-saved record can follow a replacement only within an explicit project constraint.
+saved record cannot follow another instance, even within the same project.
+Only a bounded explicit restart can accept a replacement after verifying the
+same GUI host, kernel boot and CIW process birth identity and any fixed port.
 Uncertain application work is never replayed.
 
 ## Authentication and state
@@ -56,6 +55,16 @@ same-UID processes. Token provisioning uses the original home-based path and
 token-path overrides. Registered clients still require a signed record match;
 an unauthenticated daemon cannot satisfy that check. Legacy connections retain
 the existing token and identity checks.
+
+Ordinary execution uses the signed `instance_bound_requests=1` capability to
+send `op=execute`, with the authenticated `daemon_instance` included in a
+distinct request MAC domain. Both workers check it before any IPC dispatch.
+This prevents cached clients and replacements between hello and execution from
+running commands on a different same-account daemon after port reuse. Registered
+peers without this capability require an updated bundle loaded into the intended
+idle CIW; they never fall back to unbound execution. Updated registered daemons
+also refuse unbound clients. Older unregistered fixed-port daemons retain their
+existing request format and configuration. No uncertain command is replayed.
 
 Current state and selections are published atomically with private permissions.
 Historical non-secret connection metadata may be read from same-owner 0755
@@ -81,13 +90,22 @@ original literal-root behavior; use absolute paths for remote staging. Registry
 helpers can expand `~/` on the daemon host. Never chmod `/tmp` or an account home.
 Existing workflow private-child checks from the main branch remain.
 
+Automatic deployment and registry roots must be owned by the current account
+with mode 0700. Each ancestor is opened without following symlinks and must be
+owned by root or the current account, without group/other writes. Root-owned
+sticky parents such as /tmp are allowed above the private account directory.
+Publication, record access and cleanup use verified directory descriptors;
+remote bundle input is piped directly to the publisher. Existing unsafe paths
+are rejected without chmod. Shared program installations retain their separate
+trusted-installer policy and contain no account credentials or runtime state.
+
 Generated setup embeds the daemon registry root. Deployment/GUI hosts must see
 the bundle. Shared setup uses installer `--scratch-root`, otherwise daemon
 `RB_SCRATCH_ROOT`, then `VB_REMOTE_SCRATCH_ROOT`, then the default per-account child.
 Client settings do not change a loaded CIW. The older nested registry layout
 remains readable. No existing job or record is moved automatically.
 
-A working old endpoint is connected without rewriting its setup. New generated
+A working old endpoint is connected without rewriting its setup. Opt-in generated
 setup uses registration: load the printed path in the intended idle CIW and run
 `start` again. Existing `.cdsinit` files are not silently changed. Differing
 generated bundles need `--replace-setup`; `VB_DAEMON_SETUP` installations require
@@ -111,6 +129,12 @@ Legacy restart uses old RBStop/RBStart with a bounded exit wait and verifies the
 same CIW birth/PID and a changed authenticated daemon identity. Neither reloads
 newly staged code or retries an uncertain request. Polling uses bounded backoff;
 busy lanes and identity changes refuse restart.
+
+CIW process birth/ownership checks run on the configured GUI host, using that
+host's authenticated account UID rather than the daemon host's numeric UID.
+Registry access and TCP forwarding stay on the daemon host. Bundle publication
+uses Python detected on the deployment host; the generated launcher retains
+the daemon host's Python path. GUI and daemon hosts must both see the bundle.
 
 `RBStopAll()` remains tracked-child-only, an explicitly reviewed safety change.
 An untracked daemon needs operator identity investigation, not a broad process

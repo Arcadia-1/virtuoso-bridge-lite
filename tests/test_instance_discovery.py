@@ -21,8 +21,8 @@ def row(port=65001, pid=10, work_dir="/project/a"):
                 work_dir=work_dir, instance="%032x" % pid)
 
 
-@pytest.mark.parametrize("mode", [0o644, 0o666])
-def test_record_read_accepts_filesystem_owner_and_mode_without_gates(tmp_path, monkeypatch, mode):
+@pytest.mark.parametrize("mode,owner,links", [(0o644, 1000, 1), (0o666, 1000, 1), (0o600, -1, 1), (0o600, 1000, 2)])
+def test_record_read_rejects_unsafe_files(tmp_path, monkeypatch, mode, owner, links):
     import stat
     from types import SimpleNamespace
     expected = row()
@@ -31,10 +31,11 @@ def test_record_read_accepts_filesystem_owner_and_mode_without_gates(tmp_path, m
     path.write_bytes(payload)
     # Simulate foreign ownership and permissive POSIX modes on every platform;
     # the native harness separately checks real chmod/locks on Linux.
-    metadata = SimpleNamespace(st_mode=stat.S_IFREG | mode, st_size=len(payload), st_uid=-1)
-    monkeypatch.setattr(registry, "os", SimpleNamespace(fstat=lambda fd: metadata, read=os.read))
+    metadata = SimpleNamespace(st_mode=stat.S_IFREG | mode, st_size=len(payload), st_uid=owner, st_nlink=links)
+    monkeypatch.setattr(registry, "os", SimpleNamespace(fstat=lambda fd: metadata, read=os.read, geteuid=lambda: 1000))
     with path.open("rb") as stream:
-        assert registry._read_record(stream.fileno()) == expected
+        with pytest.raises(ValueError, match="metadata"):
+            registry._read_record(stream.fileno())
 
 
 def test_registry_root_uses_daemon_account_without_changing_workflow_defaults(monkeypatch):
@@ -190,6 +191,7 @@ def test_saved_selection_is_scoped_to_config_and_expected_directory(tmp_path, mo
             monkeypatch.delenv(key)
     monkeypatch.setenv("VB_REMOTE_HOST", "localhost")
     monkeypatch.setenv("VB_REMOTE_WORK_DIR", "/project/a")
+    monkeypatch.setenv("VB_AUTO_SESSIONS", "1")
     client = SSHClient.from_env()
     client._port = 65099
     client.instance_record = row(65099)
