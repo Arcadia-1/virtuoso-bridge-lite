@@ -61,11 +61,16 @@ jobs:
         if: matrix.python-version == '3.13'
         shell: bash
         run: |
+          # Fixture accounts cannot traverse the runner's private temp parent.
+          # Copy only this test interpreter to a disposable, traversable prefix.
+          fixture_python=$(sudo mktemp -d /opt/vb-python27-XXXXXX)
+          trap 'sudo userdel vb-fixture-a; sudo userdel vb-fixture-b; sudo rm -rf -- "$fixture_python"' EXIT
+          sudo cp -a "$RUNNER_TEMP/python27/." "$fixture_python/"
+          sudo chmod 0755 "$fixture_python"
           sudo useradd --no-create-home --shell /usr/sbin/nologin vb-fixture-a
-          trap 'sudo userdel vb-fixture-a; sudo userdel vb-fixture-b' EXIT
           sudo useradd --no-create-home --shell /usr/sbin/nologin vb-fixture-b
           sudo env VB_TEST_ACCOUNT_USERS=vb-fixture-a,vb-fixture-b \
-            VB_TEST_WORKER_PYTHON="$RUNNER_TEMP/python27/bin/python2.7" \
+            VB_TEST_WORKER_PYTHON="$fixture_python/bin/python2.7" \
             /usr/bin/python3 tests/native_daemon_concurrency.py src/virtuoso_bridge/virtuoso/basic/resources
       - name: Run full test suite
         env:
