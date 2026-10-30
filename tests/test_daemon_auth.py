@@ -796,8 +796,9 @@ class TestRealDaemon:
             )
             assert collision.returncode == 1
             assert f"Port {first_port} is already in use" in collision.stderr.decode()
-            assert b"VB_REMOTE_PORT" in collision.stderr
-            assert b"each CIW" in collision.stderr
+            assert b"RBSetPort" in collision.stderr
+            assert b"Traceback" not in collision.stderr
+            assert b"Leave the existing session running" in collision.stderr
             assert first.poll() is None
 
             second_port = _free_port()

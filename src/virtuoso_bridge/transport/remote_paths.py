@@ -117,6 +117,21 @@ def default_virtuoso_bridge_dir(
         return f"{root}/virtuoso_bridge_{safe}/{safe_client}/{leaf_norm}"
     return f"{root}/virtuoso_bridge_{safe}/{leaf_norm}"
 
+
+def instance_scratch_root(runner: SSHRunner | None = None) -> str:
+    """Registry root; keep the shared /tmp parent outside the registry."""
+    root = remote_scratch_root()
+    if root.startswith("~/") and runner is not None:
+        home = runner.run_command('getent passwd "$(id -u)" | cut -d: -f6')
+        if home.returncode or not home.stdout.strip().startswith("/"):
+            raise ValueError("Cannot resolve the remote account home for instance discovery")
+        root = home.stdout.strip().rstrip("/") + root[1:]
+    if root == "/tmp":
+        user = resolve_remote_username(configured_user=None, runner=runner)
+        return root + "/virtuoso_bridge_" + user
+    return root
+
+
 def private_dir_shell_prelude(label: str) -> str:
     """POSIX sh functions that create or verify directories private to the user.
 

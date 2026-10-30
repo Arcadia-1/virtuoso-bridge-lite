@@ -62,11 +62,10 @@ def test_command_log_is_created_lazily(monkeypatch, tmp_path) -> None:
 
 def test_tunnel_state_reads_legacy_cache_path(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("VB_STATE_DIR", str(tmp_path / "new-state"))
     legacy = tmp_path / ".cache" / "virtuoso_bridge" / "state.json"
-    legacy.parent.mkdir(parents=True)
-    legacy.write_text(json.dumps({"mode": "local", "port": 65432}), encoding="utf-8")
+    from virtuoso_bridge.transport.tunnel import SSHClient, _write_private_json
+    _write_private_json(legacy, {"mode": "local", "port": 65432})
 
-    from virtuoso_bridge.transport.tunnel import SSHClient
-
-    assert SSHClient.read_state() == {"mode": "local", "port": 65432}
+    assert SSHClient.read_state(target=None) == {"mode": "local", "port": 65432}

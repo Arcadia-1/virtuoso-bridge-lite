@@ -26,6 +26,52 @@ jobs:
         run: uv run --python ${{ matrix.python-version }} --extra dev python tests/test_x11_dialog_close_native.py -v
       - name: Build distributions
         run: uv build
+      - name: Run native instance registry and daemon protocol checks
+        timeout-minutes: 5
+        run: uv run --python ${{ matrix.python-version }} --extra dev python tests/native_instance_registry.py src/virtuoso_bridge/virtuoso/basic/resources
+      - name: Run full daemon startup races under real fixture accounts
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          sudo useradd --no-create-home --shell /usr/sbin/nologin vb-fixture-a
+          trap 'sudo userdel vb-fixture-a; sudo userdel vb-fixture-b' EXIT
+          sudo useradd --no-create-home --shell /usr/sbin/nologin vb-fixture-b
+          sudo env VB_TEST_ACCOUNT_USERS=vb-fixture-a,vb-fixture-b \
+            /usr/bin/python3 tests/native_daemon_concurrency.py src/virtuoso_bridge/virtuoso/basic/resources
+      - name: Build pinned isolated Python 2.7 test worker
+        timeout-minutes: 15
+        if: matrix.python-version == '3.13'
+        shell: bash
+        run: |
+          curl --fail --location --retry 3 https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tgz -o "$RUNNER_TEMP/python27.tgz"
+          echo "da3080e3b488f648a3d7a4560ddee895284c3380b11d6de75edb986526b9a814  $RUNNER_TEMP/python27.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/python27.tgz" -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP/Python-2.7.18"
+          ./configure --prefix="$RUNNER_TEMP/python27" --without-ensurepip > configure.log
+          make -j2 > build.log 2>&1
+          make install > install.log 2>&1
+      - name: Run native checks with actual Python 2.7 workers
+        timeout-minutes: 5
+        if: matrix.python-version == '3.13'
+        env:
+          VB_TEST_WORKER_PYTHON: ${{ runner.temp }}/python27/bin/python2.7
+        run: uv run --python ${{ matrix.python-version }} --extra dev python tests/native_instance_registry.py src/virtuoso_bridge/virtuoso/basic/resources
+      - name: Run full startup races with actual Python 2.7 workers
+        timeout-minutes: 5
+        if: matrix.python-version == '3.13'
+        shell: bash
+        run: |
+          # Fixture accounts cannot traverse the runner's private temp parent.
+          # Copy only this test interpreter to a disposable, traversable prefix.
+          fixture_python=$(sudo mktemp -d /opt/vb-python27-XXXXXX)
+          trap 'sudo userdel vb-fixture-a; sudo userdel vb-fixture-b; sudo rm -rf -- "$fixture_python"' EXIT
+          sudo cp -a "$RUNNER_TEMP/python27/." "$fixture_python/"
+          sudo chmod 0755 "$fixture_python"
+          sudo useradd --no-create-home --shell /usr/sbin/nologin vb-fixture-a
+          sudo useradd --no-create-home --shell /usr/sbin/nologin vb-fixture-b
+          sudo env VB_TEST_ACCOUNT_USERS=vb-fixture-a,vb-fixture-b \
+            VB_TEST_WORKER_PYTHON="$fixture_python/bin/python2.7" \
+            /usr/bin/python3 tests/native_daemon_concurrency.py src/virtuoso_bridge/virtuoso/basic/resources
       - name: Run full test suite
         env:
           VB_TEST_DIST_DIR: ${{ github.workspace }}/dist
@@ -48,3 +94,13 @@ jobs:
           tests/test_tunnel_profiles.py
           tests/test_process_liveness.py
           tests/test_maestro_jobs.py
+          tests/test_instance_discovery.py
+          tests/test_instance_binding.py
+          tests/test_remote_host_roles.py
+          tests/test_pr269_review.py
+          tests/test_discovery_audit_regressions.py
+          tests/test_discovery_status.py
+          tests/test_discovery_round2.py
+          tests/test_discovery_compatibility.py
+          tests/test_remote_paths.py
+          tests/test_generated_bundle.py

@@ -34,6 +34,16 @@ from virtuoso_bridge.virtuoso.layout.xstream import XStreamLogResult
 Status = ExecutionStatus
 Reason = GdsExportReason
 
+
+@pytest.fixture(autouse=True)
+def isolated_scratch_configuration(monkeypatch, tmp_path):
+    from virtuoso_bridge import env
+    monkeypatch.delenv("VB_REMOTE_SCRATCH_ROOT", raising=False)
+    monkeypatch.delenv("VB_CLIENT_ID", raising=False)
+    configuration = tmp_path / "offline.env"
+    configuration.write_text("", encoding="utf-8")
+    monkeypatch.setattr(env, "_RUNTIME_ENV_FILE", configuration)
+
 _GDS_EXPORT_RESULT_FIELDS = (
     "status",
     "reason",
@@ -193,6 +203,8 @@ class _FakeLocalClient:
 
 
 class _FakeRemoteRunner:
+    _vb_remote_home = "/home/designer"
+
     def __init__(
         self,
         *,
@@ -2721,7 +2733,7 @@ def test_remote_export_stages_owned_posix_run_and_all_request_fields(
     assert str(tmp_path) not in skill
 
 
-def test_remote_export_budgeted_whoami_is_sanitized_and_runs_once_per_export(
+def test_remote_export_resolves_username_for_restored_scratch_layout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     stream_map: Path,

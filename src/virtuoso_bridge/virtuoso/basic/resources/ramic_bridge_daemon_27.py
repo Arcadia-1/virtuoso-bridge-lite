@@ -252,8 +252,10 @@ def _auth_error(request_data, kind):
     (regular SKILL execution).  The MAC covers the complete request for its
     kind, so no field can be tampered with in flight.
     """
+    if kind == "req" and _INSTANCE_LEASE is not None:
+        return "AuthError: registered daemon requires instance-bound execution; update the client"
     if not BRIDGE_TOKEN:
-        if kind == "recoverable":
+        if kind in ("recoverable", "bound"):
             return "AuthError: recoverable requests require bridge token authentication"
         return None
     nonce = request_data.get("nonce")
@@ -308,9 +310,17 @@ def _auth_error(request_data, kind):
         skill = request_data.get("skill")
         if not isinstance(skill, basestring):
             return "AuthError: invalid skill field"
-        expected = _mac_hex(
-            _REQ_DOMAIN, str(proto), nonce, "%.6f" % timeout, skill
-        )
+        if kind == "bound":
+            instance = request_data.get("daemon_instance")
+            if not isinstance(instance, basestring) or not _is_hex_token(instance, 32, 32):
+                return "AuthError: invalid daemon_instance field"
+            expected = _mac_hex(
+                "vb1-execute", str(proto), nonce, instance, "%.6f" % timeout, skill
+            )
+        else:
+            expected = _mac_hex(
+                _REQ_DOMAIN, str(proto), nonce, "%.6f" % timeout, skill
+            )
         ttl = timeout
     if not _compare_digest(expected, str(mac).lower()):
         return (
@@ -318,6 +328,8 @@ def _auth_error(request_data, kind):
             "belongs to a different user (or the token was rotated); run "
             "`virtuoso-bridge restart` after RBStop()"
         )
+    if kind == "bound" and request_data["daemon_instance"] != _RECOVERY.instance_id:
+        return "AuthError: daemon_instance mismatch; request was not executed"
     with _NONCE_LOCK:
         verdict = _consume_nonce(nonce, ttl)
     if verdict == "replay":
@@ -342,8 +354,11 @@ def _capabilities_body():
             "proto": _PROTO,
             "auth": "on" if BRIDGE_TOKEN else "off",
             "daemon": "ramic-bridge",
+            "build": "instance-discovery-3",
             "virtuoso_pid": virtuoso_pid,
+            "instance_record": _INSTANCE_LEASE.metadata if _INSTANCE_LEASE else None,
             "recoverable_requests": 1 if BRIDGE_TOKEN else 0,
+            "instance_bound_requests": 1 if BRIDGE_TOKEN else 0,
             "daemon_instance": _RECOVERY.instance_id,
             "server_time_ms": int(time.time() * 1000),
             "lane": _RECOVERY.lane_state(),
@@ -404,6 +419,7 @@ except ImportError:
 # Command line arguments for host and port
 HOST = sys.argv[1]
 PORT = int(sys.argv[2])
+_INSTANCE_LEASE = None
 
 # Global timeout control flag
 timeout_flag = False
@@ -821,7 +837,7 @@ def handle_external_connection(conn, addr):
             _send_recovery_reply(conn, request_nonce, reply)
             return
 
-        auth_error = _auth_error(request_data, "req")
+        auth_error = _auth_error(request_data, "bound" if request_data.get("op") == "execute" else "req")
         if auth_error:
             # Unauthenticated or foreign client: refuse without executing.
             if isinstance(auth_error, unicode):
@@ -893,6 +909,7 @@ def _connection_thread(conn, addr, slots):
         slots.release()
 
 def start_server():
+    global PORT, _INSTANCE_LEASE
     """Start the TCP server to accept client connections."""
     # Python 2.7 compatibility: don't use context manager for socket
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -903,21 +920,30 @@ def start_server():
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
         # Try to bind with error handling for port conflicts
-        try:
-            s.bind((HOST, PORT))
-        except socket.error as e:
-            if e.errno == errno.EADDRINUSE:
-                sys.stderr.write("ERROR: Port {0} is already in use. Another daemon may be running.\n".format(PORT))
-                sys.stderr.write(
-                    "For parallel Virtuoso sessions, use separate profiles with distinct "
-                    "VB_REMOTE_PORT values; load the matching generated setup in each CIW. "
-                    "Leave the existing session running.\n"
-                )
-                sys.exit(1)
-            else:
+        if PORT == 0 or os.environ.get("RB_AUTO_PORT") == "1":
+            try:
+                from ramic_registry import bind_instance
+            except ImportError:
+                from virtuoso_bridge.virtuoso.basic.resources.ramic_registry import bind_instance
+            try:
+                _INSTANCE_LEASE = bind_instance(
+                    s, HOST, PORT, pid=virtuoso_pid, backlog=_MAX_CONNECTIONS,
+                    work_dir=os.environ.get("RB_VIRTUOSO_WORK_DIR") or os.getcwd())
+            except socket.error as exc:
+                if exc.errno == errno.EADDRINUSE:
+                    sys.stderr.write("ERROR: Requested port is already in use; clear the explicit fixed-port request or choose a free port.\n")
+                    raise SystemExit(1)
                 raise
-
-        s.listen(_MAX_CONNECTIONS)
+            PORT = _INSTANCE_LEASE.metadata["port"]
+        else:
+            try:
+                s.bind((HOST, PORT))
+            except socket.error as exc:
+                if exc.errno == errno.EADDRINUSE:
+                    sys.stderr.write("ERROR: Port %s is already in use. Leave the existing session running; load the automatic bootstrap or use RBSetPort(port).\n" % PORT)
+                    raise SystemExit(1)
+                raise
+            s.listen(_MAX_CONNECTIONS)
         # Banner -- SKILL side parses this from stderr to populate
         # RBLastPid / RBLastBind / RBLastHost / RBLastIP for the monitor
         # display.  Format is frozen:

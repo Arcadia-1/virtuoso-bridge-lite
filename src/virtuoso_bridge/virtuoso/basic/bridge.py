@@ -11,6 +11,7 @@ import math
 import os
 import re
 import secrets
+import shlex
 import socket
 import hashlib
 import time
@@ -61,13 +62,11 @@ _UNSET: Any = object()
 def _default_remote_port(
     username: str | None = None, *, environ: Mapping[str, str] | None = None,
 ) -> int:
-    """Return a stable per-user default port in the range 65000-65499.
+    """Stable legacy/local-forward default; automatic daemons use bind(0).
 
-    SHA-1 based: the previous ``sum(ord(c)) % 500`` assigned identical ports
-    to any anagram pair (and collided often on shared EDA hosts), which made
-    cross-user daemon squatting trivial.  Deployment-time occupancy probing
-    (SSHClient.ensure_remote_setup) additionally shifts away ports already
-    held by another user.
+    SHA-1 provides a deterministic username mapping across Python processes,
+    unlike hash(). The small range reduces accidental account collisions;
+    it is neither a reservation nor an authentication boundary.
     """
     values = os.environ if environ is None else environ
     user = username or values.get("VB_REMOTE_USER", "").strip()
@@ -269,10 +268,12 @@ class VirtuosoClient(VirtuosoInterface):
                 raise RuntimeError("Tunnel state file is missing or invalid.")
             port = state["port"]
             ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
-            # The token never lives in state.json (world-readable by
-            # design); it is fetched from the daemon host over SSH.
+            # Resolve discovery before choosing a credential mode. Historical
+            # state contains only metadata and must not force registered auth.
+            unresolved = getattr(ssh, "_discover_instances", False) and not getattr(ssh, "instance_record", None)
+            token = None if unresolved else _acquire_daemon_token(ssh)
             client = cls(host="127.0.0.1", port=port, timeout=timeout, tunnel=ssh,
-                         log_to_ciw=log_to_ciw, daemon_token=_acquire_daemon_token(ssh))
+                         log_to_ciw=log_to_ciw, daemon_token=token)
             client._reject_cross_user_daemon_if_reachable(profile=profile, timeout=timeout)
             return client
 
@@ -961,7 +962,11 @@ let((result winName ciwNum)
         client_id = resolve_client_id(getattr(self._tunnel, '_profile', None)) if self._tunnel else None
         screenshot_dir = default_virtuoso_bridge_dir(username, "screenshots", client_id)
         if self._tunnel and self._tunnel._ssh_runner:
-            self._tunnel._ssh_runner.run_command(f"mkdir -p {screenshot_dir}")
+            self._tunnel._ssh_runner.run_command(f"mkdir -p {shlex.quote(screenshot_dir)}")
+        elif self.ssh_runner is None:
+            local_dir = Path(screenshot_dir).expanduser().resolve()
+            local_dir.mkdir(parents=True, exist_ok=True)
+            screenshot_dir = local_dir.as_posix()
 
         from datetime import datetime
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2051,6 +2056,14 @@ let((result winName ciwNum)
             logger.debug("TCP received %d bytes", len(raw))
             return raw
 
+    def use_current_selection(self) -> None:
+        """Keep the caller's freshly selected record; still authenticate hello.
+
+        Read-only diagnostics and explicit lifecycle operations must not
+        reconcile a vanished selection by silently connecting to another CIW.
+        """
+        self._selection_reconciled = True
+
     def _build_hello_payload(self) -> dict[str, Any]:
         nonce = secrets.token_hex(16)
         self._pending_nonce = nonce
@@ -2116,7 +2129,38 @@ let((result winName ciwNum)
         ``ConnectionRefusedError``/``OSError`` propagate so callers can apply
         their normal connect-retry policy.
         """
-        if self._daemon_caps is not None and not refresh:
+        expected = getattr(self._tunnel, "instance_record", None)
+        if getattr(self._tunnel, "_discover_instances", False):
+            if expected is None and not getattr(self, "_selection_reconciled", False):
+                # An existing legacy tunnel is not a reason to skip discovery.
+                # Resolve before transmitting anything, then use the credential
+                # appropriate to the selected registered or legacy endpoint.
+                self._tunnel.discover_instance(provision=False)
+                self._tunnel.ensure_tunnel()
+                self._port = self._tunnel.port
+                self.daemon_token = self._tunnel.ensure_daemon_token()
+                expected = self._tunnel.instance_record
+                self._selection_reconciled = True
+            from virtuoso_bridge.instance_discovery import validate_record
+            try:
+                if not getattr(self._tunnel, "_legacy_fallback", False):
+                    validate_record(expected)
+            except ValueError as exc:
+                raise daemon_auth.DaemonAuthError(
+                    "No valid Virtuoso instance selected. Run virtuoso-bridge start first: " + str(exc)
+                ) from exc
+            if expected and not getattr(self, "_selection_reconciled", False) and hasattr(self._tunnel, "reconcile_instance"):
+                changed = self._tunnel.reconcile_instance(max(1, int(deadline - time.monotonic())))
+                if changed:
+                    self._port = self._tunnel.port
+                    self.daemon_token = self._tunnel.daemon_token
+                    self._daemon_caps = None
+                expected = self._tunnel.instance_record
+                self._selection_reconciled = True
+        elif expected is not None and not isinstance(expected, dict):
+            raise daemon_auth.DaemonAuthError("Invalid expected instance record")
+        if (self._daemon_caps is not None and not refresh
+                and (not expected or self._daemon_caps.get("instance_record") == expected)):
             return self._daemon_caps
         payload = self._build_hello_payload()
         nonce = payload["nonce"]
@@ -2189,6 +2233,18 @@ let((result winName ciwNum)
                     "insecure legacy mode"
                 )
 
+        expected = getattr(self._tunnel, "instance_record", None)
+        if getattr(self._tunnel, "_legacy_fallback", False) and caps.get("instance_record"):
+            raise daemon_auth.DaemonAuthError(
+                "Registered daemon is absent from discovery; inspect the registry root before connecting"
+            )
+        if isinstance(expected, dict) and (
+            caps.get("auth") != "on" or caps.get("instance_record") != expected
+        ):
+            raise daemon_auth.DaemonAuthError(
+                "Authenticated daemon does not match the discovered instance; run start again"
+            )
+
         # Free identity data from the (signed, when auth is on) handshake.
         pid = caps.get("virtuoso_pid")
         if isinstance(pid, int) and pid > 0:
@@ -2204,7 +2260,20 @@ let((result winName ciwNum)
     ) -> str:
         # Handshake first: authentication failures must never cost an
         # execution on a foreign or outdated daemon.
-        self._ensure_daemon_capabilities(deadline)
+        caps = self._ensure_daemon_capabilities(deadline)
+        binding = caps.get("instance_bound_requests")
+        if binding is not None and (type(binding) is not int or binding not in (0, 1)):
+            raise daemon_auth.DaemonAuthError("Invalid instance-bound execution capabilities")
+        bound = type(binding) is int and binding == 1
+        if caps.get("instance_record") and not bound:
+            raise daemon_auth.DaemonAuthError(
+                "Registered daemon lacks instance-bound execution; load an updated "
+                "bridge bundle in the intended idle CIW before executing"
+            )
+        if bound and (caps.get("auth") != "on" or not self._daemon_token
+                      or not isinstance(caps.get("daemon_instance"), str)
+                      or not re.fullmatch(r"[0-9a-f]{32}", caps["daemon_instance"])):
+            raise daemon_auth.DaemonAuthError("Invalid instance-bound execution capabilities")
         request_timeout = min(timeout, self._remaining_timeout(deadline))
         payload: dict[str, Any] = {
             "proto": daemon_auth.PROTOCOL_VERSION,
@@ -2215,11 +2284,17 @@ let((result winName ciwNum)
         if self._daemon_token:
             nonce = secrets.token_hex(16)
             payload["nonce"] = nonce
-            payload["mac"] = daemon_auth.request_mac(
+            binding_fields = {}
+            if bound:
+                payload.update(op="execute", daemon_instance=caps["daemon_instance"])
+                binding_fields["daemon_instance"] = caps["daemon_instance"]
+            sign = daemon_auth.bound_request_mac if bound else daemon_auth.request_mac
+            payload["mac"] = sign(
                 self._daemon_token,
                 nonce=nonce,
                 skill=skill_code,
                 timeout=request_timeout,
+                **binding_fields,
             )
         self._pending_nonce = nonce
         raw = self._exchange_payload(payload, deadline)

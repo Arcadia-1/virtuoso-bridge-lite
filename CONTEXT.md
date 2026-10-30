@@ -20,6 +20,10 @@ _Avoid_: Upload host, file host
 The filesystem root containing generated bridge files; in a split topology it must be visible to the GUI and daemon hosts.
 _Avoid_: Temp dir, remote scratch
 
+**Project working directory**:
+The absolute working directory of the Virtuoso process, selected with
+`VB_REMOTE_WORK_DIR`. It is independent of the deployment root.
+
 **Spectre host**:
 The machine that executes standalone Spectre jobs.
 _Avoid_: Simulation server, remote host
