@@ -364,4 +364,3 @@ they opened, including on error. A failed save, connection loss or timeout may
 leave an uncertain write or in-memory change: inspect/reconcile before retry.
 No automatic object cleanup, recursive master edit, `lceClearLogicalConn`,
 `oaScan -repair`, temporary rectangle workaround or design replacement is used.
-
