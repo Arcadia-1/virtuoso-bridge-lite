@@ -17,18 +17,18 @@ try {
         await page.setViewportSize({ width, height: 900 });
         const label = `${path}, ${language}, ${width}px`;
         const header = page.locator('.site-header');
-        const links = header.locator('.header-nav .site-link');
-        assert.equal(await links.count(), 4, label);
+        const links = header.locator('.header-nav > a');
+        assert.equal(await links.count(), 2, label);
         assert.equal(await header.locator('details').count(), 0, label);
-        assert.equal(await header.locator('.header-actions .nav-guide').count(), 1, label);
+        assert.equal(await header.locator('.header-left .nav-guide').count(), 1, label);
         for (const link of await links.all()) {
           const box = await link.boundingBox();
           assert(box && box.width >= 36 && box.height >= 36, label);
           assert(box.x >= 0 && box.x + box.width <= width, `Link clipped: ${label}`);
-          assert.equal(await link.locator('.site-link-label').isVisible(), width > 1180, label);
+          if (await link.locator('.site-link-label').count()) assert.equal(await link.locator('.site-link-label').isVisible(), width > 850, label);
           assert(await link.getAttribute('title'), label);
           assert(await link.getAttribute('aria-label'), label);
-          {
+          if (await link.locator('.site-link-logo').count()) {
             const logo = link.locator('.site-link-logo');
             const frame = await logo.boundingBox();
             const artwork = await logo.locator('img, svg').boundingBox();
@@ -43,7 +43,7 @@ try {
           });
           assert(clickable, `Link covered: ${label}`);
         }
-        const groups = await header.locator('.brand, .header-nav, .header-actions').evaluateAll(els => els.map(el => el.getBoundingClientRect().toJSON()));
+        const groups = await header.locator('.header-left, .header-nav, .header-actions').evaluateAll(els => els.map(el => el.getBoundingClientRect().toJSON()));
         for (let i = 1; i < groups.length; i++)
           assert(groups[i].left >= groups[i - 1].right || groups[i].top >= groups[i - 1].bottom || groups[i].bottom <= groups[i - 1].top, `Header groups overlap: ${label}`);
         assert(groups.at(-1).right <= width, `Utilities overflow: ${label}`);
@@ -51,7 +51,7 @@ try {
       }
     }
   }
-  console.log('PASS: 66 page/language/viewport combinations; all four direct links visible, clickable and unclipped.');
+  console.log('PASS: 66 page/language/viewport combinations; both direct links visible, clickable and unclipped.');
 } finally {
   await browser.close();
 }

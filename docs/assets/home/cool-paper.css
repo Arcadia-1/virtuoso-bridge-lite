@@ -66,27 +66,6 @@
 .ecosystem-heading p{color:#52616a}
 .refined .ecosystem-area .archive{background:#fff;border-color:#b8cbd5}
 .refined .ecosystem-area .collection-bar{background:#f0f6fa;border-color:#c7d9e4}
-.refined .ecosystem-area #categories button{color:#425563}
-.refined .ecosystem-area #categories button[aria-pressed=true]{background:#c24620;color:#fff}
 
-/* Paper-bound index; the spine and numbered tabs are uncoated card stock. */
-.refined .ecosystem-area #full-index{background:linear-gradient(90deg,#dce4e7 0 30px,#b4c1c8 30px 31px,#f8fbfc 31px);box-shadow:3px 4px #dce4e8,5px 6px #f8fbfc,6px 7px #bcc9cf}
-.refined .ecosystem-area #full-index:before{background:radial-gradient(circle,#7e919b 0 2px,#f8fbfc 3px 4px,transparent 5px) 0 0/9px 62px}
-.refined .ecosystem-area summary{border-color:#bcc7c9}
-.refined .ecosystem-area input{color:#172b38;border-color:#8c9ba2}
-.refined .ecosystem-area input::placeholder{color:#64727a}
-.refined #ecosystem-index h3{border-color:#9eafb5;color:#172b38}
-.refined #ecosystem-index h3:before{background:#dce4e7;color:#344650}
-.refined #ecosystem-index h3 .count{color:#ae3d1b}
-.refined #ecosystem-index .eco li{border-color:#d7dedc}
-.refined #ecosystem-index .eco li:before{color:#647985}
-.refined #ecosystem-index .eco li:hover,.refined #ecosystem-index .eco li:focus-within{background:#eaf1f5;border-color:#b4c0c2;box-shadow:inset 2px 0 #d65328}
-.refined #ecosystem-index .eco a{color:#172b38}
-.refined #ecosystem-index .eco li>span,.refined #ecosystem-index>p{color:#52616a}
-.refined .eco-categories a{color:#294e63}
-.refined .eco-categories{border-color:#d7dedc}
 
-@media(max-width:760px){
-  .refined .ecosystem-area #full-index{background:linear-gradient(90deg,#dce4e7 0 20px,#b4c1c8 20px 21px,#f8fbfc 21px)}
-}
 @media(prefers-reduced-motion:reduce){.refined #docs .links li:hover,.refined #docs .links li:focus-within{transform:none}}
