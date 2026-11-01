@@ -295,3 +295,73 @@ with client.layout.create(lib, cell) as lay:
 with client.layout.modify(lib, cell) as lay:
     lay.add(rect("M2", "drawing", 0, 1, 10, 1.5))
 ```
+
+## Bounding-Box Diagnosis and Recompute
+
+Cellview `bBox`, physical geometry extents and `prBoundary` are distinct.
+Large extents can come from real off-screen figures, logical routing objects,
+child masters or stale caches. Do not assume corruption or delete objects just
+because the visible geometry looks smaller.
+
+```python
+from virtuoso_bridge.virtuoso.layout import (
+    layout_diagnose_bbox, layout_recompute_bbox,
+    parse_layout_bbox_output, parse_layout_bbox_recompute_output,
+)
+
+response = client.execute_skill(layout_diagnose_bbox("worklib", "amp"))
+if response.errors:
+    raise RuntimeError(response.errors)
+report = parse_layout_bbox_output(response.output, expected_bbox=((0, 0), (100, 50)))
+# Inspect cached_edges / outside_expected in report["objects"].
+
+# Default is a read-only dry-run, identical to diagnosis.
+dry_run = layout_recompute_bbox("worklib", "amp")
+# Only after reviewing the target and making an external backup/checkpoint:
+operation = layout_recompute_bbox("worklib", "amp", dry_run=False, save=True)
+response = client.execute_skill(operation)
+if response.errors:
+    raise RuntimeError(response.errors)
+result = parse_layout_bbox_recompute_output(response.output)
+```
+
+`layout_diagnose_bbox(lib, cell, *, view="layout")` reads top-level shapes, vias,
+instances, mosaics, steiners, markers, guides, routes and figGroups. Optional
+collections missing from a release are returned as `unavailable_collections`.
+No recompute, visibility change, save, deletion or connectivity extraction occurs.
+The reader borrows an open view, including unsaved changes; otherwise it opens
+read-only and closes its own reference.
+
+`parse_layout_bbox_output(raw, *, expected_bbox=None, tolerance=1e-6)` returns
+`bbox`, `pr_boundary_bbox`, `geometry_bbox`, `observed_bbox`, objects and warnings.
+Malformed/inverted database boxes are preserved in `invalid_bboxes` and excluded
+from unions, rather than preventing the rest of the diagnostic from being read.
+Each object includes collection/type/name/LPP/bBox, the cached edges it touches,
+and whether it extends outside an optional user-specified footprint. Coordinates
+use the cellview's database user units. With no expected footprint, no heuristic
+claims to know the true boundary. Missing boxes, nested objects, unavailable
+collections and duplicate reports across collections mean this is an inventory,
+not an exhaustive geometric proof. Child master extents are not refreshed.
+
+`layout_recompute_bbox(lib, cell, *, view="layout", dry_run=True, save=False)`
+requires explicit `dry_run=False` to call `dbComputeBBox` exactly once. It refuses
+unsaved edits, non-maskLayout targets and borrowed read-only views. It never
+promotes a borrowed view's mode or creates a missing view. A closed existing
+view is opened for append, so arrange edit permission/checkout beforehand and
+use an idle session. No SOS action, popup recovery or lock breaking is included.
+
+With `save=False`, the result is memory-only; an owned reference is closed and
+the recalculation is not persisted. A borrowed editable view stays open.
+With `save=True`, save failure is an error. An owned view is closed/reopened to
+check its saved BBox (`verification="reopened"`); an already-open editable view
+stays open and is checked in-session (`verification="session"`), not against an
+independent disk reader. Neither method prevents another process changing the
+design later. `changed=False` is valid: existing logical or physical objects
+may still legitimately extend the boundary.
+
+These are plain SKILL builders, not transactions. They close only references
+they opened, including on error. A failed save, connection loss or timeout may
+leave an uncertain write or in-memory change: inspect/reconcile before retry.
+No automatic object cleanup, recursive master edit, `lceClearLogicalConn`,
+`oaScan -repair`, temporary rectangle workaround or design replacement is used.
+

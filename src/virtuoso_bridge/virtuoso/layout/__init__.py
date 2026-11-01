@@ -49,6 +49,10 @@ from virtuoso_bridge.virtuoso.layout.xstream import (
     parse_xstream_log,
     xstream_export_gds_skill,
 )
+from virtuoso_bridge.virtuoso.layout.bbox import (
+    layout_diagnose_bbox, layout_recompute_bbox,
+    parse_layout_bbox_output, parse_layout_bbox_recompute_output,
+)
 
 if TYPE_CHECKING:
     from virtuoso_bridge import VirtuosoClient
@@ -178,4 +182,6 @@ __all__ = [
     "layout_find_via_def",
     "layout_create_via_by_name",
     "layout_via_def_expr_from_name",
+    "layout_diagnose_bbox", "layout_recompute_bbox",
+    "parse_layout_bbox_output", "parse_layout_bbox_recompute_output",
 ]
