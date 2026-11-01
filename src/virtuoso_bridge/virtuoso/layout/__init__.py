@@ -8,6 +8,11 @@ from typing import Any, Callable, Literal, TYPE_CHECKING
 
 from virtuoso_bridge.virtuoso.layout.editor import LayoutEditor
 from virtuoso_bridge.virtuoso.layout.reader import parse_layout_geometry_output
+from virtuoso_bridge.virtuoso.layout.groups import (
+    layout_create_fig_group, layout_create_group, layout_add_to_group,
+    layout_remove_from_group, layout_transform_fig_group, layout_ungroup,
+    layout_read_groups, parse_layout_groups_output,
+)
 from virtuoso_bridge.virtuoso.layout.ops import (
     layout_bind_current_or_open_cell_view,
     close_current_cellview,
@@ -140,6 +145,9 @@ class LayoutOps:
 
 
 __all__ = [
+    "layout_create_fig_group", "layout_create_group", "layout_add_to_group",
+    "layout_remove_from_group", "layout_transform_fig_group", "layout_ungroup",
+    "layout_read_groups", "parse_layout_groups_output",
     "LayoutOps",
     "LayoutEditor",
     "XStreamExportRequest",

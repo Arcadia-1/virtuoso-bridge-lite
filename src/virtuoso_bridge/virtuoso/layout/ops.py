@@ -433,6 +433,7 @@ def layout_read_geometry(
     *,
     view: str = "layout",
     view_type: str | None = None,
+    include_groups: bool = False,
 ) -> str:
     """Build SKILL to dump geometry, releasing only a view it opens.
 
@@ -463,7 +464,13 @@ def layout_read_geometry(
         'inst~>bBox inst~>transform)))) '
         "out"
     )
-    return _layout_read_cellview(lib, cell, view, view_type, "out", body)
+    variables = "out"
+    if include_groups:
+        from virtuoso_bridge.virtuoso.layout.groups import _group_rows
+
+        body = body.removesuffix("out") + _group_rows() + 'out = strcat(out sprintf(nil "groups\\tdata=%L\\n" reverse(rows))) out'
+        variables += " rows members"
+    return _layout_read_cellview(lib, cell, view, view_type, variables, body)
 
 # Set by LayoutEditor for the duration of a create()/modify() batch, so the
 # content operations below act on the edited cellview there rather than on
