@@ -90,7 +90,7 @@ def sessions(tmp_path):
         virtuoso_pid = int(evaluate("ipcGetPid()"))
         item["pids"].append(virtuoso_pid)
         assert client.remote_virtuoso_pid == virtuoso_pid
-        item.update(evaluate=evaluate, virtuoso_pid=virtuoso_pid, daemon_pid=daemon_pid,
+        item.update(client=client, evaluate=evaluate, virtuoso_pid=virtuoso_pid, daemon_pid=daemon_pid,
                     ipc_pid=ipc_pid, port=port, skill=skill)
         return item
 

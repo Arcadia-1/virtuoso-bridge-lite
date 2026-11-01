@@ -434,6 +434,64 @@ client.maestro.set_parameter("cload", "1p 2p", type_name="corner", type_value='(
 
 ## Write — Environment & Simulator Options
 
+### Spectre Engine and X Preset
+
+APS and Spectre X are execution modes of a Spectre-backed test, not separate
+`maeCreateTest(... ?simulator ...)` names. Use an existing idle, editable setup:
+
+```python
+current = client.maestro.get_engine("TRAN", session=session)
+result = client.maestro.set_engine(
+    "TRAN", engine="spectre_x", preset="AX", session=session,
+)
+print(result.before.engine, result.after.engine, result.after.preset)
+
+client.maestro.set_engine("TRAN", engine="aps", session=session)
+# Persistence is separate and explicit; neither API saves or starts a run.
+client.maestro.save_setup(lib, cell, session=session)
+```
+
+| API | Contract |
+| --- | --- |
+| `get_engine(test, *, session="", timeout=30)` | Return `MaestroEngineConfig` with active `engine`, active `preset`, and `stored_spectre_x_preset` |
+| `set_engine(test, *, engine, preset=None, session="", timeout=30)` | Return `MaestroEngineChangeResult` containing `before`, `after`, `changed` and `saved=False` |
+
+Engines are `spectre`, `aps`, `spectre_x` (case-insensitive). X **requires** an
+explicit `CX`, `AX`, `MX`, `LX` or `VX` preset; other engines reject a preset.
+There is no default precision, accuracy-equivalence claim or license guarantee.
+The stored X preset may remain present in APS/Spectre mode, but `preset` then
+returns `None` because that setting is inactive. Switching away from X does not
+reset the stored preset. Existing matching values are not written again.
+
+Both calls resolve exactly one `maeGetTestSession` handle. Passing `session`
+is recommended when multiple sessions exist; empty means Cadence's current
+session, not a newly opened one. Unsupported APIs, non-Spectre analog backends,
+unknown modes and missing tests fail rather than selecting a default. Setting
+X also requires readable, recognized X options; older/indeterminate installations
+are refused. FX and arbitrary simulator switching remain raw-SKILL operations.
+
+The setter checks capabilities, captures the current state, sets the requested
+X preset before switching the mode, then checks setter return values and reads
+both options back within one request. It touches only `uniMode` and (for X)
+`spectreXPreset`. It does not manage thread counts, other solver options,
+session lifecycle, netlists, GUI windows, checkpoints, saving or simulation.
+Arrange an appropriate idle setup and external checkpoint before changing a
+production design. This is not a lock against concurrent users or an atomic
+transaction: partial changes can remain if a later setter fails.
+
+`MaestroEngineError` retains `.result`, `.phase`, `.before` and `.after` when
+available. `MaestroEngineOutcomeUnknown` indicates that a mutation may have
+executed but its outcome is not confirmed, including transport loss or failed
+readback. Keep any request handle in `.result.metadata`, reconcile the original
+request and use a read-only query when safe. No retry, fallback or rollback is
+performed. Neither in-memory readback nor saved setup proves the execution
+engine/threads of a future run; inspect its generated command and simulator log
+when execution-level validation is required.
+
+The same functions/models are available from `virtuoso_bridge.virtuoso.maestro`.
+
+### General Options
+
 | Python | SKILL | Description |
 |--------|-------|-------------|
 | `client.maestro.set_env_option(test, options, *, session="")` | `maeSetEnvOption` | Set model files, view lists, etc. |
