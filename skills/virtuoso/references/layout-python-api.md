@@ -319,7 +319,7 @@ report = parse_layout_bbox_output(response.output, expected_bbox=((0, 0), (100, 
 dry_run = layout_recompute_bbox("worklib", "amp")
 # Only after reviewing the target and making an external backup/checkpoint:
 operation = layout_recompute_bbox("worklib", "amp", dry_run=False, save=True)
-response = client.execute_skill(operation)
+response = client.execute_skill(operation, retry_connect=False)
 if response.errors:
     raise RuntimeError(response.errors)
 result = parse_layout_bbox_recompute_output(response.output)
@@ -360,7 +360,9 @@ design later. `changed=False` is valid: existing logical or physical objects
 may still legitimately extend the boundary.
 
 These are plain SKILL builders, not transactions. They close only references
-they opened, including on error. A failed save, connection loss or timeout may
+they opened, including on error. Execute mutations with `retry_connect=False`;
+the builder cannot control the caller's transport retry policy.
+A failed save, connection loss or timeout may
 leave an uncertain write or in-memory change: inspect/reconcile before retry.
 No automatic object cleanup, recursive master edit, `lceClearLogicalConn`,
 `oaScan -repair`, temporary rectangle workaround or design replacement is used.
