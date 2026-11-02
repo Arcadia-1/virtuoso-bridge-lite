@@ -111,3 +111,13 @@ read-only diagnosis, dry-run, unsaved/read-only refusals, preserve-object
 recompute/save, reopen verification, missing targets and failure cleanup.
 It does not fabricate a corrupted OA database or claim to reproduce every
 historical oversized-BBox bug. No user session or PDK is touched.
+
+## Maestro Engine Configuration Checks
+
+`test_maestro_engine_live.py` uses the isolated headless-session fixture and
+never connects to an existing CIW/profile. On Linux with Cadence/ADE licenses,
+set `VB_RUN_MAESTRO_ENGINE_TESTS=1` and `VB_TEST_VIRTUOSO`. It reuses one private
+V1 cell (empty schematic and maestro views) for Spectre, APS and the five X
+presets, checks inactive-preset preservation and unrelated temperature settings,
+and explicitly saves/reopens to check persistence. It does not netlist or run
+Spectre, create a cell per mode, use a foundry PDK, or prove electrical results.

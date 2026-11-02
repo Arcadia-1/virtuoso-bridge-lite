@@ -12,6 +12,8 @@ from __future__ import annotations
 from functools import wraps
 from typing import Any, Callable, TYPE_CHECKING
 
+from virtuoso_bridge.virtuoso.maestro.engine import get_engine, set_engine
+
 from virtuoso_bridge.virtuoso.maestro.lifecycle import (
     _purge_maestro_cellviews,
     close_gui_session,
@@ -151,6 +153,8 @@ class MaestroOps:
     load_corners = _client_method(load_corners)
 
     # Run configuration and execution
+    get_engine = _client_method(get_engine)
+    set_engine = _client_method(set_engine)
     set_current_run_mode = _client_method(set_current_run_mode)
     set_job_control_mode = _client_method(set_job_control_mode)
     set_job_policy = _client_method(set_job_policy)
