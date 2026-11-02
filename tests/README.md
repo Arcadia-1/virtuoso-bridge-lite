@@ -71,6 +71,12 @@ uv run --extra dev pytest tests/test_layout_read_lifecycle_live.py -v
 This is native OA lifecycle coverage, not PDK or electrical-equivalence testing.
 The offline generation tests do not substitute for it.
 
+`test_layout_groups_live.py` uses the same isolated headless-session fixture.
+Set `VB_RUN_LAYOUT_GROUP_TESTS=1` and `VB_TEST_VIRTUOSO` on Linux. It creates
+only a private library with generic rectangles, verifies both OA group types,
+membership guards, figGroup transforms and preserve-members ungroup. No PDK,
+existing CIW, layout window or configured Bridge profile is used.
+
 The default run needs only plain Virtuoso and Spectre. Optional variables
 enable more checks:
 

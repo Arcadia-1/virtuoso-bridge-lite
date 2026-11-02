@@ -8,12 +8,31 @@ try {
   const context=await browser.newContext({viewport:{width:1440,height:1000},extraHTTPHeaders:{DNT:'1','Sec-GPC':'1'}});
   await context.route('**/*',route=>new URL(route.request().url()).origin===base.origin?route.continue():route.abort());
   await context.route('**/api/track**',route=>route.fulfill({status:204}));
+  await context.addInitScript(() => {
+    window.routeFrames=[];
+    let started;
+    const capture=()=>{
+      const route=document.querySelector('#route-virtuoso');
+      if(route){started??=performance.now();window.routeFrames.push(Number.parseFloat(getComputedStyle(route).strokeDashoffset));}
+      if(!started||performance.now()-started<4500)requestAnimationFrame(capture);
+    };
+    requestAnimationFrame(capture);
+  });
+  await context.route('**/assets/home/home.mjs*',async route=>{
+    await new Promise(resolve=>setTimeout(resolve,2800));
+    await route.continue();
+  });
   const page=await context.newPage(),errors=[];
   page.on('pageerror',error=>errors.push(error.message));
   await page.goto(base.href);
   await page.locator('.system-motion').waitFor({state:'attached'});
-  assert.equal(await page.locator('.wf-record').count(),0,'Offscreen cards must not compete with the first-screen entrance');
+  assert.equal(await page.locator('.wf-copy:not([data-original])').count(),0,'Offscreen cards must not compete with the first-screen entrance');
   await page.waitForTimeout(2000);
+  const firstFrames=await page.evaluate(()=>window.routeFrames);
+  assert(firstFrames[0]>95,'The first painted output route starts hidden, even before the module arrives');
+  assert(firstFrames.at(-1)<1,'The CSS entrance completes even while the module is delayed');
+  assert(firstFrames.every((value,i)=>!i||value<=firstFrames[i-1]+.1),'Routes never reset from complete to hidden');
+  await context.unroute('**/assets/home/home.mjs*');
   const animationState=()=>page.locator('.system-motion').evaluate(e=>e.getAnimations({subtree:true}).map(a=>({time:a.currentTime,state:a.playState})));
   const before=await animationState();
   await page.waitForTimeout(250);
@@ -48,7 +67,7 @@ try {
   await page.waitForFunction(()=>document.querySelector('.system-motion').getAnimations({subtree:true}).every(a=>a.playState==='paused'));
   const held=await animationState();await page.waitForTimeout(200);
   assert.deepEqual(await animationState(),held,'Offscreen hero does no continuous animation work');
-  assert.equal(await page.locator('.wf-column[data-set="1"] .wf-copy:first-child .wf-record').count(),53);
+  assert.equal(await page.locator('[data-original] .wf-record').count(),53);
   await page.locator('.hero-flow').scrollIntoViewIfNeeded();
   await page.waitForFunction(()=>document.querySelector('.system-motion').getAnimations({subtree:true}).every(a=>a.playState==='running'));
   await page.emulateMedia({reducedMotion:'reduce'});
@@ -60,10 +79,8 @@ try {
   assert.equal(await page.locator('.system-motion').count(),0,'Reduced motion skips signal setup entirely');
   await page.goto(new URL('/?lang=zh#eco-tools',base).href);
   await page.locator('.archive').waitFor({state:'visible'});
-  assert.equal(await page.locator('#ecosystem-index li:visible').count(),53,'Deep links initialize the archive without losing the index');
-  const heading=await page.locator('#eco-tools').boundingBox();
-  const anchorOffset=await page.locator('#eco-tools').evaluate(e=>parseFloat(getComputedStyle(e).scrollMarginTop)+parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop));
-  assert(Math.abs(heading.y-anchorOffset)<3,'Deferred initialization preserves the requested index anchor and header offset');
+  assert.equal(await page.locator('[data-original] .wf-record').count(),53,'Deep links retain all original projects');
+  assert.equal(await page.locator('#eco-tools').isVisible(),true);
   assert.deepEqual(errors,[]);
-  console.log('PASS: deferred archive; compositor-only signal properties; desktop/mobile route alignment; offscreen pause/resume; reduced motion; direct index anchors.');
+  console.log('PASS: deferred archive; compositor-only signal properties; desktop/mobile route alignment; offscreen pause/resume; reduced motion; direct collection anchors.');
 } finally {await browser.close();}

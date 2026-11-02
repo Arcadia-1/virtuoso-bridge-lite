@@ -5,12 +5,14 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from virtuoso_bridge.virtuoso.skill_output import parse_sexpr
+
 
 def _decode_skill_output(raw: str) -> str:
     text = (raw or "").strip()
     if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
-        text = text[1:-1]
-    return text.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"').replace("\\\\", "\\")
+        return parse_sexpr(text)
+    return text
 
 
 def _parse_skill_numbers(value: str) -> list[float]:
@@ -36,6 +38,13 @@ def parse_layout_geometry_output(raw: str) -> list[dict[str, Any]]:
         if not line.strip():
             continue
         fields = line.split("\t")
+        if fields[0] == "groups":
+            from virtuoso_bridge.virtuoso.layout.groups import parse_layout_groups_output
+
+            if len(fields) != 2 or not fields[1].startswith("data="):
+                raise ValueError("invalid geometry groups row")
+            objects.extend(parse_layout_groups_output(fields[1][5:]))
+            continue
         obj: dict[str, Any] = {"kind": fields[0]}
         for field in fields[1:]:
             if "=" not in field:
