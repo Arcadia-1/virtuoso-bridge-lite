@@ -77,5 +77,405 @@
     "start": "6c29e7e8e2bdd4ea1f63b66751293e9819fa0235a32d65136c2b3f47aea61941",
     "docs": "b2cd1a05e8c49071fbceccce3f4ea910767522a1e6bd89a3d2d07d5816efee0a",
     "ecosystem": "d9b93e96a21eabc537f9d8cd50fef9b2f1fe36a824f132553f8451f9e1d5c26b"
+  },
+  "projects": [
+    {
+      "id": "eco-forks",
+      "en": "Rewrites, copies and forks",
+      "zh": "重写、副本与 fork",
+      "items": [
+        {
+          "url": "https://github.com/deanyou/virtuoso-cli",
+          "name": "deanyou/virtuoso-cli",
+          "en": "Rust rewrite (vcli), multi-session",
+          "zh": "Rust 重写（vcli），多会话"
+        },
+        {
+          "url": "https://github.com/kos2001/mock-virtuoso",
+          "name": "kos2001/mock-virtuoso",
+          "en": "Test double, no Cadence needed",
+          "zh": "测试替身，无需 Cadence"
+        },
+        {
+          "url": "https://github.com/sunsun1949/virtuoso-bridge-lite",
+          "name": "sunsun1949/virtuoso-bridge-lite",
+          "en": "Copy with web GUI and desktop app",
+          "zh": "副本，加网页界面与桌面版"
+        },
+        {
+          "url": "https://github.com/DavidQyz/virtuoso-bridge",
+          "name": "DavidQyz/virtuoso-bridge",
+          "en": "Snapshot with an OTA example",
+          "zh": "源码快照，附 OTA 示例"
+        },
+        {
+          "url": "https://github.com/Ajith-82/virtuoso-bridge-lite",
+          "name": "Ajith-82/virtuoso-bridge-lite",
+          "en": "Fork: constraints, Layout XL",
+          "zh": "fork：约束与 Layout XL"
+        },
+        {
+          "url": "https://github.com/GentLau/virtuoso-bridge-NCS",
+          "name": "GentLau/virtuoso-bridge-NCS",
+          "en": "Fork: multi-user design",
+          "zh": "fork：多用户设计"
+        },
+        {
+          "url": "https://github.com/Olderdriver/virtuoso-bridge-lite",
+          "name": "Olderdriver/virtuoso-bridge-lite",
+          "en": "Fork: daemon selection",
+          "zh": "fork：daemon 选择"
+        },
+        {
+          "url": "https://github.com/cortalo/virtuoso-bridge-lite",
+          "name": "cortalo/virtuoso-bridge-lite",
+          "en": "Fork: waveform export option",
+          "zh": "fork：波形导出参数"
+        },
+        {
+          "url": "https://github.com/why250/virtuoso-bridge-lite",
+          "name": "why250/virtuoso-bridge-lite",
+          "en": "Fork: file transfer docs",
+          "zh": "fork：文件传输文档"
+        },
+        {
+          "url": "https://github.com/Pyrojewel-zard/virtuoso-bridge-lite",
+          "name": "Pyrojewel-zard/virtuoso-bridge-lite",
+          "en": "Fork: ADE notes, clean-up",
+          "zh": "fork：ADE 文档与整理"
+        },
+        {
+          "url": "https://github.com/muziyangyu/virtuoso-bridge-lite",
+          "name": "muziyangyu/virtuoso-bridge-lite",
+          "en": "Fork: documentation changes",
+          "zh": "fork：文档调整"
+        },
+        {
+          "url": "https://github.com/Jureka-Shiyi/virtuoso-bridge-lite",
+          "name": "Jureka-Shiyi/virtuoso-bridge-lite",
+          "en": "Fork: personal changes",
+          "zh": "fork：个人改动"
+        },
+        {
+          "url": "https://github.com/hayatushitaro-lab/virtuoso-bridge-lite",
+          "name": "hayatushitaro-lab/virtuoso-bridge-lite",
+          "en": "Fork: tooling update",
+          "zh": "fork：工具链更新"
+        },
+        {
+          "url": "https://github.com/defineiocc02/virtuoso-bridge-lite",
+          "name": "defineiocc02/virtuoso-bridge-lite",
+          "en": "Fork: documents its additions",
+          "zh": "fork：标明个人增量"
+        }
+      ]
+    },
+    {
+      "id": "eco-tools",
+      "en": "Tools built on it",
+      "zh": "基于它的工具",
+      "items": [
+        {
+          "url": "https://github.com/Ruadaa/cadence_to_visio",
+          "name": "Ruadaa/cadence_to_visio",
+          "en": "Schematic to Visio export",
+          "zh": "原理图导出 Visio"
+        },
+        {
+          "url": "https://github.com/MacAnalog/spicexplorer-release",
+          "name": "MacAnalog/spicexplorer-release",
+          "en": "Spectre backend via the bridge",
+          "zh": "Spectre 后端用本桥接"
+        },
+        {
+          "url": "https://github.com/cortalo/VirtuosoKit",
+          "name": "cortalo/VirtuosoKit",
+          "en": "Standard-cell place and route",
+          "zh": "标准单元布局布线"
+        },
+        {
+          "url": "https://github.com/Johnmc104/tool_virtuoso",
+          "name": "Johnmc104/tool_virtuoso",
+          "en": "vbridge CLI, bridge submodule",
+          "zh": "vbridge 命令行"
+        },
+        {
+          "url": "https://github.com/VlHash/Virtuoso-Flow-Plugin",
+          "name": "VlHash/Virtuoso-Flow-Plugin",
+          "en": "Workflow plugin, credits us",
+          "zh": "工作流插件，致谢本项目"
+        },
+        {
+          "url": "https://github.com/jianshengchuanchaun/virtuoso-wiki-bridge",
+          "name": "jianshengchuanchaun/virtuoso-wiki-bridge",
+          "en": "Knowledge vault and wrappers",
+          "zh": "知识库与桥接封装"
+        },
+        {
+          "url": "https://github.com/xz0831/primesim-bridge",
+          "name": "xz0831/primesim-bridge",
+          "en": "PrimeSim companion plugin",
+          "zh": "PrimeSim 配套插件"
+        },
+        {
+          "url": "https://github.com/Lway-ai/rfic-passive-wizard",
+          "name": "Lway-ai/rfic-passive-wizard",
+          "en": "RFIC inductor generator",
+          "zh": "RFIC 电感与变压器生成"
+        },
+        {
+          "url": "https://github.com/lizhangmai/Sigilicon",
+          "name": "lizhangmai/Sigilicon",
+          "en": "Thin layer over the bridge",
+          "zh": "本桥接的薄封装"
+        },
+        {
+          "url": "https://github.com/Dachy-git/prj_pyopt",
+          "name": "Dachy-git/prj_pyopt",
+          "en": "Optimization, pyopt_bridge",
+          "zh": "优化流程与封装"
+        },
+        {
+          "url": "https://github.com/BucketSran/virtuosoBridgeCi",
+          "name": "BucketSran/virtuosoBridgeCi",
+          "en": "Minimal EDA CI",
+          "zh": "最小 EDA CI"
+        }
+      ]
+    },
+    {
+      "id": "eco-agents",
+      "en": "Agents and design projects",
+      "zh": "智能体与设计项目",
+      "items": [
+        {
+          "url": "https://github.com/PKU-IDEA/PANDA",
+          "name": "PKU-IDEA/PANDA",
+          "en": "LLM analog design to layout",
+          "zh": "LLM 模拟设计到版图"
+        },
+        {
+          "url": "https://github.com/lixunqi12/virtuoso-agent",
+          "name": "lixunqi12/virtuoso-agent",
+          "en": "LLM closed-loop optimizer",
+          "zh": "LLM 闭环优化"
+        },
+        {
+          "url": "https://github.com/HrishikeshGawasIIITH/EDA_Agent",
+          "name": "HrishikeshGawasIIITH/EDA_Agent",
+          "en": "Schematic chat agent",
+          "zh": "原理图对话智能体"
+        },
+        {
+          "url": "https://github.com/XuMai25/Virtuoso-Design-Agent",
+          "name": "XuMai25/Virtuoso-Design-Agent",
+          "en": "Design orchestration layer",
+          "zh": "设计编排层"
+        },
+        {
+          "url": "https://github.com/aocriup233/Analog-Design-Orchestrator",
+          "name": "aocriup233/Analog-Design-Orchestrator",
+          "en": "Artifact-driven design flow",
+          "zh": "产物驱动的设计流程"
+        },
+        {
+          "url": "https://github.com/chenzc24/t28-ioring",
+          "name": "chenzc24/t28-ioring",
+          "en": "28 nm IO ring agent skills",
+          "zh": "28 nm IO ring 技能"
+        },
+        {
+          "url": "https://github.com/chenzc24/t180-ioring",
+          "name": "chenzc24/t180-ioring",
+          "en": "180 nm IO ring agent skills",
+          "zh": "180 nm IO ring 技能"
+        },
+        {
+          "url": "https://github.com/chenzc24/SIM-IO",
+          "name": "chenzc24/SIM-IO",
+          "en": "IO simulation skills",
+          "zh": "IO 仿真技能"
+        },
+        {
+          "url": "https://github.com/chchan18/8-9bit-vcm-based-sar",
+          "name": "chchan18/8-9bit-vcm-based-sar",
+          "en": "Agent-driven SAR ADC design",
+          "zh": "智能体设计 SAR ADC"
+        },
+        {
+          "url": "https://github.com/OpenDgK/IC_opt",
+          "name": "OpenDgK/IC_opt",
+          "en": "Two-stage PA optimization",
+          "zh": "两级功放优化"
+        },
+        {
+          "url": "https://github.com/defineiocc02/Digital_process.srcs",
+          "name": "defineiocc02/Digital_process.srcs",
+          "en": "SAR ADC workspace",
+          "zh": "SAR ADC 工程"
+        },
+        {
+          "url": "https://github.com/dude1wudv/vdmos-tid-research",
+          "name": "dude1wudv/vdmos-tid-research",
+          "en": "VDMOS radiation research",
+          "zh": "VDMOS 辐照研究"
+        },
+        {
+          "url": "https://github.com/CATEular/Eularcat-PersonalWebsite",
+          "name": "CATEular/Eularcat-PersonalWebsite",
+          "en": "Virtuoso workflow skills",
+          "zh": "Virtuoso 工作流技能"
+        },
+        {
+          "url": "https://github.com/ZheHDestiny/ADDA_PJ",
+          "name": "ZheHDestiny/ADDA_PJ",
+          "en": "SAR ADC course project",
+          "zh": "SAR ADC 课程项目"
+        }
+      ]
+    },
+    {
+      "id": "eco-skills",
+      "en": "Skills and knowledge",
+      "zh": "技能与知识库",
+      "items": [
+        {
+          "url": "https://github.com/Pyrojewel-zard/pyrojewel-claude-code-public2",
+          "name": "Pyrojewel-zard/pyrojewel-claude-code-public2",
+          "en": "Skill collection",
+          "zh": "技能合集"
+        },
+        {
+          "url": "https://github.com/agihub-source/virtuoso-bridge-lite-knowledge-graph",
+          "name": "agihub-source/virtuoso-bridge-lite-knowledge-graph",
+          "en": "Knowledge graph of this repo",
+          "zh": "本仓库知识图谱"
+        },
+        {
+          "url": "https://github.com/alexyudragonsword-collab/Virtuo_B",
+          "name": "alexyudragonsword-collab/Virtuo_B",
+          "en": "Mirror and analysis",
+          "zh": "镜像与分析"
+        },
+        {
+          "url": "https://github.com/lawrence3699/agent-skills-corpus",
+          "name": "lawrence3699/agent-skills-corpus",
+          "en": "Agent skills dataset",
+          "zh": "智能体技能数据集"
+        }
+      ]
+    },
+    {
+      "id": "eco-mentions",
+      "en": "Mentions and lists",
+      "zh": "提及与收录",
+      "items": [
+        {
+          "url": "https://github.com/Ryuwang3/snapgene-bridge",
+          "name": "Ryuwang3/snapgene-bridge",
+          "en": "Same pattern for SnapGene",
+          "zh": "同模式接入 SnapGene"
+        },
+        {
+          "url": "https://github.com/JonathanLiu1401/Aspice",
+          "name": "JonathanLiu1401/Aspice",
+          "en": "Recommends the bridge",
+          "zh": "推荐本项目"
+        },
+        {
+          "url": "https://github.com/ds54e/ams-signals",
+          "name": "ds54e/ams-signals",
+          "en": "Mixed-signal tracker",
+          "zh": "混合信号动态追踪"
+        },
+        {
+          "url": "https://github.com/cloudliu01/useful_projects",
+          "name": "cloudliu01/useful_projects",
+          "en": "SKILL project list",
+          "zh": "SKILL 项目清单"
+        },
+        {
+          "url": "https://github.com/OmarSiwy/Schemify",
+          "name": "OmarSiwy/Schemify",
+          "en": "Research notes",
+          "zh": "调研笔记"
+        },
+        {
+          "url": "https://github.com/ActuallyTaylor/strata",
+          "name": "ActuallyTaylor/strata",
+          "en": "Repository dataset",
+          "zh": "仓库数据集"
+        },
+        {
+          "url": "https://github.com/joaofix/fixturedb",
+          "name": "joaofix/fixturedb",
+          "en": "Test fixture dataset",
+          "zh": "测试夹具数据集"
+        },
+        {
+          "url": "https://github.com/Luis24M/vibeSecurity",
+          "name": "Luis24M/vibeSecurity",
+          "en": "Security metrics",
+          "zh": "安全指标"
+        },
+        {
+          "url": "https://github.com/laojiahuo2003/github-daily-report",
+          "name": "laojiahuo2003/github-daily-report",
+          "en": "Daily GitHub report",
+          "zh": "GitHub 日报"
+        },
+        {
+          "url": "https://github.com/arthurspk/guiadoconhecimento",
+          "name": "arthurspk/guiadoconhecimento",
+          "en": "Knowledge guide",
+          "zh": "知识导航"
+        }
+      ]
+    }
+  ],
+  "transferredSections": {
+    "architecture": "<section class=\"block\" id=\"architecture\">\n<h2><span class=\"en\">Architecture</span><span class=\"zh\">架构</span></h2>\n<figure class=\"figure\"><img src=\"/assets/arch.png?v=20261012-guide\" width=\"1800\" height=\"756\" loading=\"lazy\" alt=\"Architecture: VirtuosoClient sends SKILL over TCP to the bridge daemon inside Virtuoso; SSHClient manages tunnels and files; SpectreSimulator runs Spectre separately.\" /></figure>\n<ul class=\"bullets\"><li><span class=\"en\"><strong>VirtuosoClient</strong>: a plain TCP SKILL client. Sends SKILL as JSON and gets results; it knows nothing about SSH.</span><span class=\"zh\"><strong>VirtuosoClient</strong>：纯 TCP 的 SKILL 客户端，以 JSON 发送 SKILL 并取回结果，不关心 SSH。</span></li><li><span class=\"en\"><strong>SpectreSimulator</strong>: runs standalone Spectre locally or over SSH and parses PSF ASCII results into Python data.</span><span class=\"zh\"><strong>SpectreSimulator</strong>：在本机或经 SSH 运行独立 Spectre，把 PSF ASCII 结果解析成 Python 数据。</span></li><li><span class=\"en\"><strong>SSHClient</strong>: resolves the GUI, deployment, daemon and Spectre host roles, keeps a standalone port forward to the daemon host, and runs role-specific commands and transfers over OpenSSH or Paramiko. Skipped in local mode.</span><span class=\"zh\"><strong>SSHClient</strong>：解析 GUI、部署、daemon、Spectre 各主机角色，维持到 daemon 主机的独立端口转发，并通过 OpenSSH 或 Paramiko 执行各角色的命令与文件传输。本机模式下不使用。</span></li></ul>\n<p><span class=\"en\">VirtuosoClient works with any TCP endpoint (SSH tunnel, VPN, LAN or local), and each profile manages its own tunnel to a separate server. To see the raw mechanism, start with <a href=\"https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/src/virtuoso_bridge/virtuoso/basic/resources/ramic_bridge.il\">ramic_bridge.il</a> and <a href=\"https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/src/virtuoso_bridge/virtuoso/basic/bridge.py\">bridge.py</a>.</span><span class=\"zh\">VirtuosoClient 可连接任何 TCP 端点（SSH 隧道、VPN、局域网或本机），每个配置各自管理到一台服务器的隧道。想看底层机制，从 <a href=\"https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/src/virtuoso_bridge/virtuoso/basic/resources/ramic_bridge.il\">ramic_bridge.il</a> 和 <a href=\"https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/src/virtuoso_bridge/virtuoso/basic/bridge.py\">bridge.py</a> 读起。</span></p>\n</section>",
+    "cite": "<section class=\"block\" id=\"cite\">\n<h2><span class=\"en\">Citation</span><span class=\"zh\">引用</span></h2>\n<p><span class=\"en\">If you use Virtuoso Bridge in academic work, please cite:</span><span class=\"zh\">如果在学术工作中使用了 Virtuoso Bridge，请引用：</span></p>\n<div class=\"code\"><div class=\"code-head\"><span>BibTeX</span><button class=\"copy-button js-only\" type=\"button\" data-copy=\"guide-code-4\"><span class=\"en\">Copy</span><span class=\"zh\">复制</span></button></div><pre id=\"guide-code-4\"><code>@article{zhang2025virtuosobridge,\n  title   = {Virtuoso-Bridge: An Agent-Native Bridge for Remote Analog and Mixed-Signal Design Automation},\n  author  = {Zhang, Zhishuai and Li, Xintian and Sun, Nan and Jie, Lu},\n  year    = {2025}\n}</code></pre></div>\n<p><span class=\"en\">Authors: Zhishuai Zhang, Xintian Li, Nan Sun and Lu Jie, Tsinghua University.</span><span class=\"zh\">作者：Zhishuai Zhang、Xintian Li、Nan Sun、Lu Jie（清华大学）。</span></p>\n</section>"
+  },
+  "comparison": {
+    "rows": [
+      {
+        "heading": "<span class=\"en\">Where Virtuoso runs</span><span class=\"zh\">Virtuoso 在哪</span>",
+        "vb": "<span class=\"en\">This machine, or a remote server over SSH (jump hosts too)</span><span class=\"zh\">本机，或通过 SSH 连接远程服务器（支持跳板机）</span>",
+        "sb": "<span class=\"en\">Same machine only: Unix socket or localhost TCP</span><span class=\"zh\">仅限本机：Unix socket 或 localhost TCP</span>"
+      },
+      {
+        "heading": "<span class=\"en\">Schematic, layout, Maestro</span><span class=\"zh\">原理图、版图、Maestro</span>",
+        "vb": "<span class=\"en\"><code>create()</code> / <code>modify()</code> editors, CDF parameters with callbacks, Maestro runs and results</span><span class=\"zh\"><code>create()</code> / <code>modify()</code> 编辑接口、带回调的 CDF 参数设置、Maestro 运行与结果读取</span>",
+        "sb": "<span class=\"en\">Call the SKILL functions yourself</span><span class=\"zh\">自己调用 SKILL 函数</span>"
+      },
+      {
+        "heading": "Spectre",
+        "vb": "<span class=\"en\">Runs netlists locally or over SSH and parses PSF ASCII, no Virtuoso needed</span><span class=\"zh\">本机或经 SSH 跑网表并解析 PSF ASCII，不需要 Virtuoso</span>",
+        "sb": "<span class=\"en\">Not included</span><span class=\"zh\">不包含</span>"
+      },
+      {
+        "heading": "<span class=\"en\">Safety</span><span class=\"zh\">安全与超时</span>",
+        "vb": "<span class=\"en\">Token-signed requests, one at a time, 30 s default timeout; after a timeout it holds new work until replies are back in step, then resumes by itself, no restart</span><span class=\"zh\">请求用令牌签名，一次只跑一个，默认 30 秒超时；超时后先暂停新请求，等回复重新对齐后自动恢复，无需重启</span>",
+        "sb": "<span class=\"en\">No token (relies on local socket access); waits forever by default; after a timeout, replies can fall out of step until restart</span><span class=\"zh\">无令牌（靠本机 socket 权限）；默认无限等待；超时后回复可能错位，需重启</span>"
+      },
+      {
+        "heading": "<span class=\"en\">Built for</span><span class=\"zh\">面向谁</span>",
+        "vb": "<span class=\"en\">AI agents: CLI, agent skills, <code>AGENTS.md</code></span><span class=\"zh\">AI 智能体：命令行、智能体技能、<code>AGENTS.md</code></span>",
+        "sb": "<span class=\"en\">People in Python: Jupyter tab completion, IDE stubs</span><span class=\"zh\">写 Python 的人：Jupyter 补全、IDE 类型存根</span>"
+      },
+      {
+        "heading": "<span class=\"en\">Calling SKILL</span><span class=\"zh\">调用方式</span>",
+        "vb": "<span class=\"en\">SKILL text: <code>execute_skill()</code>, <code>load_il()</code>, <code>virtuoso-bridge eval</code></span><span class=\"zh\">SKILL 文本：<code>execute_skill()</code>、<code>load_il()</code>、<code>virtuoso-bridge eval</code></span>",
+        "sb": "<span class=\"en\">Python style: <code>ws.db.open_cell_view_by_type()</code>, objects mapped both ways</span><span class=\"zh\">Python 风格：<code>ws.db.open_cell_view_by_type()</code>，对象双向映射</span>"
+      },
+      {
+        "heading": "<span class=\"en\">License</span><span class=\"zh\">许可证</span>",
+        "vb": "MIT",
+        "sb": "LGPL-3.0"
+      }
+    ],
+    "intro": "<span class=\"en\">Both run SKILL through the same Virtuoso IPC core (<code>ipcBeginProcess</code> + <code>evalstring</code>). The difference is what sits on top.</span><span class=\"zh\">两者底层相同，都通过 Virtuoso 的 IPC 机制（<code>ipcBeginProcess</code> + <code>evalstring</code>）执行 SKILL，区别在上层。</span>",
+    "note": "<span class=\"en\">skillbridge details checked against its source and docs, version 1.8.0.</span><span class=\"zh\">skillbridge 的信息对照其 1.8.0 版源码和文档核实。</span>"
   }
 }

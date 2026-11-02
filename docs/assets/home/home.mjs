@@ -5,7 +5,7 @@ if (figure) {
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const animations = [];
   const cycle = 4400, entrance = 1800;
-  let visible = false, introduced = false, plane;
+  let visible = false, plane;
 
   function prepareMotion() {
     if (plane) return;
@@ -68,10 +68,6 @@ if (figure) {
     if (running) prepareMotion();
     figure.classList.toggle('system-running', running);
     figure.classList.toggle('system-reduced', reduced.matches);
-    if (running && !introduced) {
-      introduced = true;
-      figure.classList.add('system-enter');
-    }
     for (const animation of animations) {
       if (running && animation.playState !== 'running') animation.play();
       else if (!running && animation.playState === 'running') animation.pause();

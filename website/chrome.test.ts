@@ -24,15 +24,14 @@ describe("shared light website chrome", () => {
     for (const page of pages) {
       for (const target of [
         "https://analog-canvas.tokenzhang.com/",
-        "https://chip-arena.com/",
-        "https://circuits-and-systems.tokenzhang.com/",
+
+
         "https://www.tokenzhang.com/",
         'href="/guide/" data-internal',
-        'href="/guide/#cite" data-internal',
         'href="/privacy/"',
         'href="/analytics/"',
         "Analog Canvas",
-        "CAS Classroom",
+
         "data-visitors",
         "data-views",
       ])
@@ -43,22 +42,23 @@ describe("shared light website chrome", () => {
     }
   });
 
-  it("shows four direct cross-site links and keeps Docs in the utility area", () => {
+  it("places Docs beside the brand and only Analog Canvas and the author on the right", () => {
     for (const page of pages) {
-      const nav = page.match(/<nav class="header-nav(?: project-links)?"[^>]*>[\s\S]*?<\/nav>/)?.[0] ?? "";
-      const actions = page.match(/<div class="header-actions">[\s\S]*?<\/div>/)?.[0] ?? "";
-      expect(nav.match(/class="site-link"/g)).toHaveLength(4);
-      expect(nav).not.toContain("nav-guide");
-      expect(actions).toContain('class="nav-guide"');
-      expect(page).not.toContain("site-switcher");
+      const left = page.match(/<div class="header-left">[\s\S]*?<\/div>/)![0];
+      const nav = page.match(/<nav class="header-nav"[^>]*>[\s\S]*?<\/nav>/)![0];
+      expect(left).toContain('class="brand"');
+      expect(left).toContain('class="nav-guide"');
+      expect(nav.match(/<a /g)).toHaveLength(2);
+      expect(nav).toContain('Analog Canvas');
+      expect(nav).toContain('Presented by');
+      expect(nav).toContain('TokenZhang');
+      expect(page).not.toMatch(/chip-arena.com|circuits-and-systems.tokenzhang.com|related-label/);
       for (const link of nav.match(/<a [\s\S]*?<\/a>/g) ?? []) {
         expect(link).toContain('aria-label="');
         expect(link).toContain('title="');
         expect(link).toContain('target="_blank" rel="noopener"');
-        expect(link).toContain('width="24" height="24"');
       }
     }
-    expect(read("site.js")).not.toContain("siteSwitcher");
   });
 
   it("uses a light default, including the independent dashboard", () => {
@@ -124,9 +124,9 @@ describe("shared light website chrome", () => {
 
   it("lists external projects at the bottom of the home page", () => {
     const landing = pages[0];
-    const section = landing.match(/<section class="block ecosystem" id="ecosystem-index">[\s\S]*?<\/section>/)?.[0];
+    const section = landing.match(/<section class="archive" data-waterfall[\s\S]*?<\/section>/)?.[0];
     expect(section).toBeTruthy();
-    const repos = [...section!.matchAll(/<li><a href="https:\/\/github\.com\/([^"]+)" title="\1">/g)].map((m) => m[1]);
+    const repos = [...section!.matchAll(/<a class="wf-record" href="https:\/\/github\.com\/([^"]+)"/g)].map((m) => m[1]);
     expect(repos.length).toBeGreaterThan(40);
     expect(new Set(repos).size).toBe(repos.length);
     // Same-author projects stay out of the list.
@@ -135,15 +135,14 @@ describe("shared light website chrome", () => {
     expect(landing.indexOf('id="ecosystem"')).toBeGreaterThan(landing.indexOf('id="docs"'));
   });
 
-  it("compares with skillbridge in one labelled table", () => {
-    const table = pages[0].match(/<table class="compare">[\s\S]*?<\/table>/)?.[0];
-    expect(table).toBeTruthy();
-    expect(table).toContain('href="https://github.com/unihd-cag/skillbridge"');
-    // Phones stack each row and show these labels instead of the header row.
-    const rows = table!.match(/<tr>[\s\S]*?<\/tr>/g)!.slice(1);
-    expect(rows.length).toBeGreaterThan(3);
-    for (const row of rows)
-      expect(row.match(/data-label="(Virtuoso Bridge|skillbridge)"/g)).toHaveLength(2);
+  it("labels all comparison entries with their criterion and product", () => {
+    const section = pages[0].match(/<section class="block" id="skillbridge">[\s\S]*?<\/section>/)![0];
+    expect(section).toContain('href="https://github.com/unihd-cag/skillbridge"');
+    expect(section.match(/class="dossier-pair"/g)).toHaveLength(7);
+    for (let i = 0; i < 7; i++) {
+      expect(section).toContain(`aria-labelledby="criterion-${i}-primary vb-heading"`);
+      expect(section).toContain(`aria-labelledby="criterion-${i}-secondary sb-heading"`);
+    }
   });
 
   it("serves the guide as an indexed page that replaces the README body", () => {
@@ -153,7 +152,7 @@ describe("shared light website chrome", () => {
     expect(guide).toContain(
       '<link rel="canonical" href="https://virtuoso-bridge.tokenzhang.com/guide/" />',
     );
-    for (const id of ["install", "config", "cli", "agents", "cite"])
+    for (const id of ["install", "config", "cli", "agents"])
       expect(guide).toContain(`<section class="block" id="${id}">`);
     expect(read("sitemap.xml")).toContain("/guide/");
   });

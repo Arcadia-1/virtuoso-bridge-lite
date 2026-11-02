@@ -71,6 +71,12 @@ uv run --extra dev pytest tests/test_layout_read_lifecycle_live.py -v
 This is native OA lifecycle coverage, not PDK or electrical-equivalence testing.
 The offline generation tests do not substitute for it.
 
+`test_layout_groups_live.py` uses the same isolated headless-session fixture.
+Set `VB_RUN_LAYOUT_GROUP_TESTS=1` and `VB_TEST_VIRTUOSO` on Linux. It creates
+only a private library with generic rectangles, verifies both OA group types,
+membership guards, figGroup transforms and preserve-members ungroup. No PDK,
+existing CIW, layout window or configured Bridge profile is used.
+
 The default run needs only plain Virtuoso and Spectre. Optional variables
 enable more checks:
 
@@ -95,6 +101,16 @@ The repository is public. Never commit host names, user names, home
 directories, license-server details or anything copied from a foundry PDK
 (CDF prompts, versions, layer maps, models). Prefer re-recording from plain
 Virtuoso; otherwise model the behaviour and say so.
+
+## Bounding-Box Native Checks
+
+`test_layout_bbox_live.py` uses the isolated headless-session fixture with
+`VB_RUN_LAYOUT_BBOX_TESTS=1` and `VB_TEST_VIRTUOSO` on Linux. It creates only a
+private layout with generic rectangles, steiners and guides, and checks
+read-only diagnosis, dry-run, unsaved/read-only refusals, preserve-object
+recompute/save, reopen verification, missing targets and failure cleanup.
+It does not fabricate a corrupted OA database or claim to reproduce every
+historical oversized-BBox bug. No user session or PDK is touched.
 
 ## Maestro Engine Configuration Checks
 
