@@ -131,6 +131,24 @@ def test_missing_api_is_checked_before_any_mutation():
     assert code.index('"unsupported" "spectreXPreset"') < code.index("asiSetHighPerformanceOptionVal(vbTest")
 
 
+@pytest.mark.parametrize("engine", ["spectre", "aps"])
+def test_leaving_active_x_validates_original_preset_before_writing(engine):
+    # Generation coverage only: the native ASI behavior is tested separately.
+    client = Client(response(before='("Spectre X" nil)', status="unsupported",
+                             phase="spectreXPreset"))
+    with pytest.raises(MaestroEngineError) as exc:
+        set_engine(client, "T", engine=engine)
+    assert not isinstance(exc.value, MaestroEngineOutcomeUnknown)
+    assert exc.value.before == ["Spectre X", None]
+    code = client.calls[0][0]
+    guard = ('when(vbMode == "Spectre X" '
+             'unless(vbPresetProbe && member(car(vbPresetProbe) '
+             'list("CX" "AX" "MX" "LX" "VX")) ')
+    assert guard in code
+    assert code.index('"unsupported" "spectreXPreset"') < code.index("asiSetHighPerformanceOptionVal(vbTest")
+    assert len(client.calls) == 1
+
+
 def test_readback_failure_after_mutation_is_unknown_with_snapshots():
     client = Client(response(after="nil", status="readback_failed", phase="readback"))
     with pytest.raises(MaestroEngineOutcomeUnknown) as exc:

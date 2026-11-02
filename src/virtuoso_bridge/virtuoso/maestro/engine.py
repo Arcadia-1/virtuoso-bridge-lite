@@ -107,10 +107,12 @@ def _engine_skill(test: str, session: str, engine=None, preset=None) -> str:
     )
     if engine is None:
         return code + f'return(list("{_TAG}" "ok" "read" vbBefore vbAfter)))'
-    if engine == "spectre_x":
-        # A nil/failed preset read is not evidence that this release supports X.
-        code += (f'unless(vbPresetProbe && member(car(vbPresetProbe) list("CX" "AX" "MX" "LX" "VX")) '
-                 f'{fail("unsupported", "spectreXPreset")}) ')
+    # X must be understood both when entering it and when leaving it: otherwise
+    # a write could succeed before Python rejects an unrepresentable old state.
+    preset_required = 't' if engine == "spectre_x" else 'vbMode == "Spectre X"'
+    code += (f'when({preset_required} '
+             f'unless(vbPresetProbe && member(car(vbPresetProbe) list("CX" "AX" "MX" "LX" "VX")) '
+             f'{fail("unsupported", "spectreXPreset")})) ')
     # Set the dormant preset first so an unsupported preset cannot switch the mode.
     assignments = []
     if preset is not None:
