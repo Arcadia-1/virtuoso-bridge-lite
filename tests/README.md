@@ -81,8 +81,11 @@ and runs both worker versions; account/root prerequisites are not simulated.
 | Default single-session compatibility | `test_discovery_compatibility.py` and legacy request tests; live fixed-port connection, restart and pre-discovery upgrade |
 | GUI/daemon/deployment host separation | `test_remote_host_roles.py`: distinct host runners/interpreters, bundle visibility, discovery/restart routing and native GUI process identity; separate physical hosts need site acceptance |
 
-Linux CI runs Python 3.9 and 3.13; the latter also builds pinned CPython 2.7.18
-for worker checks. Obtain green Linux results before merge. Windows cannot
+Linux CI runs Python 3.9 and 3.13 on Ubuntu 24.04; the latter also builds pinned
+CPython 2.7.18 for worker checks. The runner version is explicit so a rolling
+`ubuntu-latest` migration cannot silently change that legacy build's toolchain.
+Obtain green upstream PR checks before merge; fork runs can use different runner
+images when unpinned. Windows cannot
 verify POSIX permissions, `flock` or `/proc` behavior. Offline checks do not
 establish native SKILL, CIW or electrical equivalence; report live results
 separately. `VB_TEST_DAEMON_RESOURCES` selects alternate resources for source

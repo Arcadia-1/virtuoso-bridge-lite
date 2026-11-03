@@ -10,7 +10,9 @@ permissions:
 jobs:
   linux:
     name: Linux / Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    # Keep the native Python 2.7 worker on its validated build environment.
+    # ubuntu-latest can roll out different toolchains to the fork and upstream.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -47,9 +49,10 @@ jobs:
           echo "da3080e3b488f648a3d7a4560ddee895284c3380b11d6de75edb986526b9a814  $RUNNER_TEMP/python27.tgz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/python27.tgz" -C "$RUNNER_TEMP"
           cd "$RUNNER_TEMP/Python-2.7.18"
-          ./configure --prefix="$RUNNER_TEMP/python27" --without-ensurepip > configure.log
-          make -j2 > build.log 2>&1
-          make install > install.log 2>&1
+          gcc --version
+          ./configure --prefix="$RUNNER_TEMP/python27" --without-ensurepip > configure.log 2>&1 || { tail -n 100 configure.log; exit 1; }
+          make -j2 > build.log 2>&1 || { tail -n 100 build.log; exit 1; }
+          make install > install.log 2>&1 || { tail -n 100 install.log; exit 1; }
       - name: Run native checks with actual Python 2.7 workers
         timeout-minutes: 5
         if: matrix.python-version == '3.13'
