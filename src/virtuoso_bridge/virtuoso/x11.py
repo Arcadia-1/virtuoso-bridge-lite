@@ -95,7 +95,7 @@ def _ensure_helper(
         return str(_HELPER_SCRIPT)
     remote_dir = default_virtuoso_bridge_dir(user, "x11", resolve_client_id(profile))
     remote_path = f"{remote_dir}/x11_dismiss_dialog.py"
-    runner.run_command(f"mkdir -p {remote_dir}")
+    runner.run_command(f"mkdir -p {shlex.quote(remote_dir)}")
     runner.upload(_HELPER_SCRIPT, remote_path)
     return remote_path
 

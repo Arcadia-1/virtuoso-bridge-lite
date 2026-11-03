@@ -143,7 +143,6 @@ class DialogOps:
         start/restart a bridge. Missing X11 ownership evidence is indeterminate.
         """
         from virtuoso_bridge.virtuoso import x11
-        from virtuoso_bridge.transport.remote_paths import resolve_remote_username
 
         _timeout(timeout)
         if pid is None:
@@ -162,7 +161,7 @@ class DialogOps:
         try:
             runner = self._owner.gui_runner
             payload = x11.inspect_dialogs(
-                runner, resolve_remote_username(configured_user=getattr(runner, "user", None)),
+                runner, "",
                 pid=target.pid, display=target.display, ciw_window=target.ciw_window,
                 profile=profile, timeout=timeout,
             )

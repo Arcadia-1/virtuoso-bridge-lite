@@ -649,6 +649,12 @@ class SSHRunner:
             return _pid_is_alive(self._tunnel_pid)
         return False
 
+    def detach_port_forward(self) -> None:
+        """Forget an attached forward without terminating its SSH process."""
+        self._tunnel_proc = None
+        self._tunnel_pid = None
+        self._tunnel_using_external = False
+
     @property
     def tunnel_pid(self) -> int | None:
         if self._tunnel_proc is not None and self._tunnel_proc.poll() is None:

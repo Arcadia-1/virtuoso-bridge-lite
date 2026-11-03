@@ -56,13 +56,12 @@ class DialogActionOps:
         return caps
 
     def _exchange(self, payload, deadline):
-        from virtuoso_bridge.transport.remote_paths import resolve_remote_username
         from virtuoso_bridge.virtuoso import x11
 
         owner = self._dialogs._owner
         runner = owner.gui_runner
         return x11.dialog_close_exchange(
-            runner, resolve_remote_username(configured_user=getattr(runner, "user", None)),
+            runner, "",
             payload, profile=getattr(owner._tunnel, "_profile", None),
             timeout=_timeout(deadline - time.monotonic()),
         )

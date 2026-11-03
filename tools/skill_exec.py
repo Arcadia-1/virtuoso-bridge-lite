@@ -26,6 +26,7 @@ import os
 import binascii
 import hashlib
 import hmac
+import re
 
 # IPC protocol markers — must match src/virtuoso_bridge/virtuoso/basic/resources/ramic_bridge_daemon_3.py
 STX = b'\x02'  # start-of-result (success)
@@ -152,6 +153,15 @@ def _validate_caps(caps, token):
         not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0
     ):
         return "daemon handshake payload is malformed (bad virtuoso_pid)"
+    binding = caps.get("instance_bound_requests")
+    if binding is not None and (type(binding) is not int or binding not in (0, 1)):
+        return "daemon handshake payload is malformed (bad instance-bound execution)"
+    bound = type(binding) is int and binding == 1
+    if caps.get("instance_record") and not bound:
+        return "registered daemon lacks instance-bound execution; load an updated bridge bundle"
+    if bound and (not token or not isinstance(caps.get("daemon_instance"), str)
+                  or not re.fullmatch(r"[0-9a-f]{32}", caps["daemon_instance"])):
+        return "daemon handshake payload is malformed (bad instance-bound execution)"
     return None
 
 
@@ -220,10 +230,13 @@ def execute(skill, host="127.0.0.1", port=65432, timeout=60, token=None,
     if token:
         nonce = binascii.hexlify(os.urandom(16)).decode('ascii')
         request["nonce"] = nonce
-        request["mac"] = _mac(
-            token.encode('utf-8'), REQ_DOMAIN, str(PROTO), nonce,
-            '%.6f' % float(timeout), skill,
-        )
+        if caps.get("instance_bound_requests") == 1:
+            request.update(op="execute", daemon_instance=caps["daemon_instance"])
+            parts = (b'vb1-execute', str(PROTO), nonce, caps["daemon_instance"],
+                     '%.6f' % float(timeout), skill)
+        else:
+            parts = (REQ_DOMAIN, str(PROTO), nonce, '%.6f' % float(timeout), skill)
+        request["mac"] = _mac(token.encode('utf-8'), *parts)
     data, error = _exchange(request, host, port, timeout)
     if error:
         return None, error

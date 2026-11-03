@@ -164,6 +164,10 @@ WM_CLASS(STRING) = "virtuoso", "virtuoso"
 def test_bootstrap_refuses_non_ciw_and_injects_only_generated_load(monkeypatch) -> None:
     helper = _load_helper_module()
     typed = []
+    monkeypatch.setattr(helper, "_bounded_check_output", lambda *a, **k:
+                        '_NET_WM_PID(CARDINAL) = 123\nWM_CLIENT_MACHINE(STRING) = "fixture"')
+    monkeypatch.setattr(helper, "_local_hostnames", lambda env: {"fixture"})
+    monkeypatch.setattr(helper, "_read_process_x11_env", lambda pid: {"DISPLAY": ":7"})
 
     monkeypatch.setattr(
         helper,
@@ -199,6 +203,7 @@ def test_bootstrap_refuses_non_ciw_and_injects_only_generated_load(monkeypatch) 
     result = helper.bootstrap_ciw(":7", "0xframe", "/shared/virtuoso_setup.il")
 
     assert "error" not in result
+    assert result["pid"] == 123
     assert typed == [(":7", "0xciw", 'load("/shared/virtuoso_setup.il")')]
 
 
@@ -372,6 +377,8 @@ def test_find_x11_env_decodes_pgrep_pid_bytes(monkeypatch) -> None:
 
 
 class _Runner:
+    _vb_remote_home = "/home/designer"
+
     def __init__(self, stdout_by_marker: dict[str, str]) -> None:
         self.commands: list[str] = []
         self.uploads: list[tuple[Path, str]] = []
@@ -388,8 +395,9 @@ class _Runner:
                 return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    def upload(self, local_path: Path, remote_path: str):
+    def upload(self, local_path: Path, remote_path: str, timeout=None):
         self.uploads.append((local_path, remote_path))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
 
 def test_x11_wrapper_lists_and_dismisses_explicit_window(monkeypatch) -> None:

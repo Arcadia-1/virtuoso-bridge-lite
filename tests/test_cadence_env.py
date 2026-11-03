@@ -136,6 +136,9 @@ def test_docs_search_receives_selected_install_environment(sh_tools, monkeypatch
     # Remove the Finder anchor so CDSHOME is the only evidence for the doc root.
     monkeypatch.setenv("VB_CADENCE_CSHRC_worker", str(sh_tools.selector))
     (sh_tools.install / "bin/virtuoso").unlink()
+    monkeypatch.setattr("virtuoso_bridge.virtuoso.skill_finder.SKILLFinder.discover", lambda *a, **k: None)
+    for key in ("CADENCE_DOC_ROOT", "CADENCE_DOC_ROOTS", "CDS_INST_DIR", "CDS_HOME"):
+        monkeypatch.delenv(key, raising=False)
     assert discover_remote_doc_roots(ShellRunner(), profile="worker") == [str(sh_tools.install / "doc")]
 
 

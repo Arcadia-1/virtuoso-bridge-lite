@@ -197,10 +197,14 @@ class DoctorContext:
         return SSHClient.from_env(keep_remote_files=True, profile=self.profile)
 
     def make_daemon_client(self, port: int, token: Optional[str]) -> Any:
-        return ReadOnlyVirtuosoClient(
+        client = ReadOnlyVirtuosoClient(
             host="127.0.0.1", port=port, timeout=self.timeout, log_to_ciw=False,
             daemon_token=token, max_timeout=self.timeout,
         )
+        if getattr(self.ssh, "_discover_instances", False):
+            client._tunnel = self.ssh
+            client.use_current_selection()
+        return client
 
     def make_docs_client(self) -> Any:
         client = VirtuosoClient(host="127.0.0.1", port=self.ssh.port, tunnel=self.ssh, log_to_ciw=False)
@@ -235,6 +239,13 @@ class DoctorContext:
     def command_hint(self, command: str) -> str:
         return f"virtuoso-bridge {command}" + (f" -p {self.profile}" if self.profile else "")
 
+    def setup_reload_hint(self) -> str:
+        from virtuoso_bridge.instance_discovery import setup_reload_guidance
+        return setup_reload_guidance(
+            self.command_hint("start"),
+            automatic=os.getenv(f"VB_AUTO_SESSIONS{self.suffix}", "").strip() == "1",
+        )
+
     def read_token(self) -> tuple[Optional[str], bool]:
         """The daemon token and whether it came from the local cache.
 
@@ -242,6 +253,8 @@ class DoctorContext:
         provisioned.
         """
         ssh = self.ssh
+        if getattr(ssh, "_discover_instances", False):
+            return ssh.read_daemon_token(), False
         if getattr(ssh, "ssh_runner", None) is None:
             return daemon_auth.read_local_token(), False
         cache = ssh.remote_cache_path()
@@ -251,6 +264,8 @@ class DoctorContext:
         return self.fetch_remote_token(), False
 
     def fetch_remote_token(self) -> Optional[str]:
+        if getattr(self.ssh, "_discover_instances", False):
+            return self.ssh.read_daemon_token()
         runner = self.runner("daemon")
         if runner is None:
             return None
@@ -401,13 +416,12 @@ def _handshake_failure(name: str, ctx: DoctorContext, where: str, error: Excepti
         return CheckResult(
             name, FAIL, f"{where}: the daemon rejected this client's token ({text})",
             "Another user's daemon may hold this port, or the token changed: check "
-            f"`{ctx.command_hint('status')}`, then reload your own daemon with "
-            f"`{ctx.command_hint('restart')}`.",
+            f"`{ctx.command_hint('status')}` and confirm the intended account/CIW before changing it. "
+            + ctx.setup_reload_hint(),
         )
     return CheckResult(
         name, FAIL, f"{where}: handshake failed ({text})",
-        f"Run `{ctx.command_hint('restart')}` (or re-load virtuoso_setup.il in the CIW) "
-        "to run the current daemon.",
+        ctx.setup_reload_hint(),
     )
 
 
@@ -443,17 +457,36 @@ def check_daemon(ctx: DoctorContext) -> CheckResult:
         return CheckResult(name, WARN, "the saved tunnel state names no port", start_fix)
     where = f"local daemon port {port}" if local else f"tunnel to {ctx.target} (local port {port})"
 
+    automatic = getattr(ctx.ssh, "_discover_instances", False)
+    if automatic:
+        from virtuoso_bridge.instance_discovery import validate_record
+        try:
+            rows = ctx.ssh.list_instances()
+            if ctx.ssh.use_legacy_endpoint(rows):
+                automatic = False
+            else:
+                record = validate_record(ctx.ssh.instance_record)
+                if record not in rows:
+                    raise ValueError("saved instance is no longer live")
+                if record["port"] != (ctx.state or {}).get("remote_port"):
+                    raise ValueError("saved endpoint differs from selected instance")
+        except (ValueError, RuntimeError) as exc:
+            ctx.skill_blocker = "selected instance is not verified"
+            return CheckResult(name, FAIL, str(exc),
+                               "Use sessions and start to select explicitly. Doctor does not retarget.")
+
     token, from_cache = ctx.read_token()
     if token is None and not local and ctx.ssh_failed(ctx.roles.daemon_host):
         ctx.skill_blocker = "SSH to the daemon host failed"
         return _ssh_failure(name, ctx, ctx.roles.daemon_host)
-    if token is None and not daemon_auth.allow_unauthenticated():
+    if token is None and (automatic or not daemon_auth.allow_unauthenticated()):
         ctx.skill_blocker = "no bridge token was found"
         token_home = "this machine" if local else ctx.roles.daemon_host
         return CheckResult(
             name, FAIL, f"{where} running, but no valid bridge token in "
             f"~/.virtuoso-bridge/bridge_token on {token_home}",
-            f"Run `{ctx.command_hint('restart')}`; start provisions the token, doctor only reads it.",
+            f"Run `{ctx.command_hint('start')}` to provision the token; doctor only reads it. "
+            + ctx.setup_reload_hint(),
         )
     client = ctx.make_daemon_client(port, token)
     ctx.daemon_client = client
@@ -479,7 +512,7 @@ def check_daemon(ctx: DoctorContext) -> CheckResult:
         facts.append("the daemon runs WITHOUT token authentication")
         fixes.append(
             f"Unset {daemon_auth.UNAUTH_OPTIN_ENV} and {daemon_auth.DAEMON_UNAUTH_OPTIN_ENV}, "
-            f"then `{ctx.command_hint('restart')}`."
+            "in the client and the Virtuoso launch environment. " + ctx.setup_reload_hint()
         )
     lane = _describe_lane(caps)
     if lane:
@@ -500,8 +533,8 @@ def check_daemon(ctx: DoctorContext) -> CheckResult:
         ctx.skill_blocker = "the daemon's owner was not verified"
         return CheckResult(
             name, FAIL, "; ".join(facts + [check.error]),
-            f"Make the tunnel reach your own daemon (check VB_REMOTE_PORT{ctx.suffix}, then "
-            f"`{ctx.command_hint('restart')}`); set {OVERRIDE_ENV}=1 only if this cross-user "
+            f"Make the tunnel reach your own daemon (check VB_REMOTE_PORT{ctx.suffix} and "
+            f"`{ctx.command_hint('status')}`); set {OVERRIDE_ENV}=1 only if this cross-user "
             "connection is intentional.",
         )
     elif check.skipped:
@@ -543,14 +576,14 @@ def check_listen_address(ctx: DoctorContext) -> CheckResult:
         output, _reason = ctx.skill(BIND_QUERY)
         bind = clean_skill_output(output)
         source = "RBLastBind in the CIW"
-    opt_out = (f"Remove {key}=1 unless clients connect without an SSH tunnel, then run "
-               f"`{ctx.command_hint('restart')}`.")
+    opt_out = (f"Remove {key}=1 unless clients connect without an SSH tunnel. "
+               + ctx.setup_reload_hint())
     if bind:
         host = bind.rsplit(":", 1)[0].strip("[]")
         if host not in ("127.0.0.1", "localhost", "::1"):
             fix = opt_out if listen_all else (
-                f"The daemon was started by an older setup; `{ctx.command_hint('restart')}` "
-                "reloads it on 127.0.0.1.")
+                "The loaded daemon still uses listen-all settings; changing the client configuration "
+                "does not change its listener. " + ctx.setup_reload_hint())
             return CheckResult(name, WARN, f"the daemon listens on {bind} ({source}), not only "
                                "on loopback", fix)
         if listen_all:
@@ -654,10 +687,8 @@ def check_scratch_dir(ctx: DoctorContext) -> CheckResult:
         default_virtuoso_bridge_dir,
         private_dirs_below,
         remote_scratch_root,
-        resolve_client_id,
         resolve_remote_username,
     )
-    from virtuoso_bridge.transport.tunnel import _profiled_bridge_leaf
 
     host = ctx.roles.deploy_host
     if _is_localhost(host):
@@ -671,11 +702,18 @@ def check_scratch_dir(ctx: DoctorContext) -> CheckResult:
         return skipped
     result = None
     try:
-        # The same directory `start` deploys into (`whoami` without VB_REMOTE_USER).
-        user = resolve_remote_username(configured_user=ctx.roles.remote_user, runner=runner)
-        root = remote_scratch_root()
-        work_dir = default_virtuoso_bridge_dir(
-            user, _profiled_bridge_leaf(ctx.profile), resolve_client_id(ctx.profile))
+        from virtuoso_bridge.transport.tunnel import _profiled_bridge_leaf
+        from virtuoso_bridge.transport.remote_paths import resolve_client_id
+        automatic = getattr(ctx.ssh, "_discover_instances", False)
+        if automatic:
+            from virtuoso_bridge.transport.remote_paths import instance_scratch_root
+            root = instance_scratch_root(runner)
+            work_dir = root + "/daemon"
+        else:
+            user = resolve_remote_username(configured_user=ctx.roles.remote_user, runner=runner)
+            root = remote_scratch_root()
+            work_dir = default_virtuoso_bridge_dir(
+                user, _profiled_bridge_leaf(ctx.profile), resolve_client_id(ctx.profile))
         paths = private_dirs_below(root, work_dir)
         if not runner.transport_error:
             result = runner.run_command(scratch_inspection_script(paths))
