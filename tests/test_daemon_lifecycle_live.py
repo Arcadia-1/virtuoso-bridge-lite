@@ -272,6 +272,8 @@ def test_full_upgrade_from_isolated_legacy_fixed_daemon(sessions, tmp_path, monk
     target["pids"].append(int(target["evaluate"]("RBLastPid")))
     assert target["evaluate"]("6*7") == "42"
     assert config.read_text() == original_config
+    legacy_setup = Path(transport.existing_setup_path())
+    legacy_bytes = legacy_setup.read_bytes()
     # Deliberately opt into a registered session and remove the old fixed
     # endpoint constraint. A normal reconnect never performs this migration.
     config.write_text("VB_REMOTE_HOST=localhost\nVB_AUTO_SESSIONS=1\nVB_REMOTE_SCRATCH_ROOT="
@@ -279,7 +281,15 @@ def test_full_upgrade_from_isolated_legacy_fixed_daemon(sessions, tmp_path, monk
     monkeypatch.delenv("VB_REMOTE_PORT", raising=False)
     monkeypatch.setenv("VB_AUTO_SESSIONS", "1")
     transport = tunnel.SSHClient.from_env(keep_remote_files=True, read_selection=False)
+    # Opting into discovery does not authorize overwriting a different bundle.
+    with pytest.raises(RuntimeError, match="--replace-setup"):
+        transport.ensure_local_setup()
+    assert legacy_setup.read_bytes() == legacy_bytes
+    transport.allow_setup_replacement()
     transport.ensure_local_setup()
+    backups = list(legacy_setup.parent.parent.glob(".local-recover-*"))
+    assert len(backups) == 1
+    assert (backups[0] / legacy_setup.name).read_bytes() == legacy_bytes
     setup = transport.existing_setup_path()
     assert setup
     # Operator stop/wait/load, scheduled once in this fixture-owned CIW.

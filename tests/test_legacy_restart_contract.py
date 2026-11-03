@@ -135,4 +135,4 @@ def test_registered_cli_restart_help_explains_no_reload():
     entrypoint = Path(sys.executable).parent / ("virtuoso-bridge.exe" if os.name == "nt" else "virtuoso-bridge")
     result = subprocess.run([str(entrypoint), "restart", "--help"], capture_output=True,
                             text=True, timeout=15, check=True)
-    assert "loaded code/settings (no reload or upgrade)" in " ".join(result.stdout.split())
+    assert "without deploying files or reloading setup" in " ".join(result.stdout.split())

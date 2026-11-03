@@ -21,7 +21,9 @@ replacement without replaying an uncertain request. `RBStopAll()` now stops only
 that CIW's tracked child.
 Positive-port monitor changes preserve legacy mode, including old unbound
 authenticated requests. Legacy restart preserves saved setup/identity paths
-and uses the loaded code/settings. Configuration changes and upgrades require
+and reuses the current SKILL loader, settings and worker path without deploying
+files or reloading setup. The new worker reads code at that path, which a prior
+deployment may have changed. Configuration changes and full upgrades require
 an explicit prepare, stop/wait, load and reconnect sequence; CLI and doctor
 now describe that sequence consistently.
 
@@ -29,7 +31,7 @@ In automatic mode, generated bootstraps use `/tmp/virtuoso_bridge_<user>/daemon`
 `runs/`. `start --replace-setup` explicitly replaces a differing generated bundle
 and retains its predecessor. `VB_DAEMON_SETUP` selects a versioned shared
 installation, which clients never overwrite. Running CIWs need an explicit load
-to use newly staged code.
+to use a new setup or SKILL loader.
 
 Shared bundle installation is now packaged as
 `virtuoso-bridge install-daemon DESTINATION --python /usr/bin/python3`, run on

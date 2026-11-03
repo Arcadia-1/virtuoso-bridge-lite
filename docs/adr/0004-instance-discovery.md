@@ -126,14 +126,16 @@ Stop never deletes shared code.
 Registered restart authenticates the selected CIW, verifies its Linux birth
 identity, sends one bounded timer request and authenticates the replacement.
 Legacy restart uses old RBStop/RBStart with a bounded exit wait and verifies the
-same CIW birth/PID and a changed authenticated daemon identity. Neither reloads
-newly staged code or retries an uncertain request. Polling uses bounded backoff;
-busy lanes and identity changes refuse restart.
+same CIW birth/PID and a changed authenticated daemon identity. Neither deploys
+files, reloads the setup or retries an uncertain request. The current SKILL
+loader, settings and worker path are reused; the new Python worker reads files
+at that path, so a prior deployment can change its code. Polling uses bounded
+backoff; busy lanes and identity changes refuse restart.
 Legacy restart retains the saved setup and identity paths for the same endpoint.
 Configuration edits (including listen-all to loopback) and code upgrades require
 preparing the setup, explicitly stopping the idle CIW's tracked child, waiting
 for exit, loading the exact prepared setup, and reconnecting. CLI and doctor
-guidance use this contract; restart alone does not apply these changes.
+guidance use this contract; restart alone does not reload the setup.
 
 CIW process birth/ownership checks run on the configured GUI host, using that
 host's authenticated account UID rather than the daemon host's numeric UID.

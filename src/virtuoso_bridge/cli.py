@@ -425,8 +425,9 @@ def _restart_daemon_one(profile: str | None) -> bool:
     try:
         ssh.restart_instance()
         print(f"Daemon restarted{label}; replacement instance authenticated at port {ssh.remote_port}.")
-        print("Loaded code and settings were retained. Configuration/code changes require an explicit "
-              "stop/wait/load of the prepared setup; see the connection guide's Status and restart section.")
+        print("Restart did not deploy files or reload the setup. It reused the current loader, settings "
+              "and worker path; the new worker reads files at that path. To apply a prepared setup, "
+              "use the explicit stop/wait/load sequence in the connection guide's Status and restart section.")
         return True
     except Exception as exc:
         print(f"[restart] {exc}")
@@ -2081,7 +2082,7 @@ def build_parser() -> argparse.ArgumentParser:
     for name, hlp in [
         ("start", "Start SSH tunnel + deploy daemon"),
         ("stop", "Stop the SSH tunnel"),
-        ("restart", "Restart the selected daemon using loaded code/settings (no reload or upgrade)"),
+        ("restart", "Restart the selected daemon without deploying files or reloading setup"),
         ("status", "Check tunnel + daemon status"),
         ("sessions", "List discovered Virtuoso sessions without connecting"),
         ("license", "Check Spectre license availability"),

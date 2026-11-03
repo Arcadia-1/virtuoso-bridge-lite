@@ -251,7 +251,8 @@ in one directory require `start --port PORT`.
 
 If no endpoint is available, `start` prints a `load("...")` instruction. Load it
 in the intended idle CIW, then rerun `start`. Add the load line to `.cdsinit` for
-future sessions. Uploaded code takes effect only after it is loaded in Virtuoso.
+future sessions. A new setup or SKILL loader requires an explicit load in
+Virtuoso; a restarted Python worker reads code from its configured path.
 
 ### Connecting on a fixed port
 
@@ -438,9 +439,11 @@ trusted-program-directory policy.
 
 `status` authenticates the selected instance without sending SKILL and checks
 Spectre independently. `restart` schedules one stop/wait/start in the selected
-idle CIW, then authenticates its replacement. It uses the loaded configuration;
-it does not load newly deployed files. After an uncertain result, inspect the
-original outcome before requesting another restart.
+idle CIW, then authenticates its replacement. It reuses the current SKILL loader,
+settings and worker path without deploying files or reloading the setup. The new
+Python worker reads files at that path, so a prior deployment can change its
+code. After an uncertain result, inspect the original outcome before requesting
+another restart.
 
 To apply configuration changes or upgrade code in legacy mode:
 
@@ -458,6 +461,10 @@ settings before the same stop/wait/load sequence; then use `sessions` and
 `start --port PORT` to explicitly select the new instance. An already connected
 automatic `start --replace-setup` may only reconnect, so it is not a guaranteed
 code deployment step. Reconcile any uncertain outcome before another action.
+An older local generated directory with permissions other than 0700 remains
+rejected by automatic publication; use a new protected versioned bundle.
+New local generated directories use 0700, and differing contents still require
+explicit replacement. Existing directory permissions are not changed.
 
 Restart preserves legacy setup/identity paths. Monitor Local or daemon-log
 changes at a positive port preserve the current legacy/registered mode.

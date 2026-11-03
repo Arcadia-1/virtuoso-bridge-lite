@@ -10,7 +10,7 @@ INSTANCE_COLUMNS = "port / Virtuoso PID / working directory / instance"
 
 
 def setup_reload_guidance(start_command: str = "virtuoso-bridge start", *, automatic: bool = False) -> str:
-    """Describe an explicit reload, distinct from restarting loaded code."""
+    """Describe setup deployment/reload, distinct from restarting a worker."""
     prepare = (
         "Install a new protected versioned bootstrap with install-daemon, keeping the same registry root. "
         if automatic else f"Run `{start_command}` to prepare the updated fixed-port setup. "
@@ -22,7 +22,8 @@ def setup_reload_guidance(start_command: str = "virtuoso-bridge start", *, autom
     return ("Keep the original --env and profile options for client commands. " + prepare
             + "In the intended idle CIW, call RBStop(), wait until its tracked child has exited, "
             "then load the exact prepared setup path. " + reconnect
-            + "A plain restart reuses the loaded code and settings; it does not reload or upgrade them. "
+            + "A plain restart does not deploy files or reload the setup. It reuses the current "
+            "loader, settings and worker path; the new worker reads files at that path. "
             "If an action's outcome is uncertain, reconcile it before submitting another action.")
 
 

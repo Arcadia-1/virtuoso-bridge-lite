@@ -1183,7 +1183,7 @@ class SSHClient:
             work_dir = state_dir() / f"local_{self._profile}"
         else:
             work_dir = state_dir() / "local"
-        work_dir.mkdir(parents=True, exist_ok=True)
+        work_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
 
         # Copy daemon and IL files into the work directory
         local_daemon = work_dir / daemon_local.name
@@ -1455,9 +1455,12 @@ class SSHClient:
             raise InstanceSelectionError(
                 'No valid Virtuoso instance found under %r. Check the daemon RB_SCRATCH_ROOT / '
                 'VB_REMOTE_SCRATCH_ROOT and client root agree.\n'
-                'Run virtuoso-bridge restart, or load("%s") in the intended CIW. '
+                'In the intended idle CIW, if a tracked daemon child exists, call RBStop() once '
+                'and wait for it to exit. Then load("%s"). '
                 'Add that load line to .cdsinit for future sessions.\n'
-                'Then run virtuoso-bridge start again.' % (self._instance_root(), self.setup_path))
+                'Reconcile any uncertain outcome before another action. '
+                'Then run virtuoso-bridge start again with the original --env and profile options.'
+                % (self._instance_root(), self.setup_path))
         self.instance_record = record
         self._legacy_fallback = False
         self._port = record["port"]
@@ -1705,7 +1708,7 @@ class SSHClient:
         return result
 
     def _restart_legacy_instance(self, timeout: float) -> None:
-        """Restart loaded code/settings once; retain the exact endpoint's paths.
+        """Restart using the current loader/settings; retain the endpoint's paths.
 
         Reloading a staged setup is a separate, explicit stop/wait/load action.
         A restart never deploys files or applies edits to the client environment.

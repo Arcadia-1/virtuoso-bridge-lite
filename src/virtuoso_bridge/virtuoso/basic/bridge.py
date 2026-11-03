@@ -2089,7 +2089,7 @@ let((result winName ciwNum)
             raise daemon_auth.DaemonAuthError(
                 "daemon sent an unparseable capability payload — it predates "
                 "bridge token auth; prepare updated code, then explicitly stop/wait/load "
-                "the setup in the intended idle CIW. A plain restart does not upgrade code"
+                "the setup in the intended idle CIW. A plain restart does not deploy files or reload the setup"
             )
         if not isinstance(caps, dict):
             raise daemon_auth.DaemonAuthError(
@@ -2176,7 +2176,7 @@ let((result winName ciwNum)
                 "daemon did not answer the bridge capability handshake — it "
                 "predates bridge token auth or runs with auth disabled; prepare an updated "
                 "setup, then explicitly stop/wait/load it in the intended idle CIW. "
-                "A plain restart does not upgrade code"
+                "A plain restart does not deploy files or reload the setup"
             )
         if raw[:1] != b"\x02":
             raise daemon_auth.DaemonAuthError(
@@ -2200,7 +2200,7 @@ let((result winName ciwNum)
                 raise daemon_auth.DaemonAuthError(
                     "daemon did not authenticate its handshake response — "
                     "prepare an updated setup, then explicitly stop/wait/load it in the "
-                    "intended idle CIW. A plain restart does not upgrade code"
+                    "intended idle CIW. A plain restart does not deploy files or reload the setup"
                 )
             if not daemon_auth.allow_unauthenticated():
                 raise daemon_auth.DaemonAuthError(

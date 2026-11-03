@@ -410,7 +410,7 @@ _LEGACY_DAEMON_MSG = (
     "daemon did not authenticate its response — it predates bridge "
     "token auth or runs with auth disabled; prepare an updated setup, then in "
     "the intended idle CIW call RBStop(), wait for the tracked child to exit, "
-    "and load the prepared setup. A plain restart does not reload or upgrade code"
+    "and load the prepared setup. A plain restart does not deploy files or reload the setup"
 )
 
 

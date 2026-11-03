@@ -26,7 +26,7 @@ def test_upgrade_guidance_requires_explicit_reload(registered):
     message = compatibility_message(caps)
     assert "RBStop()" in message and "tracked child has exited" in message
     assert "load the exact prepared setup path" in message
-    assert "does not reload or upgrade" in message
+    assert "does not deploy files or reload the setup" in message
     assert "reconcile it before submitting another action" in message
     if registered:
         assert "install-daemon" in message and "start --port PORT" in message
