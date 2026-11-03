@@ -26,6 +26,7 @@ def test_maestro_ops_exposes_every_public_client_bound_operation() -> None:
         "set_var", "get_var", "delete_var", "get_parameter", "set_parameter",
         "set_env_option", "set_sim_option", "set_corner", "setup_corner", "load_corners",
         "set_current_run_mode", "set_job_control_mode", "set_job_policy",
+        "get_engine", "set_engine",
         "run_simulation", "run_and_wait", "create_netlist_for_corner",
         "export_output_view", "write_script", "migrate_adel_to_maestro",
         "migrate_adexl_to_maestro", "save_setup", "open_maestro_gui_with_history",

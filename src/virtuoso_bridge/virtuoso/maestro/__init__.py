@@ -1,5 +1,10 @@
 """Maestro (ADE Assembler) session management, config reading, and writing."""
 
+from virtuoso_bridge.virtuoso.maestro.engine import (
+    MaestroEngineConfig, MaestroEngineChangeResult, MaestroEngineError,
+    MaestroEngineOutcomeUnknown, get_engine, set_engine,
+)
+
 from virtuoso_bridge.virtuoso.maestro.lifecycle import (
     open_session,
     close_session,
@@ -104,6 +109,8 @@ from virtuoso_bridge.virtuoso.maestro.waveform_viewer import (
 from virtuoso_bridge.virtuoso.maestro.ops import MaestroOps
 
 __all__ = [
+    "MaestroEngineConfig", "MaestroEngineChangeResult", "MaestroEngineError",
+    "MaestroEngineOutcomeUnknown", "get_engine", "set_engine",
     "MaestroOps",
     # session
     "open_session",

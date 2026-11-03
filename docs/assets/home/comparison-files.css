@@ -1,0 +1,34 @@
+/* Paired comparison: two continuous archive leaves, matching group headings on each leaf. */
+.refined .band-skillbridge{background:linear-gradient(#fff 120px,#f2f6f8 450px)}
+.refined #skillbridge .dossier-book{position:relative;isolation:isolate;margin-top:30px;padding:0 30px 12px}
+.refined #skillbridge .dossier-book:before,.refined #skillbridge .dossier-book:after{content:'';position:absolute;top:0;bottom:0;z-index:-1;border:1px solid #bfccd3;box-shadow:2px 3px 0 #f8fbfc,3px 4px 0 #c3d0d8,6px 7px 0 #e4ebee,7px 8px 0 #bccbd4,12px 16px 20px -16px #1f3e4c45}
+.refined #skillbridge .dossier-book:before{left:0;width:calc(50% - 14px);background:linear-gradient(90deg,#dce5e9 0,#edf2f4 3px,#fffef9 12px,#fffef9 calc(100% - 3px),#e2e9e9);border-top:3px solid #ba4b28}
+.refined #skillbridge .dossier-book:after{right:0;width:calc(50% - 14px);background:linear-gradient(90deg,#ccdce5 0,#dfeaf0 3px,#edf4f8 12px,#edf4f8 calc(100% - 3px),#d8e5ec);border-top:3px solid #8faab9}
+.refined #skillbridge .dossier-titles{display:grid;grid-template-columns:1fr 1fr;gap:72px;position:relative}
+.refined #skillbridge .file-title{position:relative;display:flex;align-items:center;min-height:99px;padding:13px 0 12px;border-bottom:1px solid #b8cad4}
+.refined #skillbridge .file-title:before{content:'';position:absolute;top:-14px;left:-17px;width:108px;height:13px;background:#f5f7f3;border:1px solid #bdcbd2;border-bottom:0;border-radius:5px 11px 0 0;z-index:-2}
+.refined #skillbridge .secondary-title:before{background:#e3edf3;border-color:#b5c8d3}
+.refined #skillbridge .file-title h3{font-size:33px;font-weight:780;letter-spacing:-1px;line-height:1.08;margin:0;position:relative;z-index:1}
+.refined #skillbridge .primary-title h3{max-width:calc(100% - 145px)}
+.refined #skillbridge .secondary-title h3{color:#536c7a;font-size:33px}
+.refined #skillbridge .file-watermark{position:absolute;right:1px;top:12px;width:100px;height:70px;object-fit:contain;opacity:.075;pointer-events:none;user-select:none}
+.refined #skillbridge .dossier-pair{display:grid;grid-template-columns:1fr 1fr;gap:72px;padding:0}
+.refined #skillbridge .dossier-pair h4{display:block;margin:0 0 6px;font-family:'Courier New',Courier,'Microsoft YaHei',monospace;font-size:15px;font-weight:700;line-height:1.45;letter-spacing:.2px;color:#3c5e70}
+
+.refined #skillbridge .file-value{min-width:0;padding:9px 0 10px;border-bottom:1px solid #c6d4dc}.refined #skillbridge .dossier-pair:last-child .file-value{border-bottom:0}
+.refined #skillbridge .file-value p{font-size:15.5px;font-weight:400;line-height:1.65;letter-spacing:.005em;margin:0 0 0 32px;color:#294452}
+.refined #skillbridge .secondary-value p{color:#496372;font-weight:400}
+.refined #skillbridge .file-value code{font-size:.92em;font-weight:inherit}
+
+@media(max-width:1000px){.refined #skillbridge .dossier-book{padding-inline:24px}.refined #skillbridge .dossier-titles,.refined #skillbridge .dossier-pair{column-gap:60px}.refined #skillbridge .file-title h3,.refined #skillbridge .secondary-title h3{font-size:30px}.refined #skillbridge .file-watermark{width:100px}.refined #skillbridge .primary-title h3{max-width:calc(100% - 95px)}}
+@media(max-width:700px){.refined #skillbridge .dossier-book{margin-top:28px;padding:0 12px 12px}.refined #skillbridge .dossier-book:before,.refined #skillbridge .dossier-book:after{width:calc(50% - 7px);box-shadow:2px 3px #f6fafc,3px 4px #bdcbd4}.refined #skillbridge .dossier-titles,.refined #skillbridge .dossier-pair{column-gap:34px}.refined #skillbridge .file-title{min-height:110px;padding:15px 0}.refined #skillbridge .file-title:before{left:-3px;width:68px;height:10px;top:-11px}.refined #skillbridge .file-title h3,.refined #skillbridge .secondary-title h3{font-size:23px;letter-spacing:-.7px}.refined #skillbridge .primary-title h3{max-width:none}.refined #skillbridge .file-watermark{width:67px;height:53px;top:auto;bottom:6px;right:0;opacity:.06}.refined #skillbridge .file-value{padding:12px 0 13px}.refined #skillbridge .dossier-pair h4{font-size:14px;line-height:1.55;letter-spacing:0}.refined #skillbridge .file-value p{font-size:14px;line-height:1.75;margin-left:0}.refined #skillbridge .file-value code{font-size:.9em}}
+
+
+
+.refined #skillbridge .file-value p{margin-left:0}
+
+.refined #skillbridge .file-value code{background:none;color:inherit;overflow-wrap:anywhere}
+.refined #skillbridge .file-title a{color:inherit;text-decoration:none}
+.refined #skillbridge .file-title a:hover{text-decoration:underline;text-underline-offset:5px}
+.refined #skillbridge>.note{font-size:12px;line-height:1.7;margin-top:14px}
+.refined #skillbridge .file-title h3{margin:0}

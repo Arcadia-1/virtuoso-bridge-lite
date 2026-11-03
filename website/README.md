@@ -8,23 +8,52 @@ HTML: edit it directly.
 website package. `npm run preview` serves the full site with local Cloudflare
 Durable Object storage. It does not connect to Cadence.
 
-The homepage uses the compact shared layout and original architecture illustration,
-with small warm-paper and orange accents. Its first screen names the Lite core:
-Spectre simulation and PDK/CDF callbacks, everyday schematic/symbol/GDS operations,
-and raw SKILL for the rest. Advanced configuration remains optional.
-All pages keep the same product links, language switch and analytics footer,
-checked by `chrome.test.ts`. Homepage-only styles and modules live in
-`docs/assets/home/` and are copied by the regular build, with no prototype
-dependency. Edit `docs/index.html` directly. The complete ecosystem index stays
-expanded and works without JavaScript. It is the single content source for
-three project examples and bilingual name/keyword search; category links jump
-to the original groups and clear any active search. `homepage-content.json`
+The homepage uses a cool paper archive layout, a staggered two-line headline,
+and a signal diagram from AI agent through the bridge to three tools. SKILL/CLI
+sits with the bridge. Spectre, Virtuoso and Maestro appear from left to right,
+with local/remote and non-live illustration captions. The render-blocking CSS
+starts the route entrance before the first paint, independently of module timing;
+it completes even if the module fails. No-script and reduced-motion readers see
+a complete static illustration. Signal geometry is sampled once; small
+transform/opacity layers animate over the SVG, pausing offscreen and in hidden tabs.
+The first screen names the Lite core: Spectre simulation and PDK/CDF callbacks,
+everyday schematic/symbol/GDS operations, and raw SKILL for the rest.
+Advanced configuration remains optional.
+All public pages keep Docs beside the brand and Analog Canvas, Presented by
+TokenZhang, issue reporting, GitHub and the language switch on the right.
+The analytics footer is unchanged. Homepage styles and modules live in
+`docs/assets/home/` and are copied by the regular build. Edit `docs/index.html`
+directly: all 53 project cards, descriptions and destinations are static HTML,
+organized into five columns. There is no separate detail panel or index. Architecture and Citation follow as
+sections 05/06, moved verbatim from the guide; old guide anchors redirect to them.
+The comparison uses paired archive leaves with matching typewriter criterion headings
+and unweighted body text on both sides. Quick start and Citation share light paper
+cards, orange tabs and typewriter format labels; their content and copy targets are
+unchanged. All six section headings share the same responsive type size.
+All five columns fit desktop widths. Selecting a collection pans it into the center
+with the same eased transition at every width. Repeated side sets prevent blank
+edges; only the outer half-column on each side has graduated blur.
+Each column supports native vertical wheel/touch scrolling (without visible
+scrollbars) and keyboard links,
+even without JavaScript. On approach to the viewport, the script adds two
+presentation copies per column for a seamless 20-pixel-per-second downward loop. Copies are
+excluded from the accessibility tree and tab order. Hovering lifts a card without enlarging it and keeps the wall moving.
+Keyboard focus on a project pauses motion. Previous/next buttons at the sides
+center the adjacent collection and stay synchronized with the category labels. Touch interaction persists a
+pause so that users can scroll or select a card without the wall moving.
+Pause/Resume is available to mouse, keyboard and touch. Explicit pause persists
+across language changes and leaving the wall. Reduced motion disables automatic
+scrolling but retains manual access to every card. Offscreen and hidden-tab
+motion stops. Category anchors remain valid, including existing deep links.
+`homepage-content.json`
 records original destinations
-and section text hashes to prevent accidental omissions during layout changes;
+bilingual project records and section text hashes to prevent accidental omissions during layout changes;
 update it deliberately when changing actual product content.
-Run `node test-header.mjs [site URL]` and `node test-homepage.mjs [site URL]`
-for browser regressions, with Playwright available via `PLAYWRIGHT_MODULE_PATH`
-if it is not installed locally. These checks opt out of visitor tracking.
+Run `node test-header.mjs [site URL]`, `node test-homepage.mjs [site URL]`,
+`node test-archive.mjs [site URL]` and `node test-home-motion.mjs [site URL]`
+for browser regressions. The motion check covers signal lifecycle and route
+alignment, including delayed-module first-paint checks. Set `PLAYWRIGHT_MODULE_PATH` if Playwright is not installed locally.
+These checks opt out of visitor tracking.
 `docs/favicon.svg` and `docs/assets/mark.svg` hold the italic VB mark (the favicon
 turns white in dark browser tabs); the PNG icons and social preview
 are derived assets and must be regenerated when the mark changes.

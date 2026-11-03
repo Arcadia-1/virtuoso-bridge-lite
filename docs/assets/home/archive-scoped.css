@@ -1,0 +1,12 @@
+/* Interaction defaults scoped to the project archive. */
+@scope (.ecosystem-area) {
+  *{box-sizing:border-box}
+  button{font:inherit;cursor:pointer}
+  button,a{touch-action:manipulation}
+  a{color:inherit;text-underline-offset:5px}
+  button:focus-visible,a:focus-visible{outline:2px solid var(--orange);outline-offset:5px}
+  [hidden]{display:none!important}
+  @media(prefers-reduced-motion:reduce){
+    *,*:before,*:after{transition:none!important;animation:none!important;scroll-behavior:auto!important}
+  }
+}

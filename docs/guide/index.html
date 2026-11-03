@@ -31,7 +31,12 @@
         document.documentElement.lang = l === "zh" ? "zh-CN" : "en";
       } catch (e) {}
     </script>
-    <link rel="stylesheet" href="/site.css?v=20261018-lite" />
+    <link rel="stylesheet" href="/site.css?v=20261030-wall" />
+    <script>
+      if (['#architecture', '#cite'].includes(location.hash)) {
+        location.replace('/?lang=' + document.documentElement.dataset.lang + location.hash);
+      }
+    </script>
     <script src="/site.js?v=20261013-navigation" defer></script>
     <script type="module" src="/analytics/track.js?v=20261012-light"></script>
   </head>
@@ -42,7 +47,7 @@
     >
     <header class="site-header">
       <div class="wrap header-inner">
-        <a
+        <div class="header-left"><a
           class="brand"
           href="/"
           data-internal
@@ -53,27 +58,7 @@
             height="24"
             alt=""
           /><span>Virtuoso Bridge</span></a
-        >
-        <nav class="header-nav" aria-label="Related sites / 相关网站">
-          <a class="site-link" href="https://analog-canvas.tokenzhang.com/" target="_blank" rel="noopener" aria-label="Analog Canvas" title="Analog Canvas">
-            <span class="site-link-logo" aria-hidden="true"><img src="/assets/analog-canvas.svg" width="24" height="24" alt="" /></span>
-            <span class="site-link-label">Analog Canvas</span>
-          </a>
-          <a class="site-link" href="https://chip-arena.com/" target="_blank" rel="noopener" aria-label="Chip Arena" title="Chip Arena">
-            <span class="site-link-logo" aria-hidden="true"><img src="/assets/chip-arena.svg" width="24" height="24" alt="" /></span>
-            <span class="site-link-label">Chip Arena</span>
-          </a>
-          <a class="site-link" href="https://circuits-and-systems.tokenzhang.com/" target="_blank" rel="noopener" aria-label="CAS Classroom" title="CAS Classroom">
-            <span class="site-link-logo" aria-hidden="true"><img src="/assets/classroom.svg" width="24" height="24" alt="" /></span>
-            <span class="site-link-label">CAS Classroom</span>
-          </a>
-          <a class="site-link" href="https://www.tokenzhang.com/" target="_blank" rel="noopener" aria-label="Zhishuai Zhang / 张智帅 · 个人主页" title="Zhishuai Zhang / 张智帅 · 个人主页">
-            <span class="site-link-logo" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="8" r="3.5" /><path d="M5 21v-2a7 7 0 0 1 14 0v2" /></svg></span>
-            <span class="site-link-label"><span class="en">Zhishuai Zhang</span><span class="zh">张智帅 · 个人主页</span></span>
-          </a>
-        </nav>
-        <div class="header-actions">
-          <a class="nav-guide" href="/guide/" data-internal aria-label="Documentation / 使用文档" title="Docs / 使用文档"
+        ><a class="nav-guide" href="/guide/" data-internal aria-label="Documentation / 使用文档" title="Docs / 使用文档"
             ><svg
               width="16"
               height="16"
@@ -88,8 +73,17 @@
                 d="M12 5c-3-2-6-2-9-1v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-3-1-6-1-9 1Zm0 0v15"
               /></svg
             ><span class="en">Docs</span><span class="zh">使用文档</span></a
-          >
-          <a
+          ></div>
+        <nav class="header-nav" aria-label="Project and author / 项目与作者">
+          <a class="site-link" href="https://analog-canvas.tokenzhang.com/" target="_blank" rel="noopener" aria-label="Analog Canvas" title="Analog Canvas">
+            <span class="site-link-logo" aria-hidden="true"><img src="/assets/analog-canvas.svg" width="24" height="24" alt="" /></span>
+            <span class="site-link-label">Analog Canvas</span>
+          </a>
+          <a class="presented-link" href="https://www.tokenzhang.com/" target="_blank" rel="noopener" aria-label="TokenZhang personal homepage / TokenZhang 个人主页" title="TokenZhang">
+            <span class="presented-label">Presented by</span><span class="presented-mark" aria-hidden="true">Z</span><span>TokenZhang</span>
+          </a>
+        </nav>
+        <div class="header-actions"><a
             class="report-link"
             href="https://github.com/Arcadia-1/virtuoso-bridge-lite/issues"
             title="Report an issue / 反馈问题"
@@ -140,15 +134,14 @@
               <path d="m22 22-5-10-5 10" />
               <path d="M14 18h6" />
             </svg>
-          </button>
-        </div>
+          </button></div>
       </div>
     </header>
     <main id="main" class="page guide">
       <section class="guide-head" id="top">
         <h1><span class="en">Guide</span><span class="zh">使用文档</span></h1>
         <p class="lead"><span class="en">Setup, configuration, Python and CLI use, and the parts for coding agents.</span><span class="zh">安装、配置、Python 与命令行用法，以及给编程智能体的部分。</span></p>
-        <nav class="toc" aria-label="Contents"><ol><li><a href="#overview"><span class="en">Overview</span><span class="zh">概览</span></a></li><li><a href="#setup"><span class="en">Choose your setup</span><span class="zh">选择使用方式</span></a></li><li><a href="#install"><span class="en">Install and connect</span><span class="zh">安装与连接</span></a></li><li><a href="#skill"><span class="en">Run SKILL</span><span class="zh">执行 SKILL</span></a></li><li><a href="#design"><span class="en">Schematic, layout and Spectre</span><span class="zh">原理图、版图与 Spectre</span></a></li><li><a href="#maestro"><span class="en">Maestro snapshots</span><span class="zh">Maestro 快照</span></a></li><li><a href="#ciw"><span class="en">Shared CIW</span><span class="zh">共享 CIW</span></a></li><li><a href="#config"><span class="en">Configuration</span><span class="zh">配置</span></a></li><li><a href="#cli"><span class="en">CLI reference</span><span class="zh">命令行参考</span></a></li><li><a href="#agents"><span class="en">Coding agents</span><span class="zh">编程智能体</span></a></li><li><a href="#architecture"><span class="en">Architecture</span><span class="zh">架构</span></a></li><li><a href="#cite"><span class="en">Citation</span><span class="zh">引用</span></a></li></ol></nav>
+        <nav class="toc" aria-label="Contents"><ol><li><a href="#overview"><span class="en">Overview</span><span class="zh">概览</span></a></li><li><a href="#setup"><span class="en">Choose your setup</span><span class="zh">选择使用方式</span></a></li><li><a href="#install"><span class="en">Install and connect</span><span class="zh">安装与连接</span></a></li><li><a href="#skill"><span class="en">Run SKILL</span><span class="zh">执行 SKILL</span></a></li><li><a href="#design"><span class="en">Schematic, layout and Spectre</span><span class="zh">原理图、版图与 Spectre</span></a></li><li><a href="#maestro"><span class="en">Maestro snapshots</span><span class="zh">Maestro 快照</span></a></li><li><a href="#ciw"><span class="en">Shared CIW</span><span class="zh">共享 CIW</span></a></li><li><a href="#config"><span class="en">Configuration</span><span class="zh">配置</span></a></li><li><a href="#cli"><span class="en">CLI reference</span><span class="zh">命令行参考</span></a></li><li><a href="#agents"><span class="en">Coding agents</span><span class="zh">编程智能体</span></a></li><li><a href="/#architecture" data-internal><span class="en">Architecture</span><span class="zh">架构</span></a></li><li><a href="/#cite" data-internal><span class="en">Citation</span><span class="zh">引用</span></a></li></ol></nav>
       </section>
 <section class="block" id="overview">
 <h2><span class="en">Overview</span><span class="zh">概览</span></h2>
@@ -358,22 +351,8 @@ New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.claude\skills\netlist" 
 New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.claude\skills\optimizer" -Target "$PWD\skills\optimizer"</code></pre></div>
 <p><span class="en">Cursor and other agents that load skills from a user-level directory work the same way: point their skills path at <code>skills/</code> in this repository.</span><span class="zh">Cursor 等从用户级目录加载技能的智能体同理：把技能路径指向本仓库的 <code>skills/</code>。</span></p>
 </section>
-<section class="block" id="architecture">
-<h2><span class="en">Architecture</span><span class="zh">架构</span></h2>
-<figure class="figure"><img src="/assets/arch.png?v=20261012-guide" width="1800" height="756" loading="lazy" alt="Architecture: VirtuosoClient sends SKILL over TCP to the bridge daemon inside Virtuoso; SSHClient manages tunnels and files; SpectreSimulator runs Spectre separately." /></figure>
-<ul class="bullets"><li><span class="en"><strong>VirtuosoClient</strong>: a plain TCP SKILL client. Sends SKILL as JSON and gets results; it knows nothing about SSH.</span><span class="zh"><strong>VirtuosoClient</strong>：纯 TCP 的 SKILL 客户端，以 JSON 发送 SKILL 并取回结果，不关心 SSH。</span></li><li><span class="en"><strong>SpectreSimulator</strong>: runs standalone Spectre locally or over SSH and parses PSF ASCII results into Python data.</span><span class="zh"><strong>SpectreSimulator</strong>：在本机或经 SSH 运行独立 Spectre，把 PSF ASCII 结果解析成 Python 数据。</span></li><li><span class="en"><strong>SSHClient</strong>: resolves the GUI, deployment, daemon and Spectre host roles, keeps a standalone port forward to the daemon host, and runs role-specific commands and transfers over OpenSSH or Paramiko. Skipped in local mode.</span><span class="zh"><strong>SSHClient</strong>：解析 GUI、部署、daemon、Spectre 各主机角色，维持到 daemon 主机的独立端口转发，并通过 OpenSSH 或 Paramiko 执行各角色的命令与文件传输。本机模式下不使用。</span></li></ul>
-<p><span class="en">VirtuosoClient works with any TCP endpoint (SSH tunnel, VPN, LAN or local), and each profile manages its own tunnel to a separate server. To see the raw mechanism, start with <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/src/virtuoso_bridge/virtuoso/basic/resources/ramic_bridge.il">ramic_bridge.il</a> and <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/src/virtuoso_bridge/virtuoso/basic/bridge.py">bridge.py</a>.</span><span class="zh">VirtuosoClient 可连接任何 TCP 端点（SSH 隧道、VPN、局域网或本机），每个配置各自管理到一台服务器的隧道。想看底层机制，从 <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/src/virtuoso_bridge/virtuoso/basic/resources/ramic_bridge.il">ramic_bridge.il</a> 和 <a href="https://github.com/Arcadia-1/virtuoso-bridge-lite/blob/main/src/virtuoso_bridge/virtuoso/basic/bridge.py">bridge.py</a> 读起。</span></p>
-</section>
-<section class="block" id="cite">
-<h2><span class="en">Citation</span><span class="zh">引用</span></h2>
-<p><span class="en">If you use Virtuoso Bridge in academic work, please cite:</span><span class="zh">如果在学术工作中使用了 Virtuoso Bridge，请引用：</span></p>
-<div class="code"><div class="code-head"><span>BibTeX</span><button class="copy-button js-only" type="button" data-copy="guide-code-4"><span class="en">Copy</span><span class="zh">复制</span></button></div><pre id="guide-code-4"><code>@article{zhang2025virtuosobridge,
-  title   = {Virtuoso-Bridge: An Agent-Native Bridge for Remote Analog and Mixed-Signal Design Automation},
-  author  = {Zhang, Zhishuai and Li, Xintian and Sun, Nan and Jie, Lu},
-  year    = {2025}
-}</code></pre></div>
-<p><span class="en">Authors: Zhishuai Zhang, Xintian Li, Nan Sun and Lu Jie, Tsinghua University.</span><span class="zh">作者：Zhishuai Zhang、Xintian Li、Nan Sun、Lu Jie（清华大学）。</span></p>
-</section>
+
+
     </main>
     <footer class="site-footer">
       <div class="wrap">
@@ -382,9 +361,6 @@ New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.claude\skills\optimizer
             © 2026 Virtuoso Bridge <span aria-hidden="true">·</span> MIT
           </p>
           <nav class="footer-links" aria-label="Footer">
-            <a href="/guide/#cite" data-internal
-              ><span class="en">Cite</span><span class="zh">引用</span></a
-            >
             <a href="https://www.tokenzhang.com/"
               ><span class="en">Homepage ↗</span
               ><span class="zh">个人主页 ↗</span></a

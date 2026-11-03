@@ -145,6 +145,10 @@ html[data-lang="zh"] h1 {
   align-items: center;
   gap: 16px;
 }
+.header-left {display:flex;align-items:center;gap:16px;min-width:0}
+.presented-link {display:inline-flex;align-items:center;gap:5px;min-height:36px;white-space:nowrap;font-size:13px;color:#131c28}
+.presented-label {color:#747b84}
+.presented-mark {display:grid;place-items:center;width:20px;height:20px;border-radius:3px;background:#131c28;color:white;font:700 14px/1 Arial,sans-serif}
 .brand,
 .header-actions,
 .header-nav {
@@ -291,7 +295,7 @@ html[data-lang="zh"] h1 {
   outline: 2px solid var(--chrome-accent);
   outline-offset: 3px;
 }
-@media (max-width: 1180px) {
+@media (max-width: 850px) {
   .site-link {
     gap: 0;
     padding: 4px;
@@ -306,6 +310,8 @@ html[data-lang="zh"] h1 {
     gap: 8px;
   }
 }
+@media (max-width: 1024px) {.report-link{display:none}.header-inner{gap:10px}.header-left{gap:8px}.header-actions{gap:6px}}
+@media (max-width: 620px) {.presented-label{display:none}.header-nav{gap:6px}}
 @media (max-width: 560px) {
   .site-header .header-inner {
     width: calc(100% - 16px);

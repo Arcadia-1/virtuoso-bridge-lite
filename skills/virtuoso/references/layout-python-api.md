@@ -278,6 +278,66 @@ Inside `client.layout.create()`/`modify()`, `layout_list_shapes`, `layout_delete
 
 ## Utility
 
+## Groups (No Layout Window Required)
+
+Graphical `figGroup` and traditional OA `group` are different objects. Use a
+figGroup for geometry transformed as a unit; a logical group is only a set of
+database objects, not an electrical connection, cell hierarchy, or GUI selection.
+
+```python
+from virtuoso_bridge.virtuoso.layout import (
+    layout_create_rect, layout_create_fig_group, layout_add_to_group,
+    layout_transform_fig_group, layout_read_groups, parse_layout_groups_output,
+    layout_ungroup,
+)
+
+with client.layout.modify("worklib", "amp") as lay:
+    lay.add('pairRect = ' + layout_create_rect("M1", "drawing", 0, 0, 1, 2))
+    lay.add(layout_create_fig_group("pair"))
+    lay.add(layout_add_to_group("pair", "pairRect"))
+    lay.add(layout_transform_fig_group("pair", offset=(5, 0), orientation="R0"))
+
+response = client.execute_skill(layout_read_groups("worklib", "amp"))
+if response.errors:
+    raise RuntimeError(response.errors)
+groups = parse_layout_groups_output(response.output)
+```
+
+| Builder | Behavior |
+| --- | --- |
+| `layout_create_fig_group(name, *, ordered=False, origin=(0,0), orientation="R0", cv_expr="cv")` | Create an empty graphical group; reject duplicate name |
+| `layout_create_group(name, *, ordered=False, cv_expr="cv")` | Create an unrestricted logical set with unique name and deleteNever |
+| `layout_add_to_group(name, object_expr, *, kind="figGroup", cv_expr="cv")` | Add one member; existing membership is a no-op |
+| `layout_remove_from_group(name, object_expr, *, kind="figGroup", cv_expr="cv")` | Remove only membership; absent membership is a no-op |
+| `layout_transform_fig_group(name, *, offset=(0,0), orientation="R0", cv_expr="cv")` | Relative rigid transform, preserving IDs |
+| `layout_ungroup(name, *, kind="figGroup", cv_expr="cv")` | Delete grouping object, retain its members |
+| `layout_read_groups(lib, cell, *, view="layout")` | Read both kinds, member types/names/LPP/bBoxes |
+| `parse_layout_groups_output(raw)` | Decode readback into dictionaries |
+
+`layout_read_geometry(..., include_groups=True)` also returns these group records;
+the default geometry output is unchanged. Group readers borrow existing views
+and close only references they opened. They do not save or refresh another
+process's edits. Member descriptors are snapshots, not stable object identifiers.
+
+`object_expr` and `cv_expr` are trusted raw SKILL expressions, not user text.
+Capture geometry-builder results in SKILL variables in the same batch; do not
+reuse printed database IDs after closing/reopening a view. Mutation requires an
+editable maskLayout. Cross-cellview and self membership are refused. Adding a
+figure from another figGroup is refused rather than silently reparenting it.
+Nested figGroup additions and transforms of non-top-level figGroups are not
+supported; use verified raw SKILL for that long tail. Ungroup is non-recursive.
+
+Transforms rotate/mirror about **cellview (0,0)**, then translate by `offset`, not
+about the group centre/origin. Supported orientations are the eight orthogonal
+OA orientations; scaling is intentionally excluded. Logical groups cannot be
+transformed by these helpers. GUI synchronized groups/constraints are not managed.
+
+Builders do not save or provide rollback. LayoutEditor saves on successful batch
+completion; a failed batch can still leave earlier edits in memory. Inspect and
+recover explicitly after an error/timeout; never blindly repeat a mutation.
+
+### Other Utilities
+
 | Function | Description |
 |----------|-------------|
 | `parse_layout_geometry_output(raw)` | Parse `layout_read_geometry` output into `[{"kind": ..., "bbox": ..., ...}]` |
@@ -295,3 +355,74 @@ with client.layout.create(lib, cell) as lay:
 with client.layout.modify(lib, cell) as lay:
     lay.add(rect("M2", "drawing", 0, 1, 10, 1.5))
 ```
+
+## Bounding-Box Diagnosis and Recompute
+
+Cellview `bBox`, physical geometry extents and `prBoundary` are distinct.
+Large extents can come from real off-screen figures, logical routing objects,
+child masters or stale caches. Do not assume corruption or delete objects just
+because the visible geometry looks smaller.
+
+```python
+from virtuoso_bridge.virtuoso.layout import (
+    layout_diagnose_bbox, layout_recompute_bbox,
+    parse_layout_bbox_output, parse_layout_bbox_recompute_output,
+)
+
+response = client.execute_skill(layout_diagnose_bbox("worklib", "amp"))
+if response.errors:
+    raise RuntimeError(response.errors)
+report = parse_layout_bbox_output(response.output, expected_bbox=((0, 0), (100, 50)))
+# Inspect cached_edges / outside_expected in report["objects"].
+
+# Default is a read-only dry-run, identical to diagnosis.
+dry_run = layout_recompute_bbox("worklib", "amp")
+# Only after reviewing the target and making an external backup/checkpoint:
+operation = layout_recompute_bbox("worklib", "amp", dry_run=False, save=True)
+response = client.execute_skill(operation, retry_connect=False)
+if response.errors:
+    raise RuntimeError(response.errors)
+result = parse_layout_bbox_recompute_output(response.output)
+```
+
+`layout_diagnose_bbox(lib, cell, *, view="layout")` reads top-level shapes, vias,
+instances, mosaics, steiners, markers, guides, routes and figGroups. Optional
+collections missing from a release are returned as `unavailable_collections`.
+No recompute, visibility change, save, deletion or connectivity extraction occurs.
+The reader borrows an open view, including unsaved changes; otherwise it opens
+read-only and closes its own reference.
+
+`parse_layout_bbox_output(raw, *, expected_bbox=None, tolerance=1e-6)` returns
+`bbox`, `pr_boundary_bbox`, `geometry_bbox`, `observed_bbox`, objects and warnings.
+Malformed/inverted database boxes are preserved in `invalid_bboxes` and excluded
+from unions, rather than preventing the rest of the diagnostic from being read.
+Each object includes collection/type/name/LPP/bBox, the cached edges it touches,
+and whether it extends outside an optional user-specified footprint. Coordinates
+use the cellview's database user units. With no expected footprint, no heuristic
+claims to know the true boundary. Missing boxes, nested objects, unavailable
+collections and duplicate reports across collections mean this is an inventory,
+not an exhaustive geometric proof. Child master extents are not refreshed.
+
+`layout_recompute_bbox(lib, cell, *, view="layout", dry_run=True, save=False)`
+requires explicit `dry_run=False` to call `dbComputeBBox` exactly once. It refuses
+unsaved edits, non-maskLayout targets and borrowed read-only views. It never
+promotes a borrowed view's mode or creates a missing view. A closed existing
+view is opened for append, so arrange edit permission/checkout beforehand and
+use an idle session. No SOS action, popup recovery or lock breaking is included.
+
+With `save=False`, the result is memory-only; an owned reference is closed and
+the recalculation is not persisted. A borrowed editable view stays open.
+With `save=True`, save failure is an error. An owned view is closed/reopened to
+check its saved BBox (`verification="reopened"`); an already-open editable view
+stays open and is checked in-session (`verification="session"`), not against an
+independent disk reader. Neither method prevents another process changing the
+design later. `changed=False` is valid: existing logical or physical objects
+may still legitimately extend the boundary.
+
+These are plain SKILL builders, not transactions. They close only references
+they opened, including on error. Execute mutations with `retry_connect=False`;
+the builder cannot control the caller's transport retry policy.
+A failed save, connection loss or timeout may
+leave an uncertain write or in-memory change: inspect/reconcile before retry.
+No automatic object cleanup, recursive master edit, `lceClearLogicalConn`,
+`oaScan -repair`, temporary rectangle workaround or design replacement is used.
