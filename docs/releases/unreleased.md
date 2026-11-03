@@ -19,6 +19,11 @@ retained local state without contacting a daemon; `stop --port PORT` targets the
 saved remote endpoint. Restart preserves the selected CIW and authenticates its
 replacement without replaying an uncertain request. `RBStopAll()` now stops only
 that CIW's tracked child.
+Positive-port monitor changes preserve legacy mode, including old unbound
+authenticated requests. Legacy restart preserves saved setup/identity paths
+and uses the loaded code/settings. Configuration changes and upgrades require
+an explicit prepare, stop/wait, load and reconnect sequence; CLI and doctor
+now describe that sequence consistently.
 
 In automatic mode, generated bootstraps use `/tmp/virtuoso_bridge_<user>/daemon`, with records under
 `runs/`. `start --replace-setup` explicitly replaces a differing generated bundle

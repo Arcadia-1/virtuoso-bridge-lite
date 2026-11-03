@@ -46,7 +46,8 @@ def _alive(pid):
 def sessions(tmp_path):
     owned = []
 
-    def launch(name, automatic=False, working_dir=None, registry_name=None, resource_dir=None, graphical=False):
+    def launch(name, automatic=False, working_dir=None, registry_name=None, resource_dir=None, graphical=False,
+               listen_all=False):
         work = tmp_path / name
         work.mkdir()
         cwd = tmp_path / working_dir if working_dir else work
@@ -75,6 +76,7 @@ def sessions(tmp_path):
                    RB_DAEMON_PATH=str(resource.joinpath("ramic_bridge_daemon_3.py")),
                    RB_LOG_ENABLED="1", RB_LOG_PATH=str(work / "bridge.log"))
         env["RB_AUTO_PORT"] = "1" if automatic else "0"
+        env["RB_LISTEN_ALL"] = "1" if listen_all else "0"
         if automatic:
             env["RB_PORT"] = "0"
             registry_root = tmp_path / registry_name if registry_name else work / "private"
@@ -371,6 +373,98 @@ def test_fixed_discovery_port_and_explicit_legacy_mode_reset(sessions):
     assert caps["auth"] == "on" and not caps.get("instance_record")
     result = legacy.execute_skill('getShellEnvVar("RB_AUTO_PORT")', retry_connect=False)
     assert not result.errors and result.output.strip('"') == "0"
+
+
+def _legacy_replacement(target, previous):
+    identity = target["work"] / "identity"
+    found = []
+
+    def ready():
+        try:
+            fields = dict(line.split("=", 1) for line in identity.read_text().splitlines())
+            child = int(fields.get("pid", previous))
+        except (FileNotFoundError, ValueError):
+            return False
+        if child != previous:
+            found.append(child)
+            return True
+        return False
+
+    _wait(ready)
+    target["pids"].append(found[0])
+    _wait(lambda: not _alive(previous))
+    target["client"]._daemon_caps = None
+    caps = target["client"]._ensure_daemon_capabilities(time.monotonic() + 5)
+    assert caps["auth"] == "on" and not caps.get("instance_record")
+    assert caps["virtuoso_pid"] == target["virtuoso_pid"]
+    return found[0]
+
+
+def _old_unbound_request(target):
+    nonce = secrets.token_hex(16)
+    payload = dict(proto=1, nonce=nonce, skill="6*7", timeout=5)
+    payload["mac"] = daemon_auth.request_mac(target["legacy_token"], **payload)
+    with socket.create_connection(("127.0.0.1", target["port"]), timeout=5) as peer:
+        peer.sendall(json.dumps(payload).encode() + b"\n")
+        peer.shutdown(socket.SHUT_WR)
+        chunks = []
+        while True:
+            chunk = peer.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    reply = daemon_auth.verify_response_bytes(b"".join(chunks), target["legacy_token"], nonce)
+    assert reply.startswith(b"\x02"), reply
+    assert b"42" in reply
+
+
+@pytest.mark.parametrize("field", ["RBMBolLog", "RBMBolLocal"])
+def test_legacy_monitor_options_keep_old_clients_connected(sessions, field):
+    # Local is initially false, so the Local toggle narrows this fixture's bind.
+    target = sessions("legacy-monitor", listen_all=True)
+    evaluate = target["evaluate"]
+    _old_unbound_request(target)
+    evaluate(f"RBMonitor->{field}->value = !RBMonitor->{field}->value")
+    evaluate('hiRegTimer("RBMApply()" 2)')
+    _legacy_replacement(target, target["daemon_pid"])
+    assert evaluate('getShellEnvVar("RB_AUTO_PORT")').strip('"') == "0"
+    assert int(evaluate("RBPort")) == target["port"]
+    _old_unbound_request(target)
+
+
+def test_legacy_restart_retains_bind_until_explicit_setup_reload(sessions, monkeypatch, tmp_path):
+    from virtuoso_bridge import env
+    from virtuoso_bridge.transport.tunnel import SSHClient, _generate_virtuoso_setup_il
+
+    target = sessions("legacy-reload", listen_all=True)
+    evaluate = target["evaluate"]
+    config = tmp_path / "loopback.env"
+    config.write_text(f"VB_REMOTE_HOST=localhost\nVB_REMOTE_PORT={target['port']}\n"
+                      "VB_DAEMON_LISTEN_ALL=0\n")
+    for key in list(os.environ):
+        if key.startswith("VB_") and key != "VB_STATE_DIR":
+            monkeypatch.delenv(key)
+    monkeypatch.setattr(env, "_RUNTIME_ENV_FILE", config)
+    monkeypatch.setenv("VB_AUTO_SESSIONS", "0")
+    monkeypatch.setenv("VB_BRIDGE_TOKEN", str(target["token_path"]))
+    transport = SSHClient.from_env()
+    assert "0.0.0.0:" in evaluate("RBLastBind")
+    transport.restart_instance(timeout=15)
+    child = _legacy_replacement(target, target["daemon_pid"])
+    assert "0.0.0.0:" in evaluate("RBLastBind")
+
+    setup = target["work"] / "loopback.il"
+    setup.write_text(_generate_virtuoso_setup_il(
+        str(Path(target["skill"]).parent / "ramic_bridge_daemon_3.py"), target["skill"],
+        sys.executable, port=target["port"], identity_path=str(target["work"] / "identity"),
+        listen_all=transport._listen_all))
+    evaluate('procedure(VBLoopbackWait(n) if(ipcIsAliveProcess(RBIpc) then '
+             'when(n > 0 hiRegTimer(sprintf(nil "VBLoopbackWait(%%d)" n-1) 1)) '
+             'else load(%s)))' % json.dumps(str(setup)))
+    evaluate('hiRegTimer("RBStop() hiRegTimer(\\\"VBLoopbackWait(50)\\\" 1)" 2)')
+    _legacy_replacement(target, child)
+    assert "127.0.0.1:" in evaluate("RBLastBind")
+    _old_unbound_request(target)
 
 
 def test_local_screenshot_on_fixture_owned_graphical_ciw(sessions, tmp_path, monkeypatch):

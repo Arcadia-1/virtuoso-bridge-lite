@@ -316,8 +316,8 @@ def _auth_error(request_data, kind):
     if not _hmac.compare_digest(expected, str(mac).lower()):
         return (
             "AuthError: bridge token mismatch - the daemon on this port "
-            "belongs to a different user (or the token was rotated); run "
-            "`virtuoso-bridge restart` after RBStop()"
+            "belongs to a different user (or the token was rotated); verify "
+            "the intended account and endpoint before changing credentials or restarting"
         )
     if kind == "bound" and request_data["daemon_instance"] != _RECOVERY.instance_id:
         return "AuthError: daemon_instance mismatch; request was not executed"

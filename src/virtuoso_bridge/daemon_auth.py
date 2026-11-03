@@ -408,8 +408,9 @@ def is_valid_nonce(nonce: str | None) -> bool:
 
 _LEGACY_DAEMON_MSG = (
     "daemon did not authenticate its response — it predates bridge "
-    "token auth or runs with auth disabled; run `virtuoso-bridge "
-    "restart` (or re-load virtuoso_setup.il in the CIW) to upgrade it"
+    "token auth or runs with auth disabled; prepare an updated setup, then in "
+    "the intended idle CIW call RBStop(), wait for the tracked child to exit, "
+    "and load the prepared setup. A plain restart does not reload or upgrade code"
 )
 
 

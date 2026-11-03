@@ -9,14 +9,32 @@ DAEMON_BUILD = "instance-discovery-3"
 INSTANCE_COLUMNS = "port / Virtuoso PID / working directory / instance"
 
 
-def compatibility_message(caps: dict) -> str:
+def setup_reload_guidance(start_command: str = "virtuoso-bridge start", *, automatic: bool = False) -> str:
+    """Describe an explicit reload, distinct from restarting loaded code."""
+    prepare = (
+        "Install a new protected versioned bootstrap with install-daemon, keeping the same registry root. "
+        if automatic else f"Run `{start_command}` to prepare the updated fixed-port setup. "
+    )
+    reconnect = (
+        "Then use sessions and start --port PORT with the original configuration to select the new instance. "
+        if automatic else f"Then run `{start_command}` again and check status. "
+    )
+    return ("Keep the original --env and profile options for client commands. " + prepare
+            + "In the intended idle CIW, call RBStop(), wait until its tracked child has exited, "
+            "then load the exact prepared setup path. " + reconnect
+            + "A plain restart reuses the loaded code and settings; it does not reload or upgrade them. "
+            "If an action's outcome is uncertain, reconcile it before submitting another action.")
+
+
+def compatibility_message(caps: dict, *, automatic: bool | None = None) -> str:
     build = caps.get("build")
     if build == DAEMON_BUILD:
         return "daemon build: " + DAEMON_BUILD
     return ("Daemon build %r differs from client bundle %s; compatibility is determined by "
-            "signed protocol/capabilities. Run `virtuoso-bridge restart` "
-            "(or re-load virtuoso_setup.il in the CIW) to upgrade it."
-            % (build if build is not None else "unknown (older daemon)", DAEMON_BUILD))
+            "signed protocol/capabilities. "
+            % (build if build is not None else "unknown (older daemon)", DAEMON_BUILD)
+              + setup_reload_guidance(automatic=bool(caps.get("instance_record"))
+                                      if automatic is None else automatic))
 
 
 class InstanceSelectionError(RuntimeError):

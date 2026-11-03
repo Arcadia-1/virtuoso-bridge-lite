@@ -314,7 +314,9 @@ procedure(RBSetPort(port)
         error("Port must be 0 (automatic) or 1..65535"))
     RBStop()
     RBRequestedPort = port
-    setShellEnvVar("RB_AUTO_PORT" "1")
+    ; A positive port (including monitor-only edits) preserves legacy or
+    ; registered mode. Only choosing zero explicitly opts into registration.
+    when(port == 0 setShellEnvVar("RB_AUTO_PORT" "1"))
     hiRegTimer("RBApplyPort(50)" 1)
     t
 )

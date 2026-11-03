@@ -442,6 +442,28 @@ idle CIW, then authenticates its replacement. It uses the loaded configuration;
 it does not load newly deployed files. After an uncertain result, inspect the
 original outcome before requesting another restart.
 
+To apply configuration changes or upgrade code in legacy mode:
+
+1. Update the client configuration and run `virtuoso-bridge start` with the
+   original `--env` / `-p` options to prepare the fixed-port setup. Record its
+   exact path. For example, disabling `VB_DAEMON_LISTEN_ALL` generates
+   `RB_LISTEN_ALL=0`; it does not change the already-loaded CIW settings.
+2. In the intended idle CIW, call `RBStop()` once and wait until its tracked
+   child has exited. Load the exact prepared setup path.
+3. Run `start` again with the original options, then check `status`.
+
+For automatic sessions, prepare a new protected versioned bundle with
+`install-daemon` on the Cadence host, using the same registry root. Inspect its
+settings before the same stop/wait/load sequence; then use `sessions` and
+`start --port PORT` to explicitly select the new instance. An already connected
+automatic `start --replace-setup` may only reconnect, so it is not a guaranteed
+code deployment step. Reconcile any uncertain outcome before another action.
+
+Restart preserves legacy setup/identity paths. Monitor Local or daemon-log
+changes at a positive port preserve the current legacy/registered mode.
+`RBSetPort(0)` explicitly enables automatic registration; pinning an already
+registered daemon to a positive port keeps it registered.
+
 `RBStopAll()` stops only the current CIW's tracked child.
 `bootstrap --window` requires an existing generated setup or `VB_DAEMON_SETUP`
 and confirms completion against the selected CIW's record and signed reply.

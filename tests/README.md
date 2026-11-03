@@ -170,6 +170,14 @@ fixture credential for automatic sessions. This verifies native SKILL behavior o
 the installed Cadence build; it is not cross-version or electrical-equivalence
 evidence.
 
+Legacy lifecycle cases also change the monitor's Local and daemon-log options
+and send old authenticated requests without instance binding afterward. The
+listen-all regression verifies that CLI restart retains the loaded bind, then
+explicit stop/wait/load of a loopback setup changes the bind. These require
+Cadence; offline source checks are not substitutes. Offline
+`test_legacy_restart_contract.py` covers state paths across local/remote and
+profiled connections, single submission after a lost reply, and failure retention.
+
 | Variable | Enables |
 |---|---|
 | `VB_TEST_LAYER`, `VB_TEST_LAYER2` | layout checks on chosen layers (default: the first two drawing layers of the scratch library's technology) |

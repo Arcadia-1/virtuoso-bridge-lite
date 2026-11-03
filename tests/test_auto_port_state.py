@@ -54,6 +54,13 @@ def test_monitor_uses_bounded_restart_and_checks_port():
     assert "RBStart()" not in body
 
 
+def test_positive_port_preserves_registration_mode():
+    source = SOURCE.read_text(encoding="utf-8")
+    body = source.split("procedure(RBSetPort(port)", 1)[1].split("procedure(RBApplyPort", 1)[0]
+    assert body.count('setShellEnvVar("RB_AUTO_PORT"') == 1
+    assert 'when(port == 0 setShellEnvVar("RB_AUTO_PORT" "1"))' in body
+
+
 def test_resource_override_is_visible(record_property):
     record_property("daemon_resources", str(RESOURCES.resolve()))
     assert SOURCE.is_file()

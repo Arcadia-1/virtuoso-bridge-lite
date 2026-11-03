@@ -1705,9 +1705,19 @@ class SSHClient:
         return result
 
     def _restart_legacy_instance(self, timeout: float) -> None:
-        """Use only the old loader's RBStop/RBStart, with a bounded exit wait."""
+        """Restart loaded code/settings once; retain the exact endpoint's paths.
+
+        Reloading a staged setup is a separate, explicit stop/wait/load action.
+        A restart never deploys files or applies edits to the client environment.
+        """
         from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
         deadline = time.monotonic() + timeout
+
+        state = self.read_state(self._profile, target=self.target) or {}
+        if self._remote_virtuoso_setup_path is None:
+            self._remote_virtuoso_setup_path = state.get("setup_path")
+        if self._remote_identity_path is None:
+            self._remote_identity_path = state.get("identity_path")
 
         def remaining():
             budget = deadline - time.monotonic()
@@ -1779,7 +1789,7 @@ class SSHClient:
             if self._legacy_fallback and caps.get("instance_record"):
                 raise RuntimeError("Endpoint advertises a registered instance absent from discovery; inspect the registry root")
             from virtuoso_bridge.instance_discovery import compatibility_message
-            self.daemon_compatibility = compatibility_message(caps)
+            self.daemon_compatibility = compatibility_message(caps, automatic=self._discover_instances)
         except Exception as exc:
             raise InstanceConnectionError(
                 f"Daemon handshake failed at local port {self.port} "

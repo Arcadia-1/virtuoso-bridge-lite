@@ -425,6 +425,8 @@ def _restart_daemon_one(profile: str | None) -> bool:
     try:
         ssh.restart_instance()
         print(f"Daemon restarted{label}; replacement instance authenticated at port {ssh.remote_port}.")
+        print("Loaded code and settings were retained. Configuration/code changes require an explicit "
+              "stop/wait/load of the prepared setup; see the connection guide's Status and restart section.")
         return True
     except Exception as exc:
         print(f"[restart] {exc}")
@@ -491,7 +493,8 @@ def _print_load_hint(setup_path: str) -> None:
     print(f"    load(\"{setup_path}\")")
     if setup_path.startswith("/tmp/"):
         print("\n  If CIW reports `load: can't access file`, its /tmp is isolated from SSH.")
-        print("  Set VB_REMOTE_SCRATCH_ROOT to a shared home/scratch directory, then restart.")
+        print("  Set VB_REMOTE_SCRATCH_ROOT to a shared home/scratch directory, prepare the setup, "
+              "then stop/wait/load it explicitly in the intended idle CIW.")
     print("\n  To auto-load on every Virtuoso startup, add to your .cdsinit:")
     print(f"    load(\"{setup_path}\")")
 
@@ -2078,12 +2081,12 @@ def build_parser() -> argparse.ArgumentParser:
     for name, hlp in [
         ("start", "Start SSH tunnel + deploy daemon"),
         ("stop", "Stop the SSH tunnel"),
-        ("restart", "Restart SSH tunnel + daemon"),
+        ("restart", "Restart the selected daemon using loaded code/settings (no reload or upgrade)"),
         ("status", "Check tunnel + daemon status"),
         ("sessions", "List discovered Virtuoso sessions without connecting"),
         ("license", "Check Spectre license availability"),
     ]:
-        sp = subparsers.add_parser(name, help=hlp)
+        sp = subparsers.add_parser(name, help=hlp, description=hlp)
         sp.add_argument("-p", "--profile", default=None,
                         help="Connection profile (reads VB_*_<profile> env vars)")
         sp.add_argument("--env", default=None,

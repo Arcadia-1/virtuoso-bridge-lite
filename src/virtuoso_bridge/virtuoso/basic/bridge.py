@@ -2088,8 +2088,8 @@ let((result winName ciwNum)
         except json.JSONDecodeError:
             raise daemon_auth.DaemonAuthError(
                 "daemon sent an unparseable capability payload — it predates "
-                "bridge token auth; run `virtuoso-bridge restart` (or re-load "
-                "virtuoso_setup.il in the CIW) to upgrade it"
+                "bridge token auth; prepare updated code, then explicitly stop/wait/load "
+                "the setup in the intended idle CIW. A plain restart does not upgrade code"
             )
         if not isinstance(caps, dict):
             raise daemon_auth.DaemonAuthError(
@@ -2174,9 +2174,9 @@ let((result winName ciwNum)
                 raise daemon_auth.DaemonAuthError(message)
             raise daemon_auth.DaemonAuthError(
                 "daemon did not answer the bridge capability handshake — it "
-                "predates bridge token auth or runs with auth disabled; run "
-                "`virtuoso-bridge restart` (or re-load virtuoso_setup.il in "
-                "the CIW) to upgrade it"
+                "predates bridge token auth or runs with auth disabled; prepare an updated "
+                "setup, then explicitly stop/wait/load it in the intended idle CIW. "
+                "A plain restart does not upgrade code"
             )
         if raw[:1] != b"\x02":
             raise daemon_auth.DaemonAuthError(
@@ -2199,8 +2199,8 @@ let((result winName ciwNum)
             if caps.get("auth") != "off":
                 raise daemon_auth.DaemonAuthError(
                     "daemon did not authenticate its handshake response — "
-                    "run `virtuoso-bridge restart` (or re-load "
-                    "virtuoso_setup.il in the CIW) to upgrade it"
+                    "prepare an updated setup, then explicitly stop/wait/load it in the "
+                    "intended idle CIW. A plain restart does not upgrade code"
                 )
             if not daemon_auth.allow_unauthenticated():
                 raise daemon_auth.DaemonAuthError(

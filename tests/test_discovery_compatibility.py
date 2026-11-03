@@ -17,6 +17,30 @@ def record(port=61001, pid=10):
                 work_dir="/project", instance="a" * 32)
 
 
+@pytest.mark.parametrize("registered", [False, True])
+def test_upgrade_guidance_requires_explicit_reload(registered):
+    from virtuoso_bridge.instance_discovery import compatibility_message
+    caps = {"build": "older"}
+    if registered:
+        caps["instance_record"] = record()
+    message = compatibility_message(caps)
+    assert "RBStop()" in message and "tracked child has exited" in message
+    assert "load the exact prepared setup path" in message
+    assert "does not reload or upgrade" in message
+    assert "reconcile it before submitting another action" in message
+    if registered:
+        assert "install-daemon" in message and "start --port PORT" in message
+    else:
+        assert "prepare the updated fixed-port setup" in message
+
+
+def test_automatic_legacy_fallback_guidance_does_not_claim_start_deploys():
+    from virtuoso_bridge.instance_discovery import compatibility_message
+    message = compatibility_message({"build": "older"}, automatic=True)
+    assert "install-daemon" in message
+    assert "prepare the updated fixed-port setup" not in message
+
+
 @pytest.fixture
 def legacy(monkeypatch, tmp_path):
     client = tunnel.SSHClient("localhost", discover_instances=True)

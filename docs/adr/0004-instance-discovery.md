@@ -129,6 +129,11 @@ Legacy restart uses old RBStop/RBStart with a bounded exit wait and verifies the
 same CIW birth/PID and a changed authenticated daemon identity. Neither reloads
 newly staged code or retries an uncertain request. Polling uses bounded backoff;
 busy lanes and identity changes refuse restart.
+Legacy restart retains the saved setup and identity paths for the same endpoint.
+Configuration edits (including listen-all to loopback) and code upgrades require
+preparing the setup, explicitly stopping the idle CIW's tracked child, waiting
+for exit, loading the exact prepared setup, and reconnecting. CLI and doctor
+guidance use this contract; restart alone does not apply these changes.
 
 CIW process birth/ownership checks run on the configured GUI host, using that
 host's authenticated account UID rather than the daemon host's numeric UID.
@@ -138,8 +143,10 @@ the daemon host's Python path. GUI and daemon hosts must both see the bundle.
 
 `RBStopAll()` remains tracked-child-only, an explicitly reviewed safety change.
 An untracked daemon needs operator identity investigation, not a broad process
-sweep. `RBSetPort(N)` in the new loader remains registered even for fixed ports;
-explicit legacy setup is a distinct credential mode.
+sweep. `RBSetPort(N)` with a positive port preserves the current registration
+mode, including when the monitor applies Local or daemon-log changes.
+`RBSetPort(0)` explicitly enables registration. A registered daemon stays
+registered when pinned to a positive port; a legacy daemon stays legacy.
 
 Status sends a signed handshake and reports roles/endpoints; legacy status also
 retains banner/load diagnostics. Independent Spectre diagnostics still run after

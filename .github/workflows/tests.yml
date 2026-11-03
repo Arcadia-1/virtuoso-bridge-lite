@@ -102,5 +102,7 @@ jobs:
           tests/test_discovery_status.py
           tests/test_discovery_round2.py
           tests/test_discovery_compatibility.py
+          tests/test_legacy_restart_contract.py
+          tests/test_auto_port_state.py
           tests/test_remote_paths.py
           tests/test_generated_bundle.py

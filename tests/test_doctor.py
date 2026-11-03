@@ -512,7 +512,11 @@ def test_a_daemon_listening_on_all_interfaces_warns(monkeypatch, tmp_path):
     result = _run(ctx)["listen address"]
     assert result.status == doctor.WARN
     assert "0.0.0.0:65123" in result.detail
-    assert "restart" in result.fix and "older setup" in result.fix
+    assert "loaded daemon still uses listen-all" in result.fix
+    assert "virtuoso-bridge start" in result.fix
+    assert "RBStop()" in result.fix and "tracked child has exited" in result.fix
+    assert "load the exact prepared setup path" in result.fix
+    assert "plain restart reuses the loaded code and settings" in result.fix
 
 
 def test_opting_into_all_interfaces_warns_even_on_loopback(monkeypatch, tmp_path):
