@@ -314,7 +314,7 @@ def test_completion_wait_checks_are_low_frequency_and_keep_history(monkeypatch):
 
 @pytest.mark.parametrize("status,expected", [("clear", 0), ("blocked", 2), ("indeterminate", 1)])
 def test_cli_inspects_without_skill_client(monkeypatch, capsys, status, expected):
-    monkeypatch.setattr(cli, "load_vb_env", lambda: None)
+    monkeypatch.setattr(cli, "load_vb_env", lambda **_kwargs: None)
     monkeypatch.setattr(cli, "_make_ssh_runner", lambda: (None, "local"))
     monkeypatch.setattr(cli, "_get_cli_profile", lambda: "sos")
     monkeypatch.setattr(x11, "inspect_dialogs", lambda *a, **k: _payload(status))
@@ -334,7 +334,7 @@ def test_cli_default_dismissal_does_not_connect(monkeypatch, capsys):
     ("_make_ssh_runner", SystemExit("GUI host not configured")),
 ])
 def test_cli_inspection_setup_failure_is_json(monkeypatch, capsys, stage, error):
-    monkeypatch.setattr(cli, "load_vb_env", lambda: None)
+    monkeypatch.setattr(cli, "load_vb_env", lambda **_kwargs: None)
     def fail():
         raise error
     monkeypatch.setattr(cli, stage, fail)

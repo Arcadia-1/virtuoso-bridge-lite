@@ -146,6 +146,127 @@ def resynchronize(send, read_one):
             return True
 
 
+# Reply tags. A modal dialog runs a nested event loop in which the CIW keeps
+# answering IPC input, so a request blocked behind the dialog can be answered
+# after later ones (the resync probe included). Replies are then no longer in
+# request order and attribution by position breaks. When the CIW handler
+# supports it (RB_REPLY_TAGS=1 in the daemon's environment), each request is
+# sent as "vbtag:<tag> <code>" and the handler echoes <tag> right after the
+# status marker; the daemon reads frames until its own tag comes back.
+REPLY_TAG_LEN = 16
+REPLY_TAG_PREFIX = "vbtag:"
+
+
+def new_reply_tag():
+    return random_instance_id()[:REPLY_TAG_LEN]
+
+
+def frame_tag(frame):
+    """The reply tag of a STX/NAK frame, or None if it carries none."""
+    frame = _as_bytes(frame)
+    candidate = frame[1:1 + REPLY_TAG_LEN]
+    if len(candidate) != REPLY_TAG_LEN:
+        return None
+    if not isinstance(candidate, str):
+        try:
+            candidate = candidate.decode("ascii")
+        except UnicodeDecodeError:
+            return None
+    if all(ch in _LOWER_HEX for ch in candidate):
+        return candidate
+    return None
+
+
+def strip_reply_tag(frame, tag):
+    """The frame without its tag if it answers *tag*, else None."""
+    frame = _as_bytes(frame)
+    if frame_tag(frame) != tag:
+        return None
+    return frame[:1] + frame[1 + REPLY_TAG_LEN:]
+
+
+class DeferredFiles(object):
+    """Temp files of requests whose reply was not read.
+
+    Virtuoso may still load() such a file once the CIW is unblocked. Without
+    reply tags a file is released when the lane resynchronizes. With tags the
+    probe can be answered first (see above), so a file is kept until its own
+    late reply has been seen, or until it is older than ``ttl_seconds`` or
+    more than ``max_files`` are waiting.
+    """
+
+    def __init__(self, ttl_seconds=DEFAULT_TTL_SECONDS, max_files=256, clock=None):
+        self.ttl_seconds = float(ttl_seconds)
+        self.max_files = int(max_files)
+        self._clock = clock or time.time
+        self._lock = threading.Lock()
+        self._untagged = []
+        self._tagged = {}
+        self._order = []
+        self._window = b""
+
+    def paths(self):
+        with self._lock:
+            return list(self._untagged) + [self._tagged[tag][0] for tag in self._order]
+
+    def add(self, path, tag=None):
+        with self._lock:
+            if tag is None:
+                self._untagged.append(path)
+                return
+            self._tagged[tag] = (path, self._clock())
+            self._order.append(tag)
+            doomed = self._expire_locked()
+        _unlink_all(doomed)
+
+    def _expire_locked(self):
+        doomed = []
+        now = self._clock()
+        while self._order:
+            tag = self._order[0]
+            added = self._tagged[tag][1]
+            if len(self._order) <= self.max_files and now - added < self.ttl_seconds:
+                break
+            self._order.pop(0)
+            doomed.append(self._tagged.pop(tag)[0])
+        return doomed
+
+    def release(self, tag):
+        """The reply of *tag* has arrived, so its load() is over."""
+        if tag is None:
+            return
+        with self._lock:
+            entry = self._tagged.pop(tag, None)
+            if entry is not None:
+                self._order.remove(tag)
+        if entry is not None:
+            _unlink_all([entry[0]])
+
+    def release_untagged(self):
+        with self._lock:
+            doomed = self._untagged
+            self._untagged = []
+        _unlink_all(doomed)
+
+    def observe(self, chunk):
+        """Watch raw pipe bytes (the resync scan) for a tagged late reply."""
+        with self._lock:
+            if not self._tagged:
+                return
+            window = (self._window + _as_bytes(chunk))[-(REPLY_TAG_LEN + 1):]
+            self._window = window
+        if len(window) == REPLY_TAG_LEN + 1 and window[:1] in (b"\x02", b"\x15"):
+            self.release(frame_tag(window))
+
+
+def _unlink_all(paths):
+    for path in paths:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 class RecoverableRequestManager(object):
     """Serialize legacy/recoverable SKILL and retain bounded receipts."""
 

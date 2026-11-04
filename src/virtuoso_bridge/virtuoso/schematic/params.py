@@ -56,7 +56,7 @@ _SHORTHAND_CANDIDATES = {
 _DEFAULT_FILTERS_PATH = Path(__file__).parent / "cdf_param_filters.yaml"
 
 _RUN_CALLBACKS_ON_CV = '''
-let((cv inst iCDF cCDF saved cdfgData cdfgForm p cb n)
+let((cv inst iCDF cCDF saved cdfgData cdfgForm p cb n v iv)
   cv = dbOpenCellViewByType("{slib}" "{scell}" "schematic" "schematic" "a")
   inst = car(setof(x cv~>instances x~>name == "{inst}"))
   unless(inst error("instance not found"))
@@ -73,7 +73,10 @@ let((cv inst iCDF cCDF saved cdfgData cdfgForm p cb n)
   foreach(n list({params})
     p = get(cCDF n)
     unless(p error(sprintf(nil "unknown CDF param: %s" n)))
-    p~>value = arrayref(paramVals n))
+    v = arrayref(paramVals n)
+    when(p~>paramType == "int" && (iv = atoi(v)) && sprintf(nil "%d" iv) == v
+      v = iv)
+    p~>value = v)
   foreach(n list({params})
     p = get(cCDF n)
     cb = p~>callback

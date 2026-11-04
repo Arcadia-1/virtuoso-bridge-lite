@@ -68,3 +68,61 @@ def test_python_runtime_env_selection_in_isolated_home(isolated_agent):
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "fixture-host"
     assert not (agent_home / ".virtuoso-bridge" / ".env").exists()
+
+
+def test_parent_directory_env_is_reported_once(tmp_path, monkeypatch, caplog):
+    from virtuoso_bridge import env
+
+    project = tmp_path / "outer"
+    child = project / "inner" / "run"
+    child.mkdir(parents=True)
+    (project / ".env").write_text("VB_REMOTE_HOST=outer-host\n", encoding="utf-8")
+    monkeypatch.setattr(env, "_REPORTED_ENV_PATHS", set())
+    monkeypatch.setattr(env, "_RUNTIME_ENV_FILE", None)
+    monkeypatch.delenv("VB_REMOTE_HOST", raising=False)
+    caplog.set_level("WARNING", logger="virtuoso_bridge.env")
+
+    for _ in range(2):
+        assert env.load_vb_env(cwd=child) == (project / ".env").resolve()
+    messages = [r.getMessage() for r in caplog.records if r.name == "virtuoso_bridge.env"]
+    assert len(messages) == 1
+    assert str((project / ".env").resolve()) in messages[0]
+    assert "VB_REMOTE_HOST=outer-host" in messages[0]
+
+    # A .env in the working directory itself, or one the caller pinned, is not news.
+    caplog.clear()
+    assert env.load_vb_env(cwd=project) == (project / ".env").resolve()
+    monkeypatch.setattr(env, "_REPORTED_ENV_PATHS", set())
+    env.set_runtime_env_file(project / ".env")
+    try:
+        env.load_vb_env(cwd=child)
+    finally:
+        env.set_runtime_env_file(None)
+    assert not [r for r in caplog.records if r.name == "virtuoso_bridge.env"]
+
+
+def test_cli_names_a_parent_directory_env_only_when_searched(tmp_path, monkeypatch, capsys):
+    from virtuoso_bridge import cli, env
+
+    project = tmp_path / "outer"
+    child = project / "run"
+    child.mkdir(parents=True)
+    (project / ".env").write_text("VB_REMOTE_HOST=outer-host\n", encoding="utf-8")
+    monkeypatch.chdir(child)
+    monkeypatch.setattr(env, "_REPORTED_ENV_PATHS", set())
+    monkeypatch.setattr(cli, "_PRINTED_ENV_PATH", None)
+    monkeypatch.delenv("VB_REMOTE_HOST", raising=False)
+
+    cli._load_cli_env()
+    assert "(from a parent directory" in capsys.readouterr().err
+    # Library calls later in the same command do not repeat it.
+    assert (project / ".env").resolve() in env._REPORTED_ENV_PATHS
+
+    monkeypatch.setattr(cli, "_PRINTED_ENV_PATH", None)
+    env.set_runtime_env_file(project / ".env")
+    try:
+        cli._load_cli_env()
+    finally:
+        env.set_runtime_env_file(None)
+    err = capsys.readouterr().err
+    assert "using .env:" in err and "parent directory" not in err

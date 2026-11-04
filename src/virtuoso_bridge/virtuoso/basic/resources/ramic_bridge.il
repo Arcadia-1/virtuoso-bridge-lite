@@ -97,15 +97,25 @@ procedure(RBIpcDataHandler(ipcId data)
   ; the first form take effect.  The progn wrap is a no-op for
   ; single-form input and returns the last form's value for multi-form
   ; input, matching what every Python caller already expects.
-  let((result)
+  ;
+  ; A daemon started with RB_REPLY_TAGS=1 sends "vbtag:<16 hex> <code>" and
+  ; the tag is echoed right after the status marker.  A modal dialog runs a
+  ; nested event loop that keeps calling this handler, so a request blocked
+  ; behind the dialog is answered after later ones; the tag lets the daemon
+  ; drop such a late reply instead of taking it for the next request's.
+  let((result tag)
+    when(and(stringp(data) greaterp(strlen(data) 23)
+             equal(substring(data 1 6) "vbtag:"))
+        tag = substring(data 7 16)
+        data = substring(data 24))
     when(RBEcho printf("[RAMIC Bridge (%L)] receive:%L\n" ipcId data))
     if(errset(result=evalstring(strcat("(progn " data ")"))) then
-	    ; Success: Send response with STX (0x02) start marker and RS (0x1E) end marker
-	    ipcWriteProcess(ipcId sprintf(nil "%c%L%c" intToChar(2) result intToChar(30)))
-		when(RBEcho printf("[RAMIC Bridge (%L)] return:%L\n" ipcId result))
-	else
+        ; Success: Send response with STX (0x02) start marker and RS (0x1E) end marker
+        ipcWriteProcess(ipcId sprintf(nil "%c%s%L%c" intToChar(2) or(tag "") result intToChar(30)))
+        when(RBEcho printf("[RAMIC Bridge (%L)] return:%L\n" ipcId result))
+    else
         ; Error: NAK + payload to Python only (no CIW printf; client parses errors)
-        ipcWriteProcess(ipcId sprintf(nil "%c%L%c" intToChar(21) errset.errset intToChar(30)))
+        ipcWriteProcess(ipcId sprintf(nil "%c%s%L%c" intToChar(21) or(tag "") errset.errset intToChar(30)))
     )
   )
 )
@@ -287,7 +297,7 @@ procedure(RBStart()
             ; bundled (and often incompatible) copies.
             ; Bind the daemon to this Virtuoso, not the intermediate cdsServIpc.
             RBLaunchedAt = getCurrentTime()
-            RBIpc = ipcBeginProcess(sprintf(nil "/usr/bin/env -u LD_LIBRARY_PATH -u LD_PRELOAD RB_VIRTUOSO_PID=%d RB_VIRTUOSO_BOOT_ID=%s RB_VIRTUOSO_WORK_DIR=%s stdbuf -oL %s %s-u %L %L %L" ipcGetPid() RBQuoteShellArg(RBOwnerBootId()) RBQuoteShellArg(getWorkingDir()) RBPython if(getShellEnvVar("RB_AUTO_PORT") == "1" then "-B " else "") RBDPath host RBConfiguredPort) "" 'RBIpcDataHandler 'RBIpcErrHandler 'RBIpcFinishHandler logpath)
+            RBIpc = ipcBeginProcess(sprintf(nil "/usr/bin/env -u LD_LIBRARY_PATH -u LD_PRELOAD RB_REPLY_TAGS=1 RB_VIRTUOSO_PID=%d RB_VIRTUOSO_BOOT_ID=%s RB_VIRTUOSO_WORK_DIR=%s stdbuf -oL %s %s-u %L %L %L" ipcGetPid() RBQuoteShellArg(RBOwnerBootId()) RBQuoteShellArg(getWorkingDir()) RBPython if(getShellEnvVar("RB_AUTO_PORT") == "1" then "-B " else "") RBDPath host RBConfiguredPort) "" 'RBIpcDataHandler 'RBIpcErrHandler 'RBIpcFinishHandler logpath)
         )
         printf("[RAMIC Bridge ipc=%L] launching daemon (bind=%s:%d) at (%s)\n"
             RBIpc

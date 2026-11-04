@@ -12,7 +12,13 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from virtuoso_bridge.env import default_user_env_path, load_vb_env, set_runtime_env_file
+from virtuoso_bridge.env import (
+    default_user_env_path,
+    is_parent_directory_env,
+    load_vb_env,
+    mark_env_reported,
+    set_runtime_env_file,
+)
 from virtuoso_bridge.cadence_env import CadenceEnvironment
 from virtuoso_bridge.transport.remote_roles import remote_host_roles_from_os
 from virtuoso_bridge.transport.ssh import (
@@ -77,10 +83,12 @@ _PRINTED_ENV_PATH: Path | None = None
 
 def _load_cli_env() -> Path | None:
     global _PRINTED_ENV_PATH
-    env_path = load_vb_env()
+    env_path = load_vb_env(report_parent=False)
     if env_path is not None and env_path != _PRINTED_ENV_PATH:
-        print(f"using .env: {env_path}", file=sys.stderr)
+        suffix = " (from a parent directory; --env FILE pins another)" if is_parent_directory_env(env_path) else ""
+        print(f"using .env: {env_path}{suffix}", file=sys.stderr)
         _PRINTED_ENV_PATH = env_path
+        mark_env_reported(env_path)
     return env_path
 
 

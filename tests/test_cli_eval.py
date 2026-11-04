@@ -192,7 +192,7 @@ def test_eval_stdout_is_only_json_while_env_and_ssh_echoes_go_to_stderr(
             return fake
 
     monkeypatch.setattr(virtuoso_bridge, "VirtuosoClient", _EchoingVirtuosoClient)
-    monkeypatch.setattr(cli, "load_vb_env", lambda: env_file)
+    monkeypatch.setattr(cli, "load_vb_env", lambda **_kwargs: env_file)
     monkeypatch.setattr(cli, "_PRINTED_ENV_PATH", None)
 
     rc = main(["eval", "x = 1 x + 41"])

@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
+
+logger = logging.getLogger(__name__)
 
 _RUNTIME_ENV_FILE: Path | None = None
+_REPORTED_ENV_PATHS: set[Path] = set()
 
 
 def default_user_env_path() -> Path:
@@ -70,9 +74,40 @@ def resolve_env_path(explicit: str | Path | None = None, *, cwd: Path | None = N
     return None
 
 
-def load_vb_env(explicit: str | Path | None = None, *, override: bool = True, cwd: Path | None = None) -> Path | None:
+def is_parent_directory_env(env_path: Path, *, cwd: Path | None = None) -> bool:
+    """Whether the upward search took *env_path* from a directory above cwd."""
+    if _RUNTIME_ENV_FILE is not None:
+        return False
+    base_cwd = (cwd or Path.cwd()).resolve()
+    return (env_path != default_user_env_path() and env_path.parent != base_cwd
+            and env_path.parent in base_cwd.parents)
+
+
+def mark_env_reported(env_path: Path) -> None:
+    """Record that the caller already told the user which .env is in use."""
+    _REPORTED_ENV_PATHS.add(env_path)
+
+
+def _report_parent_env(env_path: Path, cwd: Path | None) -> None:
+    # A parent directory may hold another project's configuration (another
+    # host, another licence setup); say so once instead of choosing silently.
+    if env_path in _REPORTED_ENV_PATHS or not is_parent_directory_env(env_path, cwd=cwd):
+        return
+    _REPORTED_ENV_PATHS.add(env_path)
+    host = dotenv_values(env_path).get("VB_REMOTE_HOST") or ""
+    logger.warning(
+        "Using .env from a parent directory: %s%s. Pin another file with "
+        "--env FILE or virtuoso_bridge.env.set_runtime_env_file().",
+        env_path, f" (VB_REMOTE_HOST={host})" if host else "",
+    )
+
+
+def load_vb_env(explicit: str | Path | None = None, *, override: bool = True, cwd: Path | None = None,
+                report_parent: bool = True) -> Path | None:
     env_path = resolve_env_path(explicit, cwd=cwd)
     if env_path is None:
         return None
     load_dotenv(env_path, override=override)
+    if report_parent and explicit is None and _RUNTIME_ENV_FILE is None:
+        _report_parent_env(env_path, cwd)
     return env_path

@@ -21,20 +21,30 @@ except ImportError:
 
 try:
     from ramic_request_recovery import (
+        DeferredFiles,
         ExecutionUncertain,
+        REPLY_TAG_PREFIX,
         RecoverableRequestManager,
         RequestNotStarted,
+        frame_tag,
+        new_reply_tag,
         read_response_frame,
         resynchronize,
+        strip_reply_tag,
         valid_request_id,
     )
 except ImportError:
     from virtuoso_bridge.virtuoso.basic.resources.ramic_request_recovery import (
+        DeferredFiles,
         ExecutionUncertain,
+        REPLY_TAG_PREFIX,
         RecoverableRequestManager,
         RequestNotStarted,
+        frame_tag,
+        new_reply_tag,
         read_response_frame,
         resynchronize,
+        strip_reply_tag,
         valid_request_id,
     )
 
@@ -350,6 +360,7 @@ def _capabilities_body():
             "instance_record": _INSTANCE_LEASE.metadata if _INSTANCE_LEASE else None,
             "recoverable_requests": 1 if BRIDGE_TOKEN else 0,
             "instance_bound_requests": 1 if BRIDGE_TOKEN else 0,
+            "reply_tags": 1 if _REPLY_TAGS else 0,
             "daemon_instance": _RECOVERY.instance_id,
             "server_time_ms": int(time.time() * 1000),
             "lane": _RECOVERY.lane_state(),
@@ -456,6 +467,9 @@ stdout_fl = _fcntl_or_die(stdout_fd, _f_getfl)
 _fcntl_or_die(stdout_fd, _f_setfl, stdout_fl & ~_o_nonblock)
 
 _RECOVERY = RecoverableRequestManager()
+# Set by a CIW handler that echoes reply tags (ramic_bridge.il); a daemon
+# started by an older handler keeps untagged, in-order replies.
+_REPLY_TAGS = os.environ.get("RB_REPLY_TAGS") == "1"
 
 
 def _safe_sendall(conn, data):
@@ -565,7 +579,7 @@ _MULTILINE_RESULT = (
 )
 
 
-def _prepare_skill(skill_code):
+def _prepare_skill(skill_code, tag=None):
     tmp_il_path = None
     try:
         if "\n" in skill_code:
@@ -579,6 +593,8 @@ def _prepare_skill(skill_code):
             )
         else:
             send_code = f'let(((__vb_r progn({skill_code}))) hiFlush() __vb_r)\n'
+        if tag is not None:
+            send_code = REPLY_TAG_PREFIX + tag + " " + send_code
         return send_code.encode("utf-8"), tmp_il_path
     except Exception as exc:
         if tmp_il_path:
@@ -589,26 +605,14 @@ def _prepare_skill(skill_code):
         raise RequestNotStarted("could not prepare SKILL request: %s" % exc)
 
 
-# Temp files of requests whose reply was never read. Virtuoso may still
-# load() them once the CIW is unblocked, so they are deleted only after the
-# lane has resynchronized (the probe is answered after that load).
-_DEFERRED_TMP_FILES = []
-_DEFERRED_TMP_LOCK = threading.Lock()
-
-
-def _delete_deferred_tmp_files():
-    with _DEFERRED_TMP_LOCK:
-        paths = list(_DEFERRED_TMP_FILES)
-        del _DEFERRED_TMP_FILES[:]
-    for path in paths:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+# Temp files of requests whose reply was never read; Virtuoso may still
+# load() them once the CIW is unblocked.
+_DEFERRED_FILES = DeferredFiles()
 
 
 def _transmit_and_read(skill_code, watchdog_seconds=None):
-    send_bytes, tmp_il_path = _prepare_skill(skill_code)
+    tag = new_reply_tag() if _REPLY_TAGS else None
+    send_bytes, tmp_il_path = _prepare_skill(skill_code, tag)
     timer = None
     expired = None
     finished = None
@@ -649,7 +653,16 @@ def _transmit_and_read(skill_code, watchdog_seconds=None):
                 )
             return sys.stdin.buffer.read(1)
 
-        response = read_response_frame(read_one)
+        while True:
+            response = read_response_frame(read_one)
+            if tag is None:
+                break
+            untagged = strip_reply_tag(response, tag)
+            if untagged is not None:
+                response = untagged
+                break
+            # The late reply of an earlier request that was given up on.
+            _DEFERRED_FILES.release(frame_tag(response))
         answered = True
         if completion_lock is not None:
             with completion_lock:
@@ -666,8 +679,7 @@ def _transmit_and_read(skill_code, watchdog_seconds=None):
         if timer is not None:
             timer.cancel()
         if tmp_il_path and transmitted and not answered:
-            with _DEFERRED_TMP_LOCK:
-                _DEFERRED_TMP_FILES.append(tmp_il_path)
+            _DEFERRED_FILES.add(tmp_il_path, tag)
         elif tmp_il_path:
             try:
                 os.unlink(tmp_il_path)
@@ -676,16 +688,25 @@ def _transmit_and_read(skill_code, watchdog_seconds=None):
 
 
 def _send_resync_probe(probe):
-    send_bytes, _tmp_il_path = _prepare_skill(probe)
+    send_bytes, _tmp_il_path = _prepare_skill(
+        probe, new_reply_tag() if _REPLY_TAGS else None)
     sys.stdout.buffer.write(send_bytes)
     sys.stdout.buffer.flush()
 
 
 def _resync_lane():
+    def read_one():
+        chunk = sys.stdin.buffer.read(1)
+        if chunk:
+            _DEFERRED_FILES.observe(chunk)
+        return chunk
+
     try:
-        return resynchronize(_send_resync_probe, lambda: sys.stdin.buffer.read(1))
+        return resynchronize(_send_resync_probe, read_one)
     finally:
-        _delete_deferred_tmp_files()
+        # Untagged replies stay in order: the probe is answered after
+        # every earlier load().
+        _DEFERRED_FILES.release_untagged()
 
 
 _RECOVERY.set_resync(_resync_lane)
