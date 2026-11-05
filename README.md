@@ -56,7 +56,7 @@ If you use virtuoso-bridge in academic work, please cite:
 }
 ```
 
-**Author affiliation:** Tsinghua University
+**Author affiliation:** Tsinghua University (Zhishuai Zhang is now at ETH Zurich).
 
 **Contact:** [arcadia16zzs@gmail.com](mailto:arcadia16zzs@gmail.com)
 
