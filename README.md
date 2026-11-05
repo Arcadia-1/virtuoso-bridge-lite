@@ -56,4 +56,4 @@ If you use virtuoso-bridge in academic work, please cite:
 }
 ```
 
-Citation metadata is also available in [CITATION.cff](CITATION.cff).
+Authors: Zhishuai Zhang, Xintian Li, Nan Sun and Lu Jie (Tsinghua University).
