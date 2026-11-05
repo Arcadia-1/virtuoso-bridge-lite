@@ -38,8 +38,22 @@ virtuoso-bridge start            # prepare fixed-port setup and the SSH tunnel
 virtuoso-bridge status
 ```
 
-Setup, configuration, CLI reference, architecture and citation are in the
+Setup, configuration, CLI reference and architecture are in the
 **[guide](https://virtuoso-bridge.tokenzhang.com/guide/)**. Coding agents start with [AGENTS.md](AGENTS.md).
 Automatic sessions are opt-in: set `VB_AUTO_SESSIONS=1` and optionally
 `VB_REMOTE_WORK_DIR=/projects/example` to discover a registered daemon using an
 OS-assigned port. A working directory alone keeps the legacy fixed-port mode.
+
+## Citation
+
+If you use virtuoso-bridge in academic work, please cite:
+
+```bibtex
+@article{zhang2025virtuosobridge,
+  title   = {Virtuoso-Bridge: An Agent-Native Bridge for Remote Analog and Mixed-Signal Design Automation},
+  author  = {Zhang, Zhishuai and Li, Xintian and Sun, Nan and Jie, Lu},
+  year    = {2025}
+}
+```
+
+Citation metadata is also available in [CITATION.cff](CITATION.cff).
