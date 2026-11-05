@@ -80,6 +80,7 @@ class StartupTests(unittest.TestCase):
         self.project.mkdir(mode=0o755)
         self.processes = []
         self.homes = {}
+        self.tagged = set()
 
     def tearDown(self):
         for process in self.processes:
@@ -122,12 +123,18 @@ class StartupTests(unittest.TestCase):
 
     def start(self, accounts, port=0):
         processes = []
-        for account in accounts:
+        for index, account in enumerate(accounts):
+            env = self.environment(account)
+            # Every other daemon talks to a CIW handler that echoes reply tags.
+            if index % 2:
+                env["RB_REPLY_TAGS"] = "1"
             process = subprocess.Popen([WORKER_PYTHON, "-B", "-u", "-c", WORKER,
                                         str(self.resources), str(port)],
                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                       env=self.environment(account), cwd=self.project,
+                                       env=env, cwd=self.project,
                                        **self.account_options(account))
+            if index % 2:
+                self.tagged.add(process.pid)
             self.processes.append(process)
             processes.append(process)
         # All workers reach the barrier before any imports/provisions a daemon.
@@ -175,8 +182,15 @@ class StartupTests(unittest.TestCase):
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as worker:
             reply = worker.submit(exchange, row["port"], request)
             self.assertTrue(select.select([process.stdout], [], [], 2)[0], "accepted request never reached IPC")
-            self.assertIn(b"1+1", os.read(process.stdout.fileno(), 65536))
-            process.stdin.write(b"\x022\x1e")
+            sent = os.read(process.stdout.fileno(), 65536)
+            self.assertIn(b"1+1", sent)
+            self.assertEqual(sent.startswith(b"vbtag:"), process.pid in self.tagged)
+            if process.pid in self.tagged:
+                # A late reply to some earlier request is dropped, not
+                # returned as this request's answer.
+                process.stdin.write(b"\x02" + b"0" * 16 + b"late\x1e\x02" + sent[6:22] + b"2\x1e")
+            else:
+                process.stdin.write(b"\x022\x1e")
             process.stdin.flush()
             response = reply.result(timeout=3)
         self.assertEqual(response, b"\x02" + mac(token, "vb1-response", nonce, "\x02", "2").encode() + b"2")

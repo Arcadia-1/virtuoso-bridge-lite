@@ -82,3 +82,16 @@ def test_allowlist_still_filters_resolved_names():
     with pytest.warns(UserWarning, match=r"params ignored by filter .*\['Wfg'\]"):
         applied = set_instance_params(client, "X0", wf="500n", l="30n")
     assert applied == {"l": "30n"}
+
+
+def test_integer_cdf_params_are_set_as_integers():
+    # analogLib vpwl declares tvpairs with paramType "int" (verified on IC
+    # 23.1); a string value is not accepted for it. The update converts
+    # plain integer text for "int" parameters only and keeps any other text.
+    client = FakeClient({"tvpairs": ("Number of pairs", None), "wave": ("Wave", None)})
+    assert set_instance_params(
+        client, "V0", param_filters=None, tvpairs="3", wave="0 0 1n 1"
+    ) == {"tvpairs": "3", "wave": "0 0 1n 1"}
+    update = client.updates()[-1]
+    assert 'when(p~>paramType == "int" && (iv = atoi(v)) && sprintf(nil "%d" iv) == v' in update
+    assert "p~>value = v)" in update

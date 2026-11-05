@@ -750,12 +750,14 @@ class VirtuosoClient(VirtuosoInterface):
             elapsed = time.monotonic() - start_time
             logger.warning("Connection refused to %s:%d (no daemon?)",
                            self._host, self._port)
+            hint = "Ensure the RAMIC Bridge daemon is running in Virtuoso."
+            if self._host in ("127.0.0.1", "localhost", "::1"):
+                hint += (" For a remote Virtuoso, the local SSH tunnel may be down: "
+                         "check with `virtuoso-bridge status`, restore it with "
+                         "`virtuoso-bridge start`.")
             return VirtuosoResult(
                 status=ExecutionStatus.ERROR,
-                errors=[
-                    f"Connection refused to {self._host}:{self._port}. "
-                    "Ensure the RAMIC Bridge daemon is running in Virtuoso."
-                ],
+                errors=[f"Connection refused to {self._host}:{self._port}. {hint}"],
                 execution_time=elapsed,
             )
         except OSError as exc:

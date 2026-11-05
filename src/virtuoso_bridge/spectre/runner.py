@@ -362,6 +362,13 @@ def _run_spectre_remote(
             except Exception:  # noqa: S110
                 logger.warning("Failed to clean up remote Spectre directory: %s", task.remote_dir)
 
+    # Kept remote files stay usable from the remote host (e.g. ViVA
+    # openResults on remote_raw_dir); deleted ones are not reported.
+    kept = (
+        {"remote_dir": task.remote_dir or remote_dir, "remote_raw_dir": remote_raw_dir}
+        if keep_remote_files else {}
+    )
+
     try:
         base_output_dir = Path(base_output_dir).resolve()
         timings = dict(task.timings)
@@ -383,6 +390,7 @@ def _run_spectre_remote(
                     "timings": timings | {"download_total": download_total},
                     "command": exec_cmd,
                     "spectre_command": spectre_command,
+                    **kept,
                 },
             )
 
@@ -416,6 +424,7 @@ def _run_spectre_remote(
                 "timings": timings,
                 "command": exec_cmd,
                 "spectre_command": spectre_command,
+                **kept,
             },
         )
     finally:
@@ -1089,6 +1098,8 @@ class SpectreSimulator:
                 "timings": timings,
                 "command": run_result.metadata.get("command"),
                 "spectre_command": run_result.metadata.get("spectre_command"),
+                **{key: run_result.metadata[key] for key in ("remote_dir", "remote_raw_dir")
+                   if key in run_result.metadata},
             },
         )
         timings["parse_results"] = time.perf_counter() - parse_started

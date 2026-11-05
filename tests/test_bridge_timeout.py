@@ -226,7 +226,9 @@ def test_execute_skill_can_disable_connect_retry_for_non_idempotent_calls(
     assert result.status == ExecutionStatus.ERROR
     assert result.errors == [
         "Connection refused to 127.0.0.1:65432. "
-        "Ensure the RAMIC Bridge daemon is running in Virtuoso."
+        "Ensure the RAMIC Bridge daemon is running in Virtuoso. "
+        "For a remote Virtuoso, the local SSH tunnel may be down: "
+        "check with `virtuoso-bridge status`, restore it with `virtuoso-bridge start`."
     ]
     assert clock.sleeps == []
     assert len(factory.created) == 1

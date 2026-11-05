@@ -178,12 +178,21 @@ expires or releases the IPC lane merely because its client stops waiting.
 Malformed/partial responses or a legacy timeout poison the lane: later
 execution is refused (`BusyError: IPC lane is poisoned …`) because a delayed
 frame could otherwise be misattributed. The daemon then sends a resync probe
-and discards everything Virtuoso writes until the probe's own reply arrives;
-because the CIW evaluates requests in order, that reply proves earlier frames
-are consumed, and the lane is usable again without reloading the bridge. The
-lane stays poisoned while the CIW is still blocked, and permanently if the pipe
-closes. `virtuoso-bridge status` shows the lane state (`busy`, `resyncing`,
+and discards everything Virtuoso writes until the probe's own reply arrives,
+and the lane is usable again without reloading the bridge. The lane stays
+poisoned while the CIW is still blocked, and permanently if the pipe closes.
+`virtuoso-bridge status` shows the lane state (`busy`, `resyncing`,
 `poisoned`) from the handshake, which does not use the CIW.
+
+Replies are not always in request order: a modal dialog runs a nested event
+loop in which the CIW keeps evaluating new input, so the probe and later
+requests can be answered before the request blocked behind the dialog. The
+bridge therefore tags each request; the CIW handler echoes the tag after the
+status marker, and the daemon drops every reply that is not its own. A
+timed-out request's temp file is kept until its own late reply arrives (at
+most one hour). The handshake reports `reply_tags: 1`. A daemon started by an
+older `ramic_bridge.il` relies on in-order replies; restart the bridge from
+the updated setup to get tags.
 
 Request IDs contain a millisecond creation timestamp and random suffix. New
 submissions must be no more than five minutes old or thirty seconds in the

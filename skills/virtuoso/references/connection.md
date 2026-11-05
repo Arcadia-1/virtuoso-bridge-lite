@@ -26,8 +26,11 @@ venv rebuild does not reload a daemon already running inside Virtuoso.
 
 Reuse existing configuration. The CLI's `--env FILE` takes priority; otherwise
 it searches parent directories for a bridge `.env`, then the user-level
-`~/.virtuoso-bridge/.env`. Initialize only when configuration is absent, using
-the user's actual SSH target and optional jump:
+`~/.virtuoso-bridge/.env`. A `.env` taken from above the working directory is
+named once per process (the CLI's `using .env:` line, a log warning from
+Python); pin one with `--env FILE` or `set_runtime_env_file()` when projects
+are nested. Initialize only when configuration is absent, using the user's
+actual SSH target and optional jump:
 
 ```bash
 virtuoso-bridge init user@compute-host -J user@jump-host

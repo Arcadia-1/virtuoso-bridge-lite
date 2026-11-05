@@ -54,6 +54,7 @@ arbitrary circuit parameters. For local-only execution, use
 | `result.errors` | Error messages (short, classified); check these whenever `result.ok` is false |
 | `result.metadata["timings"]` | Execution and parse durations, plus transfer timing in SSH mode |
 | `result.metadata["output_dir"]` | Local path to `.raw` directory |
+| `result.metadata["remote_dir"]`, `["remote_raw_dir"]` | Remote run and `.raw` directories in SSH mode, only with `keep_remote_files=True` (otherwise they are deleted); e.g. for ViVA `openResults` on the remote host |
 
 Treat `result.ok` as the execution contract. A nonzero exit, explicit fatal
 Spectre output, netlist read-in error, or explicit convergence failure returns
