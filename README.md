@@ -44,6 +44,15 @@ Automatic sessions are opt-in: set `VB_AUTO_SESSIONS=1` and optionally
 `VB_REMOTE_WORK_DIR=/projects/example` to discover a registered daemon using an
 OS-assigned port. A working directory alone keeps the legacy fixed-port mode.
 
+## Star History
+
+<a href="https://www.star-history.com/?repos=Arcadia-1%2Fvirtuoso-bridge-lite&amp;type=date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=Arcadia-1/virtuoso-bridge-lite&amp;type=Date&amp;theme=dark" />
+    <img alt="Star history of virtuoso-bridge-lite" src="https://api.star-history.com/image?repos=Arcadia-1/virtuoso-bridge-lite&amp;type=Date" width="800" />
+  </picture>
+</a>
+
 ## Citation
 
 If you use virtuoso-bridge in academic work, please cite:
