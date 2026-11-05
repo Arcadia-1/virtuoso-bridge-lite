@@ -146,13 +146,15 @@ def resynchronize(send, read_one):
             return True
 
 
-# Reply tags. A modal dialog runs a nested event loop in which the CIW keeps
-# answering IPC input, so a request blocked behind the dialog can be answered
-# after later ones (the resync probe included). Replies are then no longer in
-# request order and attribution by position breaks. When the CIW handler
+# Reply tags. Attribution by position needs exactly one reply per request,
+# in request order. After a request blocked behind a modal dialog, every
+# later reply was once observed one request behind (#274); the source of the
+# extra frame was not identified (the modal dialogs tried on IC 23.1 answered
+# nothing until dismissed, then replied in order). When the CIW handler
 # supports it (RB_REPLY_TAGS=1 in the daemon's environment), each request is
 # sent as "vbtag:<tag> <code>" and the handler echoes <tag> right after the
-# status marker; the daemon reads frames until its own tag comes back.
+# status marker; the daemon reads frames until its own tag comes back, so a
+# frame of any other origin is dropped instead of shifting the replies.
 REPLY_TAG_LEN = 16
 REPLY_TAG_PREFIX = "vbtag:"
 
@@ -189,10 +191,10 @@ class DeferredFiles(object):
     """Temp files of requests whose reply was not read.
 
     Virtuoso may still load() such a file once the CIW is unblocked. Without
-    reply tags a file is released when the lane resynchronizes. With tags the
-    probe can be answered first (see above), so a file is kept until its own
-    late reply has been seen, or until it is older than ``ttl_seconds`` or
-    more than ``max_files`` are waiting.
+    reply tags a file is released when the lane resynchronizes. With tags no
+    ordering is assumed, so a file is kept until its own late reply has been
+    seen, or until it is older than ``ttl_seconds`` or more than
+    ``max_files`` are waiting.
     """
 
     def __init__(self, ttl_seconds=DEFAULT_TTL_SECONDS, max_files=256, clock=None):

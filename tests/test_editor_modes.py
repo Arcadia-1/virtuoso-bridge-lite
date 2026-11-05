@@ -136,3 +136,29 @@ def test_dialog_blocked_edit_raises_dialog_blocked_error() -> None:
         )
     assert caught.value.outcome == "not_started"
     assert str(caught.value) == "layout edit failed: request outcome unknown"
+
+
+@pytest.mark.parametrize("ops_type", [SchematicOps, LayoutOps, SymbolOps])
+@pytest.mark.parametrize("keep_open", [False, True])
+def test_editors_redraw_the_windows_of_the_edited_cellview(ops_type, keep_open) -> None:
+    """Database edits do not repaint an open window; the editor redraws the
+    windows that show its cellview after saving, and before closing it."""
+    from virtuoso_bridge.virtuoso.editor import close_editor_cellview, redraw_editor_windows
+
+    client = _Recorder()
+    with ops_type(client).modify("demoLib", "demoCell", keep_open=keep_open):
+        pass
+    batch = client.batches[-1]
+    redraw = redraw_editor_windows()
+    assert batch.index("dbSave(") < batch.index(redraw)
+    if not keep_open:
+        assert batch.index(redraw) < batch.index(close_editor_cellview())
+    # Only windows whose cellview is the editor's own are redrawn, and only if
+    # the cellview handle is still valid; a GUI-less session has no windows.
+    assert "isCallable('hiGetWindowList)" in redraw
+    assert "dbValidP(vbEditorCv)" in redraw
+    assert "vbWin~>cellView == vbEditorCv" in redraw
+    # geGetWindowCellView would print a GE-2067 warning into the CIW for
+    # every non-editor window (the CIW itself), checked on IC 23.1.
+    assert "geGetWindowCellView" not in redraw
+    assert "errset(hiRedraw(vbWin) nil)" in redraw

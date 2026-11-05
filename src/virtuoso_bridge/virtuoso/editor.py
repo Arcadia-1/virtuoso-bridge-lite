@@ -33,6 +33,23 @@ def close_editor_cellview() -> str:
     )
 
 
+def redraw_editor_windows() -> str:
+    """SKILL repainting the windows that show the editor's cellview.
+
+    Database edits do not repaint an open window: placed instances, wires
+    and shapes stay invisible until something redraws it. Only windows of
+    the edited cellview are touched, and only their drawing.
+    """
+    return (
+        f"when({EDITOR_CV} && dbValidP({EDITOR_CV}) && isCallable('hiGetWindowList) "
+        # w~>cellView, unlike geGetWindowCellView, prints no GE-2067 warning
+        # into the CIW for windows that are not graphic editors.
+        "foreach(vbWin hiGetWindowList() "
+        f"when(vbWin~>cellView == {EDITOR_CV} "
+        "errset(hiRedraw(vbWin) nil))))"
+    )
+
+
 def ensure_operation_response(response: Any, *, context: str) -> None:
     """Raise a consistent error when an edit batch fails.
 

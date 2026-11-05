@@ -669,3 +669,21 @@ def test_parse_xstream_log_empty_text_and_non_string_input() -> None:
     )
     with pytest.raises(TypeError):
         parse_xstream_log(None)  # type: ignore[arg-type]
+
+
+def test_xstream_refuses_unsaved_cellviews_before_changing_any_field() -> None:
+    """xstOutDoTranslate() opens a modal Save All dialog for unsaved
+    cellviews, which blocks the CIW; the request fails before that."""
+    request = _request()
+    skill = xstream_export_gds_skill(request)
+
+    library = request.library.replace("\\", "\\\\").replace('"', '\\"')
+    check = (f'vbUnsaved = setof(x dbGetOpenCellViews() '
+             f'x~>libName == "{library}" && dbIsCellViewModified(x))')
+    assert check in skill
+    assert "when(isCallable('dbGetOpenCellViews) " in skill
+    assert "when(vbUnsaved error(" in skill
+    first_capture = skill.index("xstGetField(")
+    assert skill.index(check) < first_capture < skill.index("xstOutDoTranslate()")
+    assert " vbUnsaved) " in skill[:skill.index("unwindProtect(")]
+    _assert_balanced_skill_parentheses(skill)

@@ -132,6 +132,16 @@ client.execute_skill(f'hiRedraw(window({WID}))')
 ```
 `window(N)` is the SKILL way to fetch a window by its integer ID — robust to focus changes. Never rely on `hiGetCurrentWindow()` for multi-step automation.
 
+### Edits do not appear in an open window; layout shows empty boxes
+Database edits do not repaint an open window. The schematic, symbol and
+layout editors (`create()`/`modify()`) redraw the windows that show their
+cellview after saving; raw `execute_skill` edits need `hiRedraw(window(WID))`.
+
+A layout window at stop level 0 (Ctrl+F) draws instances as empty boxes.
+`client.open_window(...)` opens a new layout window at full depth, as Shift+F
+does (`leSetStopLevelToMaxHierDepth`, 31 on IC 23.1); `show_hierarchy=False`
+keeps Virtuoso's own setting. A window that is already open is not changed.
+
 ### `client.screenshot(target=...)` needs an `int`, not `str`
 Targets are dispatched by Python type:
 - `"ciw"` → CIW

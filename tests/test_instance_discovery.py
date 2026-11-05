@@ -421,3 +421,20 @@ def test_status_discovery_does_not_write_fixed_port_requests(monkeypatch):
     import shlex
     args = shlex.split(commands[0])[3:]
     assert "--configure" not in args and "--port" not in args
+
+
+def test_start_reports_unreconcilable_state_without_misdiagnosing_ssh(monkeypatch, capsys):
+    from virtuoso_bridge import cli
+    from virtuoso_bridge.transport.tunnel import RetainedTunnelStateError
+    monkeypatch.setenv("VB_REMOTE_HOST", "test-host")
+    client = SSHClient(remote_host="test-host")
+    monkeypatch.setattr(SSHClient, "from_env", lambda **kwargs: client)
+    monkeypatch.setattr(client, "close", lambda: None)
+    def warm():
+        raise RetainedTunnelStateError("Cannot reconcile retained tunnel state at '/state.json'")
+    monkeypatch.setattr(client, "warm", warm)
+    monkeypatch.setattr(cli, "_format_ssh_failure", lambda *args: pytest.fail("not an SSH failure"))
+    assert cli._start_one_profile(None) == 1
+    out = capsys.readouterr().out
+    assert "Cannot reconcile retained tunnel state at '/state.json'" in out
+    assert "status --inspect-state" in out and "SSH" not in out

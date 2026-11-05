@@ -250,9 +250,10 @@ def test_export_netlist_creates_a_private_run_dir_and_removes_it_after_download(
     run_dir = result["run_dir"]
     assert commands == [
         schematic_netlist_module._remote_run_dir_create_command(run_dir, "netlist export"),
-        schematic_netlist_module._remote_run_dir_remove_command(run_dir, "netlist export"),
+        schematic_netlist_module._remote_run_dir_remove_command(
+            run_dir, "netlist export", "sameCellNamesInMultipleLibs"),
     ]
-    assert commands[-1].endswith(f"\nvb_verify_dir {run_dir} || exit $?\nrm -rf {run_dir}\n")
+    assert f"\nvb_verify_dir {run_dir} || exit $?\nfind {run_dir} " in commands[-1]
     assert result["source_dir"].startswith(run_dir + "/")
     assert (tmp_path / "netlist" / "input.scs").read_text(encoding="utf-8") == _SPECTRE_TEXT
 
@@ -324,7 +325,7 @@ def test_export_netlist_outside_the_run_dir_is_left_in_place(tmp_path, caplog) -
     assert f"createNetlist wrote {outside} outside the export run directory" in caplog.text
     assert not any(outside in command or "simulation" in command for command in client.ssh_runner.commands)
     assert client.ssh_runner.commands[-1] == schematic_netlist_module._remote_run_dir_remove_command(
-        result["run_dir"], "netlist export"
+        result["run_dir"], "netlist export", "sameCellNamesInMultipleLibs"
     )
 
 
@@ -1078,3 +1079,51 @@ def test_a_given_device_map_replaces_the_defaults(local_import, tmp_path, monkey
     )
 
     assert seen["text"] == "devselect := resistor rppoly\n"
+
+
+def _export_package(run_dir, *, first_run: bool) -> Path:
+    netlist = run_dir / "tb_inv" / "spectre" / "schematic" / "netlist"
+    (netlist / "ihnl" / "cds0").mkdir(parents=True)
+    (netlist / "input.scs").write_text(_SPECTRE_TEXT, encoding="utf-8")
+    (netlist / "ihnl" / "cds0" / "netlist").write_text("x\n", encoding="utf-8")
+    (netlist / "ihnl" / "link").symlink_to(netlist / "input.scs")
+    if first_run:
+        (netlist / "ihnl" / "sameCellNamesInMultipleLibs").write_text("", encoding="utf-8")
+    return netlist / "ihnl" / "sameCellNamesInMultipleLibs"
+
+
+@_needs_posix_sh
+@pytest.mark.parametrize("first_run", [True, False])
+def test_export_cleanup_keeps_only_the_netlisters_process_file(tmp_path, first_run) -> None:
+    """The first netlist run of a Virtuoso process creates
+    ihnl/sameCellNamesInMultipleLibs and later runs append to that path
+    (IC 23.1): deleting it made every later netlist warn OSSHNL-941."""
+    run_dir = tmp_path / "run dir"
+    assert _run_sh(schematic_netlist_module._remote_run_dir_create_command(str(run_dir))).returncode == 0
+    kept = _export_package(run_dir, first_run=first_run)
+
+    proc = _run_sh(schematic_netlist_module._remote_run_dir_remove_command(
+        str(run_dir), "netlist export", "sameCellNamesInMultipleLibs"))
+
+    assert proc.returncode == 0, proc.stderr
+    if first_run:
+        assert kept.is_file()
+        assert sorted(p.relative_to(run_dir).as_posix() for p in run_dir.rglob("*") if not p.is_dir()) == [
+            kept.relative_to(run_dir).as_posix()
+        ]
+    else:
+        assert not run_dir.exists()
+
+
+@pytest.mark.parametrize("first_run", [True, False])
+def test_local_export_cleanup_keeps_only_the_netlisters_process_file(tmp_path, first_run) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    kept = _export_package(run_dir, first_run=first_run)
+
+    schematic_netlist_module._remove_tree_keeping(run_dir, "sameCellNamesInMultipleLibs")
+
+    if first_run:
+        assert [p for p in run_dir.rglob("*") if not p.is_dir()] == [kept]
+    else:
+        assert not run_dir.exists()

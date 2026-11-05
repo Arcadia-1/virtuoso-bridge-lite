@@ -99,10 +99,9 @@ procedure(RBIpcDataHandler(ipcId data)
   ; input, matching what every Python caller already expects.
   ;
   ; A daemon started with RB_REPLY_TAGS=1 sends "vbtag:<16 hex> <code>" and
-  ; the tag is echoed right after the status marker.  A modal dialog runs a
-  ; nested event loop that keeps calling this handler, so a request blocked
-  ; behind the dialog is answered after later ones; the tag lets the daemon
-  ; drop such a late reply instead of taking it for the next request's.
+  ; the tag is echoed right after the status marker.  The daemon then drops
+  ; any reply that is not its request's own (such as the late reply of a
+  ; request it gave up on) instead of taking it for the next request's.
   let((result tag)
     when(and(stringp(data) greaterp(strlen(data) 23)
              equal(substring(data 1 6) "vbtag:"))

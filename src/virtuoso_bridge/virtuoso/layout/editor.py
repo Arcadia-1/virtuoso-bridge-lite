@@ -18,6 +18,7 @@ from virtuoso_bridge.virtuoso.editor import (
     EDITOR_OPENED,
     close_editor_cellview,
     ensure_operation_response,
+    redraw_editor_windows,
     remember_editor_cellview,
 )
 from virtuoso_bridge.virtuoso.ops import (
@@ -88,6 +89,7 @@ class LayoutEditor:
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         if exc_type is None:
             self.commands.append(save_current_cellview())
+            self.commands.append(redraw_editor_windows())
             if not self.keep_open:
                 self.commands.append(close_editor_cellview())
             batch = compose_skill_script(self.commands)

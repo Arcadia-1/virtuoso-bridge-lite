@@ -912,10 +912,10 @@ def test_untagged_daemon_sends_plain_code(monkeypatch, tmp_path) -> None:
 
 
 def test_tagged_timeout_keeps_its_file_until_its_own_late_reply(monkeypatch, tmp_path) -> None:
-    """A modal dialog runs a nested event loop, so the CIW answers the resync
-    probe before the request blocked behind the dialog. That request's file
-    must outlive the resync, and its late reply must not be taken for the
-    next request's answer (replies were shifted by one)."""
+    """Even if the CIW answers the resync probe before a request blocked
+    behind a dialog, that request's file must outlive the resync, and its
+    late reply must not be taken for the next request's answer (replies were
+    once shifted by one, #274)."""
     module = _import_daemon(monkeypatch, tmp_path, reply_tags=True)
     pending = []
     blocked = []
