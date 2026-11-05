@@ -52,8 +52,7 @@ If you use virtuoso-bridge in academic work, please cite:
 @article{zhang2025virtuosobridge,
   title   = {Virtuoso-Bridge: An Agent-Native Bridge for Remote Analog and Mixed-Signal Design Automation},
   author  = {Zhang, Zhishuai and Li, Xintian and Sun, Nan and Jie, Lu},
-  year    = {2025}
+  year    = {2025},
+  note    = {Tsinghua University}
 }
 ```
-
-Authors: Zhishuai Zhang, Xintian Li, Nan Sun and Lu Jie (Tsinghua University).
