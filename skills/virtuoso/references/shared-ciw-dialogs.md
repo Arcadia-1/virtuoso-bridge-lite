@@ -14,10 +14,14 @@ or close the current form just to unblock automation.
 ```bash
 virtuoso-bridge inspect-dialogs --pid 12345 -p worker --json
 virtuoso-bridge inspect-dialogs --pid 12345 --display :7 --ciw-window 0x100 --json
+virtuoso-bridge inspect-dialogs -p worker --json   # PID from the running tunnel
 ```
 
-The PID is on the configured GUI host. This command uses SSH/X11 only, does
-not construct a SKILL client, and does not start/restart the Bridge. It may
+The PID is on the configured GUI host. Without `--pid`, it is the Virtuoso PID
+that the running tunnel's daemon proves in its authenticated handshake: no
+SKILL is sent, so a blocked CIW still answers. Without a running tunnel, or
+with the GUI and daemon on different hosts, pass `--pid`. This command uses
+SSH/X11 only, sends no SKILL, and does not start/restart the Bridge. It may
 deploy a small content-addressed inspection helper to the profile scratch
 directory. Subsequent inspections reuse that helper within the same runner.
 
@@ -103,6 +107,20 @@ the user resolves the dialog, inspect/read that history rather than invoking
 `client.dialogs.inspect(pid=12345)` is also available without enabling a guard.
 `client.dialogs.disable_guard()` removes protection without closing any window.
 
+## Dialogs Your Own Calls Would Open
+
+Some calls open a modal dialog that blocks the CIW. The bridge avoids two
+common ones:
+
+- `client.close_windows(lib, cell, view)` closes matching cellview windows.
+  If any of their cellviews has unsaved changes, it closes nothing and names
+  them (`unsaved="refuse"`, the default) or saves them first
+  (`unsaved="save"`); the "Save Changes" dialog never opens. A window that an
+  earlier close already took away (a linked Layout XL window) is skipped.
+- XStream export refuses while the exported library has unsaved open
+  cellviews, naming them, instead of opening "Save All". Save explicitly,
+  then export.
+
 ## Requests That Open A Popup
 
 Preflight alone cannot protect a request that opens a dialog itself. With an
@@ -184,15 +202,17 @@ poisoned while the CIW is still blocked, and permanently if the pipe closes.
 `virtuoso-bridge status` shows the lane state (`busy`, `resyncing`,
 `poisoned`) from the handshake, which does not use the CIW.
 
-Replies are not always in request order: a modal dialog runs a nested event
-loop in which the CIW keeps evaluating new input, so the probe and later
-requests can be answered before the request blocked behind the dialog. The
-bridge therefore tags each request; the CIW handler echoes the tag after the
-status marker, and the daemon drops every reply that is not its own. A
-timed-out request's temp file is kept until its own late reply arrives (at
-most one hour). The handshake reports `reply_tags: 1`. A daemon started by an
-older `ramic_bridge.il` relies on in-order replies; restart the bridge from
-the updated setup to get tags.
+Replies are also attributed by tag, not only by order: the bridge tags each
+request, the CIW handler echoes the tag after the status marker, and the
+daemon drops every reply that is not its own. Replies were once observed one
+request behind after a request blocked behind a modal dialog; on IC 23.1 the
+modal dialogs tried (an application dialog box, Layout XL's LX-2063 warning,
+XStream's "Save All") answer nothing until dismissed and then reply in order,
+so the source of that extra reply is unknown, and tags drop a stray reply
+whatever its origin. A timed-out request's temp file is kept until its own
+late reply arrives (at most one hour). The handshake reports `reply_tags: 1`.
+A daemon started by an older `ramic_bridge.il` relies on in-order replies;
+restart the bridge from the updated setup to get tags.
 
 Request IDs contain a millisecond creation timestamp and random suffix. New
 submissions must be no more than five minutes old or thirty seconds in the

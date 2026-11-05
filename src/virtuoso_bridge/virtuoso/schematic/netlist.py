@@ -250,7 +250,8 @@ def export_schematic_netlist(
         logger.warning("%s", note)
         raise
     if owned_run_dir:
-        _remove_run_dir(runner, resolved_run_dir, timeout=timeout, label="netlist export")
+        _remove_run_dir(runner, resolved_run_dir, timeout=timeout, label="netlist export",
+                        keep=_NETLISTER_PROCESS_FILE)
     return result
 
 
@@ -857,13 +858,29 @@ def _create_run_dir(
     _require_command_ok(result, f"cannot create {label} run directory")
 
 
-def _remove_run_dir(runner: Any, run_dir: str, *, timeout: int, label: str = "netlist import") -> None:
-    """Remove an owned run directory; a failure only logs a warning."""
+# The first netlist run of a Virtuoso process creates this (empty) file in its
+# ihnl directory, and every later run in that process, the user's own ADE runs
+# included, appends to that same path; the netlister keeps it in compiled code,
+# out of SKILL's reach (IC 23.1). Deleting it makes each later run warn
+# OSSHNL-941, so an export directory keeps this one file (and its parents).
+_NETLISTER_PROCESS_FILE = "sameCellNamesInMultipleLibs"
+
+
+def _remove_run_dir(
+    runner: Any, run_dir: str, *, timeout: int, label: str = "netlist import", keep: str | None = None,
+) -> None:
+    """Remove an owned run directory; a failure only logs a warning.
+
+    Files named *keep* survive, with their parent directories; the rest goes.
+    """
     try:
         if runner is None:
-            shutil.rmtree(run_dir)
+            if keep is None:
+                shutil.rmtree(run_dir)
+            else:
+                _remove_tree_keeping(Path(run_dir), keep)
         else:
-            result = runner.run_command(_remote_run_dir_remove_command(run_dir, label), timeout=timeout)
+            result = runner.run_command(_remote_run_dir_remove_command(run_dir, label, keep), timeout=timeout)
             _require_command_ok(result, f"cannot remove {label} run directory")
     except Exception as exc:
         logger.warning("%s run directory %s was not removed: %s", label, run_dir, exc)
@@ -879,14 +896,41 @@ def _remote_run_dir_create_command(run_dir: str, label: str = "netlist import") 
     )
 
 
-def _remote_run_dir_remove_command(run_dir: str, label: str = "netlist import") -> str:
-    """Shell that removes *run_dir* only if it is still the user's private directory."""
+def _remote_run_dir_remove_command(run_dir: str, label: str = "netlist import", keep: str | None = None) -> str:
+    """Shell that removes *run_dir* only if it is still the user's private directory.
+
+    With *keep*, files of that name stay; directories left empty are removed.
+    """
     quoted = shlex.quote(run_dir)
+    if keep is None:
+        remove = f"rm -rf {quoted}\n"
+    else:
+        remove = (
+            f"find {quoted} ! -type d ! -name {shlex.quote(keep)} -exec rm -f {{}} + || exit $?\n"
+            f"find {quoted} -depth -type d -empty -exec rmdir {{}} \\;\n"
+        )
     return (
         f"{private_dir_shell_prelude(label)}"
         f"vb_verify_dir {quoted} || exit $?\n"
-        f"rm -rf {quoted}\n"
+        f"{remove}"
     )
+
+
+def _remove_tree_keeping(root: Path, keep: str) -> None:
+    """Delete *root* except files named *keep*, which keep their parents."""
+    for directory, dirs, files in os.walk(root, topdown=False):
+        base = Path(directory)
+        for name in files:
+            if name != keep:
+                (base / name).unlink()
+        for name in dirs:
+            path = base / name
+            if path.is_symlink():
+                path.unlink()
+            elif not any(path.iterdir()):
+                path.rmdir()
+    if not any(root.iterdir()):
+        root.rmdir()
 
 
 def _safe_path_segment(value: str) -> str:

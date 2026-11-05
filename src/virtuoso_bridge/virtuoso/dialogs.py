@@ -189,18 +189,11 @@ class DialogOps:
             raise ValueError("protect_inflight must be an explicit boolean")
         if pid is not None:
             DialogTarget(pid=pid, display=display, ciw_window=ciw_window)
-        tunnel = self._owner._tunnel
-        if tunnel is not None and getattr(tunnel, "gui_host", None) != getattr(tunnel, "daemon_host", None):
-            raise ValueError("shared guard requires GUI and daemon on the same host; inspect an explicit GUI PID instead")
+        self._require_same_host()
         if self._owner.gui_runner is None and not local_gui:
             raise ValueError("No GUI SSH transport: pass local_gui=True only for a genuinely local GUI, not an SSH-forwarded loopback endpoint")
         deadline = time.monotonic() + timeout
-        caps = self._owner._ensure_daemon_capabilities(deadline, refresh=True)
-        actual_pid = caps.get("virtuoso_pid")
-        if caps.get("auth") != "on" or self._owner._daemon_token is None:
-            raise ValueError("shared guard requires authenticated daemon identity")
-        if not isinstance(actual_pid, int) or isinstance(actual_pid, bool) or actual_pid <= 0:
-            raise ValueError("daemon has no verified Virtuoso PID")
+        caps, actual_pid = self._verified_daemon_pid(deadline)
         if pid is not None and pid != actual_pid:
             raise ValueError("selected PID does not match the connected daemon")
         if protect_inflight:
@@ -215,6 +208,30 @@ class DialogOps:
         self._endpoint = (self._owner.host, self._owner.port)
         self._protect_inflight = protect_inflight
         return report
+
+    def connected_pid(self, *, timeout: float = 15) -> int:
+        """The Virtuoso PID the connected daemon proves, for explicit inspection.
+
+        Uses the authenticated capability handshake: no SKILL is sent and the
+        CIW is not involved, so a blocked CIW still answers.
+        """
+        _timeout(timeout)
+        return self._verified_daemon_pid(time.monotonic() + timeout)[1]
+
+    def _require_same_host(self) -> None:
+        tunnel = self._owner._tunnel
+        if tunnel is not None and getattr(tunnel, "gui_host", None) != getattr(tunnel, "daemon_host", None):
+            raise ValueError("shared guard requires GUI and daemon on the same host; inspect an explicit GUI PID instead")
+
+    def _verified_daemon_pid(self, deadline: float) -> tuple[dict[str, Any], int]:
+        self._require_same_host()
+        caps = self._owner._ensure_daemon_capabilities(deadline, refresh=True)
+        actual_pid = caps.get("virtuoso_pid")
+        if caps.get("auth") != "on" or self._owner._daemon_token is None:
+            raise ValueError("shared guard requires authenticated daemon identity")
+        if not isinstance(actual_pid, int) or isinstance(actual_pid, bool) or actual_pid <= 0:
+            raise ValueError("daemon has no verified Virtuoso PID")
+        return caps, actual_pid
 
     def disable_guard(self) -> None:
         """Disable opt-in protection; does not dismiss or recover anything."""

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from virtuoso_bridge.virtuoso.editor import (
     close_editor_cellview,
     ensure_operation_response,
+    redraw_editor_windows,
     remember_editor_cellview,
 )
 from virtuoso_bridge.virtuoso.ops import open_cell_view, save_current_cellview
@@ -61,6 +62,7 @@ class SymbolEditor:
         if exc_type is None:
             self.commands.append(symbol_check())
             self.commands.append(save_current_cellview())
+            self.commands.append(redraw_editor_windows())
             if not self.keep_open:
                 self.commands.append(close_editor_cellview())
             response = self.client.execute_operations(self.commands, timeout=self.timeout)

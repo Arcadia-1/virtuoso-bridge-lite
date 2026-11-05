@@ -50,6 +50,10 @@ from virtuoso_bridge.transport.ssh import (
 
 logger = logging.getLogger(__name__)
 
+
+class RetainedTunnelStateError(RuntimeError):
+    """A saved tunnel state file cannot be reconciled; nothing was started."""
+
 _TUNNEL_STARTUP_SETTLE_SECONDS = 1.0
 
 
@@ -1334,8 +1338,9 @@ class SSHClient:
         unsafe = [item for item in self.inspect_states(self._profile)
                   if item.get("error") and Path(item["path"]) in relevant_paths]
         if unsafe:
-            raise RuntimeError("Cannot reconcile retained tunnel state at %r; use status --inspect-state "
-                               "before starting another forward" % unsafe[0]["path"])
+            raise RetainedTunnelStateError(
+                "Cannot reconcile retained tunnel state at %r; use status --inspect-state "
+                "before starting another forward" % unsafe[0]["path"])
         runner = self._require_runner()
         if runner.is_tunnel_alive:
             if self._active_tunnel_matches():

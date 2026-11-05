@@ -272,8 +272,15 @@ def _start_one_profile(profile: str | None, selected_port: int | None = None, *,
             ssh.warm()
         except Exception as exc:
             from virtuoso_bridge.instance_discovery import InstanceConnectionError, InstanceSelectionError
+            from virtuoso_bridge.transport.tunnel import RetainedTunnelStateError
             if isinstance(exc, (InstanceSelectionError, InstanceConnectionError)):
                 print(str(exc))
+                return 1
+            if isinstance(exc, RetainedTunnelStateError):
+                # A local state file, not SSH: say so instead of blaming the host.
+                print(str(exc))
+                print("  Inspect it with `virtuoso-bridge status --inspect-state`"
+                      f"{' -p ' + profile if profile else ''}; a profile (-p NAME) keeps separate state.")
                 return 1
             if not is_local:
                 _format_ssh_failure(remote_ssh_env_from_os(profile))
@@ -1019,15 +1026,48 @@ def cli_dismiss_dialog(*, legacy_bulk: bool = False) -> int:
     return 1 if any("error" in d or d.get("still_mapped") for d in dialogs) else 0
 
 
+def _connected_virtuoso_pid(timeout: float) -> int:
+    """PID of the CIW behind the running tunnel, from its signed handshake.
+
+    Sends no SKILL and starts nothing: without a running tunnel it refuses.
+    """
+    import virtuoso_bridge as _vb_pkg
+    from virtuoso_bridge.transport.tunnel import SSHClient
+
+    profile = _get_cli_profile()
+    if not SSHClient.is_running(profile):
+        raise RuntimeError("no running bridge tunnel identifies the CIW; pass --pid PID")
+    client = _vb_pkg.VirtuosoClient.from_env(profile=profile, timeout=max(1, int(timeout)))
+    return client.dialogs.connected_pid(timeout=timeout)
+
+
 def cli_inspect_dialogs(
-    *, pid: int, display: str | None = None, ciw_window: str | None = None,
+    *, pid: int | None = None, display: str | None = None, ciw_window: str | None = None,
     timeout: float = 15, json_output: bool = False,
 ) -> int:
-    """Read one explicit GUI process; never construct a SKILL client."""
+    """Read one GUI process; never send SKILL.
+
+    Without *pid*, the CIW is the one the running tunnel's daemon proves in
+    its authenticated handshake (still no SKILL).
+    """
     import json
     from virtuoso_bridge.virtuoso import x11
     from virtuoso_bridge.virtuoso.dialogs import DialogInspection, DialogTarget, parse_inspection
 
+    if pid is None:
+        started = time.monotonic()
+        try:
+            load_vb_env()
+            pid = _connected_virtuoso_pid(timeout)
+        except (Exception, SystemExit) as exc:
+            message = f"Cannot identify the CIW from the bridge handshake: {exc}"
+            if json_output:
+                print(json.dumps({"status": "indeterminate", "target": None, "dialogs": [],
+                                  "diagnostics": [message]}, indent=2, ensure_ascii=False))
+            else:
+                print(message, file=sys.stderr)
+            return 1
+        timeout = max(1.0, timeout - (time.monotonic() - started))
     try:
         target = DialogTarget(pid=pid, display=display, ciw_window=ciw_window)
     except ValueError as exc:
@@ -2223,8 +2263,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp_dismiss.add_argument("--legacy-bulk", action="store_true",
                             help="Explicitly enable unsafe legacy bulk dismissal")
 
-    sp_inspect = subparsers.add_parser("inspect-dialogs", help="Read-only dialog inspection of one explicit CIW process")
-    sp_inspect.add_argument("--pid", type=int, required=True, help="Virtuoso process PID on the GUI host")
+    sp_inspect = subparsers.add_parser("inspect-dialogs", help="Read-only dialog inspection of one CIW process")
+    sp_inspect.add_argument("--pid", type=int, default=None,
+                            help="Virtuoso process PID on the GUI host (default: the PID the running "
+                                 "tunnel's daemon proves in its handshake)")
     sp_inspect.add_argument("--display", default=None, help="Optional expected DISPLAY; otherwise read from that PID")
     sp_inspect.add_argument("--ciw-window", default=None, help="Optional expected CIW X11 window id")
     sp_inspect.add_argument("--timeout", type=float, default=15, help="Inspection time budget in seconds")

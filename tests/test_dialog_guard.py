@@ -447,3 +447,41 @@ def test_parallel_preflight_still_needs_both_checks_to_pass(monkeypatch, inspect
 
     assert result.metadata["request_sent"] is False
     assert result.metadata["dialog_guard"]["status"] == expected
+
+
+def test_connected_pid_comes_from_the_signed_handshake(monkeypatch):
+    client = _client(monkeypatch)
+    monkeypatch.setattr(client, "execute_skill", lambda *a, **k: pytest.fail("must not send SKILL"))
+    assert client.dialogs.connected_pid(timeout=5) == 42
+    assert not client.dialogs.enabled, "reading the PID does not enable a guard"
+    client._daemon_caps = {"auth": "off", "virtuoso_pid": 42}
+    with pytest.raises(ValueError, match="authenticated"):
+        client.dialogs.connected_pid(timeout=5)
+    client._daemon_caps = {"auth": "on", "virtuoso_pid": None}
+    with pytest.raises(ValueError, match="no verified Virtuoso PID"):
+        client.dialogs.connected_pid(timeout=5)
+
+
+def test_cli_inspects_the_handshake_pid_when_none_is_given(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "load_vb_env", lambda **_kwargs: None)
+    monkeypatch.setattr(cli, "_make_ssh_runner", lambda: (None, "local"))
+    monkeypatch.setattr(cli, "_connected_virtuoso_pid", lambda timeout: 42)
+    seen = []
+    monkeypatch.setattr(x11, "inspect_dialogs", lambda *a, **k: seen.append(k["pid"]) or _payload("blocked"))
+    assert cli.cli_inspect_dialogs(json_output=True) == 2
+    assert seen == [42]
+    assert json.loads(capsys.readouterr().out)["status"] == "blocked"
+
+
+def test_cli_without_pid_or_tunnel_is_indeterminate_and_starts_nothing(monkeypatch, capsys):
+    from virtuoso_bridge.transport.tunnel import SSHClient
+
+    monkeypatch.setattr(cli, "load_vb_env", lambda **_kwargs: None)
+    monkeypatch.setattr(cli, "_get_cli_profile", lambda: None)
+    monkeypatch.setattr(SSHClient, "is_running", staticmethod(lambda profile=None: False))
+    monkeypatch.setattr(VirtuosoClient, "from_env", classmethod(lambda cls, **k: pytest.fail("must not connect")))
+    monkeypatch.setattr(x11, "inspect_dialogs", lambda *a, **k: pytest.fail("no PID to inspect"))
+    assert cli.cli_inspect_dialogs(json_output=True) == 1
+    report = json.loads(capsys.readouterr().out)
+    assert report["status"] == "indeterminate" and report["target"] is None
+    assert "pass --pid" in report["diagnostics"][0]

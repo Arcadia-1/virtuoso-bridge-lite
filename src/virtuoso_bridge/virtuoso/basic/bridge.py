@@ -25,6 +25,7 @@ from virtuoso_bridge.virtuoso.basic.composition import compose_skill_script
 from virtuoso_bridge.models import ExecutionStatus, VirtuosoInterface, VirtuosoResult
 from virtuoso_bridge.virtuoso.ops import (
     close_current_cellview as op_close_current_cellview,
+    close_windows as op_close_windows,
     default_view_type_for,
     escape_skill_string,
     open_cell_view as op_open_cell_view,
@@ -834,9 +835,29 @@ class VirtuosoClient(VirtuosoInterface):
         return self.execute_skill(skill, timeout=effective_timeout)
 
     def open_window(self, lib: str, cell: str, *, view: str = "schematic",
-                    view_type: str | None = None, timeout: int | None = None) -> VirtuosoResult:
+                    view_type: str | None = None, timeout: int | None = None,
+                    show_hierarchy: bool = True) -> VirtuosoResult:
+        """Open (or raise) a window; a new layout window shows all levels.
+
+        ``show_hierarchy=False`` keeps Virtuoso's own stop level for a layout
+        window this call opens. A window already open is never changed.
+        """
         effective_timeout = timeout if timeout is not None else self._timeout
-        skill = op_open_window(lib, cell, view=view, view_type=view_type)
+        skill = op_open_window(lib, cell, view=view, view_type=view_type,
+                               show_hierarchy=show_hierarchy)
+        return self.execute_skill(skill, timeout=effective_timeout)
+
+    def close_windows(self, lib: str | None = None, cell: str | None = None,
+                      view: str | None = None, *, unsaved: str = "refuse",
+                      timeout: int | None = None) -> VirtuosoResult:
+        """Close matching cellview windows without raising a Save Changes dialog.
+
+        ``unsaved="refuse"`` (default) closes nothing if a matching cellview
+        has unsaved changes and reports them; ``unsaved="save"`` saves them
+        first. The output is the number of windows closed.
+        """
+        effective_timeout = timeout if timeout is not None else self._timeout
+        skill = op_close_windows(lib, cell, view, unsaved=unsaved)
         return self.execute_skill(skill, timeout=effective_timeout)
 
     def save_current_cellview(self, timeout: int | None = None) -> VirtuosoResult:
