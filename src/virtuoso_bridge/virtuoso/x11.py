@@ -26,6 +26,51 @@ logger = logging.getLogger(__name__)
 _HELPER_SCRIPT = Path(__file__).parent.parent / "resources" / "x11_dismiss_dialog.py"
 
 
+class X11HelperDeploymentError(RuntimeError):
+    """A helper could not be prepared; no X11 action has been attempted."""
+
+    def __init__(self, stage: str, local: Path, remote: str, result) -> None:
+        self.stage = stage
+        self.local_helper = str(local)
+        self.remote_target = remote
+        self.returncode = getattr(result, "returncode", None)
+        self.stderr = getattr(result, "stderr", "") or ""
+        detail = self.stderr or (str(result) if isinstance(result, Exception)
+                                 else f"exit status {self.returncode}; helper unavailable or unreadable")
+        super().__init__(f"X11 helper deployment {stage} failed for {remote}: {detail}")
+
+
+def _deploy_helper(runner, local: Path, remote: str, *, timeout: float = 15) -> None:
+    """Upload and verify one helper within a single bounded deployment budget."""
+    deadline = time.monotonic() + timeout
+    for stage in ("directory", "upload", "readability"):
+        try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("X11 helper deployment budget exhausted")
+            if stage == "directory":
+                parent = remote.rsplit("/", 1)[0]
+                result = runner.run_command(f"mkdir -p {shlex.quote(parent)}", timeout=remaining)
+            elif stage == "upload":
+                result = runner.upload(local, remote, timeout=remaining)
+            else:
+                result = runner.run_command(f"test -r {shlex.quote(remote)}", timeout=remaining)
+        except Exception as exc:
+            raise X11HelperDeploymentError(stage, local, remote, exc) from exc
+        if result.returncode != 0:
+            raise X11HelperDeploymentError(stage, local, remote, result)
+
+
+def _helper_readable(runner, local: Path, remote: str, *, timeout: float) -> bool:
+    try:
+        result = runner.run_command(f"test -r {shlex.quote(remote)}", timeout=timeout)
+    except Exception as exc:
+        raise X11HelperDeploymentError("readability", local, remote, exc) from exc
+    if result.returncode not in (0, 1):
+        raise X11HelperDeploymentError("readability", local, remote, result)
+    return result.returncode == 0
+
+
 def _get_display(display: str | None) -> str | None:
     """Resolve display: explicit arg > VB_DISPLAY env var > auto-detect (None)."""
     load_vb_env()
@@ -95,8 +140,7 @@ def _ensure_helper(
         return str(_HELPER_SCRIPT)
     remote_dir = default_virtuoso_bridge_dir(user, "x11", resolve_client_id(profile))
     remote_path = f"{remote_dir}/x11_dismiss_dialog.py"
-    runner.run_command(f"mkdir -p {shlex.quote(remote_dir)}")
-    runner.upload(_HELPER_SCRIPT, remote_path)
+    _deploy_helper(runner, _HELPER_SCRIPT, remote_path)
     return remote_path
 
 
@@ -186,15 +230,13 @@ def inspect_dialogs(
         cached = getattr(runner, "_vb_dialog_helper", None)
         if cached is not None and cached[0] == key:
             script, py = cached[1:]
-        else:
+            if not _helper_readable(runner, _HELPER_SCRIPT, script, timeout=remaining()):
+                runner._vb_dialog_helper = None
+                cached = None
+        if cached is None or cached[0] != key:
             root = default_virtuoso_bridge_dir(user, "x11", resolve_client_id(profile))
             script = f"{root}/dialog_inspect_{digest}.py"
-            made = runner.run_command(f"mkdir -p {shlex.quote(root)}", timeout=remaining())
-            if made.returncode != 0:
-                raise RuntimeError(made.stderr or "cannot prepare X11 helper directory")
-            uploaded = runner.upload(_HELPER_SCRIPT, script, timeout=remaining())
-            if uploaded.returncode != 0:
-                raise RuntimeError(uploaded.stderr or "cannot upload X11 inspection helper")
+            _deploy_helper(runner, _HELPER_SCRIPT, script, timeout=remaining())
             py = _detect_remote_python(runner, timeout=remaining())
             runner._vb_dialog_helper = (key, script, py)
     cmd = f"{shlex.quote(py)} {shlex.quote(script)} --inspect-dialogs --pid {pid}"
@@ -249,16 +291,17 @@ def dialog_close_exchange(
         cached = getattr(runner, "_vb_dialog_close_helper", None)
         if cached is not None and cached[0] == key:
             script, py = cached[1:]
-        else:
+            for local in (_HELPER_SCRIPT, helper):
+                remote = f"{script.rsplit('/', 1)[0]}/{local.name}"
+                if not _helper_readable(runner, local, remote, timeout=remaining()):
+                    runner._vb_dialog_close_helper = None
+                    cached = None
+                    break
+        if cached is None or cached[0] != key:
             root = default_virtuoso_bridge_dir(user, "x11", resolve_client_id(profile))
             directory = f"{root}/close_{digest}"
-            made = runner.run_command(f"mkdir -p {shlex.quote(directory)}", timeout=remaining())
-            if made.returncode:
-                raise RuntimeError(made.stderr or "Cannot prepare dialog action helper")
             for local in (_HELPER_SCRIPT, helper):
-                uploaded = runner.upload(local, f"{directory}/{local.name}", timeout=remaining())
-                if uploaded.returncode:
-                    raise RuntimeError(uploaded.stderr or "Cannot upload dialog action helper")
+                _deploy_helper(runner, local, f"{directory}/{local.name}", timeout=remaining())
             script = f"{directory}/{helper.name}"
             py = _detect_remote_python(runner, timeout=remaining())
             runner._vb_dialog_close_helper = (key, script, py)

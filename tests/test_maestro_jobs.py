@@ -463,6 +463,8 @@ def test_unknown_start_persists_and_reconciles_original_request(tmp_path) -> Non
             "outcome": "unknown",
             "request_sent": True,
             "phase": "wait_timeout",
+            "dialog_guard": {"status": "blocked", "target": {"pid": 4242},
+                             "dialogs": [{"window_id": "0x42", "source": "unknown"}]},
         },
     )
     submitting_client = FakeClient(
@@ -478,6 +480,7 @@ def test_unknown_start_persists_and_reconciles_original_request(tmp_path) -> Non
     reloaded = observer.load("recover-run-001")
     assert reloaded.request_handle == handle
     assert reloaded.request_evidence["request_state"] == "running"
+    assert reloaded.request_evidence["dialog_guard"] == uncertain.metadata["dialog_guard"]
 
     recovery_client = FakeClient(runner)
     recovery_client.requests.result = VirtuosoResult(
@@ -494,6 +497,7 @@ def test_unknown_start_persists_and_reconciles_original_request(tmp_path) -> Non
 
     assert reconciled.history == "Interactive.9"
     assert reconciled.request_handle == handle
+    assert reconciled.request_evidence["dialog_guard"] == uncertain.metadata["dialog_guard"]
     assert recovery_client.requests.calls == [(handle, 10)]
     assert recovery_client.maestro.run_calls == 0
 

@@ -14,6 +14,9 @@ from virtuoso_bridge.virtuoso.maestro import (
 from virtuoso_bridge.virtuoso.maestro import MaestroOps
 from virtuoso_bridge.virtuoso.maestro import writer
 from virtuoso_bridge.virtuoso.maestro.writer import _without_history_name_form
+from virtuoso_bridge.models import ExecutionStatus, VirtuosoResult
+from virtuoso_bridge.virtuoso.dialogs import DialogBlockedError
+from virtuoso_bridge.virtuoso.requests import RequestHandle, RequestRecoveryError
 
 
 class _RecordingClient:
@@ -227,3 +230,149 @@ def test_run_turns_off_the_history_name_form_for_that_call_only() -> None:
     # Restored after the call whether or not it failed, before any error.
     assert skill.index(off) < skill.index(run) < skill.index(restore) < skill.index("error(")
     assert skill.endswith("car(vbRun))")
+
+
+@pytest.mark.parametrize("recovery", [False, True])
+def test_start_error_keeps_marker_and_original_recovery_error(monkeypatch, recovery):
+    client = _RecordingClient()
+    result = VirtuosoResult(status=ExecutionStatus.ERROR, errors=["socket error"],
+                            metadata={"request_sent": None, "outcome": "unknown",
+                                      "dialog_guard": {"status": "blocked"}})
+    if recovery:
+        result.metadata["request_handle"] = RequestHandle(
+            request_id="a" * 32, daemon_instance="b" * 32, virtuoso_pid=42).model_dump()
+        original = RequestRecoveryError(result)
+    else:
+        original = DialogBlockedError(result)
+    starts = []
+    def start(*a, **kw):
+        starts.append(kw)
+        raise original
+    monkeypatch.setattr(writer, "run_simulation", start)
+    monkeypatch.setattr(writer, "_remove_marker", lambda *a: None)
+    with pytest.raises(type(original)) as caught:
+        run_and_wait(client, session="session1", timeout=30)
+    assert caught.value is original
+    assert len(starts) == 1
+    assert result.metadata["completion_marker"].startswith("/tmp/vb_sim_done_")
+    assert result.metadata["session"] == "session1"
+    assert result.metadata["simulation_start_sent"] is None
+
+
+@pytest.mark.parametrize("status", ["clear", "blocked", "indeterminate"])
+def test_start_transport_error_inspects_only_enabled_guard(monkeypatch, status):
+    original = ConnectionError("socket reset")
+    calls = []
+    def annotate(result, timeout):
+        calls.append(timeout)
+        result.metadata["dialog_guard"] = {"status": status}
+        return result
+    client = _RecordingClient()
+    client.dialogs = SimpleNamespace(enabled=True, annotate_failure=annotate)
+    def failed(*a, **kw):
+        raise original
+    monkeypatch.setattr(client, "execute_skill", failed)
+    expected = DialogBlockedError if status == "blocked" else ConnectionError
+    with pytest.raises(expected) as caught:
+        run_simulation(client, session="amp", timeout=30)
+    if status != "blocked":
+        assert caught.value is original
+    assert len(calls) == 1 and 0 < calls[0] <= 5
+    assert caught.value.result.metadata["simulation_start_sent"] is None
+    assert caught.value.result.metadata["session"] == "amp"
+
+
+def test_completion_transport_error_carries_dialog_and_acknowledged_run(monkeypatch):
+    client = _RecordingClient()
+    def annotate(result, timeout):
+        assert 0 < timeout <= 5
+        result.metadata["dialog_guard"] = {"status": "blocked"}
+        return result
+    client.dialogs = SimpleNamespace(enabled=True, annotate_failure=annotate)
+    monkeypatch.setattr(writer, "run_simulation", lambda *a, **k: '"Interactive.17"')
+    monkeypatch.setattr(writer, "_remove_marker", lambda *a: None)
+    def poll(*a, **kw):
+        raise ConnectionError("poll transport lost")
+    monkeypatch.setattr(writer, "_wait_until_done", poll)
+    with pytest.raises(DialogBlockedError) as caught:
+        run_and_wait(client, session="amp", timeout=30)
+    metadata = caught.value.result.metadata
+    assert metadata["history"] == "Interactive.17"
+    assert metadata["simulation_start_sent"] is True
+    assert metadata["phase"] == "completion_wait"
+    assert metadata["outcome"] == "unknown"
+
+
+def test_start_guard_refusal_preserves_not_started_and_does_not_inspect_twice(monkeypatch):
+    client = _RecordingClient()
+    client.dialogs = SimpleNamespace(enabled=True, annotate_failure=lambda *a, **kw:
+                                    pytest.fail("existing evidence must be preserved"))
+    result = VirtuosoResult(status=ExecutionStatus.ERROR, errors=["blocked"], metadata={
+        "dialog_guard": {"status": "blocked"}, "request_sent": False, "outcome": "not_started"})
+    monkeypatch.setattr(client, "execute_skill", lambda *a, **kw: result)
+    with pytest.raises(DialogBlockedError) as caught:
+        run_and_wait(client, session="amp", timeout=30)
+    assert caught.value.result.metadata["simulation_start_sent"] is False
+    assert caught.value.result.metadata["outcome"] == "not_started"
+
+
+def test_failed_diagnostic_inspection_does_not_mask_or_repeat_start_error(monkeypatch):
+    client = _RecordingClient()
+    inspections = []
+    def annotate(*a, **kw):
+        inspections.append(kw)
+        raise ConnectionError("inspection unavailable")
+    client.dialogs = SimpleNamespace(enabled=True, annotate_failure=annotate)
+    original = ConnectionError("start socket reset")
+    def execute(expression, **kw):
+        if "maeRunSimulation" in expression:
+            raise original
+        return VirtuosoResult(status=ExecutionStatus.SUCCESS, output="t")
+    monkeypatch.setattr(client, "execute_skill", execute)
+    monkeypatch.setattr(writer, "_remove_marker", lambda *a: None)
+    with pytest.raises(ConnectionError) as caught:
+        run_and_wait(client, session="amp", timeout=30)
+    assert caught.value is original
+    assert len(inspections) == 1
+    assert original.result.metadata["dialog_inspection_error"] == "inspection unavailable"
+    assert original.result.metadata["completion_marker"].startswith("/tmp/vb_sim_done_")
+
+
+def test_new_inspection_updates_existing_recovery_exception_fields(monkeypatch):
+    client = _RecordingClient()
+    result = VirtuosoResult(status=ExecutionStatus.ERROR, errors=["socket reset"], metadata={
+        "request_handle": RequestHandle(request_id="a" * 32, daemon_instance="b" * 32,
+                                        virtuoso_pid=42).model_dump(),
+        "request_sent": None, "outcome": "unknown"})
+    original = RequestRecoveryError(result)
+    handle = original.handle
+    def annotate(result, timeout):
+        result.metadata["dialog_guard"] = {"status": "blocked"}
+    client.dialogs = SimpleNamespace(enabled=True, annotate_failure=annotate)
+    def failed(*a, **kw):
+        raise original
+    monkeypatch.setattr(client, "execute_skill", failed)
+    with pytest.raises(RequestRecoveryError) as caught:
+        run_simulation(client, timeout=30)
+    assert caught.value is original
+    assert original.handle == handle
+    assert original.inspection == {"status": "blocked"}
+    assert original.outcome == original.result.metadata["outcome"] == "unknown"
+
+
+def test_budget_exhausted_before_start_is_definitely_not_started(monkeypatch):
+    client = _RecordingClient()
+    clock = [0.0]
+    def setup(*a, **kw):
+        clock[0] = 31
+        return "t"
+    monkeypatch.setattr(writer.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(writer, "_q", setup)
+    monkeypatch.setattr(writer, "_remove_marker", lambda *a: None)
+    monkeypatch.setattr(writer, "run_simulation", lambda *a, **kw: pytest.fail("no budget to start"))
+    with pytest.raises(TimeoutError) as caught:
+        run_and_wait(client, session="amp", timeout=30)
+    metadata = caught.value.result.metadata
+    assert metadata["simulation_start_sent"] is False
+    assert metadata["request_sent"] is False
+    assert metadata["outcome"] == "not_started"
