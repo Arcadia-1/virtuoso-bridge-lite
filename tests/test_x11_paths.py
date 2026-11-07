@@ -145,11 +145,90 @@ def test_missing_cached_helpers_redeploy_before_execution(monkeypatch, operation
 def test_cached_readability_transport_failure_never_redeploys(monkeypatch):
     runner = _FakeRunner()
     runner._vb_dialog_helper = (("user", None, "digest"), "/helper.py", "python3")
+    original = ConnectionError("transport unavailable")
     def failed(*a, **kw):
-        raise ConnectionError("transport unavailable")
+        raise original
     monkeypatch.setattr(runner, "run_command", failed)
-    with pytest.raises(x11.X11HelperDeploymentError) as caught:
+    with pytest.raises(ConnectionError) as caught:
         x11._helper_readable(runner, x11._HELPER_SCRIPT, "/helper.py", timeout=5)
-    assert caught.value.stage == "readability"
-    assert isinstance(caught.value.__cause__, ConnectionError)
+    assert caught.value is original
+    assert caught.value.helper_deployment["stage"] == "readability"
     assert runner.uploads == []
+
+
+def test_legacy_deployment_keeps_runner_configured_timeouts(monkeypatch):
+    calls = []
+    class LegacyRunner:
+        def run_command(self, command):
+            calls.append(command)
+            return SimpleNamespace(returncode=0, stderr="")
+        def upload(self, local, remote):
+            calls.append(remote)
+            return SimpleNamespace(returncode=0, stderr="")
+    monkeypatch.setattr(x11, "default_virtuoso_bridge_dir", lambda *a: "/scratch/x11")
+    path = x11._ensure_helper(LegacyRunner(), "user")
+    assert path == "/scratch/x11/x11_dismiss_dialog.py"
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize("operation", ["find_dialogs", "list_windows", "dismiss_window",
+                                       "bootstrap_ciw", "dismiss_dialogs"])
+def test_legacy_wrappers_keep_list_error_shape_on_deployment_failure(monkeypatch, operation):
+    monkeypatch.setattr(x11, "load_vb_env", lambda: None)
+    runner = _FakeRunner()
+    monkeypatch.setattr(runner, "upload", lambda *a, **k:
+                        SimpleNamespace(returncode=1, stderr="upload failed"))
+    monkeypatch.setattr(x11, "_run", lambda *a, **k: pytest.fail("must not execute helper"))
+    args, kwargs = [], {}
+    if operation == "dismiss_window":
+        args = ["0x10"]
+    elif operation == "bootstrap_ciw":
+        args = ["0x10", "/setup.il"]
+    elif operation == "dismiss_dialogs":
+        kwargs = {"allow_legacy_bulk": True}
+    result = getattr(x11, operation)(runner, "user", *args, **kwargs)
+    assert isinstance(result, list) and len(result) == 1
+    assert result[0]["error"] and result[0]["returncode"] == 1
+    assert result[0]["helper_deployment"]["stage"] == "upload"
+
+
+@pytest.mark.parametrize("stage", ["directory", "upload", "readability"])
+@pytest.mark.parametrize("error_type", [ConnectionError, TimeoutError, FileNotFoundError])
+def test_deployment_preserves_original_transport_exception(monkeypatch, stage, error_type):
+    runner = _FakeRunner()
+    original = error_type("transport unavailable")
+    run = runner.run_command
+    def command(text, timeout=None):
+        if (stage == "directory" and text.startswith("mkdir")) or (
+                stage == "readability" and text.startswith("test -r")):
+            raise original
+        return run(text, timeout)
+    monkeypatch.setattr(runner, "run_command", command)
+    if stage == "upload":
+        def upload(*a, **kw):
+            raise original
+        monkeypatch.setattr(runner, "upload", upload)
+    with pytest.raises(error_type) as caught:
+        x11._deploy_helper(runner, x11._HELPER_SCRIPT, "/scratch/helper.py", timeout=5)
+    assert caught.value is original
+    assert original.helper_deployment["stage"] == stage
+
+
+@pytest.mark.parametrize("cached", [False, True])
+def test_diagnostics_do_not_mask_read_only_transport_error(monkeypatch, cached):
+    class ReadOnlyDiagnostics(ConnectionError):
+        @property
+        def helper_deployment(self):
+            return "owned by backend"
+    original = ReadOnlyDiagnostics("transport unavailable")
+    runner = _FakeRunner()
+    def failed(*a, **kw):
+        raise original
+    monkeypatch.setattr(runner, "run_command", failed)
+    with pytest.raises(ConnectionError) as caught:
+        if cached:
+            x11._helper_readable(runner, x11._HELPER_SCRIPT, "/helper.py", timeout=5)
+        else:
+            x11._deploy_helper(runner, x11._HELPER_SCRIPT, "/helper.py", timeout=5)
+    assert caught.value is original
+    assert original.helper_deployment == "owned by backend"

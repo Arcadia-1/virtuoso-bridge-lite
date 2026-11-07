@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from virtuoso_bridge.env import load_vb_env
+from virtuoso_bridge.models import VirtuosoResult
 from virtuoso_bridge.profile import resolve_profile
 from virtuoso_bridge.runtime_paths import artifact_dir, tmp_dir
 from virtuoso_bridge.transport.remote_paths import (
@@ -118,15 +119,29 @@ def _strip_skill_atom(raw: str) -> str:
     return (raw or "").strip().strip('"')
 
 
+def _request_result(source: object):
+    candidates = []
+    for attribute in ("result", "virtuoso_result"):
+        try:
+            candidate = getattr(source, attribute, None)
+            if isinstance(candidate, VirtuosoResult):
+                return candidate
+            if isinstance(getattr(candidate, "metadata", None), dict):
+                candidates.append(candidate)
+        except Exception:
+            continue
+    return candidates[0] if candidates else source
+
+
 def _request_definitely_not_sent(exc: BaseException) -> bool:
-    result = getattr(exc, "result", None)
+    result = _request_result(exc)
     metadata = getattr(result, "metadata", {})
     return isinstance(metadata, dict) and metadata.get("request_sent") is False
 
 
 def _request_evidence(source: object) -> tuple[RequestHandle | None, dict[str, Any]]:
     """Return a bounded, credential-free recovery record from a result/error."""
-    result = getattr(source, "result", source)
+    result = _request_result(source)
     metadata = getattr(result, "metadata", {})
     if not isinstance(metadata, dict):
         return None, {}

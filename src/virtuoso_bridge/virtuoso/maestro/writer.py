@@ -44,10 +44,27 @@ def _q(client: VirtuosoClient, expr: str, timeout: float | None = None) -> str:
 
 def _simulation_failure(client, exc: Exception, *, timeout: float, **context) -> VirtuosoResult:
     """Keep the original error/receipt and add bounded opt-in inspection evidence."""
-    result = getattr(exc, "result", None)
+    result = None
+    for attribute in ("result", "virtuoso_result"):
+        try:
+            candidate = getattr(exc, attribute, None)
+        except Exception:
+            continue
+        if isinstance(candidate, VirtuosoResult):
+            result = candidate
+            break
     if result is None:
         result = VirtuosoResult(status=ExecutionStatus.ERROR, errors=[str(exc)])
-        exc.result = result
+    for attribute in ("result", "virtuoso_result"):
+        try:
+            existing = getattr(exc, attribute, None)
+            if existing is not None and existing is not result:
+                continue
+            setattr(exc, attribute, result)
+            break
+        except Exception:
+            # Custom exceptions may own .result or refuse new attributes.
+            continue
     result.metadata.update(context)
     result.metadata.setdefault("outcome", "not_started" if
                                result.metadata.get("request_sent") is False else "unknown")
@@ -65,8 +82,11 @@ def _simulation_failure(client, exc: Exception, *, timeout: float, **context) ->
         finally:
             result.metadata["outcome"] = outcome
     if isinstance(exc, DialogBlockedError):
-        exc.inspection = result.metadata.get("dialog_guard")
-        exc.outcome = result.metadata["outcome"]
+        try:
+            exc.inspection = result.metadata.get("dialog_guard")
+            exc.outcome = result.metadata["outcome"]
+        except Exception:
+            pass
     return result
 
 
@@ -435,9 +455,6 @@ def run_simulation(client: VirtuosoClient, *, session: str = "",
             session=session, maestro_phase="simulation_start",
         )
         result.metadata.setdefault("simulation_start_sent", result.metadata.get("request_sent"))
-        if (not isinstance(exc, (RequestRecoveryError, DialogBlockedError))
-                and result.metadata.get("dialog_guard", {}).get("status") == "blocked"):
-            raise DialogBlockedError(result) from exc
         raise
 
 
@@ -639,8 +656,6 @@ procedure(_vb_sim_done_{nonce}(session runID)
             history=history_name, completion_marker=marker,
             phase="completion_wait", simulation_start_sent=True,
         )
-        if result.metadata.get("dialog_guard", {}).get("status") == "blocked":
-            raise DialogBlockedError(result) from exc
         raise MaestroCompletionUnknown(result) from exc
     return history, status
 

@@ -502,6 +502,30 @@ def test_unknown_start_persists_and_reconciles_original_request(tmp_path) -> Non
     assert recovery_client.maestro.run_calls == 0
 
 
+@pytest.mark.parametrize("request_sent,state", [(False, "failed"), (True, "unknown")])
+@pytest.mark.parametrize("backend_metadata", [False, True])
+def test_custom_exception_result_does_not_hide_job_evidence(tmp_path, request_sent, state, backend_metadata):
+    runner = RecordingRunner()
+    original = ConnectionError("transport unavailable")
+    backend = SimpleNamespace(metadata={"backend": "custom"}) if backend_metadata else {"backend": "custom"}
+    original.result = backend
+    original.virtuoso_result = VirtuosoResult(
+        status=ExecutionStatus.ERROR, errors=["transport unavailable"],
+        metadata={"request_sent": request_sent,
+                  "outcome": "unknown" if request_sent else "not_started",
+                  "dialog_guard": {"status": "blocked"}})
+    client = FakeClient(runner, start_error=original)
+    manager = remote_manager(tmp_path, runner, client)
+    with pytest.raises(MaestroJobSubmissionError) as caught:
+        manager.submit(session="session1", run_id="custom-error-001")
+    assert caught.value.__cause__ is original
+    assert caught.value.state == state
+    loaded = manager.load("custom-error-001")
+    assert loaded.request_evidence["request_sent"] is request_sent
+    assert loaded.request_evidence["dialog_guard"]["status"] == "blocked"
+    assert original.result is backend
+
+
 @pytest.mark.parametrize(
     "host,user,work_root",
     [

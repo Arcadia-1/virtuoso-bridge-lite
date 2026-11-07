@@ -260,8 +260,9 @@ def test_start_error_keeps_marker_and_original_recovery_error(monkeypatch, recov
 
 
 @pytest.mark.parametrize("status", ["clear", "blocked", "indeterminate"])
-def test_start_transport_error_inspects_only_enabled_guard(monkeypatch, status):
-    original = ConnectionError("socket reset")
+@pytest.mark.parametrize("error_type", [ConnectionError, TimeoutError])
+def test_start_transport_error_inspects_only_enabled_guard(monkeypatch, status, error_type):
+    original = error_type("socket reset")
     calls = []
     def annotate(result, timeout):
         calls.append(timeout)
@@ -272,35 +273,74 @@ def test_start_transport_error_inspects_only_enabled_guard(monkeypatch, status):
     def failed(*a, **kw):
         raise original
     monkeypatch.setattr(client, "execute_skill", failed)
-    expected = DialogBlockedError if status == "blocked" else ConnectionError
-    with pytest.raises(expected) as caught:
+    with pytest.raises(error_type) as caught:
         run_simulation(client, session="amp", timeout=30)
-    if status != "blocked":
-        assert caught.value is original
+    assert caught.value is original
     assert len(calls) == 1 and 0 < calls[0] <= 5
     assert caught.value.result.metadata["simulation_start_sent"] is None
     assert caught.value.result.metadata["session"] == "amp"
 
 
-def test_completion_transport_error_carries_dialog_and_acknowledged_run(monkeypatch):
+@pytest.mark.parametrize("status", ["clear", "blocked", "indeterminate"])
+def test_completion_transport_error_carries_dialog_and_acknowledged_run(monkeypatch, status):
     client = _RecordingClient()
     def annotate(result, timeout):
         assert 0 < timeout <= 5
-        result.metadata["dialog_guard"] = {"status": "blocked"}
+        result.metadata["dialog_guard"] = {"status": status}
         return result
     client.dialogs = SimpleNamespace(enabled=True, annotate_failure=annotate)
     monkeypatch.setattr(writer, "run_simulation", lambda *a, **k: '"Interactive.17"')
     monkeypatch.setattr(writer, "_remove_marker", lambda *a: None)
+    original = ConnectionError("poll transport lost")
     def poll(*a, **kw):
-        raise ConnectionError("poll transport lost")
+        raise original
     monkeypatch.setattr(writer, "_wait_until_done", poll)
-    with pytest.raises(DialogBlockedError) as caught:
+    with pytest.raises(TimeoutError) as caught:
         run_and_wait(client, session="amp", timeout=30)
+    assert isinstance(caught.value, writer.MaestroCompletionUnknown)
+    assert caught.value.__cause__ is original
     metadata = caught.value.result.metadata
+    assert metadata["dialog_guard"]["status"] == status
     assert metadata["history"] == "Interactive.17"
     assert metadata["simulation_start_sent"] is True
     assert metadata["phase"] == "completion_wait"
     assert metadata["outcome"] == "unknown"
+
+
+def test_start_preserves_third_party_exception_result_attribute(monkeypatch):
+    client = _RecordingClient()
+    original = ConnectionError("transport unavailable")
+    original.result = {"backend": "custom"}
+    def failed(*a, **kw):
+        raise original
+    monkeypatch.setattr(client, "execute_skill", failed)
+    with pytest.raises(ConnectionError) as caught:
+        run_simulation(client, session="amp", timeout=30)
+    assert caught.value is original
+    assert original.result == {"backend": "custom"}
+    assert original.virtuoso_result.metadata["session"] == "amp"
+
+
+@pytest.mark.parametrize("frozen", [False, True])
+def test_start_diagnostics_cannot_mask_read_only_exception(monkeypatch, frozen):
+    class ReadOnlyResult(ConnectionError):
+        @property
+        def result(self):
+            return None
+    class FrozenError(ConnectionError):
+        def __setattr__(self, name, value):
+            raise AttributeError("exception is frozen")
+    original = FrozenError("transport unavailable") if frozen else ReadOnlyResult("transport unavailable")
+    client = _RecordingClient()
+    def failed(*a, **kw):
+        raise original
+    monkeypatch.setattr(client, "execute_skill", failed)
+    with pytest.raises(ConnectionError) as caught:
+        run_simulation(client, session="amp", timeout=30)
+    assert caught.value is original
+    if not frozen:
+        assert original.result is None
+        assert original.virtuoso_result.metadata["session"] == "amp"
 
 
 def test_start_guard_refusal_preserves_not_started_and_does_not_inspect_twice(monkeypatch):
