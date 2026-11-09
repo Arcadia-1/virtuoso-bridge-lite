@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from virtuoso_bridge.env import load_vb_env
+from virtuoso_bridge.models import VirtuosoResult
 from virtuoso_bridge.profile import resolve_profile
 from virtuoso_bridge.runtime_paths import artifact_dir, tmp_dir
 from virtuoso_bridge.transport.remote_paths import (
@@ -118,15 +119,29 @@ def _strip_skill_atom(raw: str) -> str:
     return (raw or "").strip().strip('"')
 
 
+def _request_result(source: object):
+    candidates = []
+    for attribute in ("result", "virtuoso_result"):
+        try:
+            candidate = getattr(source, attribute, None)
+            if isinstance(candidate, VirtuosoResult):
+                return candidate
+            if isinstance(getattr(candidate, "metadata", None), dict):
+                candidates.append(candidate)
+        except Exception:
+            continue
+    return candidates[0] if candidates else source
+
+
 def _request_definitely_not_sent(exc: BaseException) -> bool:
-    result = getattr(exc, "result", None)
+    result = _request_result(exc)
     metadata = getattr(result, "metadata", {})
     return isinstance(metadata, dict) and metadata.get("request_sent") is False
 
 
 def _request_evidence(source: object) -> tuple[RequestHandle | None, dict[str, Any]]:
     """Return a bounded, credential-free recovery record from a result/error."""
-    result = getattr(source, "result", source)
+    result = _request_result(source)
     metadata = getattr(result, "metadata", {})
     if not isinstance(metadata, dict):
         return None, {}
@@ -140,6 +155,9 @@ def _request_evidence(source: object) -> tuple[RequestHandle | None, dict[str, A
         "session",
         "completion_marker",
         "waiting_for_user",
+        "dialog_guard",
+        "dialog_inspection_error",
+        "history",
     )
     evidence = {key: metadata[key] for key in allowed if key in metadata}
     handle = None
@@ -733,6 +751,11 @@ class MaestroJobManager:
         manifest["request_handle"] = job.request_handle.model_dump()
         request_phase = job.request_evidence.get("maestro_phase", "simulation_start")
         evidence["maestro_phase"] = request_phase
+        # Receipts describe the original request, not the Python workflow or
+        # the dialog inspection captured when submission stopped.
+        for key in ("dialog_guard", "dialog_inspection_error", "completion_marker", "session", "history"):
+            if key in job.request_evidence:
+                evidence.setdefault(key, job.request_evidence[key])
         manifest["request_evidence"] = evidence
         manifest["reconciled_at"] = time.time()
         history = _strip_skill_atom(getattr(result, "output", "") or "")

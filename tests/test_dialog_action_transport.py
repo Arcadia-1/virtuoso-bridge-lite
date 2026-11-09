@@ -19,7 +19,7 @@ class Runner:
 
     def run_command(self, command, timeout=None):
         self.commands.append((command, timeout))
-        if command.startswith("mkdir"):
+        if command.startswith(("mkdir", "test -r")):
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         if "CMD:python" in command:
             return SimpleNamespace(returncode=0, stdout="CMD:python\n", stderr="")

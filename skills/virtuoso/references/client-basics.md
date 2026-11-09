@@ -25,6 +25,34 @@ print(result.status, result.output)
 Use `printf` explicitly when CIW output is desired; return a structured value
 when Python needs it. Check status before treating output as successful data.
 
+## Shell commands in Virtuoso's environment
+
+`client.run_shell_command(command, timeout=...)` executes through SKILL's
+`csh()` in the selected Virtuoso process's environment. Commands are csh,
+including their quoting, variables and redirection. The bridge captures stdout
+and stderr together in `result.output`; check `result.ok` before using it.
+
+```python
+result = client.run_shell_command("uname -sr", timeout=15)
+if not result.ok:
+    raise RuntimeError(result.errors)
+print(result.output)
+```
+
+For combined output redirected to a file, csh uses `>& run.log`, rather than
+POSIX `> run.log 2>&1`. A command containing POSIX syntax can instead invoke an
+explicitly quoted `sh -c '...'` inside csh when that shell is available; quoting
+must survive both shells. The bridge passes command text through unchanged and
+does not attempt to infer or reject the syntax of nested commands or strings.
+
+`SSHRunner.run_command()` is available for commands that belong in an SSH
+session. That session has its own environment; it does not inherit changes made
+inside the running Virtuoso process. Choose the execution context deliberately.
+
+The timeout bounds the bridge's wait. It does not cancel the command, its child
+processes or the SKILL request. Preserve any request handle and reconcile its
+outcome before retrying; see [shared-CIW protection](shared-ciw-dialogs.md).
+
 ## Batched object attributes
 
 Opaque handles such as `db:0x...` are not Python objects. Read attributes in

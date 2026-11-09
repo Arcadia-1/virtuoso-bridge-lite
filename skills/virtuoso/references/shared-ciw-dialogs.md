@@ -174,13 +174,53 @@ daemon or sending a SKILL probe. Never log the credential.
 it is not proof of higher-level design or simulation acceptance. `running` or
 `unknown` never grants permission to resubmit. A missing submission
 acknowledgement is unknown too, with `request_sent=None`, not not-started.
-Only an authenticated submission refusal reports `outcome="not_started"`.
+After transmission is attempted, only an authenticated submission refusal
+establishes `outcome="not_started"`. A local preflight or deadline that stops
+before transmission also establishes that the request was not started.
 
 Maestro writer errors retain the handle in `RequestRecoveryError.handle` and
 the full `VirtuosoResult` in `.result`. `run_and_wait()` retains its session and
 completion marker when startup is uncertain. A recovered run-history response
 must be reconciled with that original marker/history, not used to start a
 second simulation. Querying a receipt does not resume a multi-step workflow.
+
+Simulation start errors also retain this context when they are
+`DialogBlockedError` or ordinary transport errors. With the guard enabled,
+missing dialog evidence is inspected once within the remaining budget (at most
+five seconds). Existing evidence and exception types are preserved;
+unguarded calls do not gain X11 inspection. Completion-poll transport failures
+likewise retain the acknowledged history and marker, with guard evidence when
+available. A confirmed unsent request remains `not_started`.
+
+Ordinary start transport exceptions keep their original type and instance,
+with added context in `.result.metadata`. If a third-party exception already
+owns an unrelated `.result`, context is attached as `.virtuoso_result` instead.
+Generic completion-poll failures still raise `MaestroCompletionUnknown`, which
+remains catchable as `TimeoutError`, even when diagnostic inspection finds a
+dialog. An existing `DialogBlockedError` or `RequestRecoveryError` keeps its
+original exception identity and recovery handle.
+Diagnostic attachment is best effort for custom exceptions that prohibit
+new attributes; a failed attachment does not replace the original exception.
+
+`MaestroJob.request_evidence["dialog_guard"]`, when present, records the
+inspection captured at submission failure. It survives receipt reconciliation
+as historical evidence, not a fresh claim that the CIW is still blocked.
+`status()` remains an out-of-band job observation; no new blocked job state or
+automatic resubmission is introduced.
+
+X11 helper deployment stays lazy. Directory creation, upload and remote
+readability are checked before a helper is used or cached. Missing cached
+helpers are redeployed before execution, including both files needed by the
+reviewed-close helper. Checked deployment failures in inspection and reviewed
+close raise `X11HelperDeploymentError` (a `RuntimeError` subclass), with `stage`,
+`local_helper`, `remote_target`, `returncode` and `stderr`. Legacy list-returning
+X11 APIs keep their list of error dictionaries, adding these details under
+`helper_deployment`. Raised transport exceptions keep their type and instance,
+with details attached as `.helper_deployment`. Legacy helper preparation keeps
+the runner's configured timeout defaults; budgeted inspection and close calls
+continue to use their remaining timeout.
+Checking or repairing a helper does not repeat an X11 action whose outcome is
+uncertain.
 
 Receipts are in-memory and bounded, not a durable job database. A daemon
 restart, lost IPC pipe, malformed response, receipt expiry or unavailable

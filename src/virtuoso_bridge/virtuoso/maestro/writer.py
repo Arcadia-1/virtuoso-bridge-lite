@@ -36,8 +36,58 @@ def _q(client: VirtuosoClient, expr: str, timeout: float | None = None) -> str:
             raise RequestRecoveryError(r)
         if getattr(r, "metadata", {}).get("dialog_guard"):
             raise DialogBlockedError(r)
-        raise RuntimeError(f"SKILL error: {r.errors[0]}")
+        error = RuntimeError(f"SKILL error: {r.errors[0]}")
+        error.result = r
+        raise error
     return r.output or ""
+
+
+def _simulation_failure(client, exc: Exception, *, timeout: float, **context) -> VirtuosoResult:
+    """Keep the original error/receipt and add bounded opt-in inspection evidence."""
+    result = None
+    for attribute in ("result", "virtuoso_result"):
+        try:
+            candidate = getattr(exc, attribute, None)
+        except Exception:
+            continue
+        if isinstance(candidate, VirtuosoResult):
+            result = candidate
+            break
+    if result is None:
+        result = VirtuosoResult(status=ExecutionStatus.ERROR, errors=[str(exc)])
+    for attribute in ("result", "virtuoso_result"):
+        try:
+            existing = getattr(exc, attribute, None)
+            if existing is not None and existing is not result:
+                continue
+            setattr(exc, attribute, result)
+            break
+        except Exception:
+            # Custom exceptions may own .result or refuse new attributes.
+            continue
+    result.metadata.update(context)
+    result.metadata.setdefault("outcome", "not_started" if
+                               result.metadata.get("request_sent") is False else "unknown")
+    dialogs = getattr(client, "dialogs", None)
+    if (dialogs is not None and dialogs.enabled and not result.metadata.get("dialog_guard")
+            and not result.metadata.get("dialog_inspection_error")
+            and result.metadata.get("request_sent") is not False):
+        outcome = result.metadata["outcome"]
+        try:
+            dialogs.annotate_failure(result, timeout=max(0, min(5.0, timeout)))
+        except Exception as inspection_error:
+            # Inspection failure must not replace the original recovery error.
+            result.metadata["dialog_inspection_error"] = str(inspection_error) or type(inspection_error).__name__
+            result.warnings.append(f"Dialog inspection unavailable: {inspection_error}")
+        finally:
+            result.metadata["outcome"] = outcome
+    if isinstance(exc, DialogBlockedError):
+        try:
+            exc.inspection = result.metadata.get("dialog_guard")
+            exc.outcome = result.metadata["outcome"]
+        except Exception:
+            pass
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -395,7 +445,17 @@ def run_simulation(client: VirtuosoClient, *, session: str = "",
     if run_mode:
         parts += f'?runMode "{escape_skill_string(run_mode)}" '
     parts = parts.rstrip() + ")"
-    return _q(client, _without_history_name_form(parts), timeout=timeout)
+    budget = timeout if timeout is not None else getattr(client, "_timeout", 30)
+    deadline = time.monotonic() + budget
+    try:
+        return _q(client, _without_history_name_form(parts), timeout=timeout)
+    except Exception as exc:
+        result = _simulation_failure(
+            client, exc, timeout=deadline - time.monotonic(),
+            session=session, maestro_phase="simulation_start",
+        )
+        result.metadata.setdefault("simulation_start_sent", result.metadata.get("request_sent"))
+        raise
 
 
 def _remove_marker(runner, marker: str) -> None:
@@ -514,6 +574,16 @@ def run_and_wait(client: VirtuosoClient, *, session: str = "",
     marker = f"/tmp/vb_sim_done_{nonce}"
     _remove_marker(runner, marker)
 
+    try:
+        setup_timeout = remaining_timeout()
+    except TimeoutError as exc:
+        _simulation_failure(
+            client, exc, timeout=0, completion_marker=marker, session=session,
+            maestro_phase="callback_setup", simulation_start_sent=False,
+            request_sent=False, outcome="not_started",
+        )
+        raise
+
     # Define callback that writes marker file when simulation finishes.
     # Use system("echo ... > file") instead of outfile/fprintf to avoid
     # SKILL I/O buffering issues in callback context.
@@ -522,22 +592,33 @@ def run_and_wait(client: VirtuosoClient, *, session: str = "",
 procedure(_vb_sim_done_{nonce}(session runID)
   system(sprintf(nil "echo done > {marker}"))
   printf("[%s sim done] run %L\\n" nth(2 parseString(getCurrentTime())) runID))
-''', timeout=remaining_timeout())
-    except RequestRecoveryError as exc:
-        exc.result.metadata.update(maestro_phase="callback_setup", session=session,
-                                   simulation_start_sent=False)
+''', timeout=setup_timeout)
+    except Exception as exc:
+        _simulation_failure(client, exc, timeout=deadline - time.monotonic(),
+                            maestro_phase="callback_setup", session=session,
+                            simulation_start_sent=False)
         raise
 
+    try:
+        start_timeout = remaining_timeout()
+    except TimeoutError as exc:
+        _simulation_failure(
+            client, exc, timeout=0, completion_marker=marker, session=session,
+            maestro_phase="simulation_start", simulation_start_sent=False,
+            request_sent=False, outcome="not_started",
+        )
+        raise
     try:
         # Start once: missing acknowledgement must not trigger a second run.
         history = run_simulation(client, session=session,
                                  callback=f"_vb_sim_done_{nonce}",
                                  run_mode=run_mode,
-                                 timeout=remaining_timeout())
-    except RequestRecoveryError as exc:
-        exc.result.metadata.update(completion_marker=marker, session=session,
-                                   maestro_phase="simulation_start",
-                                   simulation_start_sent=exc.result.metadata.get("request_sent"))
+                                 timeout=start_timeout)
+    except Exception as exc:
+        result = _simulation_failure(client, exc, timeout=deadline - time.monotonic(),
+                                     completion_marker=marker, session=session,
+                                     maestro_phase="simulation_start")
+        result.metadata.setdefault("simulation_start_sent", result.metadata.get("request_sent"))
         raise
 
     history_name = _strip_skill_atom(history)
@@ -551,17 +632,20 @@ procedure(_vb_sim_done_{nonce}(session runID)
             "verify run state before retrying. "
             f"session={session or '<current>'}, completion_marker={marker}"
         )
+        failure = VirtuosoResult(
+            status=ExecutionStatus.ERROR, errors=[message],
+            metadata={"completion_marker": marker, "session": session,
+                      "maestro_phase": "simulation_start", "simulation_start_sent": True,
+                      "outcome": "unknown"},
+        )
         dialogs = getattr(client, "dialogs", None)
         if dialogs is not None and dialogs.enabled:
-            failure = VirtuosoResult(
-                status=ExecutionStatus.ERROR, errors=[message],
-                metadata={"completion_marker": marker, "session": session},
-            )
-            failure = dialogs.annotate_failure(
-                failure, timeout=max(0, deadline - time.monotonic()),
-            )
-            raise DialogBlockedError(failure)
-        raise RuntimeError(message)
+            error = DialogBlockedError(failure)
+        else:
+            error = RuntimeError(message)
+            error.result = failure
+        _simulation_failure(client, error, timeout=deadline - time.monotonic())
+        raise error
 
     # Poll marker via SSH (SKILL channel stays free)
     try:
@@ -576,12 +660,10 @@ procedure(_vb_sim_done_{nonce}(session runID)
         # uncertain so clients can inspect this run without starting another.
         # Transport polling can also raise TimeoutExpired or connection errors,
         # not just the end-to-end TimeoutError.
-        result = VirtuosoResult(
-            status=ExecutionStatus.ERROR,
-            errors=[str(exc)],
-            metadata={"outcome": "unknown", "session": session,
-                      "history": history_name, "completion_marker": marker,
-                      "phase": "completion_wait", "simulation_start_sent": True},
+        result = _simulation_failure(
+            client, exc, timeout=deadline - time.monotonic(), session=session,
+            history=history_name, completion_marker=marker,
+            phase="completion_wait", simulation_start_sent=True,
         )
         raise MaestroCompletionUnknown(result) from exc
     return history, status
