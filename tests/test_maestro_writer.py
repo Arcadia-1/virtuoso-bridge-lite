@@ -416,3 +416,64 @@ def test_budget_exhausted_before_start_is_definitely_not_started(monkeypatch):
     assert metadata["simulation_start_sent"] is False
     assert metadata["request_sent"] is False
     assert metadata["outcome"] == "not_started"
+
+
+def test_budget_exhausted_before_callback_setup_is_definitely_not_started(monkeypatch):
+    client = _RecordingClient()
+    client.dialogs = SimpleNamespace(
+        enabled=True,
+        annotate_failure=lambda *a, **kw: pytest.fail("unsent request needs no inspection"),
+    )
+    clock = [0.0]
+
+    def prepare_marker(*args):
+        clock[0] = 31.0
+
+    monkeypatch.setattr(writer.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(writer, "_remove_marker", prepare_marker)
+    with pytest.raises(TimeoutError) as caught:
+        run_and_wait(client, session="amp", timeout=30)
+
+    assert client.expressions == []
+    metadata = caught.value.result.metadata
+    assert metadata["maestro_phase"] == "callback_setup"
+    assert metadata["session"] == "amp"
+    assert metadata["completion_marker"].startswith("/tmp/vb_sim_done_")
+    assert metadata["simulation_start_sent"] is False
+    assert metadata["request_sent"] is False
+    assert metadata["outcome"] == "not_started"
+
+
+@pytest.mark.parametrize("guard_enabled", [False, True])
+def test_nil_history_retains_context_when_diagnostic_inspection_fails(monkeypatch, guard_enabled):
+    client = _RecordingClient()
+    inspections = []
+    starts = []
+
+    def annotate(*args, **kwargs):
+        inspections.append(kwargs)
+        raise ConnectionError("inspection unavailable")
+
+    def start(*args, **kwargs):
+        starts.append(kwargs)
+        return "nil"
+
+    client.dialogs = SimpleNamespace(enabled=guard_enabled, annotate_failure=annotate)
+    monkeypatch.setattr(writer, "run_simulation", start)
+    monkeypatch.setattr(writer, "_remove_marker", lambda *a: None)
+    monkeypatch.setattr(writer, "_wait_until_done", lambda *a, **kw: pytest.fail("no acknowledged run"))
+    expected_type = DialogBlockedError if guard_enabled else RuntimeError
+    with pytest.raises(expected_type) as caught:
+        run_and_wait(client, session="amp", timeout=30)
+
+    assert type(caught.value) is expected_type
+    assert "no history acknowledged" in str(caught.value)
+    assert len(starts) == 1
+    assert len(inspections) == int(guard_enabled)
+    metadata = caught.value.result.metadata
+    assert metadata["session"] == "amp"
+    assert metadata["completion_marker"].startswith("/tmp/vb_sim_done_")
+    assert metadata["simulation_start_sent"] is True
+    assert metadata["outcome"] == "unknown"
+    if guard_enabled:
+        assert metadata["dialog_inspection_error"] == "inspection unavailable"

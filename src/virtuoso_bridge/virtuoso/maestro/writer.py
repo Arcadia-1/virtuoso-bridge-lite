@@ -574,6 +574,16 @@ def run_and_wait(client: VirtuosoClient, *, session: str = "",
     marker = f"/tmp/vb_sim_done_{nonce}"
     _remove_marker(runner, marker)
 
+    try:
+        setup_timeout = remaining_timeout()
+    except TimeoutError as exc:
+        _simulation_failure(
+            client, exc, timeout=0, completion_marker=marker, session=session,
+            maestro_phase="callback_setup", simulation_start_sent=False,
+            request_sent=False, outcome="not_started",
+        )
+        raise
+
     # Define callback that writes marker file when simulation finishes.
     # Use system("echo ... > file") instead of outfile/fprintf to avoid
     # SKILL I/O buffering issues in callback context.
@@ -582,7 +592,7 @@ def run_and_wait(client: VirtuosoClient, *, session: str = "",
 procedure(_vb_sim_done_{nonce}(session runID)
   system(sprintf(nil "echo done > {marker}"))
   printf("[%s sim done] run %L\\n" nth(2 parseString(getCurrentTime())) runID))
-''', timeout=remaining_timeout())
+''', timeout=setup_timeout)
     except Exception as exc:
         _simulation_failure(client, exc, timeout=deadline - time.monotonic(),
                             maestro_phase="callback_setup", session=session,
@@ -630,12 +640,11 @@ procedure(_vb_sim_done_{nonce}(session runID)
         )
         dialogs = getattr(client, "dialogs", None)
         if dialogs is not None and dialogs.enabled:
-            failure = dialogs.annotate_failure(
-                failure, timeout=max(0, min(5.0, deadline - time.monotonic())),
-            )
-            raise DialogBlockedError(failure)
-        error = RuntimeError(message)
-        error.result = failure
+            error = DialogBlockedError(failure)
+        else:
+            error = RuntimeError(message)
+            error.result = failure
+        _simulation_failure(client, error, timeout=deadline - time.monotonic())
         raise error
 
     # Poll marker via SSH (SKILL channel stays free)
