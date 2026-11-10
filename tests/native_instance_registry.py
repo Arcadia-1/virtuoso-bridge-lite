@@ -497,7 +497,14 @@ runpy.run_path(sys.argv[0], run_name='__main__')
             self.assertIn(b"AuthError", response)
         response = request(dict(skill="1+1", timeout=1))
         self.assertIn(b"AuthError", response)
-        process.kill()
+        # No locally verifiable owner: a lost SSH/IPC input pipe must end
+        # even an idle daemon and release both the listener and record lock.
+        process.stdin.close()
+        process.stdin = None
+        self.assertEqual(process.wait(timeout=3), 0)
+        self.assertEqual(registry.discover(self.directory, read_only=True), [])
+        with socket.socket() as probe:
+            self.assertNotEqual(probe.connect_ex(("127.0.0.1", record["port"])), 0)
         stdout, stderr = process.communicate(timeout=5)
         self.assertNotIn(token.encode(), stdout + stderr)
         self.assertEqual(stdout, b"")  # no forged request reached the SKILL IPC lane

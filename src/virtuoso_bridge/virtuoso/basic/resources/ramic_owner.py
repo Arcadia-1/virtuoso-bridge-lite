@@ -7,6 +7,7 @@ Unknown/different boots retain IPC cleanup without local polling or signals.
 
 import errno
 import os
+import select
 import signal
 import sys
 import threading
@@ -15,6 +16,35 @@ import time
 
 BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
 _UNKNOWN = object()
+
+
+def start_pipe_monitor(fd):
+    """End the worker on IPC hangup without consuming response bytes.
+
+    A split-host owner cannot be polled by PID. Its SSH/Cadence pipe still
+    closes on exit; polling only hangup/error also works while no request
+    reader is active, or while a timed-out reader is resynchronizing.
+    """
+    poller = select.poll()
+    poller.register(fd, select.POLLHUP | select.POLLERR | select.POLLNVAL)
+
+    def watch():
+        while True:
+            try:
+                events = poller.poll()
+            except (OSError, select.error) as exc:
+                if exc.args[0] == errno.EINTR:
+                    continue
+                # An unusable IPC monitor cannot establish a usable bridge.
+                os._exit(1)
+            if events:
+                # Close the listener and release registry locks even when
+                # another thread is stuck in accept/recv/SKILL I/O.
+                os._exit(0)
+
+    monitor = threading.Thread(target=watch, name="virtuoso-ipc-pipe")
+    monitor.daemon = True
+    monitor.start()
 
 
 def _boot_id():
