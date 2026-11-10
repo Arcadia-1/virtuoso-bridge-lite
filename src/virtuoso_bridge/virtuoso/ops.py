@@ -165,7 +165,8 @@ def close_windows(
     closed and the SKILL errors, naming the modified cellviews; with
     ``unsaved="save"`` they are saved first. ``unsaved="discard"`` explicitly
     purges modified matching cellviews, invalidating their database handles
-    and clearing undo checkpoints. A window that closing another
+    and clearing undo checkpoints for earlier edits, including other cellviews.
+    A window that closing another
     one already took away (e.g. a linked Layout XL window) is skipped.
     Returns the number of windows closed. Filters left as None match all.
     """

@@ -856,7 +856,8 @@ class VirtuosoClient(VirtuosoInterface):
         ``unsaved="refuse"`` (default) closes nothing if a matching cellview
         has unsaved changes and reports them; ``unsaved="save"`` saves them
         first. ``unsaved="discard"`` purges the modified matching cellviews,
-        invalidating their database handles and clearing undo checkpoints.
+        invalidating their database handles and clearing undo checkpoints for
+        earlier edits, including other cellviews.
         The output is the number of windows closed.
         """
         effective_timeout = timeout if timeout is not None else self._timeout

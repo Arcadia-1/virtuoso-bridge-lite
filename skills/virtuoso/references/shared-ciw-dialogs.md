@@ -118,7 +118,8 @@ known save prompts before the operation:
   (`unsaved="save"`), or discards them when explicitly requested
   (`unsaved="discard"`). Saving must leave each cellview unmodified before
   windows can close. Discard uses `dbPurge`: database handles become invalid
-  and undo checkpoints are cleared. A window that an earlier close already
+  and undo checkpoints for earlier edits, including other cellviews, are cleared.
+  A window that an earlier close already
   took away (a linked Layout XL window) is skipped.
 - XStream export refuses while the exported library has unsaved open
   cellviews, naming them, instead of opening "Save All". Save explicitly,
@@ -144,8 +145,8 @@ not merely an agent's desire to unblock work. These options do not dismiss
 an already-open dialog.
 
 The helper queues one callback, rechecks unsaved cellviews, applies the chosen
-policy, and calls ordinary `exit()` with Cadence's `layout
-drmSuppressSaveDialogBox` setting temporarily enabled. Native exit hooks still
+policy, and calls ordinary `exit()` with Cadence's display-resource save prompt
+temporarily suppressed (`layout` / `drmSuppressSaveDialogBox`). Native exit hooks still
 run and may cancel or block exit. If exit returns, the prior setting is restored.
 Saving/discarding happens before those hooks; it is not rolled back on a later
 error or cancelled exit. This does not bypass other application-specific prompts.
