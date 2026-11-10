@@ -126,7 +126,7 @@ def test_close_windows_never_leaves_a_modified_cellview_to_a_dialog(unsaved) -> 
         assert "error(sprintf(nil \"unsaved cellviews would open a Save Changes dialog" in skill
         assert "dbSave(" not in skill
     else:
-        assert "foreach(x vbUnsaved unless(dbSave(x) error(" in skill
+        assert "foreach(x vbUnsaved unless(dbSave(x) && !dbIsCellViewModified(x) error(" in skill
     # Matching by name, silently skipping non-editor windows such as the CIW,
     # and skipping a window an earlier close already took away.
     assert '(vbCv = w~>cellView) && vbCv~>libName == "demo\\"Lib" && vbCv~>cellName == "nand2")' in skill
@@ -138,4 +138,4 @@ def test_close_windows_never_leaves_a_modified_cellview_to_a_dialog(unsaved) -> 
 
 def test_close_windows_rejects_unknown_unsaved_policy() -> None:
     with pytest.raises(ValueError, match="refuse"):
-        close_windows(unsaved="discard")
+        close_windows(unsaved="ignore")

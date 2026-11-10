@@ -126,6 +126,31 @@ def _show_layout_hierarchy(window: str) -> str:
         f"hiRedraw({window})) "
     )
 
+def _unsaved_action(unsaved: str) -> str:
+    """Handle the caller's ``vbUnsaved`` list without a confirmation dialog."""
+    if unsaved == "refuse":
+        return (
+            'error(sprintf(nil "unsaved cellviews would open a Save Changes dialog; '
+            'save them or pass unsaved=save: %s" '
+            'buildString(mapcar(lambda((x) sprintf(nil "%s/%s/%s" '
+            'x~>libName x~>cellName x~>viewName)) vbUnsaved) " ")))'
+        )
+    if unsaved == "save":
+        return (
+            "foreach(x vbUnsaved unless(dbSave(x) && !dbIsCellViewModified(x) "
+            'error(sprintf(nil "cannot save %s/%s/%s" x~>libName x~>cellName x~>viewName))))'
+        )
+    if unsaved == "discard":
+        # Purging may invalidate another ID in this snapshot. It also clears
+        # undo checkpoints; callers must explicitly choose this policy.
+        return (
+            "foreach(x vbUnsaved when(dbIsId(x) let((vbName) "
+            'vbName = sprintf(nil "%s/%s/%s" x~>libName x~>cellName x~>viewName) '
+            'unless(dbPurge(x) error(sprintf(nil "cannot discard %s" vbName))))))'
+        )
+    raise ValueError('unsaved must be "refuse", "save", or "discard"')
+
+
 def close_windows(
     lib: str | None = None,
     cell: str | None = None,
@@ -138,29 +163,19 @@ def close_windows(
     Closing the last window of a modified cellview opens a modal "Save
     Changes" dialog that blocks the CIW. With ``unsaved="refuse"`` nothing is
     closed and the SKILL errors, naming the modified cellviews; with
-    ``unsaved="save"`` they are saved first. A window that closing another
+    ``unsaved="save"`` they are saved first. ``unsaved="discard"`` explicitly
+    purges modified matching cellviews, invalidating their database handles
+    and clearing undo checkpoints for earlier edits, including other cellviews.
+    A window that closing another
     one already took away (e.g. a linked Layout XL window) is skipped.
     Returns the number of windows closed. Filters left as None match all.
     """
-    if unsaved not in ("refuse", "save"):
-        raise ValueError('unsaved must be "refuse" or "save"')
+    handle = _unsaved_action(unsaved)
     tests = "".join(
         f' && vbCv~>{attr} == "{escape_skill_string(value)}"'
         for attr, value in (("libName", lib), ("cellName", cell), ("viewName", view))
         if value is not None
     )
-    if unsaved == "refuse":
-        handle = (
-            'error(sprintf(nil "unsaved cellviews would open a Save Changes dialog; '
-            'save them or pass unsaved=save: %s" '
-            'buildString(mapcar(lambda((x) sprintf(nil "%s/%s/%s" '
-            'x~>libName x~>cellName x~>viewName)) vbUnsaved) " ")))'
-        )
-    else:
-        handle = (
-            "foreach(x vbUnsaved unless(dbSave(x) "
-            'error(sprintf(nil "cannot save %s/%s/%s" x~>libName x~>cellName x~>viewName))))'
-        )
     return (
         "let((vbCv vbWins vbCvs vbUnsaved (vbClosed 0)) "
         "vbWins = setof(w hiGetWindowList() "
@@ -173,6 +188,55 @@ def close_windows(
         "when(memq(w hiGetWindowList()) && car(errset(hiCloseWindow(w) nil)) "
         "vbClosed = vbClosed + 1)) "
         "vbClosed)"
+    )
+
+
+def request_exit(
+    *,
+    display_resources: str,
+    unsaved: str = "refuse",
+    display_path: str | None = None,
+) -> str:
+    """Queue one exit, with explicit treatment of display-resource changes.
+
+    The acknowledgement means queued, not exited. Native exit hooks still
+    run and can cancel or block exit. Recheck cellviews inside the callback
+    so an edit after submission cannot bypass the default refusal.
+    """
+    handle = _unsaved_action(unsaved)
+    if display_resources not in ("save", "discard"):
+        raise ValueError('display_resources must explicitly be "save" or "discard"')
+    if display_resources == "save":
+        if not isinstance(display_path, str) or not display_path.strip() or any(
+            char in display_path for char in "\x00\r\n"
+        ):
+            raise ValueError("saving display resources requires a nonempty display_path")
+        save_display = (
+            f"unless(drDumpDrf({q(display_path)}) "
+            'error("cannot save display resources; exit refused")) '
+        )
+    else:
+        if display_path is not None:
+            raise ValueError("display_path is only used when display_resources=save")
+        save_display = ""
+    collect = "vbUnsaved = setof(x dbGetOpenCellViews() dbIsCellViewModified(x)) "
+    preflight = (
+        f"let((vbUnsaved) {collect}when(vbUnsaved {handle})) "
+        if unsaved == "refuse" else ""
+    )
+    callback = (
+        "let((vbUnsaved vbOldSuppress) "
+        f"{collect}when(vbUnsaved {handle}) {save_display}"
+        'vbOldSuppress = envGetVal("layout" "drmSuppressSaveDialogBox") '
+        "unwindProtect(progn("
+        'unless(envSetVal("layout" "drmSuppressSaveDialogBox" \'boolean t) '
+        'error("cannot configure display-resource exit policy")) '
+        "exit()) "
+        'envSetVal("layout" "drmSuppressSaveDialogBox" \'boolean vbOldSuppress)))'
+    )
+    return (
+        f"progn({preflight}unless(hiRegTimer({q(callback)} 1) "
+        'error("cannot queue Virtuoso exit")) "exit_requested")'
     )
 
 

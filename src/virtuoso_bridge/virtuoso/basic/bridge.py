@@ -30,6 +30,7 @@ from virtuoso_bridge.virtuoso.ops import (
     escape_skill_string,
     open_cell_view as op_open_cell_view,
     open_window as op_open_window,
+    request_exit as op_request_exit,
     save_current_cellview as op_save_current_cellview,
 )
 from virtuoso_bridge.virtuoso.layout import LayoutOps
@@ -854,11 +855,37 @@ class VirtuosoClient(VirtuosoInterface):
 
         ``unsaved="refuse"`` (default) closes nothing if a matching cellview
         has unsaved changes and reports them; ``unsaved="save"`` saves them
-        first. The output is the number of windows closed.
+        first. ``unsaved="discard"`` purges the modified matching cellviews,
+        invalidating their database handles and clearing undo checkpoints for
+        earlier edits, including other cellviews.
+        The output is the number of windows closed.
         """
         effective_timeout = timeout if timeout is not None else self._timeout
         skill = op_close_windows(lib, cell, view, unsaved=unsaved)
-        return self.execute_skill(skill, timeout=effective_timeout)
+        return self.execute_skill(skill, timeout=effective_timeout, retry_connect=False)
+
+    def request_exit(self, *, display_resources: str, unsaved: str = "refuse",
+                     display_path: str | Path | None = None,
+                     timeout: int | None = None) -> VirtuosoResult:
+        """Request exit of this Virtuoso, retaining ordinary exit hooks.
+
+        Display resources must explicitly be saved to ``display_path`` or
+        discarded. Cellviews default to refusing unsaved edits; ``save`` and
+        ``discard`` apply to all open cellviews, including non-window handles.
+        A successful reply has ``metadata.exit_state="requested"``: a hook
+        may still cancel or block exit. Do not retry an uncertain request.
+        """
+        skill = op_request_exit(
+            display_resources=display_resources, unsaved=unsaved,
+            display_path=os.fspath(display_path) if display_path is not None else None,
+        )
+        effective_timeout = timeout if timeout is not None else self._timeout
+        result = self.execute_skill(skill, timeout=effective_timeout, retry_connect=False)
+        result.metadata["exit_state"] = (
+            "requested" if result.status == ExecutionStatus.SUCCESS else
+            "not_started" if result.metadata.get("request_sent") is False else "unknown"
+        )
+        return result
 
     def save_current_cellview(self, timeout: int | None = None) -> VirtuosoResult:
         effective_timeout = timeout if timeout is not None else self._timeout
