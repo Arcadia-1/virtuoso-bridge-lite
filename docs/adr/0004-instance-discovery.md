@@ -143,6 +143,13 @@ Registry access and TCP forwarding stay on the daemon host. Bundle publication
 uses Python detected on the deployment host; the generated launcher retains
 the daemon host's Python path. GUI and daemon hosts must both see the bundle.
 
+Workers monitor IPC input hangup without reading response bytes. This ends an
+idle or blocked worker when its Cadence/SSH pipe closes, releasing the listener
+and registry lock even when the CIW lives on another host. Local owner polling
+still checks the original boot and process birth identity; a foreign PID is
+never polled or signalled. A site launcher must preserve the IPC pipe lifetime.
+Pipe loss ends the worker, not the GUI or an uncertain operation in that GUI.
+
 `RBStopAll()` remains tracked-child-only, an explicitly reviewed safety change.
 An untracked daemon needs operator identity investigation, not a broad process
 sweep. `RBSetPort(N)` with a positive port preserves the current registration

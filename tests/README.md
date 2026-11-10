@@ -171,6 +171,16 @@ operator acceptance step, not automated by the Cadence lifecycle suite. Supply
 isolated CIWs and baseline resources as well as a reachable daemon. Missing
 prerequisites must be reported as skips, not successful live verification.
 
+For split hosts, verify that a site IPC launcher carries the GUI identity and
+closes the daemon's input pipe when its CIW exits. Check normal exit, killed
+CIW and restart with a surviving peer: the old daemon listener and live registry
+record must disappear. `test_daemon_lifecycle.py` reproduces pipe loss with
+idle and timed-out workers and foreign/unknown owners; it also checks that a
+colliding local PID is never signalled. The native registry harness checks
+listener/record release for both ephemeral and fixed registered ports, including
+the actual Python 2.7 worker in CI. These process tests do not substitute for
+physical host acceptance.
+
 `test_layout_groups_live.py` uses the same isolated headless-session fixture.
 Set `VB_RUN_LAYOUT_GROUP_TESTS=1` and `VB_TEST_VIRTUOSO` on Linux. It creates
 only a private library with generic rectangles, verifies both OA group types,

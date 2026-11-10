@@ -92,7 +92,8 @@ def test_daemon_exits_when_owner_dies_with_ipc_pipes_still_open(tmp_path, versio
     ("3", sys.executable), ("27", shutil.which("python2.7")),
 ])
 @pytest.mark.parametrize("owner_kind", ["absent", "collision", "unknown_host", "missing_pid"])
-def test_foreign_owner_never_uses_local_pid(tmp_path, version, python, owner_kind):
+@pytest.mark.parametrize("state", ["idle", "timed_out"])
+def test_foreign_owner_never_uses_local_pid(tmp_path, version, python, owner_kind, state):
     if python is None:
         pytest.skip("Python 2.7 is unavailable")
     token_path = tmp_path / "token"
@@ -125,21 +126,22 @@ def test_foreign_owner_never_uses_local_pid(tmp_path, version, python, owner_kin
                 assert time.monotonic() < deadline, "daemon did not listen"
                 time.sleep(0.02)
         with conn:
-            conn.settimeout(3)
-            nonce = "ef" * 16
-            request = dict(proto=1, nonce=nonce, skill="1+1", timeout=0.1)
-            request["mac"] = daemon_auth.request_mac(
-                TOKEN, nonce=nonce, skill="1+1", timeout=0.1,
-            )
-            conn.sendall(json.dumps(request).encode())
-            conn.shutdown(socket.SHUT_WR)
-            response = b""
-            while True:
-                chunk = conn.recv(4096)
-                if not chunk:
-                    break
-                response += chunk
-            assert b"did not answer within the request timeout" in response
+            if state == "timed_out":
+                conn.settimeout(3)
+                nonce = "ef" * 16
+                request = dict(proto=1, nonce=nonce, skill="1+1", timeout=0.1)
+                request["mac"] = daemon_auth.request_mac(
+                    TOKEN, nonce=nonce, skill="1+1", timeout=0.1,
+                )
+                conn.sendall(json.dumps(request).encode())
+                conn.shutdown(socket.SHUT_WR)
+                response = b""
+                while True:
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    response += chunk
+                assert b"did not answer within the request timeout" in response
         time.sleep(0.1)
         assert bystander.poll() is None, "watchdog signalled an unrelated local process"
         bystander.kill()
@@ -147,6 +149,12 @@ def test_foreign_owner_never_uses_local_pid(tmp_path, version, python, owner_kin
         # A local PID's death must not end a remote owner's daemon either.
         time.sleep(0.6)
         assert daemon.poll() is None
+        # The actual IPC channel, unlike a foreign PID, proves owner loss.
+        # Idle workers must release their listener without another client call.
+        daemon.stdin.close()
+        assert daemon.wait(timeout=3) == 0
+        with socket.socket() as probe:
+            assert probe.connect_ex(("127.0.0.1", port)) != 0
     finally:
         for process in (daemon, bystander):
             if process.poll() is None:

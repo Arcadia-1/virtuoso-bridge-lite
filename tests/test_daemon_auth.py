@@ -765,6 +765,8 @@ def _wait_for_listener(proc: subprocess.Popen, port: int) -> None:
     reason="real bridge daemon needs POSIX fcntl/signals (macOS/Linux only)",
 )
 class TestRealDaemon:
+    # Keep the simulated CIW input pipe open while testing TCP authentication.
+    # A closed IPC pipe now terminates the worker even when it is otherwise idle.
     @pytest.mark.parametrize("version,interpreter", [
         ("3", sys.executable), ("27", shutil.which("python2.7")),
     ])
@@ -780,7 +782,7 @@ class TestRealDaemon:
         def launch(port):
             proc = subprocess.Popen(
                 [interpreter, str(daemon_src), "127.0.0.1", str(port)],
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE, env=env,
             )
             processes.append(proc)
@@ -821,11 +823,10 @@ class TestRealDaemon:
                 if proc.poll() is None:
                     proc.terminate()
                 try:
-                    proc.wait(timeout=5)
+                    proc.communicate(timeout=5)
                 except subprocess.TimeoutExpired:
                     proc.kill()
-                    proc.wait(timeout=5)
-                proc.stderr.close()
+                    proc.communicate(timeout=5)
 
     def test_rejects_unauthenticated_and_mismatched_requests(self, tmp_path) -> None:
         daemon_src = _resources_dir() / "ramic_bridge_daemon_3.py"
@@ -834,7 +835,7 @@ class TestRealDaemon:
         env = dict(os.environ, RB_TOKEN_PATH=str(token_path))
         proc = subprocess.Popen(
             [sys.executable, str(daemon_src), "127.0.0.1", str(port)],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE, env=env,
         )
         try:
@@ -857,9 +858,10 @@ class TestRealDaemon:
         finally:
             proc.terminate()
             try:
-                proc.wait(timeout=5)
+                proc.communicate(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
+                proc.communicate(timeout=5)
 
     def test_signed_handshake_and_replay_protection(self, tmp_path) -> None:
         daemon_src = _resources_dir() / "ramic_bridge_daemon_3.py"
@@ -868,7 +870,7 @@ class TestRealDaemon:
         env = dict(os.environ, RB_TOKEN_PATH=str(token_path))
         proc = subprocess.Popen(
             [sys.executable, str(daemon_src), "127.0.0.1", str(port)],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE, env=env,
         )
         try:
@@ -909,9 +911,10 @@ class TestRealDaemon:
         finally:
             proc.terminate()
             try:
-                proc.wait(timeout=5)
+                proc.communicate(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
+                proc.communicate(timeout=5)
 
     @pytest.mark.parametrize(
         ("daemon_name", "interpreter"),
@@ -935,7 +938,7 @@ class TestRealDaemon:
         )
         proc = subprocess.Popen(
             [interpreter, str(daemon_src), "127.0.0.1", str(port)],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE, env=env,
         )
         try:
@@ -962,9 +965,10 @@ class TestRealDaemon:
         finally:
             proc.terminate()
             try:
-                proc.wait(timeout=5)
+                proc.communicate(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
+                proc.communicate(timeout=5)
 
     def test_missing_token_is_fatal_unless_explicitly_opted_in(self, tmp_path) -> None:
         daemon_src = _resources_dir() / "ramic_bridge_daemon_3.py"
@@ -976,7 +980,7 @@ class TestRealDaemon:
         env = dict(os.environ, RB_TOKEN_PATH=str(blocker / "sub" / "token"))
         proc = subprocess.Popen(
             [sys.executable, str(daemon_src), "127.0.0.1", str(port)],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE, env=env,
         )
         try:
@@ -984,6 +988,8 @@ class TestRealDaemon:
         except subprocess.TimeoutExpired:
             proc.kill()
             pytest.fail("daemon must exit when it cannot provision a token")
+        finally:
+            proc.communicate(timeout=5)
 
         # Explicit opt-in: boots with auth disabled.
         env = dict(
@@ -993,7 +999,7 @@ class TestRealDaemon:
         )
         proc = subprocess.Popen(
             [sys.executable, str(daemon_src), "127.0.0.1", str(port)],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE, env=env,
         )
         try:
@@ -1003,9 +1009,10 @@ class TestRealDaemon:
         finally:
             proc.terminate()
             try:
-                proc.wait(timeout=5)
+                proc.communicate(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
+                proc.communicate(timeout=5)
 
 
 def test_daemon_scripts_compile() -> None:

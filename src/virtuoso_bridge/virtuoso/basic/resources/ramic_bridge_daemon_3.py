@@ -15,9 +15,9 @@ import tempfile
 import traceback
 
 try:
-    from ramic_owner import OwnerProcess
+    from ramic_owner import OwnerProcess, start_pipe_monitor
 except ImportError:
-    from virtuoso_bridge.virtuoso.basic.resources.ramic_owner import OwnerProcess
+    from virtuoso_bridge.virtuoso.basic.resources.ramic_owner import OwnerProcess, start_pipe_monitor
 
 try:
     from ramic_request_recovery import (
@@ -903,6 +903,7 @@ def start_server():
             )
         )
         sys.stderr.flush()
+        start_pipe_monitor(stdin_fd)
         slots = threading.BoundedSemaphore(_MAX_CONNECTIONS)
         while True:
             conn, addr = s.accept()
