@@ -109,17 +109,54 @@ the user resolves the dialog, inspect/read that history rather than invoking
 
 ## Dialogs Your Own Calls Would Open
 
-Some calls open a modal dialog that blocks the CIW. The bridge avoids two
-common ones:
+Some calls open a modal dialog that blocks the CIW. These helpers handle
+known save prompts before the operation:
 
 - `client.close_windows(lib, cell, view)` closes matching cellview windows.
   If any of their cellviews has unsaved changes, it closes nothing and names
-  them (`unsaved="refuse"`, the default) or saves them first
-  (`unsaved="save"`); the "Save Changes" dialog never opens. A window that an
-  earlier close already took away (a linked Layout XL window) is skipped.
+  them (`unsaved="refuse"`, the default), saves them first
+  (`unsaved="save"`), or discards them when explicitly requested
+  (`unsaved="discard"`). Saving must leave each cellview unmodified before
+  windows can close. Discard uses `dbPurge`: database handles become invalid
+  and undo checkpoints are cleared. A window that an earlier close already
+  took away (a linked Layout XL window) is skipped.
 - XStream export refuses while the exported library has unsaved open
   cellviews, naming them, instead of opening "Save All". Save explicitly,
   then export.
+
+To exit an explicitly selected CIW, choose how to handle display resources:
+
+```python
+# Only when the user has authorized closing this Virtuoso and saving its edits.
+result = client.request_exit(
+    unsaved="save", display_resources="save",
+    display_path="/absolute/path/on/gui/host/display.drf",
+)
+print(result.metadata["exit_state"])
+```
+
+`request_exit` requires `display_resources="save"` with a path on the GUI host,
+or explicit `display_resources="discard"`. The latter discards in-memory display
+resource changes when exit completes. Cellviews default to `unsaved="refuse"`;
+`save` and `discard` apply to **all** open cellviews, including non-window
+handles. Discarding edits or exiting a shared CIW requires the user's intent,
+not merely an agent's desire to unblock work. These options do not dismiss
+an already-open dialog.
+
+The helper queues one callback, rechecks unsaved cellviews, applies the chosen
+policy, and calls ordinary `exit()` with Cadence's `layout
+drmSuppressSaveDialogBox` setting temporarily enabled. Native exit hooks still
+run and may cancel or block exit. If exit returns, the prior setting is restored.
+Saving/discarding happens before those hooks; it is not rolled back on a later
+error or cancelled exit. This does not bypass other application-specific prompts.
+
+`metadata.exit_state="requested"` acknowledges the queued callback, not process
+termination or successful saving. `not_started` means the request was known not
+to have been sent; otherwise a failed submission is `unknown`. Keep the original
+result/receipt evidence and verify process state separately. Both `close_windows`
+and `request_exit` disable connection retries; an uncertain result must be
+reconciled before any new attempt. The helpers were verified on IC 23.1 with
+isolated CIWs; this is not evidence for every application hook or IC version.
 
 ## Requests That Open A Popup
 

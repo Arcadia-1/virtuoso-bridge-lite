@@ -137,6 +137,19 @@ uv run --extra dev pytest tests/test_layout_read_lifecycle_live.py -v
 This is native OA lifecycle coverage, not PDK or electrical-equivalence testing.
 The offline generation tests do not substitute for it.
 
+`test_window_lifecycle_live.py` launches its own graphical CIW on Xvfb and a
+separate headless reader, with a private schematic library. It checks
+close/exit refusal, saving and discarding against independently read disk data;
+unrelated dirty windows; hidden open cellviews; dirty display resources;
+cancelled exit hooks; and edits made after an exit request was queued. Only
+the fixture CIW enables schematic license fallback to avoid a site license
+selection prompt. Xvfb and a usable schematic editor license are required.
+
+```bash
+VB_RUN_WINDOW_LIFECYCLE_TESTS=1 VB_TEST_VIRTUOSO=/path/to/virtuoso \
+uv run --extra dev pytest tests/test_window_lifecycle_live.py -v
+```
+
 The lifecycle suite also exercises CLI restart/reconnect with two CIWs in one
 working directory and a shared registry. Set
 `VB_TEST_LEGACY_RESOURCES=/absolute/pre-discovery/resources` to enable a full
