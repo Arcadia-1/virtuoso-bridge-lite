@@ -87,7 +87,7 @@ def _write_waveform_plot(
 
 
 def _parse_mode(argv: list[str]) -> str:
-    mode = "ax"
+    mode = "spectre"
     if "--mode" in argv:
         idx = argv.index("--mode")
         if idx + 1 >= len(argv):

@@ -84,7 +84,7 @@ def main(argv: list[str] | None = None) -> int:
         print("[Run] Running StrongArm single-point PSS + Pnoise remotely ...")
         sim = SpectreSimulator.from_env(
             spectre_cmd=os.getenv("SPECTRE_CMD", "spectre"),
-            spectre_args=spectre_mode_args("ax"),
+            spectre_args=spectre_mode_args("spectre"),
             work_dir=OUT_DIR,
             output_format="psfascii",
         )
