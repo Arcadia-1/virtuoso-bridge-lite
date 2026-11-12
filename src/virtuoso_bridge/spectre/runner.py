@@ -464,11 +464,10 @@ def _build_simulation_result(
         ("error reading" in combined_lower or "read-in failed" in combined_lower)
     )
     has_convergence_failure = _has_convergence_failure(combined)
-    has_crash = "segmentation" in combined_lower or "core dump" in combined_lower
+    has_crash = "segmentation fault" in combined_lower or "core dumped" in combined_lower
     has_execution_failure = (
         has_readin_error
         or has_convergence_failure
-        or has_crash
         or _has_fatal_spectre_error(combined)
     )
     if run_result.returncode != 0 or has_execution_failure:

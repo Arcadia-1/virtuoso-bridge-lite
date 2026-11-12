@@ -36,6 +36,13 @@ def test_successful_license_checkout_has_no_errors():
     assert result.errors == []
 
 
+@pytest.mark.parametrize("directory", ["segmentation", "core dump", "segmentation fault"])
+def test_successful_run_does_not_treat_echoed_paths_as_crashes(directory):
+    result = _result(f"Reading file: /tmp/{directory}/input.scs\n" + SUCCESS_LOG)
+    assert result.ok
+    assert result.errors == []
+
+
 @pytest.mark.parametrize("returncode", [0, 134])
 def test_native_fatal_codes_and_wrapped_explanation_survive(returncode):
     result = _result(
