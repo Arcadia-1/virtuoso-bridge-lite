@@ -10,7 +10,7 @@ Run a `.scs` netlist locally or on a remote machine through SSH, then parse PSF 
 ## Before you start
 
 1. **`virtuoso-bridge` is a Python CLI** — install it in a virtual environment with `uv pip install -e virtuoso-bridge-lite`.
-2. `virtuoso-bridge status` — check connection, Spectre path, license
+2. `virtuoso-bridge status` — check connection and Spectre path. Finding the binary (including `check_license()["ok"]`) does not prove that a requested mode is licensed; confirm with a small simulation.
 3. Check `examples/02_spectre/` — use existing examples as a basis
 4. `spectre` must be on `PATH`, or set `VB_CADENCE_CSHRC` (project or user `.env`) so the runner can source the Cadence environment, or `VB_SPECTRE_BIN` (a site wrapper with arguments works). This applies to local and SSH execution; see [connection.md](../virtuoso/references/connection.md#cadence-environment-on-the-remote-host).
 
@@ -20,7 +20,7 @@ Run a `.scs` netlist locally or on a remote machine through SSH, then parse PSF 
 from virtuoso_bridge.spectre.runner import SpectreSimulator, spectre_mode_args
 
 sim = SpectreSimulator.from_env(
-    spectre_args=spectre_mode_args("ax"),  # APS extended (recommended)
+    spectre_args=spectre_mode_args("spectre"),  # classic Spectre; basic license
     work_dir="./output",
 )
 result = sim.run_simulation("my_netlist.scs", {})
@@ -35,7 +35,7 @@ With Verilog-A includes:
 ```python
 result = sim.run_simulation(
     "tb_adc.scs",
-    {"include_files": ["adc.va", "dac.va"], "spectre_args": ["+aps"]},
+    {"include_files": ["adc.va", "dac.va"]},
 )
 ```
 
@@ -51,7 +51,7 @@ arbitrary circuit parameters. For local-only execution, use
 |-----------|---------|
 | `result.ok` | Whether simulation succeeded |
 | `result.data` | Parsed waveforms plus scalar OP values; STRUCT OP entries are flattened as `"instance:parameter"` (for example `"M0:gm"`) |
-| `result.errors` | Error messages (short, classified); check these whenever `result.ok` is false |
+| `result.errors` | Error categories plus original ERROR/FATAL diagnostics and wrapped explanations; check these whenever `result.ok` is false |
 | `result.metadata["timings"]` | Execution and parse durations, plus transfer timing in SSH mode |
 | `result.metadata["output_dir"]` | Local path to `.raw` directory |
 | `result.metadata["remote_dir"]`, `["remote_raw_dir"]` | Remote run and `.raw` directories in SSH mode, only with `keep_remote_files=True` (otherwise they are deleted); e.g. for ViVA `openResults` on the remote host |
@@ -150,34 +150,57 @@ full API and multi-server setup, read `references/parallel.md`.
 
 ## Simulation modes
 
-Precision ordering (measured on an 11-bit sub-radix-2 SAR ADC tran, N=128
-coherent FFT, ax baseline ≈ 220 s):
+Start with classic Spectre. Select APS or Spectre X explicitly when the
+installation and license support it:
 
-| arg | preset | speed | ENOB Δ vs `aps` | use for |
-|---|---|---|---|---|
-| `"spectre"` | (none) | slowest | reference | least license demand, basic direct |
-| `"aps"` | `+preset=aps` | 1.0× (gold) | 0.000 | sign-off accuracy reference |
-| `"cx"` | `+preset=cx` | 1.2× | −0.03 | sign-off for designs with mixed-signal stiff loops (cmp metastability) |
-| `"ax"` | `+preset=ax` | **2.0×** | **−0.03** (within noise) | **default for daily work** |
-| `"mx"` | `+preset=mx` | 3.8× | −0.29 | design exploration, corner sweeps where 0.3 ENOB is acceptable |
-| `"lx"` | `+preset=lx` | 5.9× | −2.8 (**unusable for SAR**) | small-signal AC / linear DC sweeps; not for circuits with cmp/regen |
-| `"vx"` | `+preset=vx` | 8.8× | −8.5 (**totally fails**) | verification-style connectivity / DC convergence only — never for transient signal fidelity |
+| Mode | Arguments from `spectre_mode_args()` | License family |
+|---|---|---|
+| `"spectre"` | (none) | Classic Spectre |
+| `"aps"` | `+aps` | APS |
+| `"x"` | `+x` | Spectre X |
+| `"cx"`, `"ax"`, `"mx"`, `"lx"`, `"vx"` | `+preset=<mode> +mt` | Spectre X |
+
+AX is a Spectre X preset, not an APS mode. An installation with only traditional
+Spectre/APS licenses can use `"spectre"` or `"aps"`; the X presets require an
+appropriate Spectre X entitlement (feature names vary by release/license).
+The bridge passes the selected mode through without an automatic fallback.
 
 ```python
-spectre_mode_args("ax")     # default for daily transient work
-spectre_mode_args("aps")    # reference / sign-off
-spectre_mode_args("mx")     # fast iteration if ENOB ≤ 0.3 loss is OK
+spectre_mode_args("spectre")  # basic default
+spectre_mode_args("aps")      # when APS is licensed
+spectre_mode_args("ax")       # when Spectre X is licensed
 ```
 
-Critical: SAR / latched-comparator circuits and any topology with
-metastable regeneration depend on tight `reltol` (1e-4 or better) to
-resolve LSB-scale differential inputs. `lx` relaxes `reltol` to ~1e-3
-and drops ENOB by ~3 bits on such circuits; `vx` disables LTE bounding
-entirely and produces garbage. Reserve those two for non-signal-fidelity
-work (DC, connectivity, link-test).
+One lab benchmark (Spectre 21.1, 11-bit SAR ADC, N=128 coherent FFT) measured
+ENOB changes versus APS of approximately −0.03 bit for AX, −0.29 for MX,
+−2.8 for LX and −8.5 for VX. These are results for that circuit and setup,
+not accuracy guarantees for other designs. Validate solver tolerances and
+waveforms against your own reference, especially for regenerative comparators.
 
-If a Maestro config you inherit specifies `+preset=lx` or `+preset=vx`
-for a transient performance sim, that's almost always a bug.
+### License queue and failure diagnostics
+
+Existing calls retain the 900-second license queue default. To omit the
+automatic `+lqtimeout` flag, for example on a static-license installation:
+
+```python
+sim = SpectreSimulator.from_env(
+    spectre_args=spectre_mode_args("aps"),
+    license_queue_timeout=None,
+)
+```
+
+`license_queue_timeout` accepts a nonnegative integer in seconds or `None`
+on the constructor, `local()` and `from_env()`. An explicit
+`spectre_args=["+lqtimeout", "30"]` still takes precedence, including per-run
+arguments; Spectre's `+lqt` abbreviation is also recognized. A value of `0`
+means wait indefinitely in Spectre, so use `None` to omit the flag. `timeout`
+is the separate command timeout.
+
+Issue #288 reports Spectre 21.1.0.058 crashing with `SPECTRE-18` while queuing
+for an unavailable X license. Omitting the queue flag lets that installation
+report `SPECTRE-209` directly; it does not supply the missing license or patch
+Spectre. Inspect `result.errors` and `result.metadata["returncode"]` for the
+native reason before selecting a licensed mode or retrying.
 
 ## When (and when not) to replace cells with Verilog-A for speedup
 

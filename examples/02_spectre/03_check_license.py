@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Check Spectre license availability on the remote host.
+"""Inspect the Spectre installation and reported license usage.
 
 Queries the remote server for Spectre binary path, version, and active
-license usage via ``SpectreSimulator.check_license()``.
+license usage via ``SpectreSimulator.check_license()``. This does not check
+out a license or prove that a particular simulation mode is licensed.
 
 Usage::
 
@@ -20,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _result_io import save_summary_json
 from virtuoso_bridge.models import ExecutionStatus, SimulationResult
-from virtuoso_bridge.spectre.runner import SpectreSimulator, spectre_mode_args
+from virtuoso_bridge.spectre.runner import SpectreSimulator
 
 ROOT = Path(__file__).resolve().parent
 OUT_DIR = ROOT / "output" / "check_license"
@@ -45,7 +46,6 @@ def main() -> int:
 
     sim = SpectreSimulator.from_env(
         spectre_cmd=os.getenv("SPECTRE_CMD", "spectre"),
-        spectre_args=spectre_mode_args("ax"),
         work_dir=OUT_DIR,
         output_format="psfascii",
     )
@@ -68,7 +68,8 @@ def main() -> int:
         print(f"  Version          : {version}")
     print(f"  Active licenses  :")
     _format_licenses(licenses)
-    print(f"  Overall status   : {'OK' if ok else 'NOT OK'}")
+    print(f"  Installation probe: {'OK' if ok else 'NOT OK'}")
+    print("  A simulation is needed to verify checkout for a specific mode.")
     print("=" * 55)
 
     if raw_output:

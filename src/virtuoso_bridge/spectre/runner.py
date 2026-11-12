@@ -43,6 +43,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_PARALLEL_WORKERS = 4
 
+_SPECTRE_DIAGNOSTIC = re.compile(
+    r"^\s*(?:\w+:\s*)?(?:error|fatal)\s*(?:\(|:)", re.IGNORECASE | re.MULTILINE,
+)
+
 
 SPECTRE_MODE_ARGS: dict[str, list[str]] = {
     "spectre": [],
@@ -152,6 +156,7 @@ def _build_spectre_argv(
     netlist_path: str,
     raw_dir: str | None = None,
     log_file: str | None = None,
+    license_queue_timeout: int | None = 900,
 ) -> list[str]:
     """Construct a fuller Spectre argv similar to direct production runs."""
     spectre_bin, cmd_prefix_args = _resolve_spectre_invocation(spectre_cmd)
@@ -163,7 +168,11 @@ def _build_spectre_argv(
     if "-64" not in all_flags and "-32" not in all_flags:
         argv.append("-64")
     argv.append(netlist_path)
-    queue_args = [] if "+lqtimeout" in all_flags else ["+lqtimeout", "900"]
+    queue_args = (
+        ["+lqtimeout", str(license_queue_timeout)]
+        if license_queue_timeout is not None and not {"+lqtimeout", "+lqt"}.intersection(all_flags)
+        else []
+    )
     warning_args = [] if "-maxw" in all_flags else ["-maxw", "5"]
     notice_args = [] if "-maxn" in all_flags else ["-maxn", "5"]
     argv.append("+escchars")
@@ -196,6 +205,7 @@ def _run_spectre_local(
     output_format: str | None = "psfascii",
     cadence_cshrc: str | None = None,
     cadence_env: CadenceEnvironment | None = None,
+    license_queue_timeout: int | None = 900,
 ) -> _SpectreRunResult:
     """Run Spectre as a local subprocess."""
     params = params or {}
@@ -216,6 +226,7 @@ def _run_spectre_local(
         netlist_path=str(netlist),
         raw_dir=raw_dir,
         log_file=log_file,
+        license_queue_timeout=license_queue_timeout,
     )
     spectre_command = " ".join(shlex.quote(part) for part in cmd)
     command = cmd
@@ -284,6 +295,7 @@ def _run_spectre_remote(
     timeout: int = 600,
     keep_remote_files: bool = False,
     cadence_env: CadenceEnvironment | None = None,
+    license_queue_timeout: int | None = 900,
 ) -> _SpectreRunResult:
     """Run Spectre on a remote host: upload netlist, run, download results."""
     run_id = uuid.uuid4().hex[:8]
@@ -305,6 +317,7 @@ def _run_spectre_remote(
         netlist_path=f"{remote_dir}/{netlist.name}",
         raw_dir=remote_raw_dir,
         log_file=remote_log_file,
+        license_queue_timeout=license_queue_timeout,
     )
     spectre_command = " ".join(shlex.quote(arg) for arg in spectre_argv)
     logger.info("[remote] %s", spectre_command)
@@ -445,31 +458,35 @@ def _build_simulation_result(
     combined = (run_result.stdout or "") + "\n" + (run_result.stderr or "")
     combined_lower = combined.lower()
 
-    # Classify errors into short, actionable messages
     # "Circuit read-in complete" is normal Spectre output — only flag actual
     # read-in *errors* which contain "error reading" or "read-in failed".
     has_readin_error = (
         ("error reading" in combined_lower or "read-in failed" in combined_lower)
     )
-    if has_readin_error:
-        errors.append("netlist read error (missing include or syntax)")
-    elif "license" in combined_lower and ("error" in combined_lower or "denied" in combined_lower):
-        errors.append("license error")
-    elif _has_convergence_failure(combined):
-        errors.append("convergence failure")
-    elif "no such file" in combined_lower or "cannot open" in combined_lower:
-        errors.append("file not found")
-    elif "segmentation" in combined_lower or "core dump" in combined_lower:
-        errors.append("spectre crashed")
-    else:
-        # Fallback: collect raw error lines
-        for line in combined.splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            lower = stripped.lower()
-            if "error" in lower and "0 errors" not in lower:
-                errors.append(stripped)
+    has_convergence_failure = _has_convergence_failure(combined)
+    has_crash = "segmentation" in combined_lower or "core dump" in combined_lower
+    has_execution_failure = (
+        has_readin_error
+        or has_convergence_failure
+        or has_crash
+        or _has_fatal_spectre_error(combined)
+    )
+    if run_result.returncode != 0 or has_execution_failure:
+        # A category supplements the native diagnostic; never discard codes or
+        # wrapped explanations. License matching stays within each diagnostic,
+        # not between an unrelated licensing banner and a later error summary.
+        details = _spectre_error_details(combined)
+        if has_readin_error:
+            errors.append("netlist read error (missing include or syntax)")
+        if any(_has_license_failure(detail) for detail in details):
+            errors.append("license error")
+        if has_convergence_failure:
+            errors.append("convergence failure")
+        if "no such file" in combined_lower or "cannot open" in combined_lower:
+            errors.append("file not found")
+        if has_crash:
+            errors.append("spectre crashed")
+        errors.extend(details)
 
     for line in combined.splitlines():
         stripped = line.strip()
@@ -485,11 +502,6 @@ def _build_simulation_result(
         else []
     )
 
-    has_execution_failure = (
-        has_readin_error
-        or _has_convergence_failure(combined)
-        or _has_fatal_spectre_error(combined)
-    )
     if run_result.returncode != 0 or has_execution_failure:
         status = ExecutionStatus.PARTIAL if output_files else ExecutionStatus.FAILURE
         if not errors:
@@ -547,8 +559,38 @@ def _has_fatal_spectre_error(output: str) -> bool:
     return (
         "spectre terminated prematurely due to fatal error" in lower
         or "fatal error" in lower
-        or bool(re.search(r"(?m)^\s*error\s*\(", output, re.IGNORECASE))
+        or bool(_SPECTRE_DIAGNOSTIC.search(output))
     )
+
+
+def _has_license_failure(diagnostic: str) -> bool:
+    """Match a failed checkout within one diagnostic, including wrapped text."""
+    return bool(
+        re.search(r"\blicen[cs](?:e|es|ing)\b", diagnostic, re.IGNORECASE)
+        and re.search(
+            r"\b(?:error|denied|failed|failure|cannot|unavailable)\b|could not|unable to",
+            diagnostic, re.IGNORECASE,
+        )
+    )
+
+
+def _spectre_error_details(output: str) -> list[str]:
+    """Keep native diagnostics and their indented continuation lines together."""
+    details: list[str] = []
+    in_diagnostic = False
+    for line in output.splitlines():
+        stripped = line.strip()
+        if _SPECTRE_DIAGNOSTIC.match(stripped):
+            details.append(stripped)
+            in_diagnostic = True
+        elif in_diagnostic and stripped and line[0].isspace():
+            details[-1] += "\n" + line.rstrip()
+        else:
+            in_diagnostic = False
+            lower = stripped.lower()
+            if ("error" in lower and "0 errors" not in lower) or _has_license_failure(stripped):
+                details.append(stripped)
+    return details
 
 # ---------------------------------------------------------------------------
 # SpectreSimulator
@@ -635,7 +677,11 @@ class SpectrePool:
 
 
 class SpectreSimulator:
-    """Cadence Spectre simulator adapter."""
+    """Cadence Spectre simulator adapter.
+
+    ``license_queue_timeout`` sets the automatic ``+lqtimeout`` in seconds
+    (default 900); ``None`` omits it. Explicit Spectre queue arguments win.
+    """
 
     def __init__(
         self,
@@ -655,7 +701,15 @@ class SpectreSimulator:
         remote: bool = False,
         ssh_runner: SSHRunner | None = None,
         profile: str | None = None,
+        license_queue_timeout: int | None = 900,
     ) -> None:
+        if license_queue_timeout is not None and (
+            not isinstance(license_queue_timeout, int)
+            or isinstance(license_queue_timeout, bool)
+            or license_queue_timeout < 0
+        ):
+            raise ValueError("license_queue_timeout must be a nonnegative integer or None")
+        self._license_queue_timeout = license_queue_timeout
         profile = resolve_profile(profile)
         load_vb_env()
         if spectre_cmd == "spectre":
@@ -720,6 +774,7 @@ class SpectreSimulator:
         keep_remote_files: bool = False,
         ssh_runner: SSHRunner | None = None,
         profile: str | None = None,
+        license_queue_timeout: int | None = 900,
     ) -> "SpectreSimulator":
         """Create a SpectreSimulator from environment variables.
 
@@ -742,6 +797,7 @@ class SpectreSimulator:
                 output_format=output_format,
                 keep_remote_files=keep_remote_files,
                 profile=profile,
+                license_queue_timeout=license_queue_timeout,
             )
 
         if ssh_runner is None:
@@ -767,6 +823,7 @@ class SpectreSimulator:
             remote=True,
             ssh_runner=ssh_runner,
             profile=profile,
+            license_queue_timeout=license_queue_timeout,
         )
 
     @classmethod
@@ -777,6 +834,7 @@ class SpectreSimulator:
         timeout: int = 600,
         work_dir: Path | None = None,
         output_format: str | None = "psfascii",
+        license_queue_timeout: int | None = 900,
     ) -> "SpectreSimulator":
         """Create a SpectreSimulator for local execution (no SSH)."""
         return cls(
@@ -785,6 +843,7 @@ class SpectreSimulator:
             timeout=timeout,
             work_dir=work_dir,
             output_format=output_format,
+            license_queue_timeout=license_queue_timeout,
         )
 
     # -- public API ---------------------------------------------------------
@@ -1010,6 +1069,7 @@ class SpectreSimulator:
             work_dir=work_dir,
             output_format=self._output_format,
             cadence_env=CadenceEnvironment.from_env(self._profile),
+            license_queue_timeout=self._license_queue_timeout,
         )
         if not run_result.success:
             return SimulationResult(
@@ -1081,6 +1141,7 @@ class SpectreSimulator:
             timeout=self._timeout,
             keep_remote_files=self._keep_remote_files,
             cadence_env=CadenceEnvironment.from_env(self._profile),
+            license_queue_timeout=self._license_queue_timeout,
         )
         if not run_result.success:
             return SimulationResult(
