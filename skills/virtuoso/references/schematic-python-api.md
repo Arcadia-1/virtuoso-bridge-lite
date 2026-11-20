@@ -215,9 +215,55 @@ Use these with `sch.add(...)`:
 | `schematic_create_pin_at_instance_term(inst, term, pin, *, direction, orientation)` | `schCreatePin` at terminal center | Pin at terminal |
 | `schematic_create_wire_between_instance_terms(from_inst, from_term, to_inst, to_term)` | `schCreateWire` between terminal centers | Wire two terminals |
 | `schematic_label_instance_term(inst, term, net)` | Wire stub + label | Label terminal |
+| `schematic_wire_instance_terms_labeled(from_inst, from_term, to_inst, to_term, net)` | One wire + one label | Connect facing terminals of one net |
 | `schematic_create_net_stub(net, x, y, *, direction, length)` | wire + `schCreateWireLabel` | Short named electrical connection |
+| `pin_anchored_label_placement(x, y, direction)` | (Python only) | Label point, justification and rotation of the default convention |
 | `schematic_create_net_expression(net, expression, x, y)` | `schCreateNetExpression` | Attach inherited-connection expression |
 | `schematic_set_netset_property(instance, property, net)` | `dbReplaceProp` | Set an inherited-connection override |
+
+### Default wiring convention
+
+Schematics drawn through the bridge follow one convention, taken from
+hand-drawn cells:
+
+1. **Facing terminals of one net get one wire and one label.** When one
+   instance's terminal faces another's on the same net (a chain stage's
+   output and the next stage's input), draw a single wire between them with
+   `schematic_wire_instance_terms_labeled`. Do not label both terminals: the
+   net name would be printed twice on a short wire.
+2. **Every other terminal gets a 0.25 stub and a label at the terminal end.**
+   `schematic_label_instance_term` (default `cosmetic`) and
+   `schematic_create_net_stub` (default `label_anchor="start"`) place it:
+   - horizontal stub: text above the wire, `lowerLeft` when the stub runs
+     right and `lowerRight` when it runs left, at 0.4 × height along and
+     0.7 × height across from the terminal (0.025 / 0.04375 at the usual
+     0.0625 height);
+   - vertical stub: text rotated `R90` on the left of the wire, `lowerLeft`
+     going up and `lowerRight` going down.
+3. **Labels never sit at the far end or the midpoint of a stub**, and never
+   on the outside past the wire's end.
+
+For example, a terminal at `(0.6875, 2.25)` with a stub to the right gets its
+label at `(0.7125, 2.29375)`, `lowerLeft`, `R0`; a supply pin at `(0, 3)` with
+a stub up gets `(-0.04375, 3.025)`, `lowerLeft`, `R90`.
+
+```python
+from virtuoso_bridge.virtuoso.schematic.ops import (
+    schematic_label_instance_term as label,
+    schematic_wire_instance_terms_labeled as wire_labeled,
+)
+
+with client.schematic.modify(LIB, "sar_logic") as sch:
+    # Bit 5's ENB_N drives bit 4's ENB_P: one wire, one label.
+    sch.add(wire_labeled("I3", "ENB_N", "I2", "ENB_P", "ENB_N<5>"))
+    # Outputs and supplies: stub + label at the terminal end.
+    sch.add(label("I3", "DOP", "DOP<5>"))
+    sch.add(label("I3", "VDD", "VDD"))
+```
+
+When a cell already uses another style, match it. `cosmetic="legacy"` gives
+the former default (`centerCenter` label on the stub midpoint) and
+`label_anchor="midpoint"` the former net stub.
 
 ## Netlist import and export
 
@@ -278,6 +324,7 @@ For format and `spiceIn` limitations, see [netlist.md](netlist.md).
 | `schematic_create_pin_at_instance_term(inst, term, pin)` | Terminal center lookup + `schCreatePin` |
 | `schematic_create_wire_between_instance_terms(from_inst, from_term, to_inst, to_term)` | Terminal center lookup + `schCreateWire` |
 | `schematic_label_instance_term(inst, term, net)` | Terminal center + MOS-aware stub + `schCreateWireLabel` |
+| `schematic_wire_instance_terms_labeled(from_inst, from_term, to_inst, to_term, net)` | Terminal centers + `schCreateWire` + one `schCreateWireLabel` |
 | `schematic_check()` | `schCheck(cv)` |
 
 ## Terminal-aware helpers
