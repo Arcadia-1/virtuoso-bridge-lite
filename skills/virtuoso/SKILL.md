@@ -52,6 +52,13 @@ Editable names and derived fields are PDK-specific: `nf` and `fingers` are not
 universally interchangeable. Details:
 [schematic-skill-api.md](references/schematic-skill-api.md).
 
+Wire and label schematics in the default convention: terminals of one net
+that face each other get one wire and one label; any other terminal gets a
+0.25 stub with its label at the terminal end, above a horizontal stub or left
+of a vertical one. Match the style already in the cell when it differs. See
+"Default wiring convention" in
+[schematic-python-api.md](references/schematic-python-api.md).
+
 ## Shared CIW and uncertain outcomes
 
 Before popup-prone operations or timeout recovery, read
