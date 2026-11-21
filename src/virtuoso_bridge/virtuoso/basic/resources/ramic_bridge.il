@@ -546,34 +546,44 @@ RBMonInstalled = t
 
 ; ---------------------------------------------------------------------
 ; Banner menu -- guarded SEPARATELY from the form because hiInsertBanner
-; Menu has no remove-and-replace primitive on this IC build.  We need
-; the form to be re-creatable (toggle RBMonInstalled = nil + reload),
-; but the menu must stay built once per Virtuoso session.
+; Menu has no remove-and-replace primitive on this IC build.  During
+; .cdsinit, the CIW banner is still being assembled: inserting immediately
+; can return before the standard menus finish and the custom menu then gets
+; lost.  Install five seconds later, and only mark success when Cadence says
+; the menu was actually inserted.  Repeated timers/reloads are harmless
+; because the first successful call sets RBMenuInstalled.
 ; ---------------------------------------------------------------------
-unless(boundp('RBMenuInstalled) && RBMenuInstalled
-    ramicMenu = hiCreatePulldownMenu(
-        'ramicMenu
-        "RAMIC"
-        list(
-            hiCreateMenuItem(
-                ?name 'RAMIC_Bridge
-                ?itemText "RAMIC Bridge..."
-                ?callback "hiDisplayForm(RBMonitor)"
-            )
-            hiCreateMenuItem(
-                ?name 'RAMIC_PrintLines10
-                ?itemText "Print 10 Empty Lines"
-                ?callback "RBPrintEmptyLines(10)"
-            )
-            hiCreateMenuItem(
-                ?name 'RAMIC_PrintLines20
-                ?itemText "Print 20 Empty Lines"
-                ?callback "RBPrintEmptyLines(20)"
+procedure(RBInstallMenu()
+    unless(boundp('RBMenuInstalled) && RBMenuInstalled
+        ramicMenu = hiCreatePulldownMenu(
+            'ramicMenu
+            "RAMIC"
+            list(
+                hiCreateMenuItem(
+                    ?name 'RAMIC_Bridge
+                    ?itemText "RAMIC Bridge..."
+                    ?callback "hiDisplayForm(RBMonitor)"
+                )
+                hiCreateMenuItem(
+                    ?name 'RAMIC_PrintLines10
+                    ?itemText "Print 10 Empty Lines"
+                    ?callback "RBPrintEmptyLines(10)"
+                )
+                hiCreateMenuItem(
+                    ?name 'RAMIC_PrintLines20
+                    ?itemText "Print 20 Empty Lines"
+                    ?callback "RBPrintEmptyLines(20)"
+                )
             )
         )
+        when(hiInsertBannerMenu(window(1) ramicMenu 3)
+            RBMenuInstalled = t
+        )
     )
-    hiInsertBannerMenu(window(1) ramicMenu 3)
-    RBMenuInstalled = t
+)
+
+unless(boundp('RBMenuInstalled) && RBMenuInstalled
+    hiRegTimer("RBInstallMenu()" 50)
 )
 
 procedure(RBMRefresh()
