@@ -240,8 +240,9 @@ hand-drawn cells:
      0.0625 height);
    - vertical stub: text rotated `R90` on the left of the wire, `lowerLeft`
      going up and `lowerRight` going down.
-3. **Labels never sit at the far end or the midpoint of a stub**, and never
-   on the outside past the wire's end.
+
+   Both helpers bind the offset label to the wire they create. For custom
+   dimensions, choose a stub longer than the along-wire offset.
 
 For example, a terminal at `(0.6875, 2.25)` with a stub to the right gets its
 label at `(0.7125, 2.29375)`, `lowerLeft`, `R0`; a supply pin at `(0, 3)` with
@@ -262,8 +263,9 @@ with client.schematic.modify(LIB, "sar_logic") as sch:
 ```
 
 When a cell already uses another style, match it. `cosmetic="legacy"` gives
-the former default (`centerCenter` label on the stub midpoint) and
-`label_anchor="midpoint"` the former net stub.
+the former default (`centerCenter` label on the stub midpoint). For a
+coordinate-based net stub, `label_anchor="midpoint"` also restores its
+former default length of 0.5.
 
 ## Netlist import and export
 

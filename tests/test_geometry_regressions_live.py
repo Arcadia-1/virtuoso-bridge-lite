@@ -1,4 +1,4 @@
-"""Public-helper regressions for #242/#243; dedicated session only.
+"""Schematic and layout geometry regressions for a dedicated session.
 
 Uses the opt-in client/library fixtures and cleanup from test_bridge_live.
 Only analogLib and a generic text/drawing rectangle are used, never a PDK.
@@ -12,8 +12,11 @@ import pytest
 from tests.test_bridge_live import client, lib, _cell, _ok
 from virtuoso_bridge.virtuoso.schematic import (
     schematic_create_inst_by_master_name,
+    schematic_create_net_stub,
     schematic_create_wire,
+    schematic_label_instance_term,
     schematic_label_instance_term_offset,
+    schematic_wire_instance_terms_labeled,
 )
 from virtuoso_bridge.virtuoso.layout import (
     layout_create_rect,
@@ -41,6 +44,29 @@ def test_offset_label_binds_the_terminal_net(client, lib, direction):
     data = client.schematic.read(lib, cell)
     cap = next(i for i in data["instances"] if i["name"] == "C0")
     assert cap["terms"]["PLUS"] == "INTENDED", cap["terms"]
+
+
+def test_pin_anchored_labels_name_the_intended_wires_after_save(client, lib):
+    cell = _cell("pin_labels")
+    ports = client.symbol.read_ports("analogLib", "cap")["terms"]
+    bottom = next(term["bbox"] for term in ports if term["name"] == "MINUS")
+    x, y = [(a + b) / 2 for a, b in zip(*bottom)]
+    with client.schematic.create(lib, cell) as sch:
+        for name, dy in [("C0", 0), ("C1", 4)]:
+            sch.add(schematic_create_inst_by_master_name(
+                "analogLib", "cap", "symbol", name, 0, dy, "R0"))
+        # Put a second wire exactly under the offset label. Only C0's stub
+        # should receive the net name when Cadence extracts connectivity.
+        sch.add(schematic_create_wire([(x - 0.4375, y), (x - 0.4375, y - 1)]))
+        sch.add(schematic_create_net_stub("BOTTOM", x, y, direction="down",
+                                          length=1, height=0.625))
+        sch.add(schematic_wire_instance_terms_labeled("C0", "PLUS", "C1", "MINUS", "LINK"))
+        sch.add(schematic_label_instance_term("C1", "PLUS", "TOP"))
+
+    data = client.schematic.read(lib, cell)
+    terms = {i["name"]: i["terms"] for i in data["instances"]}
+    assert terms["C0"] == {"MINUS": "BOTTOM", "PLUS": "LINK"}, terms
+    assert terms["C1"] == {"MINUS": "LINK", "PLUS": "TOP"}
 
 
 def test_generic_wire_preserves_every_supplied_vertex(client, lib):

@@ -77,9 +77,17 @@ def test_schematic_create_net_stub_places_wire_and_midpoint_label(
 def test_schematic_create_net_stub_labels_the_start_by_default(
     direction: str, label: str, justification: str, rotation: str
 ) -> None:
-    skill = schematic_create_net_stub("IN", 1, 2, direction=direction, length=0.25)
+    skill = schematic_create_net_stub("IN", 1, 2, direction=direction)
 
+    assert "when(rbWireObj schCreateWireLabel(cv rbWireObj " in skill
     assert f'{label} "IN" "{justification}" "{rotation}"' in skill
+
+
+def test_default_and_midpoint_net_stub_lengths() -> None:
+    default = schematic_create_net_stub("IN", 0, 0)
+    midpoint = schematic_create_net_stub("IN", 0, 0, label_anchor="midpoint")
+    assert "'((0.000 0.000) (0.250 0.000))" in default
+    assert "'((0.000 0.000) (0.500 0.000))" in midpoint
 
 
 def test_pin_anchored_label_placement_scales_with_height() -> None:
@@ -162,12 +170,13 @@ def test_label_instance_term_tries_aliases_and_can_skip_a_missing_terminal() -> 
     assert "not found on" not in skill
     # Every later step is guarded, so a nil terminal draws nothing.
     assert "rbPin = when(rbTerm car(rbTerm~>pins))" in skill
-    assert "when(rbLblPt schCreateWireLabel(" in skill
+    assert "when(rbWireObj && rbLblPt schCreateWireLabel(" in skill
 
 
 def test_label_instance_term_default_anchors_label_at_the_terminal() -> None:
     skill = schematic_label_instance_term("M0", "D", "OUT")
 
+    assert 'schCreateWireLabel(cv rbWireObj rbLblPt "OUT"' in skill
     # Placement is computed from the terminal centre toward the stub end.
     assert "rbLblDx = when(rbCtr && rbStubEnd xCoord(rbStubEnd) - xCoord(rbCtr))" in skill
     assert 'rbLblPt = list(xCoord(rbCtr) + 0.025 yCoord(rbCtr) + 0.04375) rbLblJust = "lowerLeft" rbLblRot = "R0"' in skill

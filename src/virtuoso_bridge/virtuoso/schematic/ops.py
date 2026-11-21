@@ -97,12 +97,13 @@ def schematic_create_wire_label(
     rotation: str,
     *,
     cv_expr: str = "cv",
+    wire_expr: str = "nil",
     style: str = "stick",
     height: float = 0.0625,
 ) -> str:
-    """Build SKILL to create a schematic wire label."""
+    """Build SKILL to create a schematic wire label on the specified wire or by position."""
     return (
-        f'schCreateWireLabel({cv_expr} nil {skill_point(x, y)} '
+        f'schCreateWireLabel({cv_expr} {wire_expr} {skill_point(x, y)} '
         f'"{escape_skill_string(text)}" '
         f'"{escape_skill_string(justification)}" '
         f'"{escape_skill_string(rotation)}" '
@@ -178,7 +179,7 @@ def schematic_create_net_stub(
     y: float,
     *,
     direction: str = "right",
-    length: float = 0.5,
+    length: float | None = None,
     cv_expr: str = "cv",
     route_style: str = "route",
     route_mode: str = "full",
@@ -198,15 +199,18 @@ def schematic_create_net_stub(
     horizontal stub or left of a vertical one, as
     :func:`pin_anchored_label_placement` describes. ``"midpoint"`` keeps the
     older centred label (``centerCenter`` unless ``justification`` is given).
+    The default stub length is 0.25 for start and 0.5 for midpoint.
     """
     if direction not in _NET_STUB_DIR_OFFSETS:
         raise ValueError(
             f"direction must be one of {sorted(_NET_STUB_DIR_OFFSETS)}, got {direction!r}"
         )
-    if length <= 0:
-        raise ValueError("length must be positive")
     if label_anchor not in {"start", "midpoint"}:
         raise ValueError(f"label_anchor must be 'start' or 'midpoint', got {label_anchor!r}")
+    if length is None:
+        length = 0.25 if label_anchor == "start" else 0.5
+    if length <= 0:
+        raise ValueError("length must be positive")
     dx, dy = _NET_STUB_DIR_OFFSETS[direction]
     end_x = x + dx * length
     end_y = y + dy * length
@@ -221,11 +225,19 @@ def schematic_create_net_stub(
         auto_rot = "R90" if direction in {"up", "down"} else "R0"
     justification = justification or auto_just
     label_rotation = rotation or auto_rot
+    wire = schematic_create_wire(
+        [(x, y), (end_x, end_y)], cv_expr=cv_expr, route_style=route_style, route_mode=route_mode
+    )
+    label = schematic_create_wire_label(
+        label_x, label_y, net_name, justification, label_rotation, cv_expr=cv_expr,
+        wire_expr="rbWireObj" if label_anchor == "start" else "nil", style=style, height=height,
+    )
+    if label_anchor == "midpoint":
+        return f"progn({wire} {label})"
     return (
-        "progn("
-        f"{schematic_create_wire([(x, y), (end_x, end_y)], cv_expr=cv_expr, route_style=route_style, route_mode=route_mode)} "
-        f"{schematic_create_wire_label(label_x, label_y, net_name, justification, label_rotation, cv_expr=cv_expr, style=style, height=height)}"
-        ")"
+        f"let((rbWire rbWireObj) rbWire = {wire} "
+        "rbWireObj = if(listp(rbWire) car(rbWire) rbWire) "
+        f"when(rbWireObj {label}))"
     )
 
 
@@ -405,7 +417,7 @@ def schematic_label_instance_term(
     extension_length: float | None = None,
     cosmetic: str = "default",
     auto_rotation: bool = False,
-    bind_label_to_wire: bool = False,
+    bind_label_to_wire: bool | None = None,
     aliases: tuple[str, ...] = (),
     missing_ok: bool = False,
 ) -> str:
@@ -435,7 +447,8 @@ def schematic_label_instance_term(
 
     ``bind_label_to_wire``: when True, pass the created wire object to
     ``schCreateWireLabel`` instead of ``nil``. This avoids unconnected-label
-    warnings in flows that check the generated schematic immediately.
+    warnings in flows that check the generated schematic immediately. By default
+    pin-anchored labels bind to their wire and midpoint presets use position.
 
     When two terminals of the same net face each other, connect them with
     :func:`schematic_wire_instance_terms_labeled` (one wire, one label)
@@ -447,6 +460,8 @@ def schematic_label_instance_term(
         )
     preset = _LABEL_TERM_COSMETIC_PRESETS[cosmetic]
     pin_anchor = preset["anchor"] == "pin"
+    if bind_label_to_wire is None:
+        bind_label_to_wire = pin_anchor
     eff_ext = extension_length if extension_length is not None else preset["extension_length"]
 
     if pin_anchor:
