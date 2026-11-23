@@ -17,17 +17,35 @@ from __future__ import annotations
 import csv
 import logging
 import re
+import shlex
 import tempfile
 import uuid
 from pathlib import Path
 
 from virtuoso_bridge import VirtuosoClient
 
+from virtuoso_bridge.virtuoso.maestro.writer import _export_output_view_skill
+
 from ._parse_skill import _parse_skill_str_list
 from ._skill import _q, _get_test, _unique_remote_wave_path
 from .session import natural_sort_histories
 
 logger = logging.getLogger(__name__)
+
+
+class NoResults(dict):
+    """Empty :func:`read_results` value that says why it is empty.
+
+    Equal to ``{}`` and falsy as before, but ``result["points"]`` raises a
+    ``KeyError`` naming the reason instead of a bare ``'points'``.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+    def __missing__(self, key):
+        raise KeyError(f"{key!r}: read_results returned no results: {self.reason}")
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +121,7 @@ def read_results(client: VirtuosoClient, session: str,
             "session likely lacks an active test — pass lib= and cell= explicitly",
             lib, cell, session,
         )
-        return {}
+        return NoResults(f"missing lib/cell for session {session!r}; pass lib= and cell=")
 
     test = _get_test(client, session)
     if not test:
@@ -113,7 +131,7 @@ def read_results(client: VirtuosoClient, session: str,
             "through maeSetupTest); returning empty",
             session,
         )
-        return {}
+        return NoResults(f"maeGetSetup returned no test for session {session!r}")
 
     # Pick the latest history with actual results (newest-first scan).
     if history:
@@ -127,7 +145,7 @@ def read_results(client: VirtuosoClient, session: str,
             "(passed history=%r); returning empty",
             lib, cell, test, history,
         )
-        return {}
+        return NoResults(f"no history with results for {lib}/{cell} test {test!r}")
 
     # Export the full Detail table to a remote tmp CSV; scp; parse.
     # maeExportOutputView's return contract is not portable across
@@ -135,31 +153,31 @@ def read_results(client: VirtuosoClient, session: str,
     # ``t``/``nil`` -- so the only reliable success signal is whether
     # the remote CSV materialised.  Let download_file be the arbiter.
     remote_csv = f"/tmp/vb_results_{uuid.uuid4().hex}.csv"
-    export_cmd = (
-        f'maeExportOutputView('
-        f'  ?session "{session}"'
-        f'  ?testName "{test}"'
-        f'  ?historyName "{latest_history}"'
-        f'  ?view "Detail"'
-        f'  ?fileName "{remote_csv}"'
-        f')'
+    export_cmd = _export_output_view_skill(
+        remote_csv,
+        f'?session "{session}" ?testName "{test}" '
+        f'?historyName "{latest_history}" ?view "Detail"',
     )
-    skill_out = q("maeExportOutputView", export_cmd)
+    export = client.execute_skill(export_cmd)
+    skill_out = export.output or ""
+    export_error = "; ".join(getattr(export, "errors", None) or [])
 
     local_csv = Path(tempfile.gettempdir()) / f"vb_results_{uuid.uuid4().hex}.csv"
     csv_text = ""
     try:
+        if export_error:
+            raise RuntimeError(export_error)
         client.download_file(remote_csv, str(local_csv))
         csv_text = local_csv.read_text(encoding="utf-8", errors="replace")
     except Exception as exc:
         logger.warning(
             "read_results: maeExportOutputView did not produce a fetchable "
             "CSV (remote=%s, skill_out=%r, exc=%s); returning empty.  "
-            "This usually means the SKILL call failed silently — try the "
-            "command in CIW manually to see Cadence's error.",
+            "Compute outputs from the PSF instead (export_waveform or OCEAN).",
             remote_csv, skill_out, exc,
         )
-        return {}
+        return NoResults(f"maeExportOutputView did not produce a CSV for "
+                         f"{latest_history}: {exc}")
     finally:
         try:
             local_csv.unlink()
@@ -319,6 +337,84 @@ def _unquote_atom(raw: str) -> str | None:
     if not s or s.lower() == "nil":
         return None
     return s
+
+
+# ---------------------------------------------------------------------------
+# check_points — per-point Spectre log status
+# ---------------------------------------------------------------------------
+
+# Lines of spectre.out that decide a point's status.
+_SPECTRE_LOG_PATTERN = (
+    r"ERROR \(|terminated prematurely|Segmentation fault|"
+    r"internal error|completes with [0-9]+ error"
+)
+_SPECTRE_FAILED = re.compile(
+    r"ERROR \(|terminated prematurely|Segmentation fault|internal error|"
+    r"completes with [1-9][0-9]* error", re.IGNORECASE)
+_SPECTRE_OK = re.compile(r"completes with 0 errors", re.IGNORECASE)
+
+
+def _classify_spectre_log(lines) -> tuple[str, list[str]]:
+    """Return ``("failed"|"ok"|"incomplete", error_lines)`` for a log.  Pure."""
+    errors = [ln.strip() for ln in lines if _SPECTRE_FAILED.search(ln)]
+    if errors:
+        return "failed", errors[:10]
+    if any(_SPECTRE_OK.search(ln) for ln in lines):
+        return "ok", []
+    return "incomplete", []
+
+
+def check_points(client: VirtuosoClient, history: str, *,
+                 lib: str, cell: str) -> list[dict]:
+    """Status of every simulated point of *history*, from its Spectre logs.
+
+    A finished Maestro run says nothing about failed points; a Spectre crash
+    (SPECTRE-18/19, a segfault) still ends the run as "done". This reads each
+    ``spectre.out`` under the history's results directory and returns::
+
+        [{"log": "1/TRAN/psf/spectre.out", "point": "1",
+          "status": "failed" | "ok" | "incomplete",
+          "errors": ["ERROR (SPECTRE-18): ..."]}, ...]
+    """
+    history = (history or "").strip().strip('"')
+    r = client.execute_skill(f'ddGetObj("{lib}")~>readPath')
+    lib_path = (r.output or "").strip().strip('"')
+    if not lib_path or lib_path == "nil":
+        raise RuntimeError(f"check_points: library {lib!r} not found")
+    root = f"{lib_path}/{cell}/maestro/results/maestro/{history}"
+
+    logs: dict[str, list[str]] = {}
+    runner = client.ssh_runner
+    if runner is None:
+        for path in sorted(Path(root).rglob("spectre.out")):
+            text = path.read_text(encoding="utf-8", errors="replace")
+            logs[str(path.relative_to(root))] = [
+                ln for ln in text.splitlines()
+                if re.search(_SPECTRE_LOG_PATTERN, ln, re.IGNORECASE)]
+    else:
+        q_root = shlex.quote(root)
+        out = runner.run_command(
+            f"cd {q_root} && find . -name spectre.out | sort | while read f; do "
+            f"echo \"@@ $f\"; grep -i -E {shlex.quote(_SPECTRE_LOG_PATTERN)} \"$f\" | head -20; "
+            f"done"
+        )
+        if out.returncode != 0:
+            raise RuntimeError(f"check_points: cannot read {root}: {out.stderr.strip()}")
+        current = None
+        for line in out.stdout.splitlines():
+            if line.startswith("@@ "):
+                current = line[3:].removeprefix("./")
+                logs[current] = []
+            elif current is not None:
+                logs[current].append(line)
+
+    points = []
+    for log, lines in logs.items():
+        status, errors = _classify_spectre_log(lines)
+        first = log.split("/", 1)[0]
+        points.append({"log": log, "point": first if first.isdigit() else "",
+                       "status": status, "errors": errors})
+    return points
 
 
 # ---------------------------------------------------------------------------

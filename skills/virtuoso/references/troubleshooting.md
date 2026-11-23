@@ -175,6 +175,28 @@ foreach(w hiGetWindowList()
 ```
 Or skip SKILL string-matching entirely and filter on the Python side via `client.list_windows()` — much easier to debug.
 
+### SKILL language traps
+- `t` is a protected variable: `t = 1` or `let((t) ...)` fails. Name it `tv`.
+- `list((...))` is read as a call of the inner list; write a quoted literal
+  `'(...)`, or `list(...)` with plain arguments.
+- `cross()` returns a waveform, and with `?multiple t` a list. `length()` of a
+  waveform fails; count points with
+  `drVectorLength(drGetWaveformXVec(wave))`, crossings with `length()` of the
+  `?multiple t` list.
+- `ccpRename` takes a symbol as argument 5, e.g. `'CCP_UPDATE_DESTLIB_ONLY`,
+  not a string.
+
+### `load error at line N` with no message
+Errors raised inside a `load()`ed file reach the caller only as the line
+number; the message is printed to the CIW. `client.load_il()` /
+`virtuoso-bridge load` append the `*Error*` lines CDS.log gained during the
+load. Multi-line `eval` requests run under `errset` in the daemon since #183;
+a host still running an older checkout reports only the line, so update it and
+restart the daemon. To see the message on such a host, run the code as
+`errset(progn(...) t)` and read `errset.errset`. Shell quoting: pass SKILL
+containing `'sym` quotes through `virtuoso-bridge eval --stdin` rather than a
+single-quoted argument.
+
 ---
 
 ## Netlist / si
@@ -215,6 +237,48 @@ client.execute_skill('maeSetVar("f" "1G" ?typeName "test" ?typeValue \'("IB_PSS"
 ```
 If a test has a local variable with the same name, it overrides the global one. To delete test-level variables, use the `axl*` API (see main skill doc).
 
+Test-level values were seen to have no effect on corner runs in IC23.10.
+Set such variables per corner (`setup_corner(..., variables=...)`) and confirm
+the netlisted value.
+
+### Corner model files drop the test's includes
+A corner's `modelFiles` replaces the test's list, so a std-cell include listed
+there disappears from that corner's netlist. Put includes the corners must
+keep in the test's `definitionFiles` (`set_env_option(client, test,
+'(("definitionFiles" ("/path/std.scs")))')`).
+
+### Analysis options accepted but not netlisted
+`maeSetAnalysis` accepts options the netlister then drops, e.g. `noisefmax`
+while the tran form's transient-noise toggle is off, and the toggle could not
+be set through the API. Netlist a corner with `create_netlist_for_corner` and
+check it with `client.maestro.check_netlist_options(path, "tran", names)`,
+which returns the missing names.
+
+### `maeAddOutput` keeps an existing output's expression
+Re-adding a name keeps its old definition. Use
+`client.maestro.add_output(..., replace=True)`, which deletes it first.
+
+### Run "done" but points failed
+`run_and_wait` reports Maestro finishing, not each point. A Spectre crash
+(SPECTRE-18/19) still ends as "done". Pass `check=True` to raise
+`MaestroPointsFailed`, or call `client.maestro.check_points(history, lib=,
+cell=)` for each `spectre.out` status.
+
+### `read_results` empty or `KeyError`
+`maeExportOutputView` can return without writing the CSV. `read_results` then
+returns an empty result whose `KeyError` names the reason. Compute outputs
+from the PSF (`export_waveform` or OCEAN) instead.
+
+### History-name form on every run
+A site setting `adexl.historyNamePrefix showNameHistoryForm` opens a modal
+form per run. `run_simulation` switches it off for its own call since #228;
+an older checkout needs the update.
+
+### Copied point netlists break
+`netlist` and `ihnl` in a point directory are relative symlinks into
+`psf/<TEST>/netlist`. Copy with `client.maestro.copy_point_netlist(src, dst)`
+(follows the links) or `cp -RL`.
+
 ### Must `maeSaveSetup` before `maeRunSimulation`
 Skipping save causes stale state — the simulation runs with old parameters. Always save before run.
 
@@ -227,6 +291,12 @@ CIW is overloaded or a dialog is blocking. Check Virtuoso GUI state before retry
 
 ### `OPEN_FAILED` on view access
 The cellview doesn't exist or is locked by another process. Verify with `ddGetObj(lib cell view)` before opening.
+
+### Background jobs over SSH die or fail with "Ambiguous output redirect"
+A csh login shell rejects `> log 2>&1`, and a job started with `&` dies when
+the SSH session closes. `runner.run_detached(command, log_path)` runs it under
+`sh` with `setsid nohup` and returns its PID. By hand:
+`ssh host 'sh -c "setsid nohup CMD > log 2>&1 < /dev/null &"'`.
 
 ### `.il line 16` SKILL probe failure
 The RAMIC daemon setup script failed to load. Run `virtuoso-bridge status` and

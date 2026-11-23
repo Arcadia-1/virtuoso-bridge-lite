@@ -52,6 +52,8 @@ from virtuoso_bridge.virtuoso.maestro.reader import (
     filter_sdb_xml,
     filter_active_state_xml,
     read_results,
+    NoResults,
+    check_points,
     export_waveform,
     MaestroSessionState,
     MaestroStateProbeError,
@@ -88,9 +90,13 @@ from virtuoso_bridge.virtuoso.maestro.writer import (
     # simulation
     run_simulation,
     run_and_wait,
+    MaestroPointsFailed,
     # export
     create_netlist_for_corner,
     export_output_view,
+    copy_point_netlist,
+    check_netlist_options,
+    missing_netlist_options,
     write_script,
     # migration
     migrate_adel_to_maestro,
@@ -161,6 +167,8 @@ __all__ = [
     "filter_active_state_xml",
     # read — runtime ops
     "read_results",
+    "NoResults",
+    "check_points",
     "export_waveform",
     # write - test
     "create_test",
@@ -191,9 +199,13 @@ __all__ = [
     # write - simulation
     "run_simulation",
     "run_and_wait",
+    "MaestroPointsFailed",
     # write - export
     "create_netlist_for_corner",
     "export_output_view",
+    "copy_point_netlist",
+    "check_netlist_options",
+    "missing_netlist_options",
     "write_script",
     # write - migration
     "migrate_adel_to_maestro",

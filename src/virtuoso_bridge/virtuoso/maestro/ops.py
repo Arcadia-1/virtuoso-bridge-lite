@@ -39,6 +39,7 @@ from virtuoso_bridge.virtuoso.maestro.reader import (
     export_waveform,
     get_session_state,
     list_session_states,
+    check_points,
     read_results,
     snapshot,
 )
@@ -48,6 +49,8 @@ from virtuoso_bridge.virtuoso.maestro.waveform_viewer import (
 )
 from virtuoso_bridge.virtuoso.maestro.writer import (
     add_output,
+    check_netlist_options,
+    copy_point_netlist,
     create_netlist_for_corner,
     create_test,
     delete_var,
@@ -131,6 +134,7 @@ class MaestroOps:
     get_session_state = _client_method(get_session_state)
     list_session_states = _client_method(list_session_states)
     read_results = _client_method(read_results)
+    check_points = _client_method(check_points)
     export_waveform = _client_method(export_waveform)
     open_waveform_viewer = _client_method(open_waveform_viewer)
     close_waveform_viewer = _client_method(close_waveform_viewer)
@@ -164,6 +168,8 @@ class MaestroOps:
     # Export, migration, and persistence
     create_netlist_for_corner = _client_method(create_netlist_for_corner)
     export_output_view = _client_method(export_output_view)
+    check_netlist_options = _client_method(check_netlist_options)
+    copy_point_netlist = _client_method(copy_point_netlist)
     write_script = _client_method(write_script)
     migrate_adel_to_maestro = _client_method(migrate_adel_to_maestro)
     migrate_adexl_to_maestro = _client_method(migrate_adexl_to_maestro)

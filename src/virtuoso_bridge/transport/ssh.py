@@ -9,6 +9,7 @@ import hashlib
 import logging
 import os
 import queue
+import shlex
 import shutil
 import signal
 import socket
@@ -744,6 +745,26 @@ class SSHRunner:
                 self._log_persistent_shell_fallback("Persistent SSH shell failed", exc)
 
         return self._run_command_once(command, _budget=budget)
+
+    def run_detached(self, command: str, log_path: str,
+                     timeout: float | None = None) -> int:
+        """Start *command* on the remote host so it outlives this SSH session.
+
+        Returns the remote process ID. The job runs under ``sh`` in its own
+        session (``setsid``), so a csh login shell neither rejects the
+        ``> log 2>&1`` redirection ("Ambiguous output redirect") nor kills
+        the job when SSH disconnects. stdout and stderr go to *log_path*.
+        """
+        result = self.run_command(
+            f"$(command -v setsid) nohup sh -c {shlex.quote(command)} "
+            f"> {shlex.quote(log_path)} 2>&1 < /dev/null & echo $!",
+            timeout=timeout,
+        )
+        pid = result.stdout.strip().splitlines()[-1:] if result.stdout else []
+        if result.returncode != 0 or not pid or not pid[0].isdigit():
+            raise RuntimeError(
+                self.describe_ssh_command_failure("start detached command", result))
+        return int(pid[0])
 
     def _print_cmd(self, cmd: list[str]) -> None:
         logger.info("[local] %s", " ".join(cmd))

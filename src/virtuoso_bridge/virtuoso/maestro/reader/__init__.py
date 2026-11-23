@@ -18,7 +18,7 @@ parsers.  XML files (raw + filtered) and ``state_from_skill.txt``
 """
 
 from ._parse_sdb import filter_active_state_xml, filter_sdb_xml
-from .runs import export_waveform, read_results
+from .runs import NoResults, check_points, export_waveform, read_results
 from .snapshot import snapshot
 from .state import (
     MaestroSessionState,
@@ -32,6 +32,8 @@ __all__ = [
     "filter_sdb_xml",
     "filter_active_state_xml",
     "read_results",
+    "NoResults",
+    "check_points",
     "export_waveform",
     "snapshot",
     "MaestroSessionState",

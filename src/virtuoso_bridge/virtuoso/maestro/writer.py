@@ -7,8 +7,13 @@ They return the raw SKILL output string.
 from __future__ import annotations
 
 import logging
+import re
+import shlex
+import shutil
+import tempfile
 import time
 import uuid
+from pathlib import Path
 
 from virtuoso_bridge import VirtuosoClient
 from virtuoso_bridge.models import ExecutionStatus, VirtuosoResult
@@ -126,8 +131,61 @@ def set_analysis(client: VirtuosoClient, test: str, analysis: str, *,
     s = f' ?session "{session}"' if session else ""
     en = "t" if enable else "nil"
     opts = f" ?options `{options}" if options else ""
+    noise = sorted(set(_option_names(options)) & _TRAN_NOISE_OPTIONS)
+    if analysis == "tran" and noise:
+        logger.warning(
+            "set_analysis: %s are netlisted only while transient noise is "
+            "enabled, and Maestro accepts them silently otherwise; verify the "
+            "netlist with check_netlist_options()", ", ".join(noise))
     return _q(client,
         f'maeSetAnalysis("{test}" "{analysis}" ?enable {en}{opts}{s})')
+
+
+# Transient-noise options Spectre receives only when the tran form's noise
+# toggle is on; maeSetAnalysis accepts them either way.
+_TRAN_NOISE_OPTIONS = frozenset(
+    {"noisefmax", "noisefmin", "noiseseed", "noisescale", "noisetmin"})
+
+
+def _option_names(options: str) -> list[str]:
+    """Option names of a SKILL alist string such as '(("stop" "1n"))'."""
+    return re.findall(r'\(\s*"([^"]+)"', options or "")
+
+
+def missing_netlist_options(netlist: str, analysis: str,
+                            names) -> list[str]:
+    """Return the *names* not set on any *analysis* statement of a netlist.
+
+    Pure. Spectre statements continue across lines ending in ``\\``; an
+    analysis statement reads ``<instance> <analysis> key=value ...``.
+    """
+    text = re.sub(r"\\\s*\n", " ", netlist)
+    present: set[str] = set()
+    for line in text.splitlines():
+        tokens = line.split()
+        if len(tokens) >= 2 and tokens[1] == analysis:
+            present.update(t.split("=", 1)[0] for t in tokens[2:] if "=" in t)
+    return [name for name in names if name not in present]
+
+
+def check_netlist_options(client: VirtuosoClient, netlist_path: str,
+                          analysis: str, names) -> list[str]:
+    """Check that requested analysis options reached a generated netlist.
+
+    Maestro accepts some options without netlisting them (for example
+    ``noisefmax`` while transient noise is off). Generate the netlist first,
+    e.g. with :func:`create_netlist_for_corner`, then pass its ``input.scs``.
+    Returns the names that are missing; an empty list means all arrived.
+    """
+    if isinstance(names, str):
+        names = _option_names(names)
+    local = Path(tempfile.gettempdir()) / f"vb_netlist_{uuid.uuid4().hex}.scs"
+    try:
+        client.download_file(netlist_path, str(local))
+        text = local.read_text(encoding="utf-8", errors="replace")
+    finally:
+        local.unlink(missing_ok=True)
+    return missing_netlist_options(text, analysis, names)
 
 
 # ---------------------------------------------------------------------------
@@ -136,8 +194,14 @@ def set_analysis(client: VirtuosoClient, test: str, analysis: str, *,
 
 def add_output(client: VirtuosoClient, name: str, test: str, *,
                output_type: str = "", signal_name: str = "",
-               expr: str = "", session: str = "") -> str:
-    """maeAddOutput — add an output (waveform or expression)."""
+               expr: str = "", session: str = "",
+               replace: bool = False) -> str:
+    """maeAddOutput — add an output (waveform or expression).
+
+    maeAddOutput keeps the old definition of an output that already exists.
+    ``replace=True`` deletes an output of that name first (with its spec),
+    so the call updates it or adds it.
+    """
     s = f' ?session "{escape_skill_string(session)}"' if session else ""
     parts = (
         f'maeAddOutput("{escape_skill_string(name)}" '
@@ -150,6 +214,11 @@ def add_output(client: VirtuosoClient, name: str, test: str, *,
     if expr:
         parts += f' ?expr "{escape_skill_string(expr)}"'
     parts += f'{s})'
+    if replace:
+        parts = (
+            f'progn(errset(maeDeleteOutput("{escape_skill_string(name)}" '
+            f'"{escape_skill_string(test)}"{s}) nil) {parts})'
+        )
     return _q(client, parts)
 
 
@@ -184,6 +253,10 @@ def set_var(client: VirtuosoClient, name: str, value: str, *,
     Note: if a test has a local variable, it overrides the global one.
     Use type_name="test" to set test-level variables directly.
     Comma-separated values create a parametric sweep.
+
+    On IC23.10 a test-level value was seen to have no effect on the runs
+    of corners; read the netlisted value back, or set the variable per
+    corner with :func:`setup_corner` ``variables=``.
     """
     s = f' ?session "{session}"' if session else ""
     parts = f'maeSetVar("{name}" "{value}"'
@@ -313,6 +386,13 @@ def setup_corner(client: VirtuosoClient, name: str, *,
       2. For each entry in ``variables``: ``maeSetVar(?typeName "corner" ?typeValue …)``.
       3. ``axlGetCorner`` → ``axlPutModel`` → ``axlSetModelFile`` /
          ``axlSetModelSection`` — attach the model.
+
+    A corner model file replaces the test's ``modelFiles``, so includes
+    listed there (a std-cell netlist, for example) are dropped for this
+    corner. Put such includes in the test's ``definitionFiles`` instead,
+    which corners do not override::
+
+        set_env_option(client, test, '(("definitionFiles" ("/path/std.scs")))')
 
     Intentionally heavier than its peers — use it when you want a fully
     configured corner in one call.  For "just create an empty corner",
@@ -543,8 +623,24 @@ def _strip_skill_atom(raw: str) -> str:
     return (raw or "").strip().strip('"')
 
 
+class MaestroPointsFailed(RuntimeError):
+    """A finished run whose Spectre logs report failed points."""
+
+    def __init__(self, history: str, points: list[dict]) -> None:
+        self.history = history
+        self.points = points
+        failed = [p for p in points if p["status"] != "ok"]
+        detail = "; ".join(
+            f'{p["log"]}: {p["status"]}' + (f' ({p["errors"][0]})' if p["errors"] else "")
+            for p in failed[:5])
+        super().__init__(
+            f"{history}: {len(failed)} of {len(points)} points did not complete: {detail}")
+
+
 def run_and_wait(client: VirtuosoClient, *, session: str = "",
-                 run_mode: str = "", timeout: int = 600) -> tuple[str, str]:
+                 run_mode: str = "", timeout: int = 600,
+                 check: bool = False, lib: str = "",
+                 cell: str = "") -> tuple[str, str]:
     """Run simulation and wait for completion without blocking SKILL.
 
     Uses maeRunSimulation(?callback ...) to register a completion callback
@@ -557,6 +653,13 @@ def run_and_wait(client: VirtuosoClient, *, session: str = "",
     ``timeout`` is an end-to-end budget covering the simulation-start request
     and completion polling. Returns (history, status) — e.g.
     ('"Interactive.3"', 'done').
+
+    "done" only means Maestro finished; points can still have failed (a
+    Spectre crash, for instance). ``check=True`` reads every point's
+    ``spectre.out`` (see :func:`check_points`) and raises
+    :class:`MaestroPointsFailed` unless all completed without errors, or
+    no log was found. ``lib``/``cell`` locate the results and are read
+    from the session when omitted.
     """
     deadline = time.monotonic() + timeout
 
@@ -666,7 +769,27 @@ procedure(_vb_sim_done_{nonce}(session runID)
             phase="completion_wait", simulation_start_sent=True,
         )
         raise MaestroCompletionUnknown(result) from exc
+    if check:
+        _check_run_points(client, history_name, session=session, lib=lib, cell=cell)
     return history, status
+
+
+def _check_run_points(client: VirtuosoClient, history: str, *, session: str,
+                      lib: str, cell: str) -> None:
+    from virtuoso_bridge.virtuoso.maestro.reader.runs import check_points
+
+    s = f' ?session "{escape_skill_string(session)}"' if session else ""
+
+    def env_option(option: str) -> str:
+        test = _strip_skill_atom(_q(client, f'car(maeGetSetup({s.strip()}))'))
+        return _strip_skill_atom(
+            _q(client, f'maeGetEnvOption("{test}" ?option "{option}"{s})'))
+
+    lib = lib or env_option("lib")
+    cell = cell or env_option("cell")
+    points = check_points(client, history, lib=lib, cell=cell)
+    if points and any(p["status"] != "ok" for p in points):
+        raise MaestroPointsFailed(history, points)
 
 
 # ---------------------------------------------------------------------------
@@ -685,11 +808,47 @@ def create_netlist_for_corner(client: VirtuosoClient, test: str,
         f'maeCreateNetlistForCorner("{test}" "{corner}" "{output_dir}"{s})')
 
 
+def _export_output_view_skill(filepath: str, args: str) -> str:
+    """SKILL running maeExportOutputView that fails unless *filepath* exists.
+
+    maeExportOutputView can return without writing anything and without an
+    error; the file is the only reliable signal.
+    """
+    path = escape_skill_string(filepath)
+    return (
+        f'let((vbRun) vbRun = errset(maeExportOutputView({args} ?fileName "{path}") t) '
+        f'unless(isFile("{path}") error("maeExportOutputView wrote no file %s: %L" '
+        f'"{path}" if(vbRun car(vbRun) errset.errset))) '
+        f'car(vbRun))'
+    )
+
+
 def export_output_view(client: VirtuosoClient, filepath: str, *,
                        view: str = "Detail") -> str:
-    """maeExportOutputView — export results to CSV."""
-    return _q(client,
-        f'maeExportOutputView(?fileName "{filepath}" ?view "{view}")')
+    """maeExportOutputView — export results to CSV.
+
+    Raises ``RuntimeError`` when no file was written.
+    """
+    return _q(client, _export_output_view_skill(
+        filepath, f'?view "{escape_skill_string(view)}"'))
+
+
+def copy_point_netlist(client: VirtuosoClient, source: str,
+                       destination: str) -> None:
+    """Copy a Maestro point's netlist directory for a standalone rerun.
+
+    ``netlist`` and ``ihnl`` in a point directory are relative symlinks into
+    ``psf/<TEST>/netlist``, so a plain copy leaves dangling links. This copy
+    follows them. Runs on the Virtuoso host.
+    """
+    runner = client.ssh_runner
+    if runner is None:
+        shutil.copytree(source, destination, symlinks=False)
+        return
+    r = runner.run_command(
+        f"cp -RL {shlex.quote(source)} {shlex.quote(destination)}")
+    if r.returncode != 0:
+        raise RuntimeError(f"copy_point_netlist failed: {r.stderr.strip()}")
 
 
 def write_script(client: VirtuosoClient, filepath: str) -> str:
