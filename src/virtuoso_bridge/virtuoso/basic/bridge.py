@@ -128,6 +128,35 @@ def _escape_for_skill_evalstring_source(s: str) -> str:
     )
 
 
+def _load_il_skill(path: str) -> str:
+    """SKILL that load()s *path* and reports the error raised inside it.
+
+    An error inside a loaded file reaches the caller only as load's own
+    "error while loading file ... at line N"; the real message goes to the
+    CIW. On failure, the ``*Error*`` lines CDS.log gained during the load are
+    appended to the error.
+    """
+    file = _escape_for_skill_evalstring_source(path)
+    return (
+        "let((vbLog vbStart vbRun vbErr vbPort vbLine vbLines) "
+        "when(isCallable('hiGetLogFileName) && isCallable('hiFlushLogFile) "
+        "hiFlushLogFile() vbLog = hiGetLogFileName() "
+        "when(vbLog && isFile(vbLog) vbStart = fileLength(vbLog))) "
+        f'vbRun = errset(load("{file}") t) '
+        "unless(vbRun "
+        "vbErr = errset.errset "
+        "when(vbStart hiFlushLogFile() vbPort = infile(vbLog) "
+        "when(vbPort fileSeek(vbPort vbStart 0) "
+        'while(gets(vbLine vbPort) when(rexMatchp("[*]Error[*]" vbLine) '
+        'vbLines = cons(car(parseString(vbLine "\\n")) vbLines))) '
+        "close(vbPort))) "
+        'error("%s%s" if(and(nth(4 vbErr) stringp(car(nth(4 vbErr)))) '
+        'car(nth(4 vbErr)) sprintf(nil "%L" vbErr)) '
+        'if(vbLines strcat(" | " buildString(reverse(vbLines) " | ")) ""))) '
+        "car(vbRun))"
+    )
+
+
 # ---------------------------------------------------------------------------
 # VirtuosoClient — pure SKILL execution client
 # ---------------------------------------------------------------------------
@@ -1992,7 +2021,7 @@ let((result winName ciwNum)
             )
 
         effective_timeout = timeout if timeout is not None else self._timeout
-        skill_command = f'load("{_escape_for_skill_evalstring_source(prepared)}")'
+        skill_command = _load_il_skill(prepared)
         result = self.execute_skill(skill_command, timeout=effective_timeout)
 
         if self._log_to_ciw and result.status == ExecutionStatus.SUCCESS:

@@ -298,7 +298,18 @@ results = client.maestro.read_results(session, lib="myLib", cell="myTB")
 
 GUI mode required (`maeOpenResults`).  Auto-detects the latest valid
 history if `history=` not given.  Pass `include_raw=True` to attach
-the raw exported CSV under `"raw_csv"`.
+the raw exported CSV under `"raw_csv"`.  When nothing could be read the
+return is empty (`== {}`), and `results["points"]` raises a `KeyError`
+naming the reason.
+
+### check_points — per-point Spectre status
+
+```python
+history, status = client.maestro.run_and_wait(session=session, check=True)
+# raises MaestroPointsFailed when a point's spectre.out has errors
+points = client.maestro.check_points(history, lib="myLib", cell="myTB")
+# [{"log": "1/TRAN/psf/spectre.out", "point": "1", "status": "ok", "errors": []}, ...]
+```
 
 ### export_waveform — OCEAN waveform export
 
