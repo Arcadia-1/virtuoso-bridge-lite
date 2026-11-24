@@ -253,6 +253,9 @@ while the tran form's transient-noise toggle is off, and the toggle could not
 be set through the API. Netlist a corner with `create_netlist_for_corner` and
 check it with `client.maestro.check_netlist_options(path, "tran", names)`,
 which returns the missing names.
+Settings that only the form writes (tran Transient Noise, the sampled
+pnoise jitter event, pss `autotstab`) need
+[gui-fallback.md](gui-fallback.md).
 
 ### `maeAddOutput` keeps an existing output's expression
 Re-adding a name keeps its old definition. Use

@@ -1129,6 +1129,63 @@ def cli_list_windows(*, json_output: bool = False, top_level: bool = False) -> i
     return 0
 
 
+def cli_gui(*, action: str, window: str | None = None, at: str | None = None,
+            text: str | None = None, keys: list[str] | None = None,
+            geometry: str | None = None, count: int = 1, output: str | None = None,
+            region: str | None = None, scale: float | None = None,
+            shot: str | None = None, display: str | None = None) -> int:
+    """Last-resort X11 form driving; see skills/virtuoso/references/gui-fallback.md."""
+    import json
+    _load_cli_env()
+    from virtuoso_bridge.virtuoso.x11_gui import GuiActionError, X11Gui, window_dict
+
+    def ints(value: str, n: int, name: str) -> list[int]:
+        parts = [int(v) for v in value.replace("x", ",").replace("+", ",").split(",") if v != ""]
+        if len(parts) != n:
+            raise GuiActionError(f"{name} needs {n} integers, got {value!r}")
+        return parts
+
+    runner, user = _make_ssh_runner()
+    try:
+        gui = X11Gui(runner, user, display=display, profile=_get_cli_profile())
+        if action == "windows":
+            missing = gui.missing_tools()
+            if missing:
+                print(f"Missing on GUI host: {', '.join(missing)}", file=sys.stderr)
+            print(json.dumps([window_dict(w) for w in gui.windows(window)],
+                             indent=2, ensure_ascii=False))
+            return 0
+        if action == "shot":
+            path = gui.screenshot(output or ".", title=window,
+                                  region=tuple(ints(region, 4, "--region")) if region else None,
+                                  scale=scale)
+            print(path)
+            return 0
+        if not window:
+            raise GuiActionError(f"{action} needs --window TITLE_REGEX")
+        if action == "pin":
+            record = window_dict(gui.pin(window, *ints(geometry or "", 4, "--geometry")))
+        elif action == "click":
+            x, y = ints(at or "", 2, "--at")
+            record = gui.click(window, x, y, count=count)
+        elif action == "type":
+            x, y = ints(at or "", 2, "--at")
+            if text is None:
+                raise GuiActionError("type needs --text")
+            record = gui.set_text(window, x, y, text)
+        elif action == "key":
+            record = gui.key(window, *(keys or []))
+        else:
+            raise GuiActionError(f"unknown gui action {action!r}")
+        if shot:
+            record["screenshot"] = str(gui.screenshot(shot, title=window))
+        print(json.dumps(record, ensure_ascii=False))
+        return 0
+    except GuiActionError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
 def cli_dismiss_window(
     *, window_id: str, action: str = "enter", display: str | None = None,
     pid: int | None = None,
@@ -2288,6 +2345,29 @@ def build_parser() -> argparse.ArgumentParser:
     sp_list_windows.add_argument("--env", default=None,
                                  help="Explicit .env file path (highest priority)")
 
+    sp_gui = subparsers.add_parser(
+        "gui",
+        help="Last resort: click/type in a Virtuoso form over X11 (xdotool)",
+        description=(
+            "Drive a form only when no SKILL/mae API makes the setting reach the "
+            "netlist. Coordinates are relative to the window named by --window "
+            "and match the pixels of 'gui shot --window'. Screenshot after every "
+            "action and verify the netlist, not the form."))
+    sp_gui.add_argument("action", choices=["windows", "shot", "pin", "click", "type", "key"])
+    sp_gui.add_argument("--window", default=None, help="Regex matching exactly one window title")
+    sp_gui.add_argument("--at", default=None, help="X,Y relative to the window")
+    sp_gui.add_argument("--text", default=None, help="Text for 'type' (replaces the field)")
+    sp_gui.add_argument("--keys", nargs="+", default=None, help="xdotool key names for 'key'")
+    sp_gui.add_argument("--geometry", default=None, help="X,Y,W,H for 'pin'")
+    sp_gui.add_argument("--count", type=int, default=1, help="Clicks (2 = double-click)")
+    sp_gui.add_argument("-o", "--output", default=None, help="PNG file or directory for 'shot'")
+    sp_gui.add_argument("--region", default=None, help="X,Y,W,H crop for 'shot', window-relative")
+    sp_gui.add_argument("--scale", type=float, default=None, help="Resize factor for 'shot'")
+    sp_gui.add_argument("--shot", default=None, help="After the action, screenshot the window here")
+    sp_gui.add_argument("--display", default=None, help="X display (default VB_DISPLAY or Virtuoso's)")
+    sp_gui.add_argument("-p", "--profile", default=None, help="Connection profile")
+    sp_gui.add_argument("--env", default=None, help="Explicit .env file path (highest priority)")
+
     sp_dismiss_window = subparsers.add_parser(
         "dismiss-window", help="Dismiss one explicit X11 window id")
     sp_dismiss_window.add_argument("window_id", help="X11 window id, e.g. 0x4203583")
@@ -2649,6 +2729,12 @@ def _run_command(parser: argparse.ArgumentParser, args: argparse.Namespace) -> i
         "inspect-dialogs": lambda: cli_inspect_dialogs(
             pid=args.pid, display=args.display, ciw_window=args.ciw_window,
             timeout=args.timeout, json_output=getattr(args, "json", False),
+        ),
+        "gui": lambda: cli_gui(
+            action=args.action, window=args.window, at=args.at, text=args.text,
+            keys=args.keys, geometry=args.geometry, count=args.count,
+            output=args.output, region=args.region, scale=args.scale,
+            shot=args.shot, display=args.display,
         ),
         "list-windows": lambda: cli_list_windows(
             json_output=getattr(args, "json", False),

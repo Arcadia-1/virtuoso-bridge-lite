@@ -66,6 +66,10 @@ Before popup-prone operations or timeout recovery, read
 It is the authority for dialog ownership, opt-in guards, request receipts and
 explicitly reviewed informational close.
 
+When a form setting has no API path to the netlist (e.g. tran Transient
+Noise, the pnoise jitter event), drive the form as a last resort per
+[gui-fallback.md](references/gui-fallback.md) and verify the netlist.
+
 Inspect through SSH/X11 when SKILL is blocked. Leave unknown-origin dialogs to
 the user; never automatically press Enter/Cancel or close the current form.
 Preserve the original request handle/history after uncertain execution.
