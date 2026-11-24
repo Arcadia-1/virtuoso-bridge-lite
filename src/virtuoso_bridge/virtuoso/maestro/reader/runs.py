@@ -138,7 +138,7 @@ def read_results(client: VirtuosoClient, session: str,
         latest_history = history.strip()
     else:
         latest_history = _find_latest_history_with_results(
-            client, lib=lib, cell=cell, test=test)
+            client, lib=lib, cell=cell, test=test, session=session)
     if not latest_history or latest_history == "nil":
         logger.warning(
             "read_results: no history with results for %s/%s test=%r "
@@ -155,7 +155,9 @@ def read_results(client: VirtuosoClient, session: str,
     remote_csv = f"/tmp/vb_results_{uuid.uuid4().hex}.csv"
     export_cmd = _export_output_view_skill(
         remote_csv,
-        f'?session "{session}" ?testName "{test}" '
+        # No ?testName: it narrows the table to one test, and the first
+        # test of the setup may have no points in this history.
+        f'?session "{session}" '
         f'?historyName "{latest_history}" ?view "Detail"',
     )
     export = client.execute_skill(export_cmd)
@@ -202,7 +204,8 @@ def read_results(client: VirtuosoClient, session: str,
 
 
 def _find_latest_history_with_results(client: VirtuosoClient, *,
-                                       lib: str, cell: str, test: str) -> str:
+                                       lib: str, cell: str, test: str,
+                                       session: str = "") -> str:
     """Scan the results dir newest-first; return the first history
     that successfully opens with at least one result output.  Returns
     ``""`` when none qualify."""
@@ -214,11 +217,19 @@ def _find_latest_history_with_results(client: VirtuosoClient, *,
     )
     files = _parse_skill_str_list(r.output or "")
     hist_list = natural_sort_histories(files)
+    # Any test with outputs counts: the first test may not have run in a
+    # history that only ran the others.
+    tests_outputs = (
+        f'foreach(mapcan vbT maeGetSetup(?typeName "tests" ?session "{session}") '
+        f'copy(maeGetResultOutputs(?testName vbT)))'
+        if session else f'maeGetResultOutputs(?testName "{test}")')
+    # Without ?session the history opens in whichever session is current.
+    session_arg = f' ?session "{session}"' if session else ""
     for h in reversed(hist_list):
         r = client.execute_skill(
-            f'when(maeOpenResults(?history "{h}") '
+            f'when(maeOpenResults(?history "{h}"{session_arg}) '
             f'  let((outs) '
-            f'    outs = maeGetResultOutputs(?testName "{test}") '
+            f'    outs = {tests_outputs} '
             f'    maeCloseResults() '
             f'    outs))'
         )
@@ -241,6 +252,9 @@ def _find_latest_history_with_results(client: VirtuosoClient, *,
 
 def _parse_detail_csv(text: str, *, history: str) -> dict:
     """Parse maeExportOutputView Detail CSV → per-point dict.  Pure."""
+    corner_points = _parse_corner_columns(text)
+    if corner_points is not None:
+        return _detail_result(corner_points[0], corner_points[1], history)
     points: list[dict] = []
     current: dict | None = None
     tests_seen: set[str] = set()
@@ -313,6 +327,10 @@ def _parse_detail_csv(text: str, *, history: str) -> dict:
                 "pass_fail": pass_fail.strip(),
             }
 
+    return _detail_result(points, tests_seen, history)
+
+
+def _detail_result(points: list[dict], tests_seen, history: str) -> dict:
     # Back-compat flat list: (test, name, value, spec_status) per point×output.
     flat_outputs: list[dict] = []
     for p in points:
@@ -330,6 +348,65 @@ def _parse_detail_csv(text: str, *, history: str) -> dict:
         "points":  points,
         "outputs": flat_outputs,
     }
+
+
+# IC23.1 writes the Detail view with one column per point (corner/sweep)::
+#
+#     ,Parameter,,,,,,pn_tt_0p8,pn_ff_0p8
+#     ,design_wrapper.lib.scs,,,,,,tt_pre,ff_pre
+#     ,vdd,,,,,,800e-3,800e-3
+#     <blank>
+#     Test,Output,Spec,Weight,Pass/Fail,Min,Max,pn_tt_0p8,pn_ff_0p8
+#     PNOISE,noise,< 1m,,pass,365e-6,528.7e-6,456e-6,528.7e-6
+#
+# Parameter rows share the point columns of the header row below them.
+_DETAIL_FIXED_COLUMNS = {"Test", "Output", "Spec", "Weight", "Pass/Fail", "Min", "Max"}
+
+
+def _parse_corner_columns(text: str):
+    """Parse the per-point-column Detail layout; ``None`` for other layouts.  Pure."""
+    rows = list(csv.reader(text.splitlines()))
+    header_at = next((i for i, r in enumerate(rows)
+                      if [c.strip() for c in r[:2]] == ["Test", "Output"]), None)
+    if header_at is None:
+        return None
+    header = [c.strip() for c in rows[header_at]]
+    if "Nominal" in header:
+        return None
+    columns = [(i, name) for i, name in enumerate(header)
+               if name and name not in _DETAIL_FIXED_COLUMNS]
+    if not columns:
+        return None
+    fixed = {name: i for i, name in enumerate(header) if name in _DETAIL_FIXED_COLUMNS}
+
+    def cell(row, i):
+        return row[i].strip() if i is not None and i < len(row) else ""
+
+    points = [{"point": n + 1, "corner": name, "parameters": {}, "outputs": {}}
+              for n, (_, name) in enumerate(columns)]
+    for row in rows[:header_at]:
+        name = cell(row, 1)
+        if cell(row, 0) or not name or name == "Parameter":
+            continue
+        for point, (i, _) in zip(points, columns):
+            value = cell(row, i)
+            if value:
+                point["parameters"][name] = value
+    tests_seen: set[str] = set()
+    for row in rows[header_at + 1:]:
+        test_n, name = cell(row, fixed.get("Test")), cell(row, fixed.get("Output"))
+        if not name:
+            continue
+        if test_n:
+            tests_seen.add(test_n)
+        for point, (i, _) in zip(points, columns):
+            point["outputs"][name] = {
+                "value":     cell(row, i),
+                "spec":      cell(row, fixed.get("Spec")),
+                "weight":    cell(row, fixed.get("Weight")),
+                "pass_fail": cell(row, fixed.get("Pass/Fail")),
+            }
+    return points, tests_seen
 
 
 def _unquote_atom(raw: str) -> str | None:
@@ -381,32 +458,24 @@ def check_points(client: VirtuosoClient, history: str, *,
     lib_path = (r.output or "").strip().strip('"')
     if not lib_path or lib_path == "nil":
         raise RuntimeError(f"check_points: library {lib!r} not found")
-    root = f"{lib_path}/{cell}/maestro/results/maestro/{history}"
-
+    tail = f"{lib}/{cell}/maestro/results/maestro/{history}"
+    # The library keeps only the history's .rdb/.log; Maestro writes the
+    # point directories under the ADE project directory (asimenv.startup
+    # projectDir, e.g. /scratch/<user>/simulation), recorded in the .rdb.
+    roots = [f"{lib_path}/{cell}/maestro/results/maestro/{history}"]
     logs: dict[str, list[str]] = {}
-    runner = client.ssh_runner
-    if runner is None:
-        for path in sorted(Path(root).rglob("spectre.out")):
-            text = path.read_text(encoding="utf-8", errors="replace")
-            logs[str(path.relative_to(root))] = [
-                ln for ln in text.splitlines()
-                if re.search(_SPECTRE_LOG_PATTERN, ln, re.IGNORECASE)]
-    else:
-        q_root = shlex.quote(root)
-        out = runner.run_command(
-            f"cd {q_root} && find . -name spectre.out | sort | while read f; do "
-            f"echo \"@@ $f\"; grep -i -E {shlex.quote(_SPECTRE_LOG_PATTERN)} \"$f\" | head -20; "
-            f"done"
-        )
-        if out.returncode != 0:
-            raise RuntimeError(f"check_points: cannot read {root}: {out.stderr.strip()}")
-        current = None
-        for line in out.stdout.splitlines():
-            if line.startswith("@@ "):
-                current = line[3:].removeprefix("./")
-                logs[current] = []
-            elif current is not None:
-                logs[current].append(line)
+    searched: list[str] = []
+    for root in _candidate_result_roots(client, roots, lib_path, cell, history, tail):
+        if root in searched:
+            continue
+        searched.append(root)
+        logs = _read_spectre_logs(client, root)
+        if logs:
+            break
+    if not logs:
+        raise RuntimeError(
+            f"check_points: no spectre.out for history {history!r}; searched "
+            + ", ".join(searched))
 
     points = []
     for log, lines in logs.items():
@@ -415,6 +484,60 @@ def check_points(client: VirtuosoClient, history: str, *,
         points.append({"log": log, "point": first if first.isdigit() else "",
                        "status": status, "errors": errors})
     return points
+
+
+def _candidate_result_roots(client, first, lib_path, cell, history, tail):
+    """Yield possible run directories of *history*, cheapest first."""
+    yield from first
+    r = client.execute_skill('car(errset(envGetVal("asimenv.startup" "projectDir")))')
+    project = (r.output or "").strip().strip('"')
+    if project and project != "nil":
+        yield f"{project.rstrip('/')}/{tail}"
+    rdb = f"{lib_path}/{cell}/maestro/results/maestro/{history}.rdb"
+    pattern = re.compile(r"(/[^\x00\s$]*/maestro/results/maestro/" + re.escape(history) + r")(?![\w.])")
+    runner = client.ssh_runner
+    if runner is None:
+        try:
+            data = Path(rdb).read_bytes().decode("latin-1")
+        except OSError:
+            data = ""
+    else:
+        cmd = (f"grep -a -o {shlex.quote('/[^[:space:]$]*/maestro/results/maestro/' + history)} "
+               f"{shlex.quote(rdb)} | sort -u")
+        out = runner.run_command(f"sh -c {shlex.quote(cmd)}")
+        data = out.stdout if out.returncode == 0 else ""
+    for match in sorted(set(pattern.findall(data))):
+        yield match
+
+
+def _read_spectre_logs(client, root: str) -> dict[str, list[str]]:
+    logs: dict[str, list[str]] = {}
+    runner = client.ssh_runner
+    if runner is None:
+        if not Path(root).is_dir():
+            return logs
+        for path in sorted(Path(root).rglob("spectre.out")):
+            text = path.read_text(encoding="utf-8", errors="replace")
+            logs[str(path.relative_to(root))] = [
+                ln for ln in text.splitlines()
+                if re.search(_SPECTRE_LOG_PATTERN, ln, re.IGNORECASE)]
+        return logs
+    q_root = shlex.quote(root)
+    # sh -c: the login shell may be csh, which has no while/do loop.
+    cmd = (f"test -d {q_root} || exit 0; cd {q_root} && find . -name spectre.out | sort | "
+           f"while read f; do echo \"@@ $f\"; "
+           f"grep -i -E {shlex.quote(_SPECTRE_LOG_PATTERN)} \"$f\" | head -20; done")
+    out = runner.run_command(f"sh -c {shlex.quote(cmd)}")
+    if out.returncode != 0:
+        raise RuntimeError(f"check_points: cannot read {root}: {out.stderr.strip()}")
+    current = None
+    for line in out.stdout.splitlines():
+        if line.startswith("@@ "):
+            current = line[3:].removeprefix("./")
+            logs[current] = []
+        elif current is not None:
+            logs[current].append(line)
+    return logs
 
 
 # ---------------------------------------------------------------------------
