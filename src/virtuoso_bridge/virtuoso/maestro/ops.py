@@ -24,6 +24,7 @@ from virtuoso_bridge.virtuoso.maestro.lifecycle import (
 )
 from virtuoso_bridge.virtuoso.maestro.history import (
     get_history,
+    delete_history,
     list_histories,
     lock_history,
     set_history_lock,
@@ -119,6 +120,7 @@ class MaestroOps:
     # Simulation history retention
     list_histories = _client_method(list_histories)
     get_history = _client_method(get_history)
+    delete_history = _client_method(delete_history)
     set_history_lock = _client_method(set_history_lock)
     lock_history = _client_method(lock_history)
     unlock_history = _client_method(unlock_history)
