@@ -53,6 +53,23 @@ an existing view. Use `fresh=false` to modify through the existing schematic
 builder. Maestro `run_test` requires a session; `test_results` requires both a
 session and an acknowledged history. A run is read only after confirmed completion.
 
+For clients that expose `structuredContent` to the agent, `test_results` supports
+`compact: true` (default: false). This keeps every point, output value and spec
+field once, without the legacy flattened duplicate, and replaces duplicated text
+with a short description. Text-only clients must keep the default. Results over
+the structured size limit are explicitly refused, not silently truncated; export
+that history through Python instead. `run_test` is unchanged; never rerun a
+simulation merely to change its result presentation.
+
+An offline comparison against a clean checkout of the same upstream commit is
+available with `python tools/benchmark_compact_results.py --baseline-root PATH`.
+Install optional `tiktoken` only in that benchmark environment. It checks full
+measurement equality and unchanged default responses, and reports estimates with
+the fixed `o200k_base` tokenizer for structured-only clients, clients exposing
+both response forms, and the latter including the updated tool definition once.
+These are serialized tool-payload estimates, not billed usage or whole-agent
+session savings. No Cadence/SSH/PDK is contacted by the benchmark.
+
 SKILL operations are never automatically replayed after a timeout. The client
 and original request diagnostics are retained for reconciliation. Use the
 bridge's documented recovery API before deciding whether a new request is safe.

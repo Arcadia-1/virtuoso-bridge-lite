@@ -307,6 +307,27 @@ the raw exported CSV under `"raw_csv"`.  When nothing could be read the
 return is empty (`== {}`), and `results["points"]` raises a `KeyError`
 naming the reason.
 
+For agent consumption, pass `compact=True` when supported by the active package:
+
+```python
+results = client.maestro.read_results(
+    session, lib="myLib", cell="myTB", history="Interactive.7", compact=True,
+)
+```
+
+This omits only the top-level legacy `outputs` duplicate. All scan points,
+parameters, corner names, output values, spec/weight/pass-fail fields and overall
+status remain in `points` and the other existing fields. No values are rounded
+or sampled and no extra bridge calls are made. `include_raw=True` still includes
+the CSV when explicitly requested. The default result shape is unchanged.
+
+For the optional MCP adapter, `test_results` accepts `compact: true`. Use it only
+when the client makes `structuredContent` available to the agent: text becomes
+a short description, while structured data contains the complete compact result
+plus the session/history identity. Text-only clients should keep the default.
+Oversized compact MCP results fail explicitly instead of silently dropping data;
+export the same history through Python, rather than rerunning the simulation.
+
 ### check_points — per-point Spectre status
 
 ```python
