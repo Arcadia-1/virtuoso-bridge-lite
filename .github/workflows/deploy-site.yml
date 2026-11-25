@@ -3,12 +3,14 @@ on:
   push:
     branches: [main]
     paths: ["docs/**", "website/**", ".github/workflows/deploy-site.yml"]
+  pull_request:
+    paths: ["docs/**", "website/**", ".github/workflows/deploy-site.yml"]
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: deploy-website
-  cancel-in-progress: false
+  group: deploy-website-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -31,8 +33,8 @@ jobs:
       - run: npm test
       - run: npm run build
       - name: Deploy to Cloudflare
-        if: ${{ env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != '' }}
+        if: ${{ github.event_name != 'pull_request' && env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != '' }}
         run: npm run deploy
       - name: Report missing deployment credentials
-        if: ${{ env.CLOUDFLARE_API_TOKEN == '' || env.CLOUDFLARE_ACCOUNT_ID == '' }}
+        if: ${{ github.event_name != 'pull_request' && (env.CLOUDFLARE_API_TOKEN == '' || env.CLOUDFLARE_ACCOUNT_ID == '') }}
         run: echo '::warning::Website checks passed, but no deployment was attempted. Configure CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID on this repository; until then use the authenticated local deployment.'
