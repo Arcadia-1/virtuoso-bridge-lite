@@ -301,3 +301,22 @@ def test_export_waveform_rejects_invalid_format_options(option, value, error):
         )
 
     assert client.skill_calls == []
+
+
+# A run whose points never reached Spectre (netlisting failed, say) exports
+# the Detail view without its value column. Pinned from IC23.1: the fixed
+# column positions read the Spec column as each output's value.
+NO_VALUE_CSV = (
+    "Point,Test,Output,Spec,Weight,Pass/Fail\n"
+    "Parameters: vdd=0.8,,,,,\n"
+    "1,CODE,t_conv,< 914p,,\n"
+    "1,CODE,dout1,,,\n"
+)
+
+
+def test_parse_detail_csv_without_value_column_reads_no_value():
+    out = _parse_detail_csv(NO_VALUE_CSV, history="Interactive.0")
+    outputs = out["points"][0]["outputs"]
+    assert outputs["t_conv"] == {"value": "", "spec": "< 914p", "weight": "", "pass_fail": ""}
+    assert outputs["dout1"]["value"] == ""
+    assert out["tests"] == ["CODE"]

@@ -100,6 +100,18 @@ def test_run_and_wait_check_raises_on_failed_points(tmp_path, monkeypatch) -> No
     assert info.value.history == "Interactive.3"
 
 
+def test_run_and_wait_check_without_logs_keeps_the_history(tmp_path, monkeypatch) -> None:
+    # Points that never reached Spectre leave no log; the acknowledged
+    # history must still reach the caller.
+    (tmp_path / "cell").mkdir()
+    monkeypatch.setattr(writer, "run_simulation", lambda *a, **k: '"Interactive.4"')
+    monkeypatch.setattr(writer, "_wait_until_done", lambda *a, **k: "done")
+    client = _Client(["t", f'"{tmp_path}"', "nil"])
+    with pytest.raises(RuntimeError, match="no spectre.out") as info:
+        run_and_wait(client, session="s1", check=True, lib="LIB", cell="cell")
+    assert info.value.history == "Interactive.4"
+
+
 def test_run_and_wait_without_check_is_unchanged(monkeypatch) -> None:
     monkeypatch.setattr(writer, "run_simulation", lambda *a, **k: '"Interactive.3"')
     monkeypatch.setattr(writer, "_wait_until_done", lambda *a, **k: "done")

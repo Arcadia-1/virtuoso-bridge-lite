@@ -111,3 +111,16 @@ def test_check_points_without_logs_raises_instead_of_empty(tmp_path) -> None:
     client = _Client([f'"{lib}"', "nil"])
     with pytest.raises(RuntimeError, match="no spectre.out"):
         check_points(client, "Interactive.9", lib="LIB", cell="cell")
+
+
+def test_check_points_ignores_paths_recorded_relative_to_a_variable(tmp_path) -> None:
+    # "$PROJ/LIB/cell/..." must not be read as the absolute "/LIB/cell/...".
+    lib = tmp_path / "lib"
+    results = lib / "cell" / "maestro" / "results" / "maestro"
+    results.mkdir(parents=True)
+    (results / "Interactive.3.rdb").write_bytes(
+        b"SQLite\x00$PROJ/LIB/cell/maestro/results/maestro/Interactive.3\x00")
+    client = _Client([f'"{lib}"', "nil"])
+    with pytest.raises(RuntimeError) as err:
+        check_points(client, "Interactive.3", lib="LIB", cell="cell")
+    assert " /LIB/cell/maestro/" not in str(err.value)
