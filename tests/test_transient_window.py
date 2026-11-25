@@ -441,7 +441,7 @@ def test_native_posix_selector_inheritance_and_fake_ocean(native_posix):
 @POSIX_ONLY
 def test_native_posix_fake_ocean_nonzero_exit(native_posix):
     executable, environment = native_posix
-    with pytest.raises(RuntimeError, match=r"failed \(23\).*synthetic native failure"):
+    with pytest.raises(RuntimeError, match=r"(?s)failed \(23\).*synthetic native failure"):
         wf.read_transient_window(
             PSF, ["OUT"], 0, 1, 0.5, ocean_bin=str(executable),
             cadence_env=environment("fail"), timeout=3,
