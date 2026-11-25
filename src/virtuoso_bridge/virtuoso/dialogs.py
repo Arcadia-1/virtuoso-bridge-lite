@@ -104,6 +104,7 @@ class DialogOps:
         self._endpoint: tuple[str, int] | None = None
         self._protect_inflight = False
         self._actions = None
+        self._probe_pid: int | None = None
 
     def prepare_close(self, window_id: str, *, expected_title: str, timeout: float = 30):
         """Read an informational window preview, without authorizing any action."""
@@ -209,11 +210,53 @@ class DialogOps:
         self._protect_inflight = protect_inflight
         return report
 
+    def remember_pid(self, *, timeout: float = 5) -> bool:
+        """Learn the CIW PID for :meth:`probe` while the CIW is still free.
+
+        The daemon identity handshake was seen to hang while a modal dialog
+        held the CIW (IC23.1), so the PID must be known before a dialog can
+        appear. Call this before starting work that may raise one.
+        """
+        if self.enabled or self._probe_pid is not None:
+            return True
+        try:
+            self._probe_pid = self.connected_pid(timeout=timeout)
+        except Exception:
+            return False
+        return True
+
+    def probe(self, *, timeout: float = 15) -> DialogInspection | None:
+        """Read-only blocker check of the connected CIW, also without the guard.
+
+        Uses the bound guard target when enabled, else the PID the daemon
+        proves (cached; see :meth:`remember_pid`, as the handshake itself
+        hangs once a dialog holds the CIW). Sends no SKILL and dismisses
+        nothing. Returns None
+        when the CIW cannot be identified or inspected (split hosts, no
+        daemon identity, X11 unavailable): a caller must treat that as
+        "unknown", never as clear.
+        """
+        if self.enabled:
+            return self.inspect(timeout=timeout)
+        deadline = time.monotonic() + timeout
+        try:
+            if self._probe_pid is None:
+                self._probe_pid = self.connected_pid(timeout=timeout)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            report = self.inspect(pid=self._probe_pid, timeout=remaining)
+        except Exception:
+            self._probe_pid = None
+            return None
+        return report
+
     def connected_pid(self, *, timeout: float = 15) -> int:
         """The Virtuoso PID the connected daemon proves, for explicit inspection.
 
-        Uses the authenticated capability handshake: no SKILL is sent and the
-        CIW is not involved, so a blocked CIW still answers.
+        Uses the authenticated capability handshake: no SKILL is sent. On
+        IC23.1 the handshake was seen to time out while a modal dialog held
+        the CIW, so learn the PID before one can appear.
         """
         _timeout(timeout)
         return self._verified_daemon_pid(time.monotonic() + timeout)[1]

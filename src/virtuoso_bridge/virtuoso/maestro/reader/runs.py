@@ -27,7 +27,7 @@ from virtuoso_bridge import VirtuosoClient
 from virtuoso_bridge.virtuoso.maestro.writer import _export_output_view_skill
 
 from ._parse_skill import _parse_skill_str_list
-from ._skill import _q, _get_test, _unique_remote_wave_path
+from ._skill import _q, _get_test, _session_lib_cell, _unique_remote_wave_path
 from .session import natural_sort_histories
 
 logger = logging.getLogger(__name__)
@@ -103,18 +103,20 @@ def read_results(client: VirtuosoClient, session: str,
     def q(label, expr):
         return _q(client, label, expr)
 
-    # Auto-detect lib/cell from session env if not provided.
+    # A request sent to a CIW held by a modal dialog waits in its queue and
+    # runs once the dialog closes, whatever state it then finds: an export
+    # queued behind an ASSEMBLER disk-error dialog crashed IC23.1 that way.
+    # Check read-only first and send nothing to a blocked CIW.
+    blocked = _blocking_dialogs(client)
+    if blocked is not None:
+        logger.warning("read_results: CIW is blocked by %s; nothing sent", blocked)
+        return NoResults(f"the CIW is blocked by a dialog ({blocked}); "
+                         "answer it in Virtuoso and read the results again")
+
+    # Auto-detect lib/cell from the session if not provided.
     if not lib or not cell:
-        test = _get_test(client, session)
-        if test:
-            if not lib:
-                r = client.execute_skill(
-                    f'maeGetEnvOption("{test}" ?option "lib" ?session "{session}")')
-                lib = (r.output or "").strip('"')
-            if not cell:
-                r = client.execute_skill(
-                    f'maeGetEnvOption("{test}" ?option "cell" ?session "{session}")')
-                cell = (r.output or "").strip('"')
+        found_lib, found_cell = _session_lib_cell(client, session)
+        lib, cell = lib or found_lib, cell or found_cell
     if not lib or not cell:
         logger.warning(
             "read_results: missing lib/cell (lib=%r cell=%r session=%r); "
@@ -163,6 +165,8 @@ def read_results(client: VirtuosoClient, session: str,
     export = client.execute_skill(export_cmd)
     skill_out = export.output or ""
     export_error = "; ".join(getattr(export, "errors", None) or [])
+    # A timed-out request may still be queued in the CIW: add nothing to it.
+    channel_lost = any(m in export_error.lower() for m in _CHANNEL_LOST_MARKERS)
 
     local_csv = Path(tempfile.gettempdir()) / f"vb_results_{uuid.uuid4().hex}.csv"
     csv_text = ""
@@ -185,11 +189,12 @@ def read_results(client: VirtuosoClient, session: str,
             local_csv.unlink()
         except OSError:
             pass
-        # Best-effort remote cleanup.
-        try:
-            client.execute_skill(f'deleteFile("{remote_csv}")')
-        except Exception:
-            pass
+        # Best-effort remote cleanup, not over a channel that just timed out.
+        if not channel_lost:
+            try:
+                client.execute_skill(f'deleteFile("{remote_csv}")')
+            except Exception:
+                pass
 
     raw_overall = q("maeGetOverallSpecStatus", 'maeGetOverallSpecStatus()')
     raw_yield   = q("maeGetOverallYield",
@@ -201,6 +206,24 @@ def read_results(client: VirtuosoClient, session: str,
     if include_raw:
         structured["raw_csv"] = csv_text
     return structured
+
+
+_CHANNEL_LOST_MARKERS = ("socket timeout", "socket error", "connection refused")
+
+
+def _blocking_dialogs(client) -> str | None:
+    """Titles of dialogs blocking the CIW, from a read-only X11 probe; else None."""
+    dialogs = getattr(client, "dialogs", None)
+    probe = getattr(dialogs, "probe", None)
+    if probe is None:
+        return None
+    try:
+        report = probe(timeout=10)
+    except Exception:
+        return None
+    if report is None or report.status != "blocked":
+        return None
+    return ", ".join(str(d.get("title") or "untitled") for d in report.dialogs) or "a dialog"
 
 
 def _find_latest_history_with_results(client: VirtuosoClient, *,

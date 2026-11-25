@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import re
+import shlex
+import shutil
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -339,3 +343,126 @@ __all__ = [
     "set_history_lock",
     "unlock_history",
 ]
+
+
+_DELETE_TAG = "VB_MAESTRO_HISTORY_DELETE_V1"
+_HISTORY_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.\-]*")
+
+
+def _delete_history_skill(session: str, history: str) -> str:
+    s, h = escape_skill_string(session), escape_skill_string(history)
+    return f'''prog((vbSdb vbRun vbEntry)
+  foreach(vbFn '(axlGetMainSetupDB axlGetRunStatus axlGetHistoryEntry axlGetHistoryLock axlRemoveElement)
+    unless(isCallable(vbFn) return(list("{_DELETE_TAG}" "unsupported" symbolToString(vbFn)))))
+  vbSdb=car(errset(axlGetMainSetupDB("{s}")))
+  unless(vbSdb return(list("{_DELETE_TAG}" "session_not_found" "{s}")))
+  vbRun=car(errset(axlGetRunStatus("{s}")))
+  unless(listp(vbRun) && length(vbRun)==2 && numberp(car(vbRun)) && numberp(cadr(vbRun))
+    return(list("{_DELETE_TAG}" "run_status_unknown" sprintf(nil "%L" vbRun))))
+  when(car(vbRun) < cadr(vbRun)
+    return(list("{_DELETE_TAG}" "running" sprintf(nil "%d of %d points done" car(vbRun) cadr(vbRun)))))
+  vbEntry=car(errset(axlGetHistoryEntry(vbSdb "{h}")))
+  unless(vbEntry return(list("{_DELETE_TAG}" "not_found" "{h}")))
+  when(car(errset(axlGetHistoryLock(vbEntry)))
+    return(list("{_DELETE_TAG}" "locked" "{h}")))
+  unless(errset(axlRemoveElement(vbEntry))
+    return(list("{_DELETE_TAG}" "remove_failed" "{h}")))
+  when(isCallable('maeSaveSetup) errset(maeSaveSetup(?session "{s}")))
+  return(list("{_DELETE_TAG}" "ok" "{h}"))
+)'''
+
+
+def delete_history(
+    client: "VirtuosoClient",
+    history: str,
+    *,
+    session: str,
+    lib: str = "",
+    cell: str = "",
+    remove_files: bool = True,
+    timeout: float = 60,
+) -> list[str]:
+    """Delete one history from a Maestro session, refusing while it runs.
+
+    Removing a history entry while the session has a run in progress left
+    IC23.1 unable to start runs ("Cannot find a setup database entry for
+    handle N"), and closing that Maestro window then crashed Virtuoso. This
+    refuses while ``axlGetRunStatus`` reports unfinished points, and for a
+    locked history. IC23.1 removes the history's result files itself once
+    the entry goes; with ``remove_files`` any left behind are removed too
+    (``<history>`` and its ``.rdb``/``.log``/``.msg.db`` under the library,
+    the run directory under the ADE project directory). Returns the paths
+    this call removed, often none.
+    """
+    from virtuoso_bridge.virtuoso.maestro.reader.runs import _candidate_result_roots
+
+    session = _require_name(session, "session")
+    history = _require_name(history, "history")
+    if not _HISTORY_NAME.fullmatch(history):
+        raise ValueError(f"history {history!r} is not a plain history name")
+
+    def skill(expr: str) -> str:
+        r = client.execute_skill(expr, timeout=timeout)
+        if not getattr(r, "ok", False):
+            raise MaestroHistoryError(f"{expr[:60]}... failed: {_result_errors(r)}")
+        return (r.output or "").strip()
+
+    # Refuse a running session before touching anything; the delete below
+    # checks again in the same SKILL call that removes the entry.
+    raw = skill(f'car(errset(axlGetRunStatus("{escape_skill_string(session)}")))')
+    done_total = re.fullmatch(r"\(\s*(\d+)\s+(\d+)\s*\)", raw)
+    if done_total and int(done_total[1]) < int(done_total[2]):
+        raise MaestroHistoryError(
+            f"History {history!r} not deleted: running: "
+            f"{done_total[1]} of {done_total[2]} points done")
+
+    roots: list[str] = []
+    if remove_files:
+        if not lib or not cell:
+            from virtuoso_bridge.virtuoso.maestro.reader._skill import _session_lib_cell
+            found_lib, found_cell = _session_lib_cell(client, session)
+            lib, cell = lib or found_lib, cell or found_cell
+        lib_path = skill(f'ddGetObj("{escape_skill_string(lib)}")~>readPath').strip('"')
+        if not lib_path or lib_path == "nil":
+            raise MaestroHistoryError(f"library {lib!r} not found")
+        tail = f"{lib}/{cell}/maestro/results/maestro/{history}"
+        base = f"{lib_path}/{cell}/maestro/results/maestro/{history}"
+        # Read the run directories before the entry (and its .rdb) goes.
+        roots = [base + suffix for suffix in ("", ".rdb", ".log", ".msg.db")]
+        for root in _candidate_result_roots(client, [], lib_path, cell, history, tail):
+            if root not in roots:
+                roots.append(root)
+
+    result = client.execute_skill(_delete_history_skill(session, history), timeout=timeout)
+    if not getattr(result, "ok", False):
+        if _transport_outcome_unknown(result):
+            raise MaestroHistoryOutcomeUnknown(
+                f"Deleting history {history!r} has an unknown outcome: {_result_errors(result)}")
+        raise MaestroHistoryError(f"Deleting history {history!r} failed: {_result_errors(result)}")
+    value = parse_sexpr((result.output or "").strip())
+    if not isinstance(value, list) or len(value) != 3 or value[0] != _DELETE_TAG:
+        raise MaestroHistoryError("Malformed Maestro history delete envelope.")
+    if value[1] != "ok":
+        raise MaestroHistoryError(f"History {history!r} not deleted: {value[1]}: {value[2]}")
+
+    removed: list[str] = []
+    suffix = re.compile(r"/maestro/results/maestro/" + re.escape(history) + r"(\.rdb|\.log|\.msg\.db)?$")
+    runner = client.ssh_runner
+    for path in roots:
+        if not suffix.search(path):
+            continue
+        if runner is None:
+            target = Path(path)
+            if target.is_dir():
+                shutil.rmtree(target, ignore_errors=True)
+            elif target.exists():
+                target.unlink(missing_ok=True)
+            else:
+                continue
+            removed.append(path)
+        else:
+            q = shlex.quote(path)
+            out = runner.run_command(f"sh -c {shlex.quote(f'test -e {q} && rm -rf {q} && echo removed')}")
+            if "removed" in (out.stdout or ""):
+                removed.append(path)
+    return removed

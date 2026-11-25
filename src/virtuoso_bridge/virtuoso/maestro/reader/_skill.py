@@ -43,3 +43,29 @@ def _get_test(client: VirtuosoClient, session: str) -> str:
         if m:
             return m[0]
     return ""
+
+
+def _session_lib_cell(client: VirtuosoClient, session: str) -> tuple[str, str]:
+    """Library and cell of a Maestro session's cellview, where its results live.
+
+    ``maeGetEnvOption(test ?option "lib")`` returns nil on IC23.1, so the
+    session's own cellview is asked first; the test's options remain the
+    fallback for versions without ``axlGetSessionLibName``.
+    """
+    def atom(expr: str) -> str:
+        out = (client.execute_skill(expr).output or "").strip().strip('"')
+        return "" if out in ("", "nil") else out
+
+    lib = cell = ""
+    if session:
+        name = session.replace("\\", "\\\\").replace('"', '\\"')
+        lib = atom(f'car(errset(axlGetSessionLibName("{name}")))')
+        cell = atom(f'car(errset(axlGetSessionCellName("{name}")))')
+    if not lib or not cell:
+        test = _get_test(client, session)
+        if test:
+            s = f' ?session "{session}"' if session else ""
+            lib = lib or atom(f'maeGetEnvOption("{test}" ?option "lib"{s})')
+            cell = cell or atom(f'maeGetEnvOption("{test}" ?option "cell"{s})')
+    return lib, cell
+

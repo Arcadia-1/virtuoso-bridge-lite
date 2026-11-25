@@ -127,6 +127,13 @@ def set_analysis(client: VirtuosoClient, test: str, analysis: str, *,
     """maeSetAnalysis — enable/disable an analysis and set its options.
 
     options: SKILL alist string, e.g. '(("start" "1") ("stop" "10G") ("dec" "20"))'
+
+    ADE netlists a field holding ``VAR(...)`` through a cached ``_EXPR_n``
+    parameter (the test session's ``expressionTable``), and maeSetAnalysis
+    does not refresh it: on IC23.1 a tran stop changed from
+    ``302*VAR("tclk")`` to ``906*VAR("tclk")`` kept netlisting
+    ``_EXPR_1=302n``. The cached entries of the fields set here are dropped,
+    so the netlist takes the new value.
     """
     s = f' ?session "{session}"' if session else ""
     en = "t" if enable else "nil"
@@ -137,8 +144,19 @@ def set_analysis(client: VirtuosoClient, test: str, analysis: str, *,
             "set_analysis: %s are netlisted only while transient noise is "
             "enabled, and Maestro accepts them silently otherwise; verify the "
             "netlist with check_netlist_options()", ", ".join(noise))
-    return _q(client,
-        f'maeSetAnalysis("{test}" "{analysis}" ?enable {en}{opts}{s})')
+    call = f'maeSetAnalysis("{test}" "{analysis}" ?enable {en}{opts}{s})'
+    fields = [f"{analysis}_{name}" for name in _option_names(options)]
+    if not fields:
+        return _q(client, call)
+    keys = " ".join(f'"{escape_skill_string(f)}"' for f in fields)
+    return _q(client, (
+        f"let((vbR vbS vbT vbK) vbR = {call} "
+        f'errset(progn(vbS = asiGetSession(maeGetTestSession("{escape_skill_string(test)}"{s})) '
+        f"vbT = vbS->data['expressionTable] "
+        f"when(tablep(vbT) "
+        f"foreach(k vbT when(listp(vbT[k]) && member(symbolToString(car(vbT[k])) '({keys})) vbK = cons(k vbK))) "
+        f"foreach(k vbK remove(k vbT))))) "
+        f"vbR)"))
 
 
 # Transient-noise options Spectre receives only when the tran form's noise
@@ -552,8 +570,20 @@ def _remove_marker(runner, marker: str) -> None:
         runner.run_command(f"rm -f {marker}", timeout=10)
 
 
+# Without the opt-in guard, a modal dialog (an ASSEMBLER question, a disk
+# error) stops the run's completion callback and the wait would look like a
+# long simulation. Probe the CIW read-only this often, and report a blocker
+# only when the same dialogs are seen on two probes in a row, so a transient
+# progress box is not mistaken for one.
+_UNGUARDED_PROBE_INTERVAL = 30.0
+
+
+def _dialog_titles(report) -> tuple[str, ...]:
+    return tuple(sorted(str(d.get("title") or d.get("window_id") or "") for d in report.dialogs))
+
+
 def _wait_until_done(client: VirtuosoClient, marker: str,
-                      timeout: float = 600) -> str:
+                      timeout: float = 600, *, dialog_check: bool = True) -> str:
     """Internal: poll the marker file written by run_and_wait's SKILL callback.
 
     Cadence-side ``maeRunSimulation(?callback ...)`` registers a SKILL
@@ -574,6 +604,8 @@ def _wait_until_done(client: VirtuosoClient, marker: str,
 
     deadline = _time.monotonic() + timeout
     next_dialog_check = 0.0
+    next_probe = _time.monotonic() + _UNGUARDED_PROBE_INTERVAL
+    seen_blocked: tuple[str, ...] | None = None
     while True:
         remaining = deadline - _time.monotonic()
         if remaining <= 0:
@@ -614,6 +646,28 @@ def _wait_until_done(client: VirtuosoClient, marker: str,
             remaining = deadline - _time.monotonic()
             if remaining <= 0:
                 break
+        elif (dialog_check and dialogs is not None and hasattr(dialogs, "probe")
+              and _time.monotonic() >= next_probe):
+            next_probe = _time.monotonic() + _UNGUARDED_PROBE_INTERVAL
+            report = dialogs.probe(timeout=min(10.0, remaining))
+            if report is not None and report.status == "blocked":
+                titles = _dialog_titles(report)
+                if titles == seen_blocked:
+                    raise DialogBlockedError(VirtuosoResult(
+                        status=ExecutionStatus.ERROR,
+                        errors=["Simulation completion wait stopped: a dialog blocks the CIW "
+                                f"({', '.join(t for t in titles if t) or 'untitled'}). "
+                                "Answer it in Virtuoso, then wait for this history again; "
+                                "the run was not cancelled and no dialog was dismissed."],
+                        metadata={"dialog_guard": report.model_dump(), "outcome": "unknown",
+                                  "phase": "completion_wait", "completion_marker": marker},
+                    ))
+                seen_blocked = titles
+            else:
+                seen_blocked = None
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                break
         _time.sleep(min(2.0, remaining))
 
     raise TimeoutError(f"Simulation did not finish within {timeout}s")
@@ -640,7 +694,7 @@ class MaestroPointsFailed(RuntimeError):
 def run_and_wait(client: VirtuosoClient, *, session: str = "",
                  run_mode: str = "", timeout: int = 600,
                  check: bool = False, lib: str = "",
-                 cell: str = "") -> tuple[str, str]:
+                 cell: str = "", dialog_check: bool = True) -> tuple[str, str]:
     """Run simulation and wait for completion without blocking SKILL.
 
     Uses maeRunSimulation(?callback ...) to register a completion callback
@@ -660,6 +714,12 @@ def run_and_wait(client: VirtuosoClient, *, session: str = "",
     :class:`MaestroPointsFailed` unless all completed without errors, or
     no log was found. ``lib``/``cell`` locate the results and are read
     from the session when omitted.
+
+    While waiting, the CIW is checked read-only every 30 s even without the
+    dialog guard; a dialog seen on two checks in a row (a modal ASSEMBLER
+    question, say, which stops the completion callback) raises
+    :class:`DialogBlockedError` carrying the history instead of waiting out
+    ``timeout``. Nothing is dismissed. ``dialog_check=False`` turns it off.
     """
     deadline = time.monotonic() + timeout
 
@@ -672,6 +732,12 @@ def run_and_wait(client: VirtuosoClient, *, session: str = "",
     # runner is None in local mode (Virtuoso on the same host); _remove_marker
     # and _wait_until_done both handle that case via local fs operations.
     runner = client.ssh_runner
+
+    # The CIW PID for the read-only dialog checks during the wait: the
+    # daemon cannot tell it once a dialog holds the CIW.
+    dialogs = getattr(client, "dialogs", None)
+    if dialog_check and hasattr(dialogs, "remember_pid") and not dialogs.enabled:
+        dialogs.remember_pid(timeout=min(5.0, max(0.1, deadline - time.monotonic())))
 
     nonce = uuid.uuid4().hex[:8]
     marker = f"/tmp/vb_sim_done_{nonce}"
@@ -752,7 +818,8 @@ procedure(_vb_sim_done_{nonce}(session runID)
 
     # Poll marker via SSH (SKILL channel stays free)
     try:
-        status = _wait_until_done(client, marker, timeout=remaining_timeout())
+        status = _wait_until_done(client, marker, timeout=remaining_timeout(),
+                                  dialog_check=dialog_check)
     except DialogBlockedError as exc:
         exc.result.metadata.update(history=history_name, session=session,
                                    phase="completion_wait", completion_marker=marker,
@@ -776,17 +843,12 @@ procedure(_vb_sim_done_{nonce}(session runID)
 
 def _check_run_points(client: VirtuosoClient, history: str, *, session: str,
                       lib: str, cell: str) -> None:
+    from virtuoso_bridge.virtuoso.maestro.reader._skill import _session_lib_cell
     from virtuoso_bridge.virtuoso.maestro.reader.runs import check_points
 
-    s = f' ?session "{escape_skill_string(session)}"' if session else ""
-
-    def env_option(option: str) -> str:
-        test = _strip_skill_atom(_q(client, f'car(maeGetSetup({s.strip()}))'))
-        return _strip_skill_atom(
-            _q(client, f'maeGetEnvOption("{test}" ?option "{option}"{s})'))
-
-    lib = lib or env_option("lib")
-    cell = cell or env_option("cell")
+    if not lib or not cell:
+        found_lib, found_cell = _session_lib_cell(client, session)
+        lib, cell = lib or found_lib, cell or found_cell
     try:
         points = check_points(client, history, lib=lib, cell=cell)
     except RuntimeError as exc:
