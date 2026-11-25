@@ -787,7 +787,14 @@ def _check_run_points(client: VirtuosoClient, history: str, *, session: str,
 
     lib = lib or env_option("lib")
     cell = cell or env_option("cell")
-    points = check_points(client, history, lib=lib, cell=cell)
+    try:
+        points = check_points(client, history, lib=lib, cell=cell)
+    except RuntimeError as exc:
+        # Keep the acknowledged run's identity, as MaestroPointsFailed does:
+        # a run whose points never reached Spectre (netlisting failed, say)
+        # leaves no log, and the caller still needs to know which history.
+        exc.history = history
+        raise
     if points and any(p["status"] != "ok" for p in points):
         raise MaestroPointsFailed(history, points)
 

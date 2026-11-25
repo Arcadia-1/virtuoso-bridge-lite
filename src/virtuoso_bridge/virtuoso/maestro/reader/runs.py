@@ -259,6 +259,11 @@ def _parse_detail_csv(text: str, *, history: str) -> dict:
     current: dict | None = None
     tests_seen: set[str] = set()
     no_point_detail = False
+    # Column of each field in "Point,..." rows, from their header. A run
+    # whose points never simulated exports "Point,Test,Output,Spec,..."
+    # without the value column; fixed positions would read Spec as value.
+    point_columns = {"Test": 1, "Output": 2, "Nominal": 3, "Spec": 4,
+                     "Weight": 5, "Pass/Fail": 6}
 
     reader = csv.reader(text.splitlines())
     for row in reader:
@@ -286,6 +291,15 @@ def _parse_detail_csv(text: str, *, history: str) -> dict:
         if first in ("", "Point", "Test"):
             if first == "Point":
                 no_point_detail = False
+                names = [c.strip() for c in row]
+                point_columns = {name: names.index(name)
+                                 for name in ("Test", "Output", "Spec", "Weight", "Pass/Fail")
+                                 if name in names}
+                # The value column is the one field that is not a fixed one.
+                value_at = [i for i, name in enumerate(names)
+                            if i and name and name not in _DETAIL_FIXED_COLUMNS]
+                if value_at:
+                    point_columns["Nominal"] = value_at[0]
             continue
         if not first.isdigit():
             if not no_point_detail:
@@ -315,8 +329,11 @@ def _parse_detail_csv(text: str, *, history: str) -> dict:
             points.append(current)
         # Cadence sometimes inserts cells with quoted commas; csv module
         # handles the quoting so columns line up.
-        cols = row + [""] * (7 - len(row))
-        _, test_n, name, value, spec, weight, pass_fail = cols[:7]
+        def field(key: str) -> str:
+            i = point_columns.get(key)
+            return row[i] if i is not None and i < len(row) else ""
+        test_n, name, value = field("Test"), field("Output"), field("Nominal")
+        spec, weight, pass_fail = field("Spec"), field("Weight"), field("Pass/Fail")
         if test_n:
             tests_seen.add(test_n.strip())
         if name.strip():
@@ -502,11 +519,18 @@ def _candidate_result_roots(client, first, lib_path, cell, history, tail):
         except OSError:
             data = ""
     else:
-        cmd = (f"grep -a -o {shlex.quote('/[^[:space:]$]*/maestro/results/maestro/' + history)} "
+        # Keep a leading "$VAR" so the check below can drop relative paths.
+        regex = r'(\$\{?[A-Za-z_][A-Za-z0-9_]*\}?)?/[^[:space:]$]*/maestro/results/maestro/' + re.escape(history)
+        cmd = (f"grep -a -o -E {shlex.quote(regex)} "
                f"{shlex.quote(rdb)} | sort -u")
         out = runner.run_command(f"sh -c {shlex.quote(cmd)}")
         data = out.stdout if out.returncode == 0 else ""
-    for match in sorted(set(pattern.findall(data))):
+    # A path recorded relative to a variable ("$PROJ/LIB/cell/...") matches
+    # from its first "/" as a bogus absolute path; skip those.
+    relative = re.compile(r"\$\{?\w+\}?$")
+    found = {m.group(1) for m in pattern.finditer(data)
+             if not relative.search(data[max(0, m.start() - 256):m.start()])}
+    for match in sorted(found):
         yield match
 
 
