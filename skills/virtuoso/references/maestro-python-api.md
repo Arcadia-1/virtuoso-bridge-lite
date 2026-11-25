@@ -266,6 +266,11 @@ pulled the XML to disk by other means.
 
 ## Read — post-sim consumption
 
+For already-flushed waveforms while a run is active, use the independent
+[transient window reader](../../spectre/references/running-results.md). Supply an
+explicit point PSF path; it does not use this shared CIW or select a GUI history.
+The post-simulation methods below are not a running-results completeness check.
+
 `maestro/reader/runs.py`
 
 ### read_results — per-point × per-output results

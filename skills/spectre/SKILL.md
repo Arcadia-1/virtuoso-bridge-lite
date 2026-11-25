@@ -63,6 +63,10 @@ use a non-empty `result.data` as proof that the simulation succeeded.
 
 ## Strict PSF accessors
 
+For a running transient (including one Maestro point), use the independent,
+bounded [running-results reader](references/running-results.md). It reads only
+already-available data and reports coverage; it does not prove run completion.
+
 Use the strict helpers when a downstream calculation must fail loudly instead
 of silently accepting the wrong file, signal spelling, or malformed data:
 
