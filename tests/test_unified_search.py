@@ -216,3 +216,154 @@ def test_skill_hit_has_inspectable_nested_source_path(tmp_path):
     source.write_text('(\"mySkill\"\n\"mySkill()\"\n\"Description\")\n', encoding='utf-8')
     rows = list(search.collect_skill({'skill': [tmp_path]}, 1000))
     assert rows[0]['path'] == str(source.resolve())
+
+
+def test_cds_lib_precedence_cwd_overrides_vb_cds_lib_overrides_home(tmp_path, monkeypatch):
+    home = tmp_path / 'home'
+    vb = tmp_path / 'vb'
+    cwd = tmp_path / 'project'
+    for base in (home, vb, cwd):
+        base.mkdir()
+
+    libs = {}
+    for label, parent in (
+        ('home_shared', home),
+        ('vb_shared', vb),
+        ('cwd_shared', cwd),
+        ('home_vb_override', home),
+        ('vb_override', vb),
+        ('home_only', home),
+        ('vb_only', vb),
+        ('cwd_only', cwd),
+    ):
+        d = parent / label
+        d.mkdir()
+        libs[label] = d
+
+    (home / 'cds.lib').write_text(
+        'DEFINE shared ./home_shared\n'
+        'DEFINE from_vb ./home_vb_override\n'
+        'DEFINE home_only ./home_only\n',
+        encoding='utf-8',
+    )
+    (vb / 'cds.lib').write_text(
+        'DEFINE shared ./vb_shared\n'
+        'DEFINE from_vb ./vb_override\n'
+        'DEFINE vb_only ./vb_only\n',
+        encoding='utf-8',
+    )
+    (cwd / 'cds.lib').write_text(
+        'DEFINE shared ./cwd_shared\n'
+        'DEFINE cwd_only ./cwd_only\n',
+        encoding='utf-8',
+    )
+
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: home))
+    monkeypatch.chdir(cwd)
+    monkeypatch.setenv('VB_CDS_LIB', str(vb / 'cds.lib'))
+
+    discovered = dict(search._discover_libs({'pdk': []}))
+    assert discovered['shared'] == libs['cwd_shared']
+    assert discovered['from_vb'] == libs['vb_override']
+    assert discovered['home_only'] == libs['home_only']
+    assert discovered['vb_only'] == libs['vb_only']
+    assert discovered['cwd_only'] == libs['cwd_only']
+
+
+def test_cds_lib_inline_comments_quoted_spaces_undefine_and_softdefine(tmp_path, monkeypatch):
+    setup = tmp_path / 'setup'
+    setup.mkdir()
+    spaced = setup / 'with  two  spaces'
+    spaced.mkdir()
+    lib_hash = setup / 'myLib'
+    lib_dash = setup / 'otherLib'
+    lib_soft = setup / 'softLib'
+    lib_quoted = spaced / 'lib # keep -- text'
+    lib_removed = setup / 'removedLib'
+    for d in (lib_hash, lib_dash, lib_soft, lib_quoted, lib_removed):
+        d.mkdir()
+
+    (spaced / 'pdk.cds.lib').write_text(
+        '-- Cadence native comment\n'
+        'DEFINE quotedLib "lib # keep -- text" -- trailing comment\n'
+        'SOFTDEFINE softLib ../softLib # soft define comment\n'
+        'SOFTDEFINE missingSoft ./no_such_lib\n',
+        encoding='utf-8',
+    )
+    main = setup / 'cds.lib'
+    main.write_text(
+        '# shell style comment\n'
+        '-- cadence style comment\n'
+        'DEFINE myLib ./myLib # project\n'
+        'DEFINE otherLib ./otherLib -- inline note\n'
+        'DEFINE removedLib ./removedLib\n'
+        'INCLUDE "with  two  spaces/pdk.cds.lib" -- base\n'
+        'UNDEFINE removedLib -- removed by project\n',
+        encoding='utf-8',
+    )
+
+    monkeypatch.setattr(search, '_cds_lib_files', lambda: [main])
+    discovered = dict(search._discover_libs({'pdk': []}))
+    assert discovered['myLib'].resolve() == lib_hash.resolve()
+    assert discovered['otherLib'].resolve() == lib_dash.resolve()
+    assert discovered['softLib'].resolve() == lib_soft.resolve()
+    assert discovered['quotedLib'].resolve() == lib_quoted.resolve()
+    assert 'removedLib' not in discovered
+    assert 'missingSoft' not in discovered
+
+
+def test_html_fragments_strip_tags_and_fall_back_to_path_stem(tmp_path):
+    assert search._html_text('<p>hello</p>') == ('', 'hello')
+    assert search._html_text(
+        '<p>hello &amp; world</p><script>ignore()</script><style>.x{}</style>'
+    ) == ('', 'hello & world')
+
+    docs = tmp_path / 'docs'
+    docs.mkdir()
+    (docs / 'choosing_analyses.html').write_text('<p>transient setup</p>', encoding='utf-8')
+    rows = list(search.collect_doc({'doc': [docs]}, 1000))
+    assert len(rows) == 1
+    assert rows[0]['title'] == 'choosing_analyses'
+    assert '<p>' not in rows[0]['body']
+    assert 'transient setup' in rows[0]['body']
+
+
+def test_fts_query_skips_punctuation_tokens_and_matches_in_sqlite(tmp_path, monkeypatch):
+    assert search._fts_query('Choosing Analyses -- ADE') == '"Choosing"* AND "Analyses"* AND "ADE"*'
+    assert search._fts_query('dc - tran') == '"dc"* AND "tran"*'
+    assert search._fts_query('-- + : $ . ___') == ''
+    assert search._fts_query('the --') == '"the"*'
+
+    monkeypatch.setattr(search, 'cache_root', lambda: tmp_path / 'cache')
+    docs = tmp_path / 'docs'
+    docs.mkdir()
+    (docs / 'ade.html').write_text(
+        '<html><title>Choosing Analyses -- ADE</title><body>Configure dc - tran sweeps.</body></html>',
+        encoding='utf-8',
+    )
+    search.build(kinds=['doc'], roots={'doc': [docs]})
+    assert search.search('Choosing Analyses -- ADE', kinds=['doc'])
+    assert search.search('dc - tran', kinds=['doc'])
+
+
+def test_tgf_rows_parses_quoted_multiword_anchors(tmp_path, monkeypatch):
+    monkeypatch.setattr(search, 'cache_root', lambda: tmp_path / 'cache')
+    docs = tmp_path / 'docs'
+    docs.mkdir()
+    tgf = docs / 'topics.tgf'
+    tgf.write_text(
+        '# header comment\n'
+        'chooseAnalyses $ade/choosing.html "Choosing Analyses -- ADE" HTML\n'
+        'simpleTopic $ade/dc.html dcAnchor HTML\n',
+        encoding='utf-8',
+    )
+    rows = list(search._tgf_rows(tgf, docs))
+    assert len(rows) == 2
+    assert rows[0]['title'] == 'Choosing Analyses -- ADE'
+    assert '"' not in rows[0]['title']
+    assert 'Choosing Analyses -- ADE' in rows[0]['body']
+    assert rows[1]['title'] == 'dcAnchor'
+
+    search.build(kinds=['doc'], roots={'doc': [docs]})
+    hits = search.search('Choosing Analyses -- ADE', kinds=['topic'])
+    assert hits and hits[0]['title'] == 'Choosing Analyses -- ADE'

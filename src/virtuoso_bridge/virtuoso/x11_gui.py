@@ -29,6 +29,7 @@ not reinterpret quoting or redirections.
 
 from __future__ import annotations
 
+import math
 import re
 import shlex
 import shutil
@@ -42,6 +43,7 @@ from virtuoso_bridge.transport.remote_paths import default_virtuoso_bridge_dir, 
 from virtuoso_bridge.virtuoso.x11 import _get_display, _run
 
 REQUIRED_TOOLS = ("xdotool", "wmctrl", "xwininfo", "import", "convert")
+_WINDOW_ID_RE = re.compile(r"^(?:0[xX][0-9a-fA-F]+|[0-9]+)$")
 
 # DISPLAY of the user's running Virtuoso, when VB_DISPLAY is not configured.
 _DETECT_DISPLAY = (
@@ -53,6 +55,23 @@ _DETECT_DISPLAY = (
 
 class GuiActionError(RuntimeError):
     """A GUI action was refused or failed; no further input was sent."""
+
+
+def _validate_window_id(window_id: str) -> str:
+    wid = str(window_id).strip()
+    if not _WINDOW_ID_RE.match(wid):
+        raise GuiActionError(f"invalid X11 window id: {window_id!r}")
+    return wid
+
+
+def _format_settle(settle: float) -> str:
+    try:
+        value = float(settle)
+    except (TypeError, ValueError) as exc:
+        raise GuiActionError(f"invalid settle duration: {settle!r}") from exc
+    if not math.isfinite(value) or value < 0:
+        raise GuiActionError(f"invalid settle duration: {settle!r}")
+    return f"{value:.6f}".rstrip("0").rstrip(".") or "0"
 
 
 @dataclass(frozen=True)
@@ -68,11 +87,12 @@ class GuiWindow:
 
     def to_root(self, x: int, y: int) -> tuple[int, int]:
         """Translate window-relative (x, y) to root coordinates, refusing points outside."""
-        if not (0 <= x < self.w and 0 <= y < self.h):
+        ix, iy = int(x), int(y)
+        if not (0 <= ix < self.w and 0 <= iy < self.h):
             raise GuiActionError(
-                f"point ({x},{y}) lies outside window {self.title!r} "
+                f"point ({ix},{iy}) lies outside window {self.title!r} "
                 f"({self.w}x{self.h}); take a new screenshot and recompute")
-        return self.x + x, self.y + y
+        return self.x + ix, self.y + iy
 
 
 class X11Gui:
@@ -99,7 +119,7 @@ class X11Gui:
 
     def _sh(self, script: str, *, display: bool = True, timeout: int | None = None):
         if display:
-            script = f"export DISPLAY={shlex.quote(self._display)}; {script}"
+            script = f"export DISPLAY={shlex.quote(self._display)}; set -e; {script}"
         return _run(self._runner, f"bash -c {shlex.quote(script)}", timeout or self._timeout)
 
     def _check(self, script: str, what: str) -> str:
@@ -144,7 +164,8 @@ class X11Gui:
     def _geometry(self, window_id: str, title: str) -> GuiWindow:
         # xwininfo's absolute origin is the client area as drawn; xdotool and
         # wmctrl -lG are off by the title bar under GNOME/mutter.
-        out = self._check(f"xwininfo -id {shlex.quote(window_id)}", f"geometry of {title!r}")
+        wid = _validate_window_id(window_id)
+        out = self._check(f"xwininfo -id {shlex.quote(wid)}", f"geometry of {title!r}")
         keys = {"Absolute upper-left X": "x", "Absolute upper-left Y": "y",
                 "Width": "w", "Height": "h"}
         geo = {}
@@ -153,7 +174,7 @@ class X11Gui:
             if name in keys:
                 geo[keys[name]] = value.strip()
         try:
-            return GuiWindow(window_id, title, int(geo["x"]), int(geo["y"]),
+            return GuiWindow(wid, title, int(geo["x"]), int(geo["y"]),
                              int(geo["w"]), int(geo["h"]))
         except (KeyError, ValueError) as exc:
             raise GuiActionError(f"unreadable geometry for {title!r}: {out!r}") from exc
@@ -169,43 +190,52 @@ class X11Gui:
     # -- actions --------------------------------------------------------------
 
     def raise_window(self, window: GuiWindow) -> None:
-        self._check(f"wmctrl -i -a {window.window_id}; sleep 0.5", f"raise {window.title!r}")
+        wid = _validate_window_id(window.window_id)
+        self._check(f"wmctrl -i -a {shlex.quote(wid)} && sleep 0.5", f"raise {window.title!r}")
 
     def pin(self, title: str, x: int, y: int, w: int, h: int) -> GuiWindow:
         """Move and resize a window so that recorded coordinates stay valid."""
+        ix, iy, iw, ih = int(x), int(y), int(w), int(h)
         window = self.find(title)
-        self._check(f"wmctrl -i -r {window.window_id} -e 0,{x},{y},{w},{h}; sleep 0.5",
+        wid = _validate_window_id(window.window_id)
+        self._check(f"wmctrl -i -r {shlex.quote(wid)} -e 0,{ix},{iy},{iw},{ih} && sleep 0.5",
                     f"pin {window.title!r}")
         return self.find(title)
 
     def click(self, title: str, x: int, y: int, *, count: int = 1, button: int = 1,
               settle: float = 1.0) -> dict[str, Any]:
         """Click at window-relative (x, y); count=2 double-clicks."""
+        ix, iy = int(x), int(y)
+        icount, ibutton = int(count), int(button)
+        delay = _format_settle(settle)
         window = self.find(title)
-        rx, ry = window.to_root(x, y)
+        rx, ry = window.to_root(ix, iy)
         self.raise_window(window)
-        self._check(f"xdotool mousemove --sync {rx} {ry} click --repeat {int(count)} "
-                    f"--delay 80 {int(button)}; sleep {settle}", f"click in {window.title!r}")
-        return {"action": "click", "window": window.title, "at": [x, y], "root": [rx, ry],
-                "count": count}
+        self._check(f"xdotool mousemove --sync {int(rx)} {int(ry)} click --repeat {icount} "
+                    f"--delay 80 {ibutton} && sleep {delay}", f"click in {window.title!r}")
+        return {"action": "click", "window": window.title, "at": [ix, iy], "root": [rx, ry],
+                "count": icount}
 
     def set_text(self, title: str, x: int, y: int, text: str, *, settle: float = 0.5) -> dict[str, Any]:
         """Replace the contents of the text field at (x, y) with *text*, then Tab out."""
+        ix, iy = int(x), int(y)
+        delay = _format_settle(settle)
         window = self.find(title)
-        rx, ry = window.to_root(x, y)
+        rx, ry = window.to_root(ix, iy)
         self.raise_window(window)
-        self._check(f"xdotool mousemove --sync {rx} {ry} click --repeat 3 --delay 60 1; "
-                    f"xdotool key ctrl+a; xdotool type --delay 30 -- {shlex.quote(text)}; "
-                    f"xdotool key Tab; sleep {settle}", f"type into {window.title!r}")
-        return {"action": "set_text", "window": window.title, "at": [x, y], "text": text}
+        self._check(f"xdotool mousemove --sync {int(rx)} {int(ry)} click --repeat 3 --delay 60 1 && "
+                    f"xdotool key ctrl+a && xdotool type --delay 30 -- {shlex.quote(text)} && "
+                    f"xdotool key Tab && sleep {delay}", f"type into {window.title!r}")
+        return {"action": "set_text", "window": window.title, "at": [ix, iy], "text": text}
 
     def key(self, title: str, *keys: str, settle: float = 0.5) -> dict[str, Any]:
         """Send key chords (xdotool names, e.g. ``ctrl+s``, ``Return``) to *title*."""
         if not keys:
             raise GuiActionError("key needs at least one key name")
+        delay = _format_settle(settle)
         window = self.find(title)
         self.raise_window(window)
-        self._check("xdotool key " + " ".join(shlex.quote(k) for k in keys) + f"; sleep {settle}",
+        self._check("xdotool key " + " ".join(shlex.quote(k) for k in keys) + f" && sleep {delay}",
                     f"keys to {window.title!r}")
         return {"action": "key", "window": window.title, "keys": list(keys)}
 
@@ -218,13 +248,22 @@ class X11Gui:
         Pixel (px, py) of an unscaled window shot is window coordinate
         (px + region x, py + region y).
         """
+        scale_op = None
+        if scale is not None:
+            try:
+                scale_val = float(scale)
+            except (TypeError, ValueError) as exc:
+                raise GuiActionError(f"invalid scale factor: {scale!r}") from exc
+            if not math.isfinite(scale_val) or scale_val <= 0:
+                raise GuiActionError(f"invalid scale factor: {scale!r}")
+            scale_op = f"-resize {scale_val * 100:g}%"
         ox = oy = 0
         crop = None
         if title is not None:
             window = self.find(title)
             self.raise_window(window)
-            ox, oy = window.x, window.y
-            crop = (window.w, window.h, window.x, window.y)
+            ox, oy = int(window.x), int(window.y)
+            crop = (int(window.w), int(window.h), ox, oy)
         if region is not None:
             rx, ry, rw, rh = (int(v) for v in region)
             crop = (rw, rh, ox + rx, oy + ry)
@@ -233,9 +272,10 @@ class X11Gui:
         remote = f"{remote_dir}/gui_{stamp}.png"
         ops = []
         if crop:
-            ops.append("-crop {}x{}+{}+{} +repage".format(*crop))
-        if scale:
-            ops.append(f"-resize {float(scale) * 100:g}%")
+            cw, ch, cx, cy = crop
+            ops.append(f"-crop {cw}x{ch}{cx:+d}{cy:+d} +repage")
+        if scale_op:
+            ops.append(scale_op)
         q = shlex.quote(remote)
         self._check(f"mkdir -p {shlex.quote(remote_dir)} && import -window root {q}"
                     + (f" && convert {q} {' '.join(ops)} {q}" if ops else ""), "screenshot")

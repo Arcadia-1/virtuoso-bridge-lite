@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sqlite3
 import sys
 import threading
@@ -212,11 +213,10 @@ def _html_text(raw: str) -> tuple[str, str]:
                 return
             (self._title if self._t else self._body).append(data)
 
-    if "<title" not in raw.lower() and "<html" not in raw.lower():
-        return Path("x").stem, unescape(_squash(raw))
     p = _X()
     try:
         p.feed(raw)
+        p.close()
     except Exception:
         return "", unescape(_squash(raw))
     title = _squash(" ".join(p._title))
@@ -226,14 +226,15 @@ def _html_text(raw: str) -> tuple[str, str]:
 
 def _fts_query(query: str) -> str:
     """Turn a free-text query into a safe FTS5 MATCH expression."""
-    tokens = re.findall(r"[A-Za-z0-9_.$:+-]+", query or "")
+    tokens = [
+        tok.strip(".")
+        for tok in re.findall(r"[A-Za-z0-9_.$:+-]+", query or "")
+    ]
+    tokens = [tok for tok in tokens if tok and re.search(r"[A-Za-z0-9]", tok)]
     keep = [t for t in tokens if t.lower() not in QUERY_STOPWORDS]
     tokens = keep or tokens
     parts = []
     for tok in tokens:
-        tok = tok.strip(".")
-        if not tok:
-            continue
         tok = tok.replace('"', '""')
         parts.append('"%s"*' % tok)
     return " AND ".join(parts)
@@ -301,7 +302,16 @@ def _tgf_rows(path: Path, root: Path) -> Iterator[dict]:
     except OSError:
         return
     for line in raw.splitlines():
-        parts = line.split()
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if '"' in stripped or "'" in stripped:
+            try:
+                parts = shlex.split(stripped)
+            except ValueError:
+                continue
+        else:
+            parts = stripped.split()
         if len(parts) < 4 or parts[-1].upper() != "HTML":
             continue
         topic_id, target, anchor = parts[0], parts[1], parts[2]
@@ -333,57 +343,107 @@ def _oa_cells(lib: Path, cap: int = 50000) -> dict[str, list[str]]:
 
 
 def _cds_lib_files() -> list[Path]:
-    """cds.lib files to read, in order: cwd, VB_CDS_LIB extras, home."""
-    out = [Path.cwd() / "cds.lib"]
+    """cds.lib files to read, lowest-to-highest precedence: home, VB_CDS_LIB, cwd."""
+    out = [Path.home() / "cds.lib"]
     for p in _split_env_paths(os.environ.get("VB_CDS_LIB")):
         out.append(p)
-    out.append(Path.home() / "cds.lib")
+    out.append(Path.cwd() / "cds.lib")
     return out
+
+
+def _strip_cds_lib_comment(line: str) -> str:
+    """Strip unquoted '#' and Cadence '--' inline comments from a cds.lib line."""
+    in_quote = False
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if ch == '"':
+            in_quote = not in_quote
+            i += 1
+            continue
+        if not in_quote:
+            if ch == "#":
+                return line[:i]
+            if ch == "-" and i + 1 < n and line[i + 1] == "-":
+                return line[:i]
+        i += 1
+    return line
+
+
+def _tokenize_cds_lib_line(line: str) -> list[str]:
+    """Strip unquoted comments and split a cds.lib line preserving quoted whitespace."""
+    cleaned = _strip_cds_lib_comment(line)
+    tokens: list[str] = []
+    buf: list[str] = []
+    in_quote = False
+    has_token = False
+    for ch in cleaned:
+        if ch == '"':
+            in_quote = not in_quote
+            has_token = True
+            continue
+        if not in_quote and ch.isspace():
+            if has_token:
+                tokens.append("".join(buf))
+                buf.clear()
+                has_token = False
+            continue
+        buf.append(ch)
+        has_token = True
+    if has_token:
+        tokens.append("".join(buf))
+    return tokens
 
 
 def _discover_libs(roots: dict) -> list[tuple[str, Path]]:
     """Find (lib, path) pairs under the PDK roots (and cds.lib DEFINEs)."""
     defs: dict[str, Path] = {}
-    seen: set[Path] = set()
 
     def expand(raw: str, base: Path) -> Path:
-        import re
         variables = {"CDS": str(_cds_install()),
                      "CDS_INST_DIR": str(_cds_install())}
         def replacement(match):
             key = match.group(1) or match.group(2)
             return os.environ.get(key, variables.get(key, match.group(0)))
         value = re.sub(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)',
-                       replacement, raw.strip().strip('"'))
+                       replacement, raw)
         path = Path(os.path.expanduser(value))
         return path if path.is_absolute() else base / path
 
-    def read_cds(cds: Path) -> None:
+    def read_cds(cds: Path, seen: set[Path]) -> None:
         # Relative directives belong to the logical include location, not a
         # symlink target's directory. Resolve only for physical-file cycle checks.
         base = cds.parent
-        cds = cds.resolve()
-        if cds in seen or not cds.is_file():
+        resolved = cds.resolve()
+        if resolved in seen or not resolved.is_file():
             return
-        seen.add(cds)
+        seen.add(resolved)
         try:
-            text = cds.read_text(encoding="utf-8", errors="replace")
+            text = resolved.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return
         for line in text.splitlines():
-            parts = line.strip().split(maxsplit=2)
-            if not parts or parts[0].startswith("#"):
+            parts = _tokenize_cds_lib_line(line)
+            if not parts:
                 continue
             keyword = parts[0].upper()
-            if keyword in ("INCLUDE", "SOFTINCLUDE") and len(parts) >= 2:
-                read_cds(expand(" ".join(parts[1:]), base))
-            elif keyword == "DEFINE" and len(parts) >= 3:
+            if keyword in ("INCLUDE", "SOFTINCLUDE") and len(parts) >= 2 and parts[1]:
+                read_cds(expand(parts[1], base), seen)
+            elif keyword in ("DEFINE", "SOFTDEFINE") and len(parts) >= 3 and parts[1] and parts[2]:
                 p = expand(parts[2], base)
                 if p.is_dir():
                     defs[parts[1]] = p
+            elif keyword == "UNDEFINE" and len(parts) >= 2 and parts[1]:
+                defs.pop(parts[1], None)
 
+    top_seen: set[Path] = set()
     for cds in _cds_lib_files():
-        read_cds(cds)
+        resolved = cds.resolve()
+        if resolved in top_seen:
+            continue
+        top_seen.add(resolved)
+        read_cds(cds, set())
 
     cands: dict[str, Path] = dict(defs)
     for root in roots.get("pdk", []):

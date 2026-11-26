@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from virtuoso_bridge import cli
 from virtuoso_bridge.cli import main
@@ -258,3 +264,84 @@ def test_skill_more_info_remote_downloads_tgf_into_cache_file(monkeypatch, tmp_p
     assert local_path.name == "api_more_info.tgf"
     assert local_path.parent == tmp_path / "cache" / "more_info"
     assert local_path.parent.is_dir()
+
+
+class _LocalBashRunner:
+    def __init__(self, env: dict[str, str] | None = None) -> None:
+        self.env = env
+
+    def run_command(self, command: str, timeout: int | None = None) -> CommandResult:
+        proc = subprocess.run(
+            ["sh", "-c", command],
+            capture_output=True,
+            text=True,
+            timeout=timeout or 15,
+            env=self.env,
+            check=False,
+        )
+        return CommandResult(proc.returncode, proc.stdout, proc.stderr)
+
+
+@pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None, reason="requires POSIX bash")
+def test_walk_up_remote_resolves_symlinked_virtuoso_binary(tmp_path: Path) -> None:
+    real_ic = tmp_path / "opt" / "cadence" / "IC231"
+    real_bin = real_ic / "tools" / "dfII" / "bin" / "virtuoso"
+    real_bin.parent.mkdir(parents=True)
+    real_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    real_bin.chmod(0o755)
+    skill_dir = real_ic / "doc" / "finder" / "SKILL"
+    skill_dir.mkdir(parents=True)
+
+    wrapper_bin = tmp_path / "site_bin" / "virtuoso"
+    wrapper_bin.parent.mkdir(parents=True)
+    try:
+        wrapper_bin.symlink_to(real_bin)
+    except OSError as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    found = SKILLFinder._walk_up_remote(_LocalBashRunner(), str(wrapper_bin))
+    assert found == skill_dir.resolve()
+
+
+@pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None, reason="requires POSIX bash")
+def test_walk_up_remote_falls_back_when_readlink_f_unavailable(tmp_path: Path) -> None:
+    real_ic = tmp_path / "opt" / "cadence" / "IC231"
+    real_bin = real_ic / "tools" / "dfII" / "bin" / "virtuoso"
+    real_bin.parent.mkdir(parents=True)
+    real_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    real_bin.chmod(0o755)
+    skill_dir = real_ic / "doc" / "finder" / "SKILL"
+    skill_dir.mkdir(parents=True)
+
+    wrapper_bin = tmp_path / "site_bin" / "virtuoso"
+    wrapper_bin.parent.mkdir(parents=True)
+    try:
+        wrapper_bin.symlink_to(real_bin)
+    except OSError as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    real_readlink = shutil.which("readlink")
+    if real_readlink is None:
+        pytest.skip("readlink not found")
+
+    # Simulate an older BSD/Solaris host where `readlink -f` and `realpath` fail
+    # while plain `readlink <symlink>` works.
+    shim_dir = tmp_path / "shims"
+    shim_dir.mkdir()
+    readlink_shim = shim_dir / "readlink"
+    readlink_shim.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "-f" ]; then exit 1; fi\n'
+        f'exec {shlex.quote(real_readlink)} "$@"\n',
+        encoding="utf-8",
+    )
+    readlink_shim.chmod(0o755)
+    realpath_shim = shim_dir / "realpath"
+    realpath_shim.write_text("#!/bin/sh\nexit 127\n", encoding="utf-8")
+    realpath_shim.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{shim_dir}{os.pathsep}{env.get('PATH', '')}"
+
+    found = SKILLFinder._walk_up_remote(_LocalBashRunner(env=env), str(wrapper_bin))
+    assert found == skill_dir.resolve()

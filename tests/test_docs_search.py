@@ -4,9 +4,12 @@ import gzip
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from virtuoso_bridge import cli
 from virtuoso_bridge.cli import main
@@ -15,6 +18,7 @@ from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
 from virtuoso_bridge.virtuoso.docs_search import (
     _remote_doc_index_command,
     _remote_doc_info_script,
+    _remote_doc_search_script,
     doc_root_info_local,
     doc_root_info_remote,
     parse_tgf_line,
@@ -1110,3 +1114,87 @@ def test_doc_search_cli_prints_progress_on_stderr_and_keeps_json_stdout(tmp_path
     assert rc == 0
     assert json.loads(captured.out)["results"]
     assert "Indexing Cadence documentation under" in captured.err
+
+
+@pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None, reason="requires POSIX bash")
+def test_remote_doc_search_script_traverses_symlinked_doc_root(tmp_path: Path) -> None:
+    real_doc = tmp_path / "real_doc"
+    html_path = real_doc / "schematic" / "guide.html"
+    html_path.parent.mkdir(parents=True)
+    html_path.write_text(
+        "<html><title>Net Expression Guide</title><body>Create an inherited net expression.</body></html>",
+        encoding="utf-8",
+    )
+    doc_link = tmp_path / "doc_link"
+    try:
+        doc_link.symlink_to(real_doc)
+    except OSError as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    cmd = _remote_doc_search_script([str(doc_link)], ["inherited", "net"], max_candidates=10)
+    assert 'find -H "$root"' in cmd
+    script = shlex.split(cmd)[2]
+    result = _run_remote_script(script, tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert f"{doc_link}\t{doc_link}/schematic/guide.html" in result.stdout.splitlines()
+
+
+@pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None, reason="requires POSIX bash")
+def test_remote_doc_index_command_parses_quoted_multiword_tgf_anchors(tmp_path: Path) -> None:
+    doc_root = tmp_path / "doc"
+    tgf_path = doc_root / "api_more_info" / "api_more_info.tgf"
+    tgf_path.parent.mkdir(parents=True)
+    tgf_path.write_text(
+        'chooseAnalyses $ade/choosing.html "Choosing Analyses -- ADE" HTML\n'
+        'simpleTopic $ade/dc.html dcAnchor HTML\n',
+        encoding="utf-8",
+    )
+
+    result = _run_remote_script(_remote_doc_index_command(str(doc_root)), tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(result.stdout.strip().splitlines()[-1])
+    records_path = Path(summary["path"])
+    try:
+        with gzip.open(records_path, "rt", encoding="utf-8") as fh:
+            records = [json.loads(line) for line in fh if line.strip()]
+    finally:
+        records_path.unlink(missing_ok=True)
+
+    topics = [r for r in records if r["kind"] == "topic"]
+    assert len(topics) == 2
+    assert topics[0]["anchor"] == "Choosing Analyses -- ADE"
+    assert topics[0]["title"] == "Choosing Analyses -- ADE"
+    assert topics[1]["anchor"] == "dcAnchor"
+
+
+@pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None, reason="requires POSIX bash")
+def test_remote_doc_info_script_emits_ascii_json_for_non_ascii_names(tmp_path: Path) -> None:
+    doc_root = _make_fake_doc_root(tmp_path, sdp="Base_IC06.18.000_lnx86.sdp")
+    (doc_root / "caf\u00e9").mkdir()
+    (doc_root / "skdfref" / "a_r\u00e9f.html").write_text("<html></html>\n", encoding="utf-8")
+
+    good_bin = tmp_path / "bin"
+    good_bin.mkdir()
+    good_python = good_bin / "python3"
+    good_python.write_text(
+        f"#!/bin/sh\nexec {shlex.quote(sys.executable)} \"$@\"\n",
+        encoding="utf-8",
+    )
+    good_python.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{good_bin}{os.pathsep}{env.get('PATH', '')}"
+    env["PYTHONIOENCODING"] = "ascii"
+    env["LC_ALL"] = "C"
+
+    script = _remote_doc_info_script([doc_root.resolve().as_posix()])
+    assert "ensure_ascii=True" in script
+    result = _run_remote_script(script, tmp_path, env=env)
+
+    assert result.returncode == 0, result.stderr
+    line = result.stdout.strip().splitlines()[-1]
+    line.encode("ascii")
+    payload = json.loads(line)
+    assert "caf\u00e9" in payload[0]["doc_sets_sample"]
+    assert "a_r\u00e9f.html" in payload[0]["skdfref"]["sample"]
