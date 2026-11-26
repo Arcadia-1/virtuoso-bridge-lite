@@ -19,13 +19,30 @@ from pathlib import Path
 DEFAULT_MOS_KEEP = ("l", "w", "nf", "fingers", "m", "multi")
 
 ELEMENT_RE = re.compile(r"^(\s*)(\S+)\s*\(([^)]*)\)\s+(\S+)(.*)$")
-SUBCKT_RE = re.compile(r"^\s*subckt\s+(\S+)\b", re.IGNORECASE)
+SUBCKT_RE = re.compile(r"^\s*(?:inline\s+)?subckt\s+(\S+)\b", re.IGNORECASE)
 ENDS_RE = re.compile(r"^\s*ends\b(?:\s+(\S+))?", re.IGNORECASE)
 PARAM_RE = re.compile(r"([A-Za-z_]\w*)\s*=\s*(\"[^\"]*\"|\S+)")
 
+_BARE_RUN_KEYWORDS = (
+    r"ac|dc|tran|noise|pnoise|pss|stb|sp|hb|envlp|montecarlo|"
+    r"info|save|probe|assert|checklimit|options|simulatorOptions"
+)
+_NAMED_RUN_KEYWORDS = (
+    r"ac|dc|tran|noise|pnoise|pss|stb|sp|hb|envlp|montecarlo|"
+    r"info|options|assert|checklimit"
+)
+_NON_RUN_LEADING_KEYWORDS = (
+    r"include|library|section|endlibrary|parameters|paramset|"
+    r"global|simulator|model|subckt|inline|ends|ahdl_include|"
+    r"statistics|correlate|process|mismatch"
+)
 RUN_DIRECTIVE_RE = re.compile(
-    r"^\s*(?:ac|dc|tran|noise|pnoise|pss|stb|sp|hb|envlp|montecarlo|"
-    r"save|probe|assert|checklimit|options|simulatorOptions)\b",
+    rf"^\s*(?:"
+    rf"(?:{_BARE_RUN_KEYWORDS})(?=\s+(?!\()|\s*$)"
+    rf"|"
+    rf"(?!(?:{_NON_RUN_LEADING_KEYWORDS})(?:\s|$))"
+    rf"[^\s()=]+\s+(?:{_NAMED_RUN_KEYWORDS})(?=\s|$)"
+    rf")",
     re.IGNORECASE,
 )
 MODEL_DIRECTIVE_RE = re.compile(r"^\s*(?:include|library|section|endlibrary)\b", re.IGNORECASE)

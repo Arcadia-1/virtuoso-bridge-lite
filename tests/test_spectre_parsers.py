@@ -477,3 +477,65 @@ def test_parse_sweep_psf_directory_merges_multiple_flat_analyses_per_point(tmp_p
     assert sweep[1]["v_out"] == [0.1, 0.9]
     assert sweep[2]["vdc"] == pytest.approx(1.1)
     assert sweep[2]["v_out"] == [0.2, 1.1]
+
+
+# ---------------------------------------------------------------------------
+# Issue #339 regressions: TRACE PROP(...) GROUP mapping & duplicate trace_names
+# ---------------------------------------------------------------------------
+
+def test_swept_trace_group_with_prop_does_not_steal_mapping_or_duplicate_traces():
+    content = """\
+HEADER
+TYPE
+"V" FLOAT DOUBLE PROP( "units" "V" )
+SWEEP
+"time" "time" PROP(
+"sweep_direction" 0
+)
+TRACE
+"group" GROUP 1 PROP(
+"key" "node"
+"nested" (1 (2 3))
+)
+"vout" "V" PROP( "key" "node" )
+" 1" GROUP 1 PROP(
+"key" "node"
+)
+"vin" "V" PROP(
+"key" "node"
+)
+VALUE
+"time" 0.0
+"group" 1.2
+" 1" 0.0
+"time" 1e-9
+"group" 0.3
+" 1" 1.8
+END
+"""
+    data = _parse_psf_ascii_content(content)
+
+    assert set(data.keys()) == {"time", "vout", "vin"}
+    assert data["time"] == [0.0, 1e-9]
+    assert data["vout"] == [1.2, 0.3]
+    assert data["vin"] == [0.0, 1.8]
+    assert "key" not in data
+    assert "group" not in data
+
+
+def test_non_swept_struct_inline_prop_preserves_members():
+    content = """\
+HEADER
+TYPE
+"nmos" STRUCT(
+"gm" FLOAT DOUBLE PROP( "units" "S" )
+"vth" FLOAT DOUBLE PROP(
+"units" "V"
+)
+) PROP( "key" "inst" )
+VALUE
+"M0" "nmos" (1.5e-4 0.42)
+END
+"""
+    data = _parse_psf_ascii_content(content)
+    assert data == {"M0:gm": pytest.approx(1.5e-4), "M0:vth": pytest.approx(0.42)}

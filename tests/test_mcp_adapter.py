@@ -787,3 +787,101 @@ def test_skills_get_rejects_traversal_and_deduplicates_skill_md(monkeypatch, tmp
     ):
         resp = call_get(bad_uri)
         assert 'error' in resp and resp['error']['code'] == -32602, (bad_uri, resp)
+
+
+def test_simulate_and_simulate_many_default_to_spectre_and_handle_null_mode(monkeypatch, tmp_path):
+    defs = {t['name']: t for t in mcp._tool_defs()}
+    assert defs['simulate']['inputSchema']['properties']['mode']['default'] == 'spectre'
+    assert defs['simulate_many']['inputSchema']['properties']['mode']['default'] == 'spectre'
+    assert 'spectre mode' in defs['simulate']['description']
+
+    net = tmp_path / 'amp.scs'
+    net.write_text('// empty\n', encoding='utf-8')
+    monkeypatch.setattr(mcp, '_safe_roots', lambda: [tmp_path])
+    seen_modes = []
+
+    def fake_sim(mode, timeout):
+        seen_modes.append((mode, timeout))
+        ok = SimulationResult(
+            status=ExecutionStatus.SUCCESS,
+            data={'time': [0.0, 1.0], 'VOUT': [0.0, 1.0]},
+            metadata={'output_dir': str(tmp_path)},
+        )
+        return SimpleNamespace(
+            run_simulation=Mock(return_value=ok),
+            run_parallel=Mock(return_value=[ok]),
+        )
+
+    monkeypatch.setattr(mcp, '_spectre_sim', fake_sim)
+
+    for args in ({'netlist': str(net)}, {'netlist': str(net), 'mode': None}):
+        resp = mcp.dispatch_tool('simulate', args, {})
+        assert not resp.get('isError')
+        assert resp['structuredContent']['mode'] == 'spectre'
+
+    for args in ({'netlists': [str(net)]}, {'netlists': [str(net), ], 'mode': None}):
+        resp = mcp.dispatch_tool('simulate_many', args, {})
+        assert not resp.get('isError')
+        assert resp['structuredContent']['mode'] == 'spectre'
+
+    assert [m for m, _ in seen_modes] == ['spectre', 'spectre', 'spectre', 'spectre']
+
+
+def test_read_waveform_surfaces_psf_parse_errors_and_rejects_invalid_at(monkeypatch, tmp_path):
+    monkeypatch.setattr(mcp, '_safe_roots', lambda: [tmp_path])
+    monkeypatch.setattr(mcp, '_wave_png', lambda *a, **kw: None)
+
+    # Binary / corrupt PSF file -> isError=True (not empty success).
+    binary_psf = tmp_path / 'binary.tran'
+    binary_psf.write_bytes(b'\x00\x01\x02\x03not psf ascii\xff\xfe')
+    resp_bin = mcp.dispatch_tool('read_waveform', {'path': str(binary_psf)}, {})
+    assert resp_bin['isError'] is True
+    assert 'failed to parse PSF file' in resp_bin['content'][0]['text']
+
+    # Empty PSF file -> surfaces parser's error message.
+    empty_psf = tmp_path / 'empty.tran'
+    empty_psf.write_text('', encoding='utf-8')
+    resp_empty = mcp.dispatch_tool('read_waveform', {'path': str(empty_psf)}, {})
+    assert resp_empty['isError'] is True
+    assert 'PSF ASCII file is empty' in resp_empty['content'][0]['text']
+
+    # Empty directory -> isError=True.
+    empty_dir = tmp_path / 'empty_raw'
+    empty_dir.mkdir()
+    resp_dir = mcp.dispatch_tool('read_waveform', {'path': str(empty_dir)}, {})
+    assert resp_dir['isError'] is True
+
+    # Non-transient PSF (AC sweep with freq, no time vector) + at=[...] -> isError=True, never fabricates samples.
+    ac_psf = tmp_path / 'ac.ac'
+    ac_psf.write_text(
+        'HEADER\nSWEEP\n"freq" 1\nTRACE\n"VO" "V"\n'
+        'VALUE\n"freq" 1e6\n"VO" (1.0 0.0)\n"freq" 1e9\n"VO" (0.5 -0.5)\nEND\n',
+        encoding='utf-8',
+    )
+    resp_ac_no_at = mcp.dispatch_tool('read_waveform', {'path': str(ac_psf), 'signals': ['VO']}, {})
+    assert not resp_ac_no_at.get('isError')
+
+    resp_ac_at = mcp.dispatch_tool('read_waveform', {'path': str(ac_psf), 'signals': ['VO'], 'at': [1e-9]}, {})
+    assert resp_ac_at['isError'] is True
+    assert 'time' in resp_ac_at['content'][0]['text'].lower()
+
+    # Transient PSF with non-finite at values -> isError=True.
+    tran_psf = tmp_path / 'wave.tran'
+    tran_psf.write_text(
+        'HEADER\nSWEEP\n"time" 1\nTRACE\n"OUT" "V"\n'
+        'VALUE\n"time" 0.0\n"OUT" 1.0\n"time" 1e-9\n"OUT" 2.0\nEND\n',
+        encoding='utf-8',
+    )
+    for bad_at in ([float('nan')], [float('inf')], [float('-inf')], ['nan'], [True]):
+        resp_bad = mcp.dispatch_tool('read_waveform', {'path': str(tran_psf), 'signals': ['OUT'], 'at': bad_at}, {})
+        assert resp_bad['isError'] is True, (bad_at, resp_bad)
+
+    # Non-finite time vector -> isError=True when 'at' is provided.
+    nan_time = tmp_path / 'nan_time.tran'
+    nan_time.write_text(
+        'HEADER\nSWEEP\n"time" 1\nTRACE\n"OUT" "V"\n'
+        'VALUE\n"time" nan\n"OUT" 1.0\nEND\n',
+        encoding='utf-8',
+    )
+    resp_nan_t = mcp.dispatch_tool('read_waveform', {'path': str(nan_time), 'signals': ['OUT'], 'at': [0.0]}, {})
+    assert resp_nan_t['isError'] is True

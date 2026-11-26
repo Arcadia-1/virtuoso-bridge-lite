@@ -426,13 +426,13 @@ def _tool_defs() -> list[dict]:
          {"type": "object", "properties": {
              "netlists": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 32},
              "max_workers": {"type": "integer", "minimum": 1, "maximum": 16, "default": 4},
-             "mode": {"type": "string", "enum": ["spectre", "aps", "ax", "mx", "cx", "lx"], "default": "ax"}},
+             "mode": {"type": "string", "enum": ["spectre", "aps", "ax", "mx", "cx", "lx"], "default": "spectre"}},
           "required": ["netlists"], "additionalProperties": False},
          {"destructiveHint": False, "idempotentHint": False, "openWorldHint": True}),
-        ("simulate", "Run one .scs netlist. Defaults: ax mode, 3600 s timeout. Long job.",
+        ("simulate", "Run one .scs netlist. Defaults: spectre mode, 3600 s timeout. Long job.",
          {"type": "object", "properties": {
              "netlist": {"type": "string", "minLength": 1, "maxLength": 500},
-             "mode": {"type": "string", "enum": ["spectre", "aps", "ax", "mx", "cx", "lx"], "default": "ax"},
+             "mode": {"type": "string", "enum": ["spectre", "aps", "ax", "mx", "cx", "lx"], "default": "spectre"},
              "timeout": {"type": "integer", "minimum": 60, "maximum": 7200, "default": 3600}},
           "required": ["netlist"], "additionalProperties": False},
          {"destructiveHint": False, "idempotentHint": False, "openWorldHint": True}),
@@ -797,10 +797,12 @@ def _impl_spectre_run(a: dict) -> dict:
     p = _safe_path(a["netlist"])
     if p.suffix not in (".scs", ".sp", ".spi", ".net"):
         return _tool_error("netlist must end with .scs/.sp/.spi/.net")
-    sim = _spectre_sim(a.get("mode", "ax"), int(a.get("timeout", TIMEOUT_SPECTRE)))
+    mode = a.get("mode") or "spectre"
+    timeout = int(a.get("timeout") if a.get("timeout") is not None else TIMEOUT_SPECTRE)
+    sim = _spectre_sim(mode, timeout)
     res = sim.run_simulation(str(p), {})
     if not res.ok:
-        details = {"ok": False, "netlist": str(p), "mode": a.get("mode", "ax"),
+        details = {"ok": False, "netlist": str(p), "mode": mode,
                    "status": str(getattr(res.status, "value", res.status)),
                    "errors": res.errors, "warnings": res.warnings,
                    "tool_version": res.tool_version, "metadata": res.metadata}
@@ -813,7 +815,7 @@ def _impl_spectre_run(a: dict) -> dict:
     meta = res.metadata or {}
     data = res.data or {}
     summary = {"ok": True, "signals": len(data), "netlist": str(p),
-               "mode": a.get("mode", "ax"), "output_dir": meta.get("output_dir"),
+               "mode": mode, "output_dir": meta.get("output_dir"),
                "signal_lengths": {k: (len(v) if isinstance(v, list) else 1)
                                   for k, v in list(data.items())[:40]}}
     content: list = []
@@ -848,9 +850,11 @@ def _impl_spectre_run(a: dict) -> dict:
 
 def _impl_spectre_parallel(a: dict) -> dict:
     nets = [_safe_path(n) for n in a["netlists"]]
-    sim = _spectre_sim(a.get("mode", "ax"), TIMEOUT_SPECTRE)
+    mode = a.get("mode") or "spectre"
+    max_workers = int(a.get("max_workers") if a.get("max_workers") is not None else 4)
+    sim = _spectre_sim(mode, TIMEOUT_SPECTRE)
     out = sim.run_parallel([(str(n), {}) for n in nets],
-                           max_workers=int(a.get("max_workers", 4)))
+                           max_workers=max_workers)
     ok = sum(1 for r in out if r.ok)
     rows = []
     content: list = [{"type": "text", "text":
@@ -871,7 +875,7 @@ def _impl_spectre_parallel(a: dict) -> dict:
                         "Showing four waveform previews; inspect remaining runs by output_dir."})
     response = _base_result({"content": content,
                              "structuredContent": {"ok": ok, "total": len(out),
-                                "mode": a.get("mode", "ax"), "runs": rows}},
+                                "mode": mode, "runs": rows}},
                             cache_public=False)
     if ok != len(out):
         response["isError"] = True
@@ -1351,13 +1355,23 @@ def _editor_shot() -> bytes | None:
 
 
 def _impl_psf_read(a: dict) -> dict:
+    import math
     p = _safe_path(a["path"], must_exist=True)
     wants = a.get("signals") or []
     from virtuoso_bridge.spectre.parsers import (
         parse_spectre_psf_ascii, parse_psf_ascii_directory)
-    data = (parse_spectre_psf_ascii(p).data if p.is_file()
-            else parse_psf_ascii_directory(p))
-    data = data or {}
+    if p.is_file():
+        parsed = parse_spectre_psf_ascii(p)
+        ok = getattr(parsed, "ok", bool(parsed.data))
+        if not ok:
+            errors = list(getattr(parsed, "errors", None) or [])
+            reason = "; ".join(errors) if errors else "no PSF ASCII data parsed (file may be binary PSF or corrupt)"
+            return _tool_error("failed to parse PSF file %s: %s" % (p, reason))
+        data = parsed.data or {}
+    else:
+        data = parse_psf_ascii_directory(p) or {}
+        if not data:
+            return _tool_error("no PSF ASCII data parsed from directory: %s" % p)
     keys = sorted(data.keys())
     if wants:
         missing = [s for s in wants if s not in data]
@@ -1370,11 +1384,10 @@ def _impl_psf_read(a: dict) -> dict:
     summary = {}
     for k, v in pick.items():
         if isinstance(v, list):
-            import math
             count = 0
             minimum = maximum = None
             for x in v:
-                if not isinstance(x, (int, float)) or not math.isfinite(x):
+                if isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x):
                     continue
                 count += 1
                 minimum = x if minimum is None else min(minimum, x)
@@ -1382,7 +1395,7 @@ def _impl_psf_read(a: dict) -> dict:
             st = {"n": len(v), "numeric": count,
                   "min": minimum, "max": maximum}
             st["head"] = [x for x in v[:1000]
-                           if isinstance(x, (int, float)) and x == x][:5] or v[:5]
+                           if not isinstance(x, bool) and isinstance(x, (int, float)) and math.isfinite(x)][:5] or v[:5]
             summary[k] = st
         else:
             summary[k] = {"scalar": v}
@@ -1392,24 +1405,44 @@ def _impl_psf_read(a: dict) -> dict:
     ats = a.get("at") or []
     if ats:
         import bisect
-        tvec = data.get("time", data.get("TIME", []))
-        rows: list[dict] = []
+        tvec = data.get("time")
+        if tvec is None:
+            tvec = data.get("TIME")
+        if (
+            not isinstance(tvec, list)
+            or not tvec
+            or not all(
+                not isinstance(x, bool)
+                and isinstance(x, (int, float))
+                and math.isfinite(x)
+                for x in tvec
+            )
+        ):
+            return _tool_error("cannot sample 'at': dataset has no finite 'time' vector")
+        if any(b < a for a, b in zip(tvec, tvec[1:])):
+            return _tool_error("cannot sample 'at': 'time' vector is not monotonically non-decreasing")
+        parsed_ats: list[float] = []
         for tt in list(ats)[:200]:
+            if isinstance(tt, bool):
+                return _tool_error("invalid 'at' timestamp: %r (expected finite number)" % (tt,))
             try:
                 f = float(tt)
             except (TypeError, ValueError):
-                continue
-            i = bisect.bisect_left(tvec, f) if tvec else 0
-            if tvec:
-                if i == len(tvec):
-                    i -= 1
-                elif i > 0 and f - tvec[i - 1] <= tvec[i] - f:
-                    i -= 1
-            row = {"t": tvec[i] if tvec else f}
+                return _tool_error("invalid 'at' timestamp: %r (expected finite number)" % (tt,))
+            if not math.isfinite(f):
+                return _tool_error("non-finite 'at' timestamp: %r" % (tt,))
+            parsed_ats.append(f)
+        rows: list[dict] = []
+        for f in parsed_ats:
+            i = bisect.bisect_left(tvec, f)
+            if i == len(tvec):
+                i -= 1
+            elif i > 0 and f - tvec[i - 1] <= tvec[i] - f:
+                i -= 1
+            row = {"t": tvec[i]}
             for k, v in pick.items():
                 if isinstance(v, list) and k.lower() != "time" and i < len(v):
-                    x = v[i]
-                    row[k] = x
+                    row[k] = v[i]
             rows.append(row)
         payload["samples"] = rows
         txt += " samples=%d" % len(rows)
