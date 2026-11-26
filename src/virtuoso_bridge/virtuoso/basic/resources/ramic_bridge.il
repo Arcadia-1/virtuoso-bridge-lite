@@ -49,6 +49,12 @@ unless(boundp('RBIpc) RBIpc = 'unbound)
 ; Ring buffer for daemon stderr; flushed to CIW only on non-zero exit.
 unless(boundp('RBStderrBuf) RBStderrBuf = "")
 
+; Session line buffer for daemon stdout (SKILL requests).  cdsServIpc delivers
+; arbitrary pipe chunks: a single callback may coalesce multiple lines or split
+; a long request across callbacks; RBIpcDataHandler buffers fragments until LF.
+unless(boundp('RBDataBuf) RBDataBuf = "")
+unless(boundp('RBDataBufIpc) RBDataBufIpc = nil)
+
 ; Last known daemon OS pid + bind address + remote hostname.  Populated
 ; by RBIpcErrHandler when it parses the daemon's startup banner; reused
 ; by Refresh / Finish / Stop so post-mortem messages keep showing
@@ -85,6 +91,39 @@ procedure(RBWriteIdentity()
 
 procedure(RBIpcDataHandler(ipcId data)
   ; Handler for successful data received from the Python daemon.
+  ; cdsServIpc delivers arbitrary pipe chunks: a single callback may coalesce
+  ; multiple newline-delimited requests (e.g. a queued request followed by a
+  ; resync probe once a modal dialog closes) or split a long request across
+  ; callbacks.  Buffer fragments in RBDataBuf and dispatch each complete
+  ; LF-terminated line independently; retain any trailing partial line for
+  ; the next callback.
+  unless(boundp('RBDataBuf) RBDataBuf = "")
+  unless(boundp('RBDataBufIpc) RBDataBufIpc = nil)
+  when(RBDataBufIpc && RBDataBufIpc != ipcId
+      RBDataBuf = "")
+  RBDataBufIpc = ipcId
+  when(and(stringp(data) greaterp(strlen(data) 0))
+      RBDataBuf = strcat(if(stringp(RBDataBuf) RBDataBuf "") data)
+      let((nl cr rest restLen lineLen line)
+          nl = sprintf(nil "%c" intToChar(10))
+          cr = sprintf(nil "%c" intToChar(13))
+          while(setq(rest index(RBDataBuf nl))
+              restLen = strlen(rest)
+              lineLen = strlen(RBDataBuf) - restLen
+              line = if(greaterp(lineLen 0) substring(RBDataBuf 1 lineLen) "")
+              RBDataBuf = if(greaterp(restLen 1) substring(rest 2) "")
+              when(and(greaterp(lineLen 0) equal(substring(line lineLen 1) cr))
+                  lineLen = lineLen - 1
+                  line = if(greaterp(lineLen 0) substring(line 1 lineLen) ""))
+              when(greaterp(lineLen 0)
+                  RBDispatchLine(ipcId line))
+          )
+      )
+  )
+)
+
+procedure(RBDispatchLine(ipcId data)
+  ; Execute one complete newline-delimited SKILL payload from the daemon.
   ; Code is executed via evalstring(), which bypasses CIW's interactive loop.
   ; As a result, CIW output (printf) is line-buffered: only text ending with
   ; "\n" is flushed immediately.  Without "\n", output stays in the buffer
@@ -102,13 +141,14 @@ procedure(RBIpcDataHandler(ipcId data)
   ; the tag is echoed right after the status marker.  The daemon then drops
   ; any reply that is not its request's own (such as the late reply of a
   ; request it gave up on) instead of taking it for the next request's.
-  let((result tag)
+  let((result tag nl)
+    nl = sprintf(nil "%c" intToChar(10))
     when(and(stringp(data) greaterp(strlen(data) 23)
              equal(substring(data 1 6) "vbtag:"))
         tag = substring(data 7 16)
         data = substring(data 24))
     when(RBEcho printf("[RAMIC Bridge (%L)] receive:%L\n" ipcId data))
-    if(errset(result=evalstring(strcat("(progn " data ")"))) then
+    if(errset(result=evalstring(strcat("(progn " data nl ")"))) then
         ; Success: Send response with STX (0x02) start marker and RS (0x1E) end marker
         ipcWriteProcess(ipcId sprintf(nil "%c%s%L%c" intToChar(2) or(tag "") result intToChar(30)))
         when(RBEcho printf("[RAMIC Bridge (%L)] return:%L\n" ipcId result))
@@ -200,6 +240,9 @@ procedure(RBIpcFinishHandler(ipcId data)
     when(exitStatus != 0 && strlen(RBStderrBuf) > 0
         printf("[RAMIC Bridge stderr]\n%s\n" RBStderrBuf))
     RBStderrBuf = ""
+    when(or(!boundp('RBDataBufIpc) !RBDataBufIpc equal(ipcId RBDataBufIpc))
+        RBDataBuf = ""
+        RBDataBufIpc = nil)
     ; Daemon is gone -- repaint the monitor so it shows Down without
     ; the user having to click Refresh.
     when(boundp('RBMonInstalled) errset(RBMRefresh()))
@@ -248,6 +291,8 @@ procedure(RBStart()
         printf("[RAMIC Bridge] zombie detected (ipc %L alive, no banner); resetting\n" RBIpc)
         errset(ipcKillProcess(RBIpc))
         RBIpc = 'unbound
+        RBDataBuf = ""
+        RBDataBufIpc = nil
         RBLastBind = ""
         RBLastHost = ""
         RBLastIP = ""
@@ -265,8 +310,10 @@ procedure(RBStart()
             RBPort)
         printf("[RAMIC Bridge] To switch profile/port: run RBStop(), then load setup again.\n")
     else
-        ; Clear leftover banner state so the new daemon's banner is
-        ; recognised as the first-of-its-lifetime by RBIpcErrHandler.
+        ; Clear leftover banner and line-buffer state so the new daemon starts
+        ; clean and its banner is recognised as first-of-its-lifetime.
+        RBDataBuf = ""
+        RBDataBufIpc = nil
         RBLastPid = nil
         RBLastBind = ""
         RBLastHost = ""
@@ -297,6 +344,7 @@ procedure(RBStart()
             ; Bind the daemon to this Virtuoso, not the intermediate cdsServIpc.
             RBLaunchedAt = getCurrentTime()
             RBIpc = ipcBeginProcess(sprintf(nil "/usr/bin/env -u LD_LIBRARY_PATH -u LD_PRELOAD RB_REPLY_TAGS=1 RB_VIRTUOSO_PID=%d RB_VIRTUOSO_BOOT_ID=%s RB_VIRTUOSO_WORK_DIR=%s stdbuf -oL %s %s-u %s %L %L" ipcGetPid() RBQuoteShellArg(RBOwnerBootId()) RBQuoteShellArg(getWorkingDir()) RBQuoteShellArg(RBPython) if(getShellEnvVar("RB_AUTO_PORT") == "1" then "-B " else "") RBQuoteShellArg(RBDPath) host RBConfiguredPort) "" 'RBIpcDataHandler 'RBIpcErrHandler 'RBIpcFinishHandler logpath)
+            RBDataBufIpc = RBIpc
         )
         printf("[RAMIC Bridge ipc=%L] launching daemon (bind=%s:%d) at (%s)\n"
             RBIpc

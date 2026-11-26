@@ -16,4 +16,4 @@ def compose_skill_script(commands: Iterable[str], *, wrap_in_progn: bool = True)
     body = "\n".join(normalized)
     if not wrap_in_progn:
         return body
-    return f"progn({body})"
+    return f"progn(\n{body}\n)"
