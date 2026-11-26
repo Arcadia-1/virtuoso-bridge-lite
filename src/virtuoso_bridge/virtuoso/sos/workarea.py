@@ -235,11 +235,16 @@ done; } && '''
             if path == "." or any(part.casefold().endswith(".oa") or part == "master.tag"
                                   for part in PurePosixPath(path).parts):
                 raise ValueError("Ordinary-file writes reject workareas and OA files/packages.")
+        from .cellview import _ONLINE_NOTICE, _STATUS_NOTICES
+
         # SOS object types distinguish an ordinary file from a package/reference.
         for path in paths:
             result = self._run("status", "-Nhdr", "-f%T\t%P", "-sall", "-sNr", path)
-            lines = [line for line in result.stdout.splitlines() if line.strip()
-                     and line.strip() != "** The flags and attributes have been updated."]
+            lines = [
+                line for line in result.stdout.splitlines()
+                if line.strip() and line.strip() not in _STATUS_NOTICES
+                and not _ONLINE_NOTICE.fullmatch(line.strip())
+            ]
             if result.returncode or len(lines) != 1 or lines[0] not in {
                 "f\t" + path, "f\t" + path[2:],
             }:

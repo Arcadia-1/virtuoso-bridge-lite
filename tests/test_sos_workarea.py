@@ -126,3 +126,52 @@ def test_all_files_are_validated_before_any_mutation():
     assert len(owner.sos_runner.commands) == 3
     assert all("status -Nhdr" in command for command in owner.sos_runner.commands[:2])
     assert "for vb_file in ./rtl/one.v ./rtl/two.v" in owner.sos_runner.commands[-1]
+
+
+@pytest.mark.parametrize("action", ["co", "ci"])
+def test_ordinary_file_check_ignores_cliosoft_online_project_banner(action):
+    area, owner = _workarea()
+    orig = owner.sos_runner.run_command
+
+    def with_banners(command: str, *, timeout: float | None = None) -> CommandResult:
+        res = orig(command, timeout=timeout)
+        if "status -Nhdr" in command:
+            return CommandResult(
+                0,
+                "** The flags and attributes have been updated.\n"
+                "## All servers for project 'FCGMASH' are online.\n"
+                + res.stdout,
+                "",
+            )
+        return res
+
+    owner.sos_runner.run_command = with_banners
+    if action == "co":
+        result = area.checkout("rtl/block.v")
+    else:
+        result = area.checkin("rtl/block.v", change_summary="Update block")
+    assert result.returncode == 0
+    assert len(owner.sos_runner.commands) == 2
+
+
+@pytest.mark.parametrize(
+    "banner",
+    [
+        "## All servers for project 'FCGMASH' are offline.\n",
+        "## All servers for project 'FCGMASH' are online. unexpected\n",
+    ],
+)
+def test_ordinary_file_check_rejects_non_online_or_unexpected_banners(banner):
+    area, owner = _workarea()
+    orig = owner.sos_runner.run_command
+
+    def with_bad_banner(command: str, *, timeout: float | None = None) -> CommandResult:
+        res = orig(command, timeout=timeout)
+        if "status -Nhdr" in command:
+            return CommandResult(0, banner + res.stdout, "")
+        return res
+
+    owner.sos_runner.run_command = with_bad_banner
+    with pytest.raises(RuntimeError, match="ordinary SOS file"):
+        area.checkout("rtl/block.v")
+    assert len(owner.sos_runner.commands) == 1

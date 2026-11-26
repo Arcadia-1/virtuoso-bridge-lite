@@ -190,3 +190,64 @@ def test_session_restart_unknown_normal_exit_never_forces_or_retries():
     )
     assert result["outcome"] == "unknown"
     assert sum(" exitsos" in command for command in client.commands) == 1
+
+
+def test_session_restart_forced_exit_nonzero_requeries_and_marks_stopped_as_unknown():
+    client = SessionClient(
+        running=("1", "1", "0"),
+        native_status=CommandResult(1, "", "status denied"),
+        exit_replies=[
+            CommandResult(1, "", "Cadence is connected"),
+            CommandResult(1, "", "exitsos -F exited with warning"),
+        ],
+    )
+    result = client.sos.restart_session_cellview(
+        "lib", "cell", "schematic_Vt", force_cadence_disconnect=True,
+    )
+    assert result["ok"] is False
+    assert result["outcome"] == "unknown"
+    assert sum(" query is_running" in command for command in client.commands) == 3
+    assert any("state changed" in diag for diag in result["diagnostics"])
+
+
+def test_session_restart_forced_exit_nonzero_with_unavailable_requery_is_unknown():
+    class FailingRequeryClient(SessionClient):
+        def run_command(self, command, *, timeout=None):
+            if " query is_running" in command and sum(" exitsos" in c for c in self.commands) >= 2:
+                self.commands.append(command)
+                raise TimeoutError("ssh lost")
+            return super().run_command(command, timeout=timeout)
+
+    client = FailingRequeryClient(
+        running=("1", "1"),
+        native_status=CommandResult(1, "", "status denied"),
+        exit_replies=[
+            CommandResult(1, "", "Cadence is connected"),
+            CommandResult(1, "", "forced exit error"),
+        ],
+    )
+    result = client.sos.restart_session_cellview(
+        "lib", "cell", "schematic_Vt", force_cadence_disconnect=True,
+    )
+    assert result["ok"] is False
+    assert result["outcome"] == "unknown"
+    assert any("forced exit error" in diag for diag in result["diagnostics"])
+    assert any("unavailable" in diag for diag in result["diagnostics"])
+
+
+def test_session_restart_forced_exit_nonzero_confirmed_still_running_stays_blocked():
+    client = SessionClient(
+        running=("1", "1", "1"),
+        native_status=CommandResult(1, "", "status denied"),
+        exit_replies=[
+            CommandResult(1, "", "Cadence is connected"),
+            CommandResult(1, "", "Forced exit refused"),
+        ],
+    )
+    result = client.sos.restart_session_cellview(
+        "lib", "cell", "schematic_Vt", force_cadence_disconnect=True,
+    )
+    assert result["ok"] is False
+    assert result["outcome"] == "blocked"
+    assert sum(" query is_running" in command for command in client.commands) == 3
+    assert "Forced exit refused" in result["diagnostics"]

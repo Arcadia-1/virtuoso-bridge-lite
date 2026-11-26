@@ -17,6 +17,8 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
+from virtuoso_bridge.models import ExecutionStatus
+
 if TYPE_CHECKING:
     from virtuoso_bridge import VirtuosoClient
 
@@ -39,7 +41,7 @@ _KIND_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
     (re.compile(r"Visualization\s*&?\s*Analysis"),                        "waveform"),
     (re.compile(r"Waveform Window"),                                      "waveform"),
     (re.compile(r"Cadence Hierarchy Editor"),                             "hierarchy"),
-    (re.compile(r"Virtuoso®?\s+[\d.\-a-z]+\s*-\s*Log:"),                  "ciw"),
+    (re.compile(r"Virtuoso®?\s+(?:Studio\s+)?(?:IC)?[\w.\-]+(?:\s+[\w.\-]+)?\s*-\s*Log:"), "ciw"),
 )
 
 
@@ -70,8 +72,14 @@ def _focused_window_title(client: VirtuosoClient) -> str:
     r = client.execute_skill(
         'let((cw) cw = hiGetCurrentWindow() if(cw hiGetWindowName(cw) ""))'
     )
+    if r.status != ExecutionStatus.SUCCESS or r.errors:
+        detail = "; ".join(r.errors) if r.errors else f"status={getattr(r.status, 'value', r.status)}"
+        raise RuntimeError(f"Failed to query focused window title: {detail}")
     raw = (r.output or "").strip()
-    return raw.strip('"') if raw and raw != "nil" else ""
+    if not raw or raw == "nil":
+        return ""
+    title = raw.strip('"')
+    return re.sub(r'\\(\d{3})', lambda m: chr(int(m.group(1), 8)), title)
 
 
 def snapshot(client: VirtuosoClient, *,
