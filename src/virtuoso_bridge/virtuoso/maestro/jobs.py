@@ -27,6 +27,7 @@ from virtuoso_bridge.runtime_paths import artifact_dir, tmp_dir
 from virtuoso_bridge.transport.remote_paths import (
     default_virtuoso_bridge_dir,
     resolve_client_id,
+    resolve_remote_scratch_root,
     resolve_remote_username,
 )
 from virtuoso_bridge.transport.remote_roles import remote_host_roles_from_os
@@ -315,7 +316,10 @@ class MaestroJobManager:
         )
         observed_host, observed_account = cls._probe_ssh_identity(runner)
         root = remote_root or default_virtuoso_bridge_dir(
-            username, "maestro-jobs", resolve_client_id(profile)
+            username,
+            "maestro-jobs",
+            resolve_client_id(profile),
+            root=resolve_remote_scratch_root(runner, error_context="Maestro jobs"),
         )
         return cls(
             runner,
@@ -394,7 +398,10 @@ class MaestroJobManager:
         )
         observed_host, observed_account = cls._probe_ssh_identity(runner)
         root = remote_root or default_virtuoso_bridge_dir(
-            username, "maestro-jobs", resolve_client_id(profile)
+            username,
+            "maestro-jobs",
+            resolve_client_id(profile),
+            root=resolve_remote_scratch_root(runner, error_context="Maestro jobs"),
         )
         return cls(
             runner,
@@ -1007,7 +1014,7 @@ class MaestroJobManager:
             "case \"$pid\" in ''|*[!0-9]*) alive=0;; "
             "*) if test \"$pid\" -gt 0 2>/dev/null && kill -0 \"$pid\" 2>/dev/null; then "
             "alive=1; stat=$(cat \"/proc/$pid/stat\" 2>/dev/null || true); "
-            "rest=${stat#*) }; set -- $rest; "
+            "rest=${stat##*) }; set -- $rest; "
             "if test $# -ge 20; then current_start=linux:${20}; fi; "
             "if test -n \"$expected_start\" && "
             "test \"$current_start\" = \"$expected_start\"; then process_match=1; fi; "

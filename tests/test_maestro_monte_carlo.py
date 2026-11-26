@@ -517,3 +517,65 @@ def test_run_treats_recovery_error_with_unknown_metadata_as_unknown(monkeypatch)
     with pytest.raises(MaestroMonteCarloOutcomeUnknown) as caught:
         run_monte_carlo_and_wait(SimpleNamespace(), session="s", timeout=30)
     assert caught.value.__cause__ is err
+
+
+def test_get_config_ignores_dormant_dutsummary_in_global_mode() -> None:
+    config = get_monte_carlo_config(_Client(_result(_base_payload(
+        mcmethod="global",
+        dutsummary="T%/I0%lib/cell/schematic%Master#",
+        ignoreflag="1",
+    ))), "s")
+
+    assert config is not None
+    assert config.variation == "global"
+    assert config.module_filter is None
+
+
+def test_get_config_treats_blank_montecarloseed_as_none() -> None:
+    config = get_monte_carlo_config(_Client(_result(_base_payload(
+        montecarloseed="",
+    ))), "s")
+
+    assert config is not None
+    assert config.seed is None
+    assert mc._run_option_values(config)["montecarloseed"] == ""
+
+
+def test_configure_unknown_with_save_and_mismatch_does_not_claim_visible(monkeypatch) -> None:
+    before = MonteCarloConfig(points=100)
+    requested = MonteCarloConfig(points=200)
+    reads = iter((before, before))
+    modes = iter((MC_RUN_MODE, MC_RUN_MODE))
+    monkeypatch.setattr(mc, "get_monte_carlo_config", lambda *args, **kwargs: next(reads))
+    monkeypatch.setattr(mc, "list_session_states", lambda *args, **kwargs: [_editing_state()])
+    monkeypatch.setattr(mc, "_get_run_mode", lambda *args, **kwargs: next(modes))
+    client = _Client(_result(ok=False, errors=["Socket timeout after 30s"]))
+
+    with pytest.raises(MaestroMonteCarloOutcomeUnknown) as caught:
+        configure_monte_carlo(client, requested, session="fnxSession4", save=True)
+    message = str(caught.value)
+    assert "does not match the request" in message
+    assert "visible in the live session" not in message
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"outcome": "not_started", "request_sent": False, "request_handle": {"id": "req-1"}},
+        {"outcome": "not_started", "request_handle": {"id": "req-1"}},
+        {"request_sent": False, "request_handle": {"id": "req-1"}},
+    ],
+)
+def test_transport_outcome_unknown_returns_false_for_not_started(monkeypatch, metadata) -> None:
+    res = _result(ok=False, errors=["Shared CIW request not sent: blocked"], metadata=metadata)
+    assert mc._transport_outcome_unknown(res) is False
+
+    requested = MonteCarloConfig(points=200)
+    monkeypatch.setattr(mc, "get_monte_carlo_config", lambda *args, **kwargs: MonteCarloConfig())
+    monkeypatch.setattr(mc, "list_session_states", lambda *args, **kwargs: [_editing_state()])
+    monkeypatch.setattr(mc, "_get_run_mode", lambda *args, **kwargs: MC_RUN_MODE)
+    client = _Client(res)
+
+    with pytest.raises(MaestroMonteCarloError) as caught:
+        configure_monte_carlo(client, requested, session="fnxSession4")
+    assert not isinstance(caught.value, MaestroMonteCarloOutcomeUnknown)

@@ -121,7 +121,7 @@ class MonteCarloConfig(BaseModel):
     variation: Variation = "all"
     points: int = Field(default=100, ge=1)
     sampling: SamplingMode = "random"
-    seed: int = Field(default=12345, ge=1)
+    seed: int | None = Field(default=12345, ge=1)
     starting_run: int = Field(default=1, ge=1)
     nominal: bool = True
     save_all_plots: bool = False
@@ -247,7 +247,7 @@ def _run_option_values(config: MonteCarloConfig) -> dict[str, str]:
         "mcmethod": config.variation,
         "mcnumpoints": str(config.points),
         "samplingmode": config.sampling,
-        "montecarloseed": str(config.seed),
+        "montecarloseed": "" if config.seed is None else str(config.seed),
         "mcstartingrunnumber": str(config.starting_run),
         "saveallplots": "1" if config.save_all_plots else "0",
         "saveprocess": "1" if config.save_process else "0",
@@ -265,6 +265,11 @@ def _result_errors(result) -> str:
 def _transport_outcome_unknown(result) -> bool:
     metadata = getattr(result, "metadata", None)
     if isinstance(metadata, dict):
+        if (
+            metadata.get("outcome") == "not_started"
+            or metadata.get("request_sent") is False
+        ):
+            return False
         if metadata.get("outcome") == "unknown":
             return True
         if metadata.get("request_handle") and not getattr(result, "ok", False):
@@ -276,12 +281,19 @@ def _transport_outcome_unknown(result) -> bool:
 
 
 def _exception_outcome_unknown(exc: Exception) -> bool:
-    if isinstance(exc, TimeoutError):
-        return True
     for attr in ("result", "virtuoso_result"):
         res = getattr(exc, attr, None)
-        if res is not None and _transport_outcome_unknown(res):
-            return True
+        if res is not None:
+            metadata = getattr(res, "metadata", None)
+            if isinstance(metadata, dict) and (
+                metadata.get("outcome") == "not_started"
+                or metadata.get("request_sent") is False
+            ):
+                return False
+            if _transport_outcome_unknown(res):
+                return True
+    if isinstance(exc, TimeoutError):
+        return True
     detail = str(exc).lower()
     return any(marker in detail for marker in _UNKNOWN_TRANSPORT_MARKERS)
 
@@ -392,21 +404,27 @@ def _config_from_rows(rows: list) -> MonteCarloConfig:
     def option(name: str) -> str:
         return options.get(name, _DEFAULTS.get(name, ""))
 
-    summary = option("dutsummary")
-    modules = _parse_modules(summary)
+    variation = option("mcmethod")
     module_filter = None
-    if modules:
-        module_filter = MonteCarloModuleFilter(
-            mode="exclude" if option("ignoreflag") == "1" else "include",
-            modules=modules,
-        )
+    if variation != "global":
+        summary = option("dutsummary")
+        modules = _parse_modules(summary)
+        if modules:
+            module_filter = MonteCarloModuleFilter(
+                mode="exclude" if option("ignoreflag") == "1" else "include",
+                modules=modules,
+            )
 
+    raw_seed = option("montecarloseed")
     try:
         return MonteCarloConfig(
-            variation=option("mcmethod"),
+            variation=variation,
             points=_decode_int(option("mcnumpoints"), "mcnumpoints"),
             sampling=option("samplingmode"),
-            seed=_decode_int(option("montecarloseed"), "montecarloseed"),
+            seed=(
+                _decode_int(raw_seed, "montecarloseed")
+                if raw_seed.strip() else None
+            ),
             starting_run=_decode_int(
                 option("mcstartingrunnumber"), "mcstartingrunnumber",
             ),
@@ -643,15 +661,16 @@ def configure_monte_carlo(
     )
     if uncertain:
         detail = str(mutation_exception) if mutation_exception else _result_errors(mutation)
+        if not matches:
+            raise MaestroMonteCarloOutcomeUnknown(
+                "Monte Carlo configuration outcome is unknown after transport failure; "
+                "the observed live setup does not match the request"
+                + (f": {detail}" if detail else ".")
+            )
         if save:
             raise MaestroMonteCarloOutcomeUnknown(
                 "Monte Carlo configuration is visible in the live session after a transport "
                 f"failure, but disk persistence is unknown: {detail}"
-            )
-        if not matches:
-            raise MaestroMonteCarloOutcomeUnknown(
-                "Monte Carlo configuration outcome is unknown after transport failure; "
-                "the observed live setup does not match the request."
             )
     if not matches:
         raise MaestroMonteCarloError(

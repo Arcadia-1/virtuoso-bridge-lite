@@ -15,11 +15,12 @@ SKILL alists verbatim) / ``state_from_sdb.xml`` (YAML-filtered sdb) /
 from __future__ import annotations
 
 import fnmatch
+import shlex
 import shutil
 import sys
 import uuid
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from virtuoso_bridge import VirtuosoClient
 
@@ -171,6 +172,26 @@ def _per_point_list(key: str, fallback: tuple[str, ...]) -> tuple[str, ...]:
     return fallback
 
 
+def _validate_history_segment(history: str) -> str:
+    """Validate that *history* is a single safe path segment."""
+    if not isinstance(history, str) or (
+        not history
+        or history in (".", "..")
+        or "/" in history
+        or "\\" in history
+        or "\x00" in history
+    ):
+        raise ValueError(
+            f"history must be a single safe path segment, got {history!r}"
+        )
+    return history
+
+
+def _normalize_posix_path(path: str) -> PurePosixPath:
+    """Normalize a POSIX archive/remote path with a single leading slash."""
+    return PurePosixPath("/" + path.lstrip("/"))
+
+
 def _dump_run_artifacts(client: VirtuosoClient, snap_dir: Path, *,
                          history: str, lib_path: str, scratch_root: str,
                          lib: str, cell: str, view: str,
@@ -191,7 +212,8 @@ def _dump_run_artifacts(client: VirtuosoClient, snap_dir: Path, *,
     or are proprietary binary blobs.  Set to ``False`` for an
     inputs-only snapshot.
     """
-    if not (history and lib_path and scratch_root):
+    history = _validate_history_segment(history)
+    if not (lib_path and scratch_root):
         return
     runner = client.ssh_runner
     if runner is None:
@@ -215,35 +237,37 @@ def _dump_run_artifacts(client: VirtuosoClient, snap_dir: Path, *,
     # pulled; this function rereads it on every call.  `-path '*/<dir>/*'`
     # scopes the match to the right subtree, each `-name` is exact or glob.
     netlist_files = _per_point_list("netlist", _DEFAULT_NETLIST_FILES)
-    netlist_clause = " -o ".join(f"-name '{n}'" for n in netlist_files)
+    netlist_clause = " -o ".join(f"-name {shlex.quote(n)}" for n in netlist_files)
     clauses = f"\\( -path '*/netlist/*' \\( {netlist_clause} \\) \\)"
     if include_results:
         psf_files = _per_point_list("psf", _DEFAULT_PSF_FILES)
-        psf_clause = " -o ".join(f"-name '{n}'" for n in psf_files)
+        psf_clause = " -o ".join(f"-name {shlex.quote(n)}" for n in psf_files)
         clauses += f" -o \\( -path '*/psf/*' \\( {psf_clause} \\) \\)"
 
     # Maestro-level extra files (siblings of <history>.log):
     #   always:            <history>.log
     #   include_results:   <history>.rdb, <history>.msg.db
     #
-    # List both project and scratch_root locations; tar
-    # --ignore-failed-read lets whichever path actually has the file
-    # win.  Explorer-derived `.RO` runs only have these companion
-    # files in scratch_root — without listing it here they'd be
-    # silently missing from the snapshot.
+    # List scratch_root first and authoritative lib_path second, AND
+    # enforce lib_path precedence explicitly during extraction so stale
+    # scratch_root copies can never overwrite authoritative lib_path files.
+    # Explorer-derived `.RO` runs only have these companion files in
+    # scratch_root — listing both with --ignore-failed-read handles both.
     scratch_maestro_dir = f"{scratch_root}/{lib}/{cell}/{view}/results/maestro"
+    expected_extras = {f"{history}.log"}
     maestro_extras = [
-        log_remote,
         f"{scratch_maestro_dir}/{history}.log",
+        log_remote,
     ]
     if include_results:
+        expected_extras.update({f"{history}.rdb", f"{history}.msg.db"})
         maestro_extras.extend([
-            f"{maestro_dir}/{history}.rdb",
-            f"{maestro_dir}/{history}.msg.db",
             f"{scratch_maestro_dir}/{history}.rdb",
             f"{scratch_maestro_dir}/{history}.msg.db",
+            f"{maestro_dir}/{history}.rdb",
+            f"{maestro_dir}/{history}.msg.db",
         ])
-    extras_str = " ".join(maestro_extras)
+    extras_str = " ".join(shlex.quote(p) for p in maestro_extras)
 
     # Include symlinks: Cadence's per-point netlist/ is largely symlinks
     # pointing into ``psf/.../netlist/`` (netlist itself, map, amap,
@@ -254,9 +278,9 @@ def _dump_run_artifacts(client: VirtuosoClient, snap_dir: Path, *,
     # (safer than preserving the link on the client, whose directory
     # layout wouldn't satisfy the relative target).
     tar_cmd = (
-        f"find {hist_remote} \\( -type f -o -type l \\) \\( {clauses} \\) "
+        f"find {shlex.quote(hist_remote)} \\( -type f -o -type l \\) \\( {clauses} \\) "
         f"-print 2>/dev/null "
-        f"| tar -chf {remote_tar} -P -T - --ignore-failed-read "
+        f"| tar -chf {shlex.quote(remote_tar)} -P -T - --ignore-failed-read "
         f"{extras_str} 2>/dev/null && echo OK"
     )
     r = runner.run_command(tar_cmd, timeout=30)
@@ -264,12 +288,16 @@ def _dump_run_artifacts(client: VirtuosoClient, snap_dir: Path, *,
         return
 
     local_tar = snap_dir / "vb_run.tar"
+    hist_root_posix = _normalize_posix_path(hist_remote)
+    lib_maestro_posix = _normalize_posix_path(maestro_dir)
+    scratch_maestro_posix = _normalize_posix_path(scratch_maestro_dir)
     try:
         if not _scp(client, remote_tar, local_tar):
             return
         import tarfile
         hist_dir = snap_dir / history
         hist_dir.mkdir(parents=True, exist_ok=True)
+        written_from_lib: set[str] = set()
         with tarfile.open(local_tar) as tf:
             for m in tf.getmembers():
                 # GNU tar folds the second-and-onwards copies of the
@@ -298,29 +326,49 @@ def _dump_run_artifacts(client: VirtuosoClient, snap_dir: Path, *,
                     continue
                 # Map remote absolute path → local relative path under
                 # snap_dir/<history>/.  Maestro-level ``<history>.log``
-                # / ``.rdb`` / ``.msg.db`` land flat in hist_dir;
-                # per-point files keep their relative path.
-                base = m.name.rsplit("/", 1)[-1]
-                if base in (f"{history}.log",
-                            f"{history}.rdb",
-                            f"{history}.msg.db"):
-                    target = hist_dir / base
-                elif f"/{history}/" in m.name:
-                    target = hist_dir / m.name.split(f"/{history}/", 1)[1]
-                else:
+                # / ``.rdb`` / ``.msg.db`` land flat in hist_dir with
+                # authoritative lib_path taking precedence over
+                # scratch_root; per-point files keep their exact path
+                # relative to hist_root_posix.
+                member_posix = _normalize_posix_path(m.name)
+                if ".." in member_posix.parts:
                     continue
+                from_lib_extra = False
+                if (
+                    member_posix.parent == lib_maestro_posix
+                    and member_posix.name in expected_extras
+                ):
+                    target = hist_dir / member_posix.name
+                    from_lib_extra = True
+                elif (
+                    member_posix.parent == scratch_maestro_posix
+                    and member_posix.name in expected_extras
+                ):
+                    if member_posix.name in written_from_lib:
+                        continue
+                    target = hist_dir / member_posix.name
+                else:
+                    try:
+                        rel = member_posix.relative_to(hist_root_posix)
+                    except ValueError:
+                        continue
+                    if not rel.parts:
+                        continue
+                    target = hist_dir / Path(*rel.parts)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 src = tf.extractfile(payload)
                 if src is None:
                     continue
                 with src, open(target, "wb") as dst:
                     dst.write(src.read())
+                if from_lib_extra:
+                    written_from_lib.add(member_posix.name)
     finally:
         try:
             local_tar.unlink()
         except OSError:
             pass
-        runner.run_command(f"rm -f {remote_tar}", timeout=10)
+        runner.run_command(f"rm -f {shlex.quote(remote_tar)}", timeout=10)
 
 
 def _dump_run_artifacts_local(snap_dir: Path, *,
@@ -340,6 +388,7 @@ def _dump_run_artifacts_local(snap_dir: Path, *,
     ``shutil.copy2`` both deref by default, producing plain files at
     the destination — same end state as the remote ``tar -h`` route.
     """
+    history = _validate_history_segment(history)
     hist_root = (Path(scratch_root) / lib / cell / view
                  / "results" / "maestro" / history)
     if not hist_root.exists():
@@ -413,12 +462,13 @@ def _dump_to_dir(client: VirtuosoClient, *, bundle: dict, lib: str, cell: str,
     lib_path = bundle.get("lib_path") or ""
     _dump_setup_xmls(client, snap_dir, lib_path, cell, view)
     _dump_skill_text(snap_dir, bundle.get("raw_sections") or [])
-    _dump_run_artifacts(
-        client, snap_dir,
-        history=latest_history, lib_path=lib_path,
-        scratch_root=bundle.get("scratch_root") or "",
-        lib=lib, cell=cell, view=view,
-    )
+    if latest_history:
+        _dump_run_artifacts(
+            client, snap_dir,
+            history=latest_history, lib_path=lib_path,
+            scratch_root=bundle.get("scratch_root") or "",
+            lib=lib, cell=cell, view=view,
+        )
     return snap_dir
 
 
@@ -457,6 +507,8 @@ def snapshot(client: VirtuosoClient, *,
     history auto-pick.  Useful for pulling older runs side-by-side.
     Only meaningful with ``output_root``.
     """
+    if history is not None:
+        history = _validate_history_segment(history)
     win  = _fetch_window_state(client)
     sess = win["session"]
     lib, cell = win["lib"], win["cell"]

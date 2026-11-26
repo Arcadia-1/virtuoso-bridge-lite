@@ -108,6 +108,8 @@ def test_maestro_close_waveform_viewer_verifies_session_close() -> None:
         ({"session": "  "}, "session must not be blank"),
         ({"window": "window(7) hiCloseWindow(window(1))"}, "window must be a window number"),
         ({"window": 0}, "positive window number"),
+        ({"window": True}, "window must be a window number"),
+        ({"window": False}, "window must be a window number"),
     ],
 )
 def test_maestro_close_waveform_viewer_rejects_invalid_targets(kwargs, message: str) -> None:
