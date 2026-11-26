@@ -76,8 +76,9 @@ _MAX_REQUEST_BYTES = 8 * 1024 * 1024
 _CONNECTION_TIMEOUT = 5.0
 _RESPONSE_WRITE_TIMEOUT = 5.0
 _MAX_CONNECTIONS = 8
-_BUSY_REJECT_TIMEOUT = 1.0
-_MAX_BUSY_REJECTORS = 8
+_LISTEN_BACKLOG = 64
+_BUSY_REJECT_TIMEOUT = 0.5
+_MAX_BUSY_REJECTORS = 32
 _BUSY_LIMIT_REPLY = "\x15BusyError: daemon connection limit reached"
 _TRANSIENT_ACCEPT_ERRNOS = frozenset(
     err for err in (
@@ -991,10 +992,13 @@ def _reject_connection_limit(conn, reject_slots):
             data = _recv_request(conn, timeout=_BUSY_REJECT_TIMEOUT)
             request_data = json.loads(data)
         except Exception:
+            if not BRIDGE_TOKEN:
+                _safe_sendall(conn, _BUSY_LIMIT_REPLY)
+            return
+        if not BRIDGE_TOKEN:
             _safe_sendall(conn, _BUSY_LIMIT_REPLY)
             return
-        if not BRIDGE_TOKEN or not isinstance(request_data, dict):
-            _safe_sendall(conn, _BUSY_LIMIT_REPLY)
+        if not isinstance(request_data, dict):
             return
         kind = _request_auth_kind(request_data)
         auth_error = _auth_error(request_data, kind, consume_nonce=False)
@@ -1006,6 +1010,25 @@ def _reject_connection_limit(conn, reject_slots):
     finally:
         _safe_close_connection(conn)
         reject_slots.release()
+
+
+def _dispatch_overflow_connection(conn, reject_slots):
+    """Handle a connection accepted while all worker slots are occupied."""
+    if reject_slots.acquire(False):
+        rejector = threading.Thread(
+            target=_reject_connection_limit,
+            args=(conn, reject_slots),
+            name="ramic-busy-reject",
+        )
+        rejector.daemon = True
+        try:
+            rejector.start()
+            return
+        except Exception:
+            reject_slots.release()
+    if not BRIDGE_TOKEN:
+        _safe_sendall(conn, _BUSY_LIMIT_REPLY)
+    _safe_close_connection(conn)
 
 
 def _accept_next(server_sock):
@@ -1064,7 +1087,7 @@ def start_server():
                 from virtuoso_bridge.virtuoso.basic.resources.ramic_registry import bind_instance
             try:
                 _INSTANCE_LEASE = bind_instance(
-                    s, HOST, PORT, pid=virtuoso_pid, backlog=_MAX_CONNECTIONS,
+                    s, HOST, PORT, pid=virtuoso_pid, backlog=_LISTEN_BACKLOG,
                     work_dir=os.environ.get("RB_VIRTUOSO_WORK_DIR") or os.getcwd())
             except socket.error as exc:
                 if exc.errno == errno.EADDRINUSE:
@@ -1080,7 +1103,7 @@ def start_server():
                     sys.stderr.write("ERROR: Port %s is already in use. Leave the existing session running; load the automatic bootstrap or use RBSetPort(port).\n" % PORT)
                     raise SystemExit(1)
                 raise
-            s.listen(_MAX_CONNECTIONS)
+            s.listen(_LISTEN_BACKLOG)
         # Banner -- SKILL side parses this from stderr to populate
         # RBLastPid / RBLastBind / RBLastHost / RBLastIP for the monitor
         # display.  Format is frozen:
@@ -1125,20 +1148,7 @@ def start_server():
                 _safe_close_connection(conn)
                 continue
             if not slots.acquire(False):
-                if reject_slots.acquire(False):
-                    rejector = threading.Thread(
-                        target=_reject_connection_limit,
-                        args=(conn, reject_slots),
-                        name="ramic-busy-reject",
-                    )
-                    rejector.daemon = True
-                    try:
-                        rejector.start()
-                        continue
-                    except Exception:
-                        reject_slots.release()
-                _safe_sendall(conn, _BUSY_LIMIT_REPLY)
-                _safe_close_connection(conn)
+                _dispatch_overflow_connection(conn, reject_slots)
                 continue
             worker = threading.Thread(
                 target=_connection_thread,

@@ -369,6 +369,23 @@ def test_py27_daemon_accept_and_signed_busy_rejection(monkeypatch, tmp_path) -> 
     assert conn_bad.closed
     assert conn_bad.sent and conn_bad.sent[0].startswith("\x15AuthError:")
 
+    # Backlog and rejector tuning + no unsigned BusyError when reject_slots is exhausted under auth.
+    assert module._LISTEN_BACKLOG == 64
+    assert module._MAX_BUSY_REJECTORS == 32
+    assert module._BUSY_REJECT_TIMEOUT == 0.5
+    exhausted = threading.BoundedSemaphore(1)
+    assert exhausted.acquire(False)
+    conn_overflow = _FakeConn("")
+    module._dispatch_overflow_connection(conn_overflow, exhausted)
+    assert conn_overflow.sent == []
+    assert conn_overflow.closed is True
+
+    monkeypatch.setattr(module, "BRIDGE_TOKEN", None)
+    conn_unauth = _FakeConn("")
+    module._dispatch_overflow_connection(conn_unauth, exhausted)
+    assert conn_unauth.sent == [module._BUSY_LIMIT_REPLY]
+    assert conn_unauth.closed is True
+
 
 def test_ramic_deploy_redacts_anchor_in_both_str_and_py2_unicode(monkeypatch) -> None:
     from virtuoso_bridge.virtuoso.basic.resources import ramic_deploy

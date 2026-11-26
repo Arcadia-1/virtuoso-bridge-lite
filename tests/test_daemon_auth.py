@@ -1135,12 +1135,44 @@ class TestRealDaemon:
             token = daemon_auth.read_local_token(token_path)
             assert token
 
-            # Occupy all 8 daemon worker slots with idle open connections.
+            def signed_hello(nonce: str) -> str:
+                return _raw_exchange(
+                    port,
+                    {
+                        "proto": 1,
+                        "op": "hello",
+                        "nonce": nonce,
+                        "mac": daemon_auth.hello_mac(token, nonce=nonce),
+                    },
+                )
+
+            # Confirm the daemon has passed banner/pipe-monitor setup and is actively accepting.
+            ready_nonce = "77" * 16
+            ready_reply = signed_hello(ready_nonce)
+            ready_caps = json.loads(daemon_auth.verify_response(ready_reply, token, ready_nonce)[1:])
+            assert ready_caps["auth"] == "on"
+
+            def wait_for_saturation(prefix: str) -> str:
+                deadline = time.monotonic() + 2.0
+                attempt = 0
+                last_reply = ""
+                while time.monotonic() < deadline:
+                    attempt += 1
+                    probe_nonce = f"{prefix}{attempt:030x}"
+                    last_reply = signed_hello(probe_nonce)
+                    if last_reply.startswith(NAK):
+                        verified = daemon_auth.verify_response(last_reply, token, probe_nonce)
+                        if verified == NAK + "BusyError: daemon connection limit reached":
+                            return verified
+                    time.sleep(0.02)
+                pytest.fail(f"daemon slots did not saturate in time; last reply={last_reply!r}")
+
+            # Occupy all 8 daemon worker slots with idle open connections and verify saturation.
             for _ in range(8):
                 s = socket.create_connection(("127.0.0.1", port), timeout=5)
                 holders.append(s)
-            # Wait briefly so accept() has handed all 8 sockets to worker threads.
-            time.sleep(0.15)
+            verified_busy = wait_for_saturation("88")
+            assert verified_busy == NAK + "BusyError: daemon connection limit reached"
 
             # 1) Unauthorized peer hitting connection limit gets AuthError, not signed BusyError.
             bad_nonce = "99" * 16
@@ -1155,21 +1187,7 @@ class TestRealDaemon:
             )
             assert unauth_reply.startswith(NAK) and "AuthError" in unauth_reply
 
-            # 2) Authorized raw hello hitting connection limit gets a VALIDLY SIGNED BusyError.
-            ok_nonce = "88" * 16
-            busy_hello = _raw_exchange(
-                port,
-                {
-                    "proto": 1,
-                    "op": "hello",
-                    "nonce": ok_nonce,
-                    "mac": daemon_auth.hello_mac(token, nonce=ok_nonce),
-                },
-            )
-            verified_busy = daemon_auth.verify_response(busy_hello, token, ok_nonce)
-            assert verified_busy == NAK + "BusyError: daemon connection limit reached"
-
-            # 3) VirtuosoClient hitting connection limit on handshake retries and succeeds
+            # 2) VirtuosoClient hitting connection limit on handshake retries and succeeds
             #    as soon as a slot is freed (never false DaemonAuthError).
             def release_one_soon() -> None:
                 time.sleep(0.2)
@@ -1185,10 +1203,11 @@ class TestRealDaemon:
             assert res.output == '"2"'
             assert res.metadata.get("busy_retries", 0) >= 1
 
-            # 4) Re-fill the 8th slot; now handshake is cached so execute_skill itself
-            #    hits connection limit, verifies signed BusyError, retries, and succeeds.
+            # 3) Re-fill the 8th slot and verify saturation; now handshake is cached so
+            #    execute_skill itself hits connection limit, verifies signed BusyError,
+            #    retries, and succeeds.
             holders.append(socket.create_connection(("127.0.0.1", port), timeout=5))
-            time.sleep(0.15)
+            wait_for_saturation("aa")
             releaser2 = threading.Thread(target=release_one_soon, daemon=True)
             releaser2.start()
             res2 = client.execute_skill("1+1", timeout=5)
@@ -1243,9 +1262,23 @@ class TestRealDaemon:
         threading.Thread(target=responder, daemon=True).start()
         try:
             _wait_for_listener(proc, port)
+            # Confirm the daemon is actively running its accept loop before saturating slots.
+            ready_reply = _raw_exchange(port, {"proto": 1, "op": "hello"})
+            assert ready_reply.startswith(STX)
+            assert json.loads(ready_reply[1:])["auth"] == "off"
+
             for _ in range(8):
                 holders.append(socket.create_connection(("127.0.0.1", port), timeout=5))
-            time.sleep(0.15)
+
+            sat_deadline = time.monotonic() + 2.0
+            saturated = False
+            while time.monotonic() < sat_deadline:
+                probe = _raw_exchange(port, {"proto": 1, "op": "hello"})
+                if probe == NAK + "BusyError: daemon connection limit reached":
+                    saturated = True
+                    break
+                time.sleep(0.02)
+            assert saturated, "auth-off daemon slots did not saturate in time"
 
             def release_one_soon() -> None:
                 time.sleep(0.2)
@@ -1698,3 +1731,61 @@ def test_py3_daemon_accept_survives_transient_errors_and_stops_on_fatal(
 
     # Fatal listener error stops the accept loop cleanly.
     assert module._accept_next(_FakeServerSock(OSError(errno.EBADF, "bad fd"))) is module._ACCEPT_STOP
+
+
+def test_py3_daemon_overflow_never_sends_unsigned_busy_when_token_auth_active(
+    tmp_path, monkeypatch
+) -> None:
+    module = _import_py3_daemon(monkeypatch, tmp_path)
+    assert module._LISTEN_BACKLOG == 64
+    assert module._MAX_BUSY_REJECTORS == 32
+    assert module._BUSY_REJECT_TIMEOUT == 0.5
+    assert module.BRIDGE_TOKEN
+
+    class _FakeConn:
+        def __init__(self, *, timeout_on_recv: bool = False) -> None:
+            self._timeout_on_recv = timeout_on_recv
+            self.sent: list[bytes] = []
+            self.closed = False
+
+        def settimeout(self, _value) -> None:
+            pass
+
+        def recv(self, _n):
+            if self._timeout_on_recv:
+                raise socket.timeout("timed out")
+            return b""
+
+        def sendall(self, data: bytes) -> None:
+            self.sent.append(data)
+
+        def shutdown(self, _how) -> None:
+            pass
+
+        def close(self) -> None:
+            self.closed = True
+
+    # 1) When reject_slots is exhausted under token auth, close without unsigned BusyError.
+    exhausted = threading.BoundedSemaphore(1)
+    assert exhausted.acquire(False)
+    conn_overflow = _FakeConn()
+    module._dispatch_overflow_connection(conn_overflow, exhausted)
+    assert conn_overflow.sent == []
+    assert conn_overflow.closed is True
+
+    # 2) When _recv_request times out inside _reject_connection_limit under token auth,
+    #    close cleanly without emitting an unsigned BusyError.
+    sem = threading.BoundedSemaphore(1)
+    assert sem.acquire(False)
+    conn_slow = _FakeConn(timeout_on_recv=True)
+    module._reject_connection_limit(conn_slow, sem)
+    assert conn_slow.sent == []
+    assert conn_slow.closed is True
+    assert sem.acquire(False)  # released
+
+    # 3) Under explicit auth-off (BRIDGE_TOKEN is None), unsigned BusyError is still sent.
+    monkeypatch.setattr(module, "BRIDGE_TOKEN", None)
+    conn_unauth = _FakeConn()
+    module._dispatch_overflow_connection(conn_unauth, exhausted)
+    assert conn_unauth.sent == [module._BUSY_LIMIT_REPLY]
+    assert conn_unauth.closed is True
