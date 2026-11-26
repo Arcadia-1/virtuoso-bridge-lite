@@ -344,12 +344,17 @@ def _parse_psf_swept_data(
     sweep_var = ""
     sweep_start = sections["SWEEP"] + 1
     sweep_end = sections.get("TRACE", sections.get("VALUE", n))
+    prop_depth = 0
     for i in range(sweep_start, sweep_end):
         stripped = lines[i].strip()
         if not stripped:
             continue
         if stripped in ("TRACE", "VALUE", "END"):
             break
+        if prop_depth or "PROP" in stripped:
+            stripped, prop_depth = _strip_prop_from_line(stripped, prop_depth)
+            if not stripped:
+                continue
         m = re.match(r'"([^"]+)"', stripped)
         if m:
             sweep_var = m.group(1)
@@ -363,19 +368,25 @@ def _parse_psf_swept_data(
     # We build a mapping from N → signal_name so data is stored under
     # the human-readable name.
     trace_names: list[str] = []
+    seen_traces: set[str] = set()
     group_to_name: dict[str, str] = {}  # " 401" → "CLK_NET"
     current_group: str | None = None
     if "TRACE" in sections:
         trace_start = sections["TRACE"] + 1
         trace_end = sections.get("VALUE", n)
+        prop_depth = 0
         for i in range(trace_start, trace_end):
             stripped = lines[i].strip()
             if not stripped:
                 continue
             if stripped in ("VALUE", "END"):
                 break
-            # GROUP marker: " N" GROUP 1
-            m_group = re.match(r'"(\s*\d+)"\s+GROUP\s+\d+', stripped)
+            if prop_depth or "PROP" in stripped:
+                stripped, prop_depth = _strip_prop_from_line(stripped, prop_depth)
+                if not stripped:
+                    continue
+            # GROUP marker: " N" GROUP 1 (or named "group" GROUP 1)
+            m_group = re.match(r'"([^"]+)"\s+GROUP\s+\d+', stripped)
             if m_group:
                 current_group = m_group.group(1)
                 continue
@@ -383,7 +394,9 @@ def _parse_psf_swept_data(
             m_sig = re.match(r'"([^"]+)"\s+"[^"]*"', stripped)
             if m_sig:
                 sig_name = m_sig.group(1)
-                trace_names.append(sig_name)
+                if sig_name not in seen_traces:
+                    trace_names.append(sig_name)
+                    seen_traces.add(sig_name)
                 if current_group is not None:
                     group_to_name[current_group] = sig_name
                 current_group = None
@@ -391,7 +404,13 @@ def _parse_psf_swept_data(
             # Fallback: bare quoted name (no unit)
             m = re.match(r'"([^"]+)"', stripped)
             if m:
-                trace_names.append(m.group(1))
+                sig_name = m.group(1)
+                if sig_name not in seen_traces:
+                    trace_names.append(sig_name)
+                    seen_traces.add(sig_name)
+                if current_group is not None:
+                    group_to_name[current_group] = sig_name
+                    current_group = None
 
     if not sweep_var:
         return {}
@@ -405,12 +424,17 @@ def _parse_psf_swept_data(
     # Parse all VALUE entries into a flat list of (key, value) pairs,
     # with None marking time-step boundaries.
     raw_entries: list[tuple[str | None, float | complex | None]] = []
+    prop_depth = 0
     for i in range(value_start, value_end):
         stripped = lines[i].strip()
         if not stripped:
             continue
         if stripped == "END":
             break
+        if prop_depth or "PROP" in stripped:
+            stripped, prop_depth = _strip_prop_from_line(stripped, prop_depth)
+            if not stripped:
+                continue
         # Complex value: "name" (real imag) → store as Python complex
         m_complex = re.match(
             rf'"([^"]+)"\s+\(\s*({_PSF_FLOAT})\s+({_PSF_FLOAT})\s*\)',
@@ -467,7 +491,7 @@ def _parse_psf_swept_data(
         if key is None:
             # Time-step boundary: snapshot all signals at the previous step
             if time_values:
-                for name in trace_names:
+                for name in signal_series:
                     signal_series[name].append(signal_state.get(name, _MISSING))
             time_values.append(value)  # type: ignore[arg-type]
         else:
@@ -475,7 +499,7 @@ def _parse_psf_swept_data(
 
     # Snapshot at the last time step
     if time_values:
-        for name in trace_names:
+        for name in signal_series:
             signal_series[name].append(signal_state.get(name, _MISSING))
 
     data: dict[str, list[float | complex]] = {sweep_var: time_values}
@@ -517,6 +541,64 @@ _RE_PSF_COMPLEX_PAIR = re.compile(rf"^\s*({_PSF_FLOAT})\s+({_PSF_FLOAT})\s*$", r
 
 def _unescape_psf_string(raw: str) -> str:
     return raw.replace('\\"', '"').replace("\\\\", "\\")
+
+
+def _strip_prop_from_line(line: str, prop_depth: int) -> tuple[str, int]:
+    """Strip balanced ``PROP(...)`` blocks across lines, ignoring quoted text."""
+    out: list[str] = []
+    in_quotes = False
+    escaped = False
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if prop_depth > 0:
+            if escaped:
+                escaped = False
+            elif in_quotes:
+                if ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_quotes = False
+            elif ch == '"':
+                in_quotes = True
+            elif ch == "(":
+                prop_depth += 1
+            elif ch == ")":
+                prop_depth -= 1
+            i += 1
+            continue
+
+        if in_quotes:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_quotes = False
+            i += 1
+            continue
+
+        if (
+            ch == "P"
+            and line[i : i + 4] == "PROP"
+            and (i == 0 or not (line[i - 1].isalnum() or line[i - 1] == "_"))
+        ):
+            j = i + 4
+            while j < n and line[j].isspace():
+                j += 1
+            if j < n and line[j] == "(":
+                prop_depth = 1
+                i = j + 1
+                continue
+
+        if ch == '"':
+            in_quotes = True
+        out.append(ch)
+        i += 1
+
+    return "".join(out).strip(), prop_depth
 
 
 def _paren_delta(text: str) -> int:
@@ -802,9 +884,16 @@ def _parse_psf_struct_types(lines: list[str], start: int, end: int) -> dict[str,
     structs: dict[str, list[str]] = {}
     current_type: str | None = None
     depth = 0
+    prop_depth = 0
 
     for line in lines[start:end]:
         stripped = line.strip()
+        if not stripped:
+            continue
+        if prop_depth or "PROP" in stripped:
+            stripped, prop_depth = _strip_prop_from_line(stripped, prop_depth)
+            if not stripped:
+                continue
         if current_type is None:
             match = re.match(r'^"([^"]+)"\s+STRUCT\($', stripped)
             if match:
@@ -813,8 +902,8 @@ def _parse_psf_struct_types(lines: list[str], start: int, end: int) -> dict[str,
                 depth = 1
             continue
 
-        # Members appear one level inside STRUCT; PROP metadata is deeper.
-        member = re.match(r'^"([^"]+)"\s+[A-Z]+(?:\s+[A-Z]+)?(?:\s+PROP\()?$', stripped)
+        # Members appear one level inside STRUCT; PROP metadata is already stripped.
+        member = re.match(r'^"([^"]+)"\s+[A-Z]+(?:\s+[A-Z]+)?$', stripped)
         if depth == 1 and member:
             structs[current_type].append(member.group(1))
 

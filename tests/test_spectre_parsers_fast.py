@@ -93,3 +93,202 @@ def test_directory_selects_only_one_transient_candidate(tmp_path, monkeypatch):
 def test_empty_directory(tmp_path):
     from virtuoso_bridge.spectre.parsers_fast import parse_dir_fast
     assert parse_dir_fast(tmp_path) == {}
+
+
+def test_trace_group_with_prop_blocks_binds_real_signal_not_key(tmp_path):
+    from virtuoso_bridge.spectre.parsers import parse_spectre_psf_ascii
+    from virtuoso_bridge.spectre.parsers_fast import parse_file_fast
+
+    psf = tmp_path / "tran.tran"
+    psf.write_text(
+        """\
+HEADER
+"PSFversion" "1.00"
+TYPE
+"V" FLOAT DOUBLE PROP(
+"units" "V"
+)
+SWEEP
+"time" "time" PROP(
+"sweep_direction" 0
+)
+TRACE
+"group" GROUP 1 PROP(
+"key" "node"
+"nested" (1 2)
+"paren_in_str" "gain ) test"
+)
+"vout" "V" PROP( "key" "node" )
+" 2" GROUP 1
+PROP(
+"key" "node"
+)
+"vin" "V" PROP(
+"key" "node"
+)
+VALUE
+"time" 0.0
+"group" 0.9
+" 2" 0.1
+"time" 1e-9
+"group" 1.8
+" 2" 0.2
+END
+""",
+        encoding="utf-8",
+    )
+
+    fast = parse_file_fast(psf)
+    full = parse_spectre_psf_ascii(psf).data
+    expected = {
+        "time": [0.0, 1e-9],
+        "vout": [0.9, 1.8],
+        "vin": [0.1, 0.2],
+    }
+    assert fast == expected
+    assert full == expected
+    assert "key" not in fast
+    assert "group" not in fast
+
+
+def test_parse_dir_fast_returns_both_dcop_scalar_and_dcsweep(tmp_path):
+    from virtuoso_bridge.spectre.parsers_fast import parse_dir_fast, parse_file_fast
+
+    dcop = tmp_path / "dcOp.dc"
+    dcop.write_text(
+        """\
+HEADER
+"analysis type" "dc"
+TYPE
+"V" FLOAT DOUBLE PROP(
+"units" "V"
+)
+VALUE
+"vdd" "V" 1.8 PROP(
+"key" "node"
+)
+"vout" "V" 0.9
+"i_bias" -1.2e-5
+END
+""",
+        encoding="utf-8",
+    )
+    dcsweep = tmp_path / "dcSweep.dc"
+    dcsweep.write_text(
+        """\
+HEADER
+TYPE
+SWEEP
+"vin" "V"
+TRACE
+"vout" "V"
+VALUE
+"vin" 0.0
+"vout" 1.8
+"vin" 0.9
+"vout" 0.9
+"vin" 1.8
+"vout" 0.0
+END
+""",
+        encoding="utf-8",
+    )
+
+    assert parse_file_fast(dcop) == {
+        "vdd": pytest.approx(1.8),
+        "vout": pytest.approx(0.9),
+        "i_bias": pytest.approx(-1.2e-5),
+    }
+    assert parse_file_fast(dcop, want=["vout"]) == {"vout": pytest.approx(0.9)}
+
+    merged = parse_dir_fast(tmp_path)
+    assert merged["dc_vdd"] == pytest.approx(1.8)
+    assert merged["dc_vout"] == pytest.approx(0.9)
+    assert merged["dc_i_bias"] == pytest.approx(-1.2e-5)
+    assert merged["dcSweep_vin"] == [0.0, 0.9, 1.8]
+    assert merged["dcSweep_vout"] == [1.8, 0.9, 0.0]
+
+
+def test_parse_file_fast_complex_nan_and_inf_do_not_carry_forward(tmp_path):
+    from virtuoso_bridge.spectre.parsers import parse_spectre_psf_ascii
+    from virtuoso_bridge.spectre.parsers_fast import parse_file_fast
+
+    ac = tmp_path / "ac.ac"
+    ac.write_text(
+        """\
+HEADER
+SWEEP
+"freq" "Hz"
+TRACE
+"VO" "V"
+VALUE
+"freq" 1e6
+"VO" (1.0 -0.5)
+"freq" 1e7
+"VO" (NaN 0.0)
+"freq" 1e8
+"VO" (inf -Inf)
+"freq" 1e9
+"VO" (+INF -infinity)
+END
+""",
+        encoding="utf-8",
+    )
+
+    for res in (parse_file_fast(ac), parse_spectre_psf_ascii(ac).data):
+        assert res["freq"] == [1e6, 1e7, 1e8, 1e9]
+        vo = res["VO"]
+        assert len(vo) == 4
+        assert vo[0] == complex(1.0, -0.5)
+        assert math.isnan(vo[1].real) and vo[1].imag == 0.0
+        assert math.isinf(vo[2].real) and vo[2].real > 0
+        assert math.isinf(vo[2].imag) and vo[2].imag < 0
+        assert math.isinf(vo[3].real) and vo[3].real > 0
+        assert math.isinf(vo[3].imag) and vo[3].imag < 0
+
+
+def test_signal_stats_excludes_infinities():
+    st = signal_stats([float("-inf"), 1.0, float("inf"), float("nan"), 3.0, True])
+    assert st["n"] == 6
+    assert st["numeric"] == 2
+    assert st["min"] == 1.0
+    assert st["max"] == 3.0
+    assert st["mean"] == pytest.approx(2.0)
+    assert st["rms"] == pytest.approx(math.sqrt(5.0))
+    assert st["first"] == 1.0
+    assert st["last"] == 3.0
+    assert signal_stats([float("inf"), float("-inf")]) == {"n": 2, "numeric": 0}
+
+
+def test_measure_period_guards_duplicate_timestamps_and_non_finite():
+    from virtuoso_bridge.spectre.parsers_fast import measure_period
+
+    # Duplicate timestamps across threshold crossings must never raise ZeroDivisionError.
+    assert measure_period([0.0, 1e-9, 1e-9, 2e-9], [0.0, 0.0, 1.0, 1.0]) == {}
+    assert measure_period([0.0, 1e-9, 1e-9, 1e-9], [0.0, 1.0, 0.0, 1.0]) == {}
+    assert measure_period([1e-9, 1e-9, 1e-9, 1e-9], [0.0, 1.0, 0.0, 1.0]) == {}
+
+    # Duplicate timestamps at a crossing followed by a genuine second edge still measures cleanly.
+    res = measure_period(
+        [0.0, 1e-9, 1e-9, 1e-9, 2e-9, 3e-9],
+        [0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+    )
+    assert res["edges"] == 2
+    assert res["period_s"] == pytest.approx(2e-9)
+    assert res["freq_hz"] == pytest.approx(5e8)
+
+    # Ideal step edges with duplicate timestamps per transition.
+    step_res = measure_period(
+        [0.0, 1e-9, 1e-9, 2e-9, 2e-9, 3e-9, 3e-9],
+        [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0],
+    )
+    assert step_res["edges"] == 2
+    assert step_res["period_s"] == pytest.approx(2e-9)
+
+    # Non-finite values and non-finite level are ignored safely.
+    assert measure_period([0.0, 1e-9, 2e-9, 3e-9], [0.0, 1.0, 0.0, 1.0], level=float("nan")) == {}
+    finite_res = measure_period(
+        [0.0, float("inf"), 1e-9, 2e-9, 3e-9, 4e-9],
+        [0.0, 0.5, 1.0, 0.0, 1.0, 0.0],
+    )
+    assert finite_res["period_s"] == pytest.approx(2e-9)

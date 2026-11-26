@@ -51,9 +51,14 @@ def _load_history(path: Path) -> dict[str, dict[str, int]]:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in traffic history {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"Invalid traffic history {path}: expected JSON object, got {type(data).__name__}"
+        )
+    return data
 
 
 def _save_history(path: Path, history: dict[str, dict[str, int]]) -> None:
@@ -155,13 +160,17 @@ def main() -> int:
         print("missing env: GH_TOKEN / OWNER / REPO", file=sys.stderr)
         return 2
 
-    STATS_DIR.mkdir(parents=True, exist_ok=True)
-
     clones_path = STATS_DIR / "clones.json"
     views_path = STATS_DIR / "views.json"
 
-    clones = _load_history(clones_path)
-    views = _load_history(views_path)
+    try:
+        clones = _load_history(clones_path)
+        views = _load_history(views_path)
+    except (ValueError, OSError) as exc:
+        print(f"Refusing to overwrite traffic archive: {exc}", file=sys.stderr)
+        return 1
+
+    STATS_DIR.mkdir(parents=True, exist_ok=True)
 
     try:
         clones = _merge(
