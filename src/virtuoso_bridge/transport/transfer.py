@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import errno
 import functools
 import hashlib
 import logging
@@ -361,6 +362,14 @@ def build_tar_upload_plans(
     return tuple(plans)
 
 
+def _normalize_local_download_path(local_path: Path) -> Path:
+    if local_path.name in ("", ".", ".."):
+        local_path = Path(os.path.abspath(local_path))
+    if local_path.name in ("", ".", ".."):
+        raise ValueError(f"Invalid local download path: {local_path}")
+    return local_path
+
+
 def build_tar_download_plan(
     tar_command: str,
     remote_path: str,
@@ -372,6 +381,7 @@ def build_tar_download_plan(
     if remote_basename in ("", ".", ".."):
         raise ValueError(f"Invalid remote directory path: {remote_path}")
 
+    local_path = _normalize_local_download_path(local_path)
     quoted_remote = shlex.quote(normalized_remote)
     inner_command = (
         f"p={quoted_remote}; "
@@ -403,6 +413,7 @@ def build_file_download_plan(
     local_path: Path,
 ) -> FileDownloadPlan:
     """Build a single-file download staged beside its final target."""
+    local_path = _normalize_local_download_path(local_path)
     stage_path = local_path.parent / f".vbtmp-{uuid.uuid4().hex}"
     return FileDownloadPlan(
         remote_path=remote_path,
@@ -423,6 +434,17 @@ def install_staged_item(
     local_path: Path,
 ) -> None:
     """Atomically install one staged item, then retire the previous target."""
+    if (
+        local_path.is_dir()
+        and not local_path.is_symlink()
+        and not (staged_item.is_dir() and not staged_item.is_symlink())
+    ):
+        discard_stage(stage_path)
+        raise IsADirectoryError(
+            errno.EISDIR,
+            f"Refusing to overwrite existing directory with a file: {local_path}",
+            str(local_path),
+        )
     backup_path: Path | None = None
     try:
         if local_path.exists() or local_path.is_symlink():

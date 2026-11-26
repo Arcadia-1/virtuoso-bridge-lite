@@ -107,9 +107,18 @@ def resolve_remote_scratch_root(
     *,
     error_context: str = "remote scratch root",
 ) -> str:
-    """Return ``remote_scratch_root()``, expanding ``~``/``~/...`` on *runner*."""
+    """Return ``remote_scratch_root()``, expanding ``~``/``~/...``."""
     root = remote_scratch_root()
-    if (root == "~" or root.startswith("~/")) and runner is not None:
+    if root == "~" or root.startswith("~/"):
+        if runner is None:
+            expanded = os.path.expanduser(root)
+            if expanded != "/" and not (
+                os.name == "nt"
+                and len(expanded) <= 3
+                and expanded.endswith((":\\", ":/"))
+            ):
+                expanded = expanded.rstrip("/") or "/"
+            return expanded
         home = runner.run_command('getent passwd "$(id -u)" | cut -d: -f6')
         home_dir = home.stdout.strip() if home.returncode == 0 else ""
         if not home_dir.startswith("/"):
@@ -130,6 +139,7 @@ def default_virtuoso_bridge_dir(
     client_id: str | None = None,
     *,
     root: str | None = None,
+    runner: SSHRunner | None = None,
 ) -> str:
     """Return the default remote scratch directory for bridge artifacts.
 
@@ -138,7 +148,12 @@ def default_virtuoso_bridge_dir(
     multiple local machines.
     """
     safe = sanitize_username_for_path(username)
-    base = remote_scratch_root() if root is None else (root.rstrip("/") or "/")
+    if root is not None:
+        base = root.rstrip("/") or "/"
+    elif runner is not None:
+        base = resolve_remote_scratch_root(runner)
+    else:
+        base = remote_scratch_root()
     prefix = "" if base == "/" else base
     leaf_norm = leaf.strip("/").replace("\\", "/")
     if client_id:
@@ -228,6 +243,15 @@ REMOTE_SPECTRE_LEAF = "virtuoso_bridge_spectre"
 def default_remote_spectre_work_dir(
     username: str,
     client_id: str | None = None,
+    runner: SSHRunner | None = None,
+    *,
+    root: str | None = None,
 ) -> str:
     """Default remote scratch for Spectre simulations."""
-    return default_virtuoso_bridge_dir(username, REMOTE_SPECTRE_LEAF, client_id)
+    return default_virtuoso_bridge_dir(
+        username,
+        REMOTE_SPECTRE_LEAF,
+        client_id,
+        root=root,
+        runner=runner,
+    )

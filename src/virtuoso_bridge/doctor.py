@@ -796,7 +796,7 @@ def check_scratch_dir(ctx: DoctorContext) -> CheckResult:
     from virtuoso_bridge.transport.remote_paths import (
         default_virtuoso_bridge_dir,
         private_dirs_below,
-        remote_scratch_root,
+        resolve_remote_scratch_root,
         resolve_remote_username,
     )
 
@@ -821,9 +821,16 @@ def check_scratch_dir(ctx: DoctorContext) -> CheckResult:
             work_dir = root + "/daemon"
         else:
             user = resolve_remote_username(configured_user=ctx.roles.remote_user, runner=runner)
-            root = remote_scratch_root()
+            root = resolve_remote_scratch_root(
+                runner,
+                error_context="remote scratch directory check",
+            )
             work_dir = default_virtuoso_bridge_dir(
-                user, _profiled_bridge_leaf(ctx.profile), resolve_client_id(ctx.profile))
+                user,
+                _profiled_bridge_leaf(ctx.profile),
+                resolve_client_id(ctx.profile),
+                root=root,
+            )
         paths = private_dirs_below(root, work_dir)
         if not runner.transport_error:
             result = runner.run_command(scratch_inspection_script(paths))

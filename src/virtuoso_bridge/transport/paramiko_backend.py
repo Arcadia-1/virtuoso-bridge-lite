@@ -5,6 +5,7 @@ from __future__ import annotations
 import errno
 import getpass
 import hashlib
+import inspect
 import logging
 import os
 import queue
@@ -188,22 +189,47 @@ def _send_stream_to_channel(
     stream: Any,
     channel: Any,
     failures: "queue.Queue[BaseException]",
+    pump_failures: "queue.Queue[BaseException] | None" = None,
+    soft_errors: tuple[type[BaseException], ...] = (BrokenPipeError, EOFError, OSError),
 ) -> None:
     try:
+        use_send = hasattr(channel, "send")
         while True:
             chunk = stream.read(65536)
             if not chunk:
                 break
-            channel.sendall(chunk)
+            if use_send:
+                view = chunk
+                while view:
+                    sent = channel.send(view)
+                    if sent <= 0:
+                        raise BrokenPipeError("SSH channel closed while writing")
+                    view = view[sent:]
+            else:
+                channel.sendall(chunk)
         channel.shutdown_write()
+    except (socket.timeout, TimeoutError) as exc:
+        failures.put(exc)
+    except soft_errors as exc:
+        if pump_failures is not None:
+            pump_failures.put(exc)
+        else:
+            failures.put(exc)
     except BaseException as exc:  # noqa: BLE001
         failures.put(exc)
+    finally:
+        try:
+            stream.close()
+        except OSError:
+            pass
 
 
 def _copy_stream(
     source: Any,
     destination: Any,
     failures: "queue.Queue[BaseException]",
+    pump_failures: "queue.Queue[BaseException] | None" = None,
+    soft_errors: tuple[type[BaseException], ...] = (BrokenPipeError, EOFError, OSError),
 ) -> None:
     try:
         while True:
@@ -211,6 +237,17 @@ def _copy_stream(
             if not chunk:
                 break
             destination.write(chunk)
+        try:
+            destination.flush()
+        except AttributeError:
+            pass
+    except (socket.timeout, TimeoutError) as exc:
+        failures.put(exc)
+    except soft_errors as exc:
+        if pump_failures is not None:
+            pump_failures.put(exc)
+        else:
+            failures.put(exc)
     except BaseException as exc:  # noqa: BLE001
         failures.put(exc)
     finally:
@@ -948,13 +985,28 @@ class ParamikoSessionBackend:
             raise OSError("Paramiko target transport is unavailable")
         return transport
 
+    _SFTP_MAX_CONCURRENT_PREFETCH_REQUESTS = 64
+
+    def _soft_write_errors(self) -> tuple[type[BaseException], ...]:
+        ssh_exc = getattr(getattr(self, "_paramiko", None), "SSHException", None)
+        if isinstance(ssh_exc, type) and issubclass(ssh_exc, BaseException):
+            return (BrokenPipeError, EOFError, OSError, ssh_exc)
+        return (BrokenPipeError, EOFError, OSError)
+
+    def _invalidate_transport(self) -> None:
+        lock = getattr(self, "_connect_lock", None)
+        if lock is None:
+            return
+        with lock:
+            self._close_locked()
+
     @contextmanager
     def _session_lease(self, deadline: _Deadline, command: object) -> Iterator[Any]:
-        self.ensure_connected(deadline.remaining(command))
         acquired = self._session_gate.acquire(timeout=deadline.remaining(command))
         if not acquired:
             raise subprocess.TimeoutExpired(command, deadline.timeout)
         try:
+            self.ensure_connected(deadline.remaining(command))
             yield self._target_transport()
         finally:
             self._session_gate.release()
@@ -968,28 +1020,148 @@ class ParamikoSessionBackend:
         channel: Any,
         deadline: _Deadline,
         command: object,
+        *,
+        stdin_bytes: bytes | None = None,
     ) -> tuple[int, str, str]:
         stdout_chunks: list[bytes] = []
         stderr_chunks: list[bytes] = []
+        soft_errors = self._soft_write_errors()
+
+        use_cooperative_stdin = (
+            stdin_bytes is not None
+            and hasattr(channel, "send_ready")
+            and hasattr(channel, "send")
+        )
+        feeder: threading.Thread | None = None
+        feeder_failures: "queue.Queue[BaseException]" = queue.Queue()
+        stdin_offset = 0
+        stdin_total = len(stdin_bytes) if stdin_bytes is not None else 0
+        write_closed = stdin_bytes is None
+
+        if stdin_bytes is not None and not use_cooperative_stdin:
+            def _feed_stdin() -> None:
+                try:
+                    channel.sendall(stdin_bytes)
+                    channel.shutdown_write()
+                except (socket.timeout, TimeoutError) as exc:
+                    feeder_failures.put(exc)
+                except soft_errors:
+                    pass
+                except BaseException as exc:  # noqa: BLE001
+                    feeder_failures.put(exc)
+
+            feeder = threading.Thread(
+                target=_feed_stdin,
+                name="virtuoso-bridge-paramiko-stdin",
+                daemon=True,
+            )
+            feeder.start()
+            write_closed = True
+
         while True:
-            while channel.recv_ready():
-                stdout_chunks.append(channel.recv(65536))
-            while channel.recv_stderr_ready():
-                stderr_chunks.append(channel.recv_stderr(65536))
-            if (
+            remaining = deadline.remaining(command)
+            did_io = False
+
+            if channel.recv_ready():
+                chunk = channel.recv(65536)
+                if chunk:
+                    stdout_chunks.append(chunk)
+                    did_io = True
+            if channel.recv_stderr_ready():
+                chunk = channel.recv_stderr(65536)
+                if chunk:
+                    stderr_chunks.append(chunk)
+                    did_io = True
+
+            if use_cooperative_stdin and not write_closed:
+                assert stdin_bytes is not None
+                if stdin_offset >= stdin_total:
+                    try:
+                        if hasattr(channel, "settimeout"):
+                            channel.settimeout(remaining)
+                        channel.shutdown_write()
+                    except (socket.timeout, TimeoutError):
+                        raise
+                    except soft_errors:
+                        pass
+                    write_closed = True
+                    did_io = True
+                elif channel.send_ready():
+                    try:
+                        if hasattr(channel, "settimeout"):
+                            channel.settimeout(remaining)
+                        sent = channel.send(
+                            stdin_bytes[stdin_offset : stdin_offset + 65536]
+                        )
+                    except (socket.timeout, TimeoutError):
+                        raise
+                    except soft_errors:
+                        write_closed = True
+                    else:
+                        if sent <= 0:
+                            write_closed = True
+                        else:
+                            stdin_offset += sent
+                            if stdin_offset >= stdin_total:
+                                try:
+                                    channel.shutdown_write()
+                                except (socket.timeout, TimeoutError):
+                                    raise
+                                except soft_errors:
+                                    pass
+                                write_closed = True
+                    did_io = True
+
+            if feeder is not None:
+                try:
+                    feeder_error = feeder_failures.get_nowait()
+                except queue.Empty:
+                    pass
+                else:
+                    raise feeder_error
+
+            remote_done = (
                 channel.exit_status_ready()
                 and (channel.eof_received or channel.closed)
                 and not channel.recv_ready()
                 and not channel.recv_stderr_ready()
-            ):
+            )
+            if remote_done:
+                if feeder is not None and feeder.is_alive():
+                    if channel.closed:
+                        feeder.join(timeout=min(0.05, remaining))
+                    else:
+                        feeder.join(timeout=min(0.01, remaining))
+                        if feeder.is_alive():
+                            continue
+                    try:
+                        feeder_error = feeder_failures.get_nowait()
+                    except queue.Empty:
+                        pass
+                    else:
+                        raise feeder_error
+                if (
+                    use_cooperative_stdin
+                    and not write_closed
+                    and not channel.closed
+                    and channel.send_ready()
+                ):
+                    continue
                 break
-            deadline.remaining(command)
-            time.sleep(0.01)
-        return (
-            channel.recv_exit_status(),
-            self._decode(stdout_chunks),
-            self._decode(stderr_chunks),
-        )
+
+            if not did_io:
+                deadline.remaining(command)
+                time.sleep(0.01)
+
+        rc = channel.recv_exit_status()
+        stdout = self._decode(stdout_chunks)
+        stderr = self._decode(stderr_chunks)
+        if rc == -1:
+            self._invalidate_transport()
+            rc = 255
+            if not stderr.strip():
+                stderr = "SSH connection closed without remote exit status"
+        return rc, stdout, stderr
 
     def run_command(self, command: str, timeout: float) -> tuple[int, str, str]:
         deadline = _Deadline.start(timeout)
@@ -999,9 +1171,12 @@ class ParamikoSessionBackend:
                 try:
                     channel.settimeout(deadline.remaining(command))
                     channel.exec_command("sh -l")
-                    channel.sendall(command.encode("utf-8"))
-                    channel.shutdown_write()
-                    return self._collect_channel(channel, deadline, command)
+                    return self._collect_channel(
+                        channel,
+                        deadline,
+                        command,
+                        stdin_bytes=command.encode("utf-8"),
+                    )
                 finally:
                     channel.close()
         except subprocess.TimeoutExpired:
@@ -1020,7 +1195,12 @@ class ParamikoSessionBackend:
         failures: "queue.Queue[BaseException]",
         deadline: _Deadline,
         command: object,
+        *,
+        pump_failures: "queue.Queue[BaseException] | None" = None,
+        local_stderr_worker: threading.Thread | None = None,
+        remote_stderr_worker: threading.Thread | None = None,
     ) -> tuple[int, int]:
+        pump_failed_at: float | None = None
         while True:
             try:
                 worker_failure = failures.get_nowait()
@@ -1034,6 +1214,38 @@ class ParamikoSessionBackend:
                 and all(not worker.is_alive() for worker in workers)
             ):
                 break
+            if pump_failures is not None and not pump_failures.empty():
+                now = time.monotonic()
+                if pump_failed_at is None:
+                    pump_failed_at = now
+                local_poll = process.poll()
+                remote_ready = channel.exit_status_ready()
+                grace_elapsed = (now - pump_failed_at) >= 0.25
+                if (
+                    local_poll is not None
+                    and local_poll != 0
+                    and not remote_ready
+                    and grace_elapsed
+                ):
+                    if local_stderr_worker is not None:
+                        local_stderr_worker.join(
+                            timeout=min(
+                                0.5,
+                                max(0.0, deadline.deadline - time.monotonic()),
+                            )
+                        )
+                    if channel.exit_status_ready():
+                        if remote_stderr_worker is not None:
+                            remote_stderr_worker.join(
+                                timeout=min(
+                                    0.1,
+                                    max(0.0, deadline.deadline - time.monotonic()),
+                                )
+                            )
+                        return channel.recv_exit_status(), local_poll
+                    return 0, local_poll
+                if remote_ready and local_poll is None and grace_elapsed:
+                    process.kill()
             deadline.remaining(command)
             time.sleep(0.01)
         try:
@@ -1044,6 +1256,13 @@ class ParamikoSessionBackend:
             raise worker_failure
         remote_rc = channel.recv_exit_status()
         local_rc = process.wait(timeout=deadline.remaining(command))
+        if remote_rc == 0 and local_rc == 0 and pump_failures is not None:
+            try:
+                pump_failure = pump_failures.get_nowait()
+            except queue.Empty:
+                pass
+            else:
+                raise pump_failure
         return remote_rc, local_rc
 
     @staticmethod
@@ -1091,6 +1310,46 @@ class ParamikoSessionBackend:
             " | ".join(stderr_parts),
         )
 
+    def _finalize_tar_result(
+        self,
+        remote_rc: int,
+        local_rc: int,
+        remote_stdout: list[bytes],
+        remote_stderr: list[bytes],
+        local_stderr: list[bytes],
+        pump_failures: "queue.Queue[BaseException]",
+    ) -> tuple[int, str, str]:
+        first_pump_error: BaseException | None = None
+        try:
+            first_pump_error = pump_failures.get_nowait()
+        except queue.Empty:
+            pass
+        if remote_rc == -1:
+            self._invalidate_transport()
+            remote_rc = 255
+            if not self._decode(remote_stderr).strip():
+                detail = (
+                    str(first_pump_error).strip()
+                    if first_pump_error is not None
+                    else ""
+                )
+                remote_stderr.append(
+                    (
+                        detail
+                        or "SSH connection closed without remote exit status"
+                    ).encode("utf-8")
+                )
+        rc, stdout, stderr = self._tar_result(
+            remote_rc,
+            local_rc,
+            remote_stdout,
+            remote_stderr,
+            local_stderr,
+        )
+        if rc != 0 and not stderr and first_pump_error is not None:
+            stderr = str(first_pump_error)
+        return rc, stdout, stderr
+
     def upload_tar(
         self,
         plan: TarUploadPlan,
@@ -1104,6 +1363,8 @@ class ParamikoSessionBackend:
         streams: list[Any] = []
         workers: list[threading.Thread] = []
         failures: "queue.Queue[BaseException]" = queue.Queue()
+        pump_failures: "queue.Queue[BaseException]" = queue.Queue()
+        soft_errors = self._soft_write_errors()
         try:
             with self._session_lease(deadline, plan.remote_command) as transport:
                 channel = transport.open_session(
@@ -1134,27 +1395,35 @@ class ParamikoSessionBackend:
                     remote_stdout: list[bytes] = []
                     remote_stderr: list[bytes] = []
                     local_stderr: list[bytes] = []
+                    local_stderr_worker = threading.Thread(
+                        target=_read_stream,
+                        args=(tar_process.stderr, local_stderr, failures),
+                        daemon=True,
+                    )
+                    remote_stderr_worker = threading.Thread(
+                        target=_read_stream,
+                        args=(remote_stderr_file, remote_stderr, failures),
+                        daemon=True,
+                    )
                     workers = [
                         threading.Thread(
                             target=_send_stream_to_channel,
-                            args=(tar_process.stdout, channel, failures),
+                            args=(
+                                tar_process.stdout,
+                                channel,
+                                failures,
+                                pump_failures,
+                                soft_errors,
+                            ),
                             daemon=True,
                         ),
-                        threading.Thread(
-                            target=_read_stream,
-                            args=(tar_process.stderr, local_stderr, failures),
-                            daemon=True,
-                        ),
+                        local_stderr_worker,
                         threading.Thread(
                             target=_read_stream,
                             args=(remote_stdout_file, remote_stdout, failures),
                             daemon=True,
                         ),
-                        threading.Thread(
-                            target=_read_stream,
-                            args=(remote_stderr_file, remote_stderr, failures),
-                            daemon=True,
-                        ),
+                        remote_stderr_worker,
                     ]
                     for worker in workers:
                         worker.start()
@@ -1165,6 +1434,9 @@ class ParamikoSessionBackend:
                         failures,
                         deadline,
                         plan.remote_command,
+                        pump_failures=pump_failures,
+                        local_stderr_worker=local_stderr_worker,
+                        remote_stderr_worker=remote_stderr_worker,
                     )
                 finally:
                     self._stop_tar_transfer(
@@ -1173,12 +1445,13 @@ class ParamikoSessionBackend:
                         streams,
                         workers,
                     )
-            return self._tar_result(
+            return self._finalize_tar_result(
                 remote_rc,
                 local_rc,
                 remote_stdout,
                 remote_stderr,
                 local_stderr,
+                pump_failures,
             )
         except subprocess.TimeoutExpired:
             raise
@@ -1204,6 +1477,8 @@ class ParamikoSessionBackend:
         streams: list[Any] = []
         workers: list[threading.Thread] = []
         failures: "queue.Queue[BaseException]" = queue.Queue()
+        pump_failures: "queue.Queue[BaseException]" = queue.Queue()
+        soft_errors = self._soft_write_errors()
         plan.local_path.parent.mkdir(parents=True, exist_ok=True)
         plan.stage_path.mkdir(parents=True)
         try:
@@ -1237,22 +1512,30 @@ class ParamikoSessionBackend:
                     )
                     remote_stderr: list[bytes] = []
                     local_stderr: list[bytes] = []
+                    remote_stderr_worker = threading.Thread(
+                        target=_read_stream,
+                        args=(remote_stderr_file, remote_stderr, failures),
+                        daemon=True,
+                    )
+                    local_stderr_worker = threading.Thread(
+                        target=_read_stream,
+                        args=(tar_process.stderr, local_stderr, failures),
+                        daemon=True,
+                    )
                     workers = [
                         threading.Thread(
                             target=_copy_stream,
-                            args=(remote_stdout_file, tar_process.stdin, failures),
+                            args=(
+                                remote_stdout_file,
+                                tar_process.stdin,
+                                failures,
+                                pump_failures,
+                                soft_errors,
+                            ),
                             daemon=True,
                         ),
-                        threading.Thread(
-                            target=_read_stream,
-                            args=(remote_stderr_file, remote_stderr, failures),
-                            daemon=True,
-                        ),
-                        threading.Thread(
-                            target=_read_stream,
-                            args=(tar_process.stderr, local_stderr, failures),
-                            daemon=True,
-                        ),
+                        remote_stderr_worker,
+                        local_stderr_worker,
                     ]
                     for worker in workers:
                         worker.start()
@@ -1263,6 +1546,9 @@ class ParamikoSessionBackend:
                         failures,
                         deadline,
                         plan.remote_command,
+                        pump_failures=pump_failures,
+                        local_stderr_worker=local_stderr_worker,
+                        remote_stderr_worker=remote_stderr_worker,
                     )
                 finally:
                     self._stop_tar_transfer(
@@ -1271,12 +1557,13 @@ class ParamikoSessionBackend:
                         streams,
                         workers,
                     )
-            result = self._tar_result(
+            result = self._finalize_tar_result(
                 remote_rc,
                 local_rc,
                 [],
                 remote_stderr,
                 local_stderr,
+                pump_failures,
             )
             if result[0] != 0:
                 discard_stage(plan.stage_path)
@@ -1294,6 +1581,9 @@ class ParamikoSessionBackend:
         except subprocess.TimeoutExpired:
             discard_stage(plan.stage_path)
             raise
+        except IsADirectoryError:
+            discard_stage(plan.stage_path)
+            raise
         except socket.timeout as exc:
             discard_stage(plan.stage_path)
             raise subprocess.TimeoutExpired(
@@ -1309,6 +1599,55 @@ class ParamikoSessionBackend:
     def _error_result(exc: Exception) -> tuple[int, str, str]:
         returncode = 1 if getattr(exc, "errno", None) == errno.ENOENT else 255
         return returncode, "", str(exc)
+
+    @staticmethod
+    def _resolve_sftp_remote_path(sftp: Any, remote_path: str) -> str:
+        if remote_path == "~" or remote_path.startswith("~/"):
+            home_dir = str(sftp.normalize(".")).rstrip("/") or "/"
+            if remote_path == "~":
+                return home_dir
+            return ("" if home_dir == "/" else home_dir) + remote_path[1:]
+        return remote_path
+
+    @classmethod
+    def _sftp_get(
+        cls,
+        sftp: Any,
+        remote_path: str,
+        local_path: str,
+        *,
+        callback: Any,
+    ) -> None:
+        try:
+            params = inspect.signature(sftp.get).parameters
+        except (TypeError, ValueError):
+            try:
+                sftp.get(
+                    remote_path,
+                    local_path,
+                    callback=callback,
+                    max_concurrent_prefetch_requests=(
+                        cls._SFTP_MAX_CONCURRENT_PREFETCH_REQUESTS
+                    ),
+                )
+            except TypeError:
+                sftp.get(remote_path, local_path, callback=callback)
+            return
+
+        if "max_concurrent_prefetch_requests" in params or any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in params.values()
+        ):
+            sftp.get(
+                remote_path,
+                local_path,
+                callback=callback,
+                max_concurrent_prefetch_requests=(
+                    cls._SFTP_MAX_CONCURRENT_PREFETCH_REQUESTS
+                ),
+            )
+        else:
+            sftp.get(remote_path, local_path, callback=callback)
 
     @contextmanager
     def _sftp(self, deadline: _Deadline, command: object) -> Iterator[Any]:
@@ -1342,12 +1681,11 @@ class ParamikoSessionBackend:
                 try:
                     channel.settimeout(deadline.remaining(plan.remote_command))
                     channel.exec_command(plan.remote_command)
-                    channel.sendall(payload)
-                    channel.shutdown_write()
                     return self._collect_channel(
                         channel,
                         deadline,
                         plan.remote_command,
+                        stdin_bytes=payload,
                     )
                 finally:
                     channel.close()
@@ -1368,13 +1706,21 @@ class ParamikoSessionBackend:
         *,
         timeout: float,
     ) -> tuple[int, str, str]:
+        if plan.local_path.is_dir() and not plan.local_path.is_symlink():
+            raise IsADirectoryError(
+                errno.EISDIR,
+                f"Refusing to overwrite existing directory with a file: {plan.local_path}",
+                str(plan.local_path),
+            )
         deadline = _Deadline.start(timeout)
         plan.local_path.parent.mkdir(parents=True, exist_ok=True)
         plan.stage_path.mkdir(parents=True)
         try:
             with self._sftp(deadline, plan.remote_path) as sftp:
-                sftp.get(
-                    plan.remote_path,
+                remote_path = self._resolve_sftp_remote_path(sftp, plan.remote_path)
+                self._sftp_get(
+                    sftp,
+                    remote_path,
                     str(plan.staged_item),
                     callback=lambda _received, _total: deadline.remaining(
                         plan.remote_path
@@ -1387,6 +1733,9 @@ class ParamikoSessionBackend:
             )
             return 0, "", ""
         except subprocess.TimeoutExpired:
+            discard_stage(plan.stage_path)
+            raise
+        except IsADirectoryError:
             discard_stage(plan.stage_path)
             raise
         except socket.timeout as exc:
@@ -1411,11 +1760,11 @@ class ParamikoSessionBackend:
                 self._close_locked()
 
     def _close_locked(self) -> None:
-        if self._target_client is not None:
+        if getattr(self, "_target_client", None) is not None:
             self._target_client.close()
-        if self._jump_channel is not None:
+        if getattr(self, "_jump_channel", None) is not None:
             self._jump_channel.close()
-        if self._jump_client is not None:
+        if getattr(self, "_jump_client", None) is not None:
             self._jump_client.close()
         self._target_client = None
         self._jump_channel = None

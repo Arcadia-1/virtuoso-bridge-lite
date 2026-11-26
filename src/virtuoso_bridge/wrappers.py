@@ -39,10 +39,17 @@ class SanitizingClient:
         self._inner = inner
         self._sanitize = sanitize_fn
 
+    def __enter__(self):
+        self._inner.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return self._inner.__exit__(exc_type, exc_val, exc_tb)
+
     def download_file(self, remote_path, local_path, *,
                       sanitize: bool = True, **kwargs):
         result = self._inner.download_file(remote_path, local_path, **kwargs)
-        if sanitize:
+        if sanitize and getattr(result, "ok", False):
             local = Path(local_path)
             if local.is_dir():
                 return result
