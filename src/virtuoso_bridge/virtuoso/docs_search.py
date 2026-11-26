@@ -468,7 +468,7 @@ for root in {root_args}; do
     if [ "$rel_match" -eq 1 ]; then
       printf '%s\\t%s\\n' "$root" "$f"
       count=$((count + 1))
-      [ "$count" -ge "$max" ] && exit 0
+      if [ "$count" -ge "$max" ]; then exit 0; fi
       continue
     fi
 
@@ -482,10 +482,11 @@ for root in {root_args}; do
     if [ "$content_match" -eq 1 ]; then
       printf '%s\\t%s\\n' "$root" "$f"
       count=$((count + 1))
-      [ "$count" -ge "$max" ] && exit 0
+      if [ "$count" -ge "$max" ]; then exit 0; fi
     fi
-  done < <(find "$root" -type f \\( {suffix_expr} \\) -print0 2>/dev/null)
+  done < <(find -H "$root" -type f \\( {suffix_expr} \\) -print0 2>/dev/null)
 done
+exit 0
 """
     return f"bash -lc {shlex.quote(script)}"
 
@@ -1341,6 +1342,7 @@ import gzip
 import json
 import os
 import re
+import shlex
 import sys
 import tempfile
 
@@ -1405,6 +1407,20 @@ def resolve_tgf_target(target_ref, tgf_path):
     return posix(os.path.join(os.path.dirname(tgf_path), target_ref))
 
 
+def split_tgf_line(stripped):
+    if '"' not in stripped and "'" not in stripped:
+        return stripped.split()
+    try:
+        if sys.version_info[0] < 3 and not isinstance(stripped, str):
+            return [
+                part.decode("utf-8", "replace")
+                for part in shlex.split(stripped.encode("utf-8"))
+            ]
+        return shlex.split(stripped)
+    except ValueError:
+        return []
+
+
 def iter_tgf_records(path):
     with open(path, "rb") as fh:
         raw = fh.read().decode("utf-8", "replace")
@@ -1412,7 +1428,7 @@ def iter_tgf_records(path):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        parts = stripped.split()
+        parts = split_tgf_line(stripped)
         if len(parts) < 4 or parts[-1].upper() != "HTML":
             continue
         topic_id, target_ref, anchor = parts[0], parts[1], parts[2]
@@ -1735,7 +1751,7 @@ def info(root):
     }
 
 
-print(json.dumps([info(r) for r in ROOTS], ensure_ascii=False))
+print(json.dumps([info(r) for r in ROOTS], ensure_ascii=True))
 '''
 
 

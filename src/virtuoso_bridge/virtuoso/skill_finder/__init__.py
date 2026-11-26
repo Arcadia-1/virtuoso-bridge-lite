@@ -151,6 +151,17 @@ class SKILLFinder:
         """Walk from remote path *start* up to ``/``, looking for ``doc/finder/SKILL``."""
         walk_script = (
             f'p={shlex.quote(start)}; '
+            'if rp=$(readlink -f "$p" 2>/dev/null) && [ -n "$rp" ]; then p="$rp"; '
+            'elif rp=$(realpath "$p" 2>/dev/null) && [ -n "$rp" ]; then p="$rp"; '
+            'else '
+            '  n=0; while [ -L "$p" ] && [ "$n" -lt 40 ]; do '
+            '    t=$(readlink "$p" 2>/dev/null) || break; '
+            '    case "$t" in /*) p="$t" ;; *) p="$(dirname -- "$p")/$t" ;; esac; '
+            '    n=$((n + 1)); '
+            '  done; '
+            '  if [ -d "$p" ] && rp=$(cd -P -- "$p" 2>/dev/null && pwd -P) && [ -n "$rp" ]; then p="$rp"; '
+            '  elif [ -e "$p" ] && d=$(cd -P -- "$(dirname -- "$p")" 2>/dev/null && pwd -P) && [ -n "$d" ]; then p="$d/$(basename -- "$p")"; fi; '
+            'fi; '
             'while [ -n "$p" ] && [ "$p" != "/" ]; do '
             '  if [ -d "$p/doc/finder/SKILL" ]; then echo "$p/doc/finder/SKILL"; exit 0; fi; '
             '  p=$(dirname "$p"); '

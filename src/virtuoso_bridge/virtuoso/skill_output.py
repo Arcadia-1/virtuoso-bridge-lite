@@ -47,8 +47,11 @@ def tokenize_top_level(
                 tokens.append(body[i:j])
             i = j
             continue
+        if ch == ")":
+            i += 1
+            continue
         j = i
-        while j < n and not body[j].isspace() and body[j] not in "()":
+        while j < n and not body[j].isspace() and body[j] not in '()"':
             j += 1
         if include_atoms:
             tokens.append(body[i:j])
@@ -79,9 +82,9 @@ def parse_sexpr(tok: str):
         return None
     if tok == "t":
         return True
-    if tok.startswith('"') and tok.endswith('"') and len(tok) >= 2:
+    if _is_single_complete_skill_string(tok):
         return _unescape_skill_string(tok[1:-1])
-    if tok.startswith("(") and tok.endswith(")"):
+    if is_single_complete_skill_list(tok):
         inner = tok[1:-1]
         return [
             parse_sexpr(token)
@@ -93,6 +96,17 @@ def parse_sexpr(tok: str):
             )
         ]
     return tok
+
+
+def _is_single_complete_skill_string(tok: str) -> bool:
+    """Return whether text is exactly one complete SKILL double-quoted string."""
+    return (
+        len(tok) >= 2
+        and tok.startswith('"')
+        and tok.endswith('"')
+        and not _is_escaped(tok, len(tok) - 1)
+        and _scan_string(tok, 0) == len(tok)
+    )
 
 
 def is_single_complete_skill_list(raw: str) -> bool:

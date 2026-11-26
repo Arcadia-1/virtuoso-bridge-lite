@@ -1,4 +1,6 @@
+import os
 import shlex
+import shutil
 from types import SimpleNamespace
 
 import pytest
@@ -116,3 +118,174 @@ def test_window_to_root_bounds():
     assert w.to_root(29, 39) == (39, 59)
     with pytest.raises(GuiActionError):
         w.to_root(30, 0)
+
+
+def test_actions_chain_with_and_and_errexit(gui):
+    g, runner = gui
+    g.pin("Choosing Analyses", 10, 20, 400, 500)
+    g.click("Choosing Analyses", 10, 20)
+    g.set_text("Choosing Analyses", 10, 20, "hello")
+    g.key("Choosing Analyses", "Return")
+
+    action_cmds = [
+        c for c in runner.commands
+        if any(tok in c for tok in ("wmctrl -i -a", "wmctrl -i -r", "xdotool "))
+    ]
+    assert action_cmds
+    for cmd in action_cmds:
+        assert "; set -e; " in cmd
+        body = cmd.split("; set -e; ", 1)[1]
+        assert ";" not in body
+        assert "&& sleep" in body
+
+
+def test_screenshot_formats_negative_multimonitor_crop_offsets(gui, tmp_path):
+    g, runner = gui
+    XWININFO_NEG = (
+        "  Absolute upper-left X:  -10\n  Absolute upper-left Y:  20\n"
+        "  Relative upper-left X:  0\n  Width: 100\n  Height: 50\n"
+    )
+    orig_run = runner.run_command
+
+    def neg_run(command, timeout=None):
+        res = orig_run(command, timeout=timeout)
+        script = shlex.split(command)[2]
+        if "xwininfo -id" in script:
+            return SimpleNamespace(returncode=0, stdout=XWININFO_NEG, stderr="")
+        return res
+
+    runner.run_command = neg_run
+
+    g.screenshot(tmp_path / "neg.png", title="Choosing Analyses")
+    shot = [c for c in runner.commands if "import -window root" in c][-1]
+    assert "-crop 100x50-10+20 +repage" in shot
+    assert "+-" not in shot
+
+    g.screenshot(tmp_path / "both_neg.png", region=(-10, -20, 100, 50))
+    shot2 = [c for c in runner.commands if "import -window root" in c][-1]
+    assert "-crop 100x50-10-20 +repage" in shot2
+    assert "+-" not in shot2
+
+
+def test_validation_rejects_malformed_window_id_settle_and_geometry(gui, tmp_path):
+    g, runner = gui
+    bad_window = GuiWindow("0x1; touch /tmp/should_not_run", "bad", 0, 0, 100, 100)
+    with pytest.raises(GuiActionError, match="invalid X11 window id"):
+        g.raise_window(bad_window)
+    with pytest.raises(GuiActionError, match="invalid X11 window id"):
+        g._geometry("0x1; id", "bad")
+
+    for bad_settle in (-1, float("nan"), float("inf"), "0.5; id"):
+        with pytest.raises(GuiActionError, match="invalid settle"):
+            g.click("Choosing Analyses", 10, 10, settle=bad_settle)
+
+    with pytest.raises(ValueError):
+        g.pin("Choosing Analyses", "10; id", 0, 100, 100)
+
+    for bad_scale in (0, -0.5, float("nan"), float("inf")):
+        with pytest.raises(GuiActionError, match="invalid scale"):
+            g.screenshot(tmp_path / "s.png", scale=bad_scale)
+
+    assert not any("wmctrl -i -a" in c or "wmctrl -i -r" in c or "xdotool" in c for c in runner.commands)
+
+
+def _install_fake_x11_bins(tmp_path, *, wmctrl_raise_rc=0, wmctrl_pin_rc=0, xdotool_fail_on=None):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True)
+    trace = tmp_path / "trace.log"
+
+    wmctrl = bin_dir / "wmctrl"
+    wmctrl.write_text(
+        "#!/bin/sh\n"
+        f'printf "wmctrl %s\\n" "$*" >> {shlex.quote(str(trace))}\n'
+        'case "$*" in\n'
+        '  *-l*)\n'
+        '    printf "0x02e1ee09  0 host Choosing Analyses -- ADE Assembler\\n"\n'
+        '    exit 0\n'
+        '    ;;\n'
+        '  *"-i -a"*)\n'
+        f'    echo "wmctrl activate failed" >&2; exit {int(wmctrl_raise_rc)}\n'
+        '    ;;\n'
+        '  *"-i -r"*)\n'
+        f'    echo "wmctrl pin failed" >&2; exit {int(wmctrl_pin_rc)}\n'
+        '    ;;\n'
+        'esac\n'
+        'exit 0\n',
+        encoding="utf-8",
+    )
+    wmctrl.chmod(0o755)
+
+    xwininfo = bin_dir / "xwininfo"
+    xwininfo.write_text(
+        "#!/bin/sh\n"
+        'printf "  Absolute upper-left X:  410\\n  Absolute upper-left Y:  195\\n"\n'
+        'printf "  Width: 415\\n  Height: 982\\n"\n',
+        encoding="utf-8",
+    )
+    xwininfo.chmod(0o755)
+
+    fail_case = ""
+    if xdotool_fail_on:
+        fail_case = (
+            f'case "$*" in\n'
+            f'  *{xdotool_fail_on}*) echo "xdotool failed" >&2; exit 1 ;;\n'
+            f'esac\n'
+        )
+    xdotool = bin_dir / "xdotool"
+    xdotool.write_text(
+        "#!/bin/sh\n"
+        f'printf "xdotool %s\\n" "$*" >> {shlex.quote(str(trace))}\n'
+        f"{fail_case}"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    xdotool.chmod(0o755)
+    return bin_dir, trace
+
+
+@pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None, reason="requires POSIX bash")
+def test_real_bash_failing_wmctrl_raises_and_blocks_subsequent_input(tmp_path, monkeypatch):
+    bin_dir, trace = _install_fake_x11_bins(tmp_path, wmctrl_raise_rc=1, wmctrl_pin_rc=1)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+    g = X11Gui(None, "u", display=":99", timeout=10)
+
+    with pytest.raises(GuiActionError, match="raise .* failed"):
+        g.click("Choosing Analyses", 10, 20, settle=0.01)
+    with pytest.raises(GuiActionError, match="raise .* failed"):
+        g.set_text("Choosing Analyses", 10, 20, "secret", settle=0.01)
+    with pytest.raises(GuiActionError, match="raise .* failed"):
+        g.key("Choosing Analyses", "Return", settle=0.01)
+    with pytest.raises(GuiActionError, match="pin .* failed"):
+        g.pin("Choosing Analyses", 10, 20, 400, 500)
+
+    lines = trace.read_text(encoding="utf-8").splitlines()
+    assert any("wmctrl -i -a 0x02e1ee09" in line for line in lines)
+    assert not any(line.startswith("xdotool ") for line in lines)
+
+
+@pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None, reason="requires POSIX bash")
+def test_real_bash_failing_xdotool_raises_and_stops_remaining_steps(tmp_path, monkeypatch):
+    bin_dir, trace = _install_fake_x11_bins(tmp_path, wmctrl_raise_rc=0, xdotool_fail_on="mousemove")
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+    g = X11Gui(None, "u", display=":99", timeout=10)
+
+    with pytest.raises(GuiActionError, match="type into .* failed"):
+        g.set_text("Choosing Analyses", 10, 20, "secret", settle=0.01)
+    with pytest.raises(GuiActionError, match="click in .* failed"):
+        g.click("Choosing Analyses", 10, 20, settle=0.01)
+
+    lines = trace.read_text(encoding="utf-8").splitlines()
+    xdotool_lines = [line for line in lines if line.startswith("xdotool ")]
+    assert len(xdotool_lines) == 2
+    assert all("mousemove" in line for line in xdotool_lines)
+    assert not any("ctrl+a" in line or "type" in line or "Tab" in line for line in xdotool_lines)
+
+    # Also verify key() propagates xdotool failure instead of being masked by sleep.
+    bin_dir2, trace2 = _install_fake_x11_bins(tmp_path / "keycase", wmctrl_raise_rc=0, xdotool_fail_on="key")
+    monkeypatch.setenv("PATH", f"{bin_dir2}{os.pathsep}{os.environ.get('PATH', '')}")
+    g2 = X11Gui(None, "u", display=":99", timeout=10)
+    with pytest.raises(GuiActionError, match="keys to .* failed"):
+        g2.key("Choosing Analyses", "Return", settle=0.01)
+    assert any("xdotool key Return" in line for line in trace2.read_text(encoding="utf-8").splitlines())

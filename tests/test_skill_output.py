@@ -40,3 +40,43 @@ def test_parse_sexpr_decodes_common_skill_string_escapes() -> None:
         "label",
         'foo\tbar\nbaz"\\end',
     ]
+
+
+def test_tokenize_top_level_skips_unmatched_closing_parens_and_splits_quotes() -> None:
+    assert tokenize_top_level(")") == []
+    assert (
+        tokenize_top_level(
+            ")))",
+            include_groups=True,
+            include_strings=True,
+            include_atoms=True,
+        )
+        == []
+    )
+    assert tokenize_top_level("a)b", include_atoms=True) == ["a", "b"]
+    assert (
+        tokenize_top_level(
+            'key"val"(grp)tail)',
+            include_groups=True,
+            include_strings=True,
+            include_atoms=True,
+        )
+        == ["key", '"val"', "(grp)", "tail"]
+    )
+
+
+def test_parse_sexpr_rejects_multi_form_and_malformed_wrappers_without_hanging() -> None:
+    assert parse_sexpr("(a) (b)") == "(a) (b)"
+    assert parse_sexpr("(a))") == "(a))"
+    assert parse_sexpr("((a)") == "((a)"
+    assert parse_sexpr('("a)")') == ["a)"]
+    assert parse_sexpr('"a" "b"') == '"a" "b"'
+    assert parse_sexpr(r'"unterminated\"') == r'"unterminated\"'
+    assert parse_sexpr(r'"\"') == r'"\"'
+    assert parse_sexpr(r'"\\"') == "\\"
+    assert parse_sexpr('""') == ""
+
+
+def test_parse_skill_str_list_terminates_on_unmatched_closing_paren() -> None:
+    assert parse_skill_str_list('*WARNING* (DB-1): msg) ("lib1")') == ["DB-1", "lib1"]
+    assert parse_skill_str_list(') ("a" "b") )') == ["a", "b"]
