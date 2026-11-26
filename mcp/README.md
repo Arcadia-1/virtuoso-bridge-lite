@@ -61,8 +61,11 @@ the structured size limit are explicitly refused, not silently truncated; export
 that history through Python instead. `run_test` is unchanged; never rerun a
 simulation merely to change its result presentation.
 
-An offline comparison against a clean checkout of the same upstream commit is
+An offline comparison against a clean checkout of the chosen upstream base is
 available with `python tools/benchmark_compact_results.py --baseline-root PATH`.
+That base must be an ancestor of the modified checkout's HEAD; the feature may
+already be committed. The synthetic client matches supported SKILL operations,
+not their ordering, and rejects unrecognized operations instead of inventing data.
 Install optional `tiktoken` only in that benchmark environment. It checks full
 measurement equality and unchanged default responses, and reports estimates with
 the fixed `o200k_base` tokenizer for structured-only clients, clients exposing

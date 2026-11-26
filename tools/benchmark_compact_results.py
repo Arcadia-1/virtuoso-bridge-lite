@@ -29,12 +29,19 @@ def _worker(root, compact):
     class Client:
         calls = 0
 
-        def __init__(self):
-            self.responses = iter(['("TRAN")', "t", "t", '"passed"', "nil"])
-
         def execute_skill(self, command, timeout=None):
             self.calls += 1
-            return SimpleNamespace(output=next(self.responses), errors=[])
+            responses = {
+                "maeGetSetup(": '("TRAN")',
+                "maeExportOutputView(": "t",
+                "deleteFile(": "t",
+                "maeGetOverallSpecStatus(": '"passed"',
+                "maeGetOverallYield(": "nil",
+            }
+            for operation, output in responses.items():
+                if operation in command:
+                    return SimpleNamespace(output=output, errors=[])
+            raise RuntimeError("Unsupported offline SKILL operation; update the benchmark fixture")
 
         def download_file(self, remote, local):
             Path(local).write_text(text, encoding="utf-8")
@@ -69,6 +76,20 @@ def _csv(points, outputs):
     return stream.getvalue()
 
 
+def _baseline_revisions(root, baseline):
+    if subprocess.check_output(["git", "status", "--porcelain"], cwd=baseline).strip():
+        raise ValueError("baseline checkout must be clean")
+    revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=baseline).strip()
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root).strip()
+    ancestry = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", revision.decode(), head.decode()],
+        cwd=root, capture_output=True,
+    )
+    if ancestry.returncode:
+        raise ValueError("baseline HEAD must be an ancestor of the modified checkout's HEAD")
+    return revision.decode(), head.decode()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline-root", type=Path)
@@ -80,14 +101,13 @@ def main():
         _worker(args.worker_root.resolve(), args.compact)
         return
     if args.baseline_root is None:
-        parser.error("--baseline-root must name a clean checkout of the same upstream commit")
+        parser.error("--baseline-root must name a clean checkout of the upstream base commit")
     root = Path(__file__).resolve().parents[1]
     baseline = args.baseline_root.resolve()
-    if subprocess.check_output(["git", "status", "--porcelain"], cwd=baseline).strip():
-        parser.error("baseline checkout must be clean")
-    revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root).strip()
-    if revision != subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=baseline).strip():
-        parser.error("baseline and modified checkout must share the same HEAD commit")
+    try:
+        revision, head = _baseline_revisions(root, baseline)
+    except ValueError as exc:
+        parser.error(str(exc))
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("TIKTOKEN_CACHE_DIR", str(output / "tokenizer-cache"))
@@ -113,7 +133,7 @@ def main():
     def tokens(value):
         return len(encoding.encode(json.dumps(value, ensure_ascii=False)))
 
-    report = {"base_commit": revision.decode(), "tokenizer": "o200k_base",
+    report = {"base_commit": revision, "modified_head_commit": head, "tokenizer": "o200k_base",
               "measurement": "offline tool-payload token estimates, not billed tokens or total agent usage",
               "cases": []}
     for name, points, outputs in [("single", 1, 4), ("sweep", 10, 8), ("wide_sweep", 40, 8)]:
@@ -129,10 +149,10 @@ def main():
                          for p in compact["data"]["points"] for n, v in p["outputs"].items()]
         assert reconstructed == original["data"]["outputs"]
         assert compact["mcp"]["structuredContent"] == {"session": "s1", **expected}
-        assert original["skill_calls"] == compact["skill_calls"] == 5
+        assert original["skill_calls"] == unchanged["skill_calls"] == compact["skill_calls"]
         metrics = {"name": name, "points": points, "outputs_per_point": outputs,
                    "measurements_equal": True, "default_compatible": True,
-                   "skill_calls_per_read": 5, "mcp_tool_calls_per_case": 1}
+                   "skill_calls_per_read": original["skill_calls"], "mcp_tool_calls_per_case": 1}
         for key, old, new in [
             ("python_result", original["data"], compact["data"]),
             ("mcp_structured_only", original["mcp"]["structuredContent"], compact["mcp"]["structuredContent"]),

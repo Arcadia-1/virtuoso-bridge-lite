@@ -12,7 +12,7 @@ import jsonschema
 import pytest
 
 from tests.test_maestro_ic23_results import IC23_CSV
-from tests.test_maestro_read_results import SAMPLE_CSV, SINGLE_POINT_CSV
+from tests.test_maestro_read_results import NO_VALUE_CSV, SAMPLE_CSV, SINGLE_POINT_CSV
 from virtuoso_bridge.virtuoso.maestro.reader.runs import NoResults, _parse_detail_csv, read_results
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,12 +45,31 @@ def assert_same_measurements(legacy, compact):
     assert reconstructed == legacy["outputs"]
 
 
-@pytest.mark.parametrize("text", [SAMPLE_CSV, SINGLE_POINT_CSV, IC23_CSV, ""])
+@pytest.mark.parametrize("text", [SAMPLE_CSV, SINGLE_POINT_CSV, IC23_CSV, NO_VALUE_CSV, ""])
 def test_compact_parser_is_lossless_except_for_redundant_flat_list(text):
     legacy = _parse_detail_csv(text, history="Interactive.7")
     compact = _parse_detail_csv(text, history="Interactive.7", compact=True)
     assert_same_measurements(legacy, compact)
     assert _parse_detail_csv(text, history="Interactive.7", compact=False) == legacy
+
+
+def test_compact_missing_value_column_does_not_turn_specs_into_values():
+    result = _parse_detail_csv(NO_VALUE_CSV, history="H", compact=True)
+    output = result["points"][0]["outputs"]["t_conv"]
+    assert output["value"] == ""
+    assert output["spec"] == "< 914p"
+
+
+def test_compact_uses_upstream_dynamic_column_mapping():
+    text = (
+        "Point,Pass/Fail,Weight,Output,Test,Spec,Nominal\n"
+        "1,failed,0.5,delay,TRAN,< 1n,2.123456789e-9\n"
+    )
+    compact = _parse_detail_csv(text, history="H", compact=True)
+    assert_same_measurements(_parse_detail_csv(text, history="H"), compact)
+    assert compact["points"][0]["outputs"]["delay"] == {
+        "value": "2.123456789e-9", "spec": "< 1n", "weight": "0.5", "pass_fail": "failed",
+    }
 
 
 @pytest.mark.parametrize("text", [SAMPLE_CSV, SINGLE_POINT_CSV, IC23_CSV])
@@ -72,6 +91,32 @@ def test_compact_read_retains_no_results_reason():
     result = read_results(client, "s1", lib="L", cell="C", history="H", compact=True)
     assert isinstance(result, NoResults)
     assert "no test" in result.reason
+
+
+def test_compact_read_sends_nothing_to_a_blocked_ciw():
+    client = SimpleNamespace(
+        dialogs=SimpleNamespace(probe=Mock(return_value=SimpleNamespace(
+            status="blocked", dialogs=[{"title": "ADE blocked"}],
+        ))), execute_skill=Mock(),
+    )
+    result = read_results(client, "s1", lib="L", cell="C", history="H", compact=True)
+    assert isinstance(result, NoResults) and "ADE blocked" in result.reason
+    client.execute_skill.assert_not_called()
+
+
+@pytest.mark.parametrize("message", ["Socket timeout", "Socket error", "Connection refused"])
+def test_compact_channel_loss_does_not_queue_cleanup_or_followup_reads(message):
+    client = SimpleNamespace(
+        execute_skill=Mock(side_effect=[
+            SimpleNamespace(output='("TRAN")', errors=[]),
+            SimpleNamespace(output="", errors=[message]),
+        ]), download_file=Mock(),
+    )
+    result = read_results(client, "s1", lib="L", cell="C", history="H", compact=True)
+    assert isinstance(result, NoResults) and message in result.reason
+    assert client.execute_skill.call_count == 2
+    client.download_file.assert_not_called()
+    assert all("deleteFile" not in call.args[0] for call in client.execute_skill.call_args_list)
 
 
 def test_compact_keeps_tiny_values_unicode_and_failed_specs():
@@ -148,6 +193,23 @@ def test_mcp_compact_retains_no_results_reason(monkeypatch):
     result = mcp._impl_maestro_read({"session": "s1", "history": "H", "compact": True})
     assert result["structuredContent"]["no_results_reason"] == "CSV export unavailable"
     assert result["structuredContent"]["history"] == "H"
+
+
+def test_mcp_compact_preserves_actual_blocked_ciw_reason(monkeypatch):
+    client = SimpleNamespace(
+        dialogs=SimpleNamespace(probe=Mock(return_value=SimpleNamespace(
+            status="blocked", dialogs=[{"title": "ADE blocked"}],
+        ))), execute_skill=Mock(),
+    )
+    client.maestro = SimpleNamespace(read_results=lambda session, **kwargs: read_results(
+        client, session, lib="L", cell="C", **kwargs,
+    ))
+    monkeypatch.setattr(mcp, "_client", lambda: client)
+    result = mcp._impl_maestro_read({"session": "s1", "history": "H", "compact": True})
+    assert "ADE blocked" in result["structuredContent"]["no_results_reason"]
+    assert result["structuredContent"]["session"] == "s1"
+    assert result["structuredContent"]["history"] == "H"
+    client.execute_skill.assert_not_called()
 
 
 def test_compact_option_is_discoverable_and_boolean():
