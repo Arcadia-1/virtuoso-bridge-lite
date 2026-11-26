@@ -427,7 +427,8 @@ def split_signed(raw: bytes) -> tuple[bytes, bytes, bytes] | None:
     if len(raw) < 1 + MAC_LEN:
         return None
     marker, mac, body = raw[:1], raw[1 : 1 + MAC_LEN], raw[1 + MAC_LEN :]
-    if all(c in _HEX for c in mac.decode("ascii", errors="ignore")) and len(mac) == MAC_LEN:
+    decoded = mac.decode("ascii", errors="ignore")
+    if len(decoded) == MAC_LEN and all(c in _HEX for c in decoded):
         return marker, mac, body
     return None
 

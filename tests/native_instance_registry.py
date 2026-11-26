@@ -509,6 +509,134 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         self.assertNotIn(token.encode(), stdout + stderr)
         self.assertEqual(stdout, b"")  # no forged request reached the SKILL IPC lane
 
+    def test_nfs_safe_locking_and_setgid_parent_with_worker(self):
+        source = '''
+import errno, fcntl, json, os, pwd, socket, sys
+sys.path.insert(0, sys.argv[1])
+import ramic_registry as reg
+root = sys.argv[2]
+parent = os.path.join(root, "setgid_parent")
+os.mkdir(parent, 0o700)
+os.chmod(parent, 0o2700)
+reg_root = os.path.join(parent, "private")
+opened = reg.Registry(root=reg_root)
+directory = os.path.join(reg_root, "runs")
+opened.close()
+
+sock = socket.socket()
+lease = reg.bind_instance(sock, "127.0.0.1", directory=directory, work_dir="/synthetic/project")
+stale = os.path.join(directory, "f" * 32 + ".json")
+with open(stale, "wb") as handle:
+    handle.write(b"stale")
+os.chmod(stale, 0o600)
+
+fd_flags = {}
+real_open = os.open
+real_close = os.close
+real_flock = reg._flock
+def tracked_open(path, flags, *args):
+    fd = real_open(path, flags, *args)
+    fd_flags[fd] = flags
+    return fd
+def tracked_close(fd):
+    fd_flags.pop(fd, None)
+    return real_close(fd)
+def nfs_flock(fd, op):
+    acc = fd_flags.get(fd, os.O_RDWR) & os.O_ACCMODE
+    if op == fcntl.LOCK_EX and acc == os.O_RDONLY:
+        raise IOError(errno.EBADF, "Bad file descriptor")
+    return real_flock(fd, op)
+
+reg.os.open = tracked_open
+reg.os.close = tracked_close
+reg._flock = nfs_flock
+try:
+    rows = reg.discover(directory, read_only=True)
+    assert len(rows) == 1 and rows[0]["port"] == lease.metadata["port"]
+    assert os.path.exists(stale)
+    rows = reg.discover(directory, read_only=False)
+    assert len(rows) == 1 and rows[0]["port"] == lease.metadata["port"]
+    assert not os.path.exists(stale)
+finally:
+    lease.close()
+    sock.close()
+'''
+        worker = self.spawn(source, self.root)
+        stdout, stderr = worker.communicate(timeout=10)
+        self.assertEqual(worker.returncode, 0, stderr)
+
+    def test_non_ascii_work_dir_and_py27_exception_formatting_with_worker(self):
+        source = '''
+import os, socket, sys
+sys.path.insert(0, sys.argv[1])
+import ramic_registry as reg
+directory = sys.argv[2]
+expected = u"/synthetic/proj_\\u00e9_\\u4e2d"
+work_dir = expected.encode("utf-8") if sys.version_info[0] == 2 else expected
+
+probe = socket.socket()
+probe.bind(("127.0.0.1", 0))
+fixed = probe.getsockname()[1]
+probe.close()
+
+reg.configure_port(fixed, work_dir, directory=directory)
+opened = reg.Registry(directory)
+try:
+    assert reg.requested_port(opened, work_dir) == fixed
+finally:
+    opened.close()
+
+sock = socket.socket()
+lease = reg.bind_instance(sock, "127.0.0.1", directory=directory, work_dir=work_dir)
+try:
+    assert lease.metadata["port"] == fixed
+    assert lease.metadata["work_dir"] == expected
+    rows = reg.discover(directory, read_only=True)
+    assert len(rows) == 1 and rows[0]["work_dir"] == expected
+finally:
+    lease.close()
+    sock.close()
+
+if sys.version_info[0] == 2:
+    import imp
+    token_path = os.path.join(sys.argv[3], "py27_token")
+    os.environ["RB_TOKEN_PATH"] = token_path
+    sys.argv = [os.path.join(sys.argv[1], "ramic_bridge_daemon_27.py"), "127.0.0.1", "1"]
+    daemon = imp.load_source("vb_daemon_27_nonascii", sys.argv[0])
+
+    class FakeConn(object):
+        def __init__(self):
+            self.sent = []
+            self.closed = False
+        def settimeout(self, value):
+            pass
+        def sendall(self, data):
+            assert isinstance(data, str)
+            self.sent.append(data)
+        def shutdown(self, how):
+            pass
+        def close(self):
+            self.closed = True
+
+    cases = [
+        (ValueError("bad \\xc3\\xa9"), "\\x15JSONDecodeError: bad \\xc3\\xa9"),
+        (ValueError(u"bad \\u00e9"), "\\x15JSONDecodeError: bad \\xc3\\xa9"),
+        (RuntimeError("boom \\xc3\\xa9"), "\\x15boom \\xc3\\xa9"),
+        (RuntimeError(u"boom \\u00e9"), "\\x15boom \\xc3\\xa9"),
+    ]
+    for exc, want in cases:
+        def fail(_conn, _exc=exc):
+            raise _exc
+        daemon._recv_request = fail
+        conn = FakeConn()
+        daemon.handle_external_connection(conn, ("127.0.0.1", 0))
+        assert conn.sent == [want], (conn.sent, want)
+        assert conn.closed
+'''
+        worker = self.spawn(source, self.directory, self.root)
+        stdout, stderr = worker.communicate(timeout=10)
+        self.assertEqual(worker.returncode, 0, stderr)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

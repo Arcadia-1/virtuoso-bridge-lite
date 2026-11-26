@@ -1011,3 +1011,46 @@ def test_ciw_handler_echoes_the_tag_the_daemons_send() -> None:
     assert handler.count('or(tag "")') == 2
     launch = next(line for line in il.splitlines() if "ipcBeginProcess(" in line and "RBDPath" in line)
     assert " RB_REPLY_TAGS=1 " in launch
+
+
+def test_wait_preserves_rejected_on_request_not_started_while_receipt_returns_unknown() -> None:
+    manager = RecoverableRequestManager()
+    request_id = _request_id()
+
+    def execute(_skill):
+        raise RequestNotStarted("never reached Virtuoso")
+
+    ack = manager.submit(request_id, "x", execute)
+    assert ack["state"] in ("running", "rejected")
+    waited = manager.wait(request_id, 2.0)
+    assert waited["state"] == "rejected"
+    assert waited["diagnostic"] == "never reached Virtuoso"
+    assert "response" not in waited
+    assert not manager.poisoned
+    # A separate op="receipt" query keeps its conservative "unknown" mapping.
+    receipt = manager.receipt(request_id)
+    assert receipt["state"] == "unknown"
+    assert "never reached Virtuoso" in receipt["diagnostic"]
+    # Unknown request_id in wait() still returns unknown.
+    missing = manager.wait(_request_id(suffix="9" * 20), 0.1)
+    assert missing["state"] == "unknown"
+
+
+def test_submit_with_wait_ms_returns_rejected_on_request_not_started(monkeypatch, tmp_path) -> None:
+    module = _import_daemon(monkeypatch, tmp_path)
+
+    def fail_not_started(_skill):
+        raise RequestNotStarted("before transmission")
+
+    monkeypatch.setattr(module, "_execute_recoverable", fail_not_started)
+    request_id = _request_id()
+    submit = _payload(module, "submit", request_id, skill="save()")
+    submit["wait_ms"] = 1000
+    reply = _decode_reply(_exchange(module, submit), submit["nonce"])
+    assert reply["state"] == "rejected"
+    assert reply["diagnostic"] == "before transmission"
+    assert not module._RECOVERY.poisoned
+
+    receipt_req = _payload(module, "receipt", request_id)
+    receipt_reply = _decode_reply(_exchange(module, receipt_req), receipt_req["nonce"])
+    assert receipt_reply["state"] == "unknown"

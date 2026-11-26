@@ -515,6 +515,8 @@ class VirtuosoClient(VirtuosoInterface):
             return VirtuosoResult(status=ExecutionStatus.SUCCESS)
         try:
             self._tunnel.warm(timeout=timeout)
+            if self._daemon_token is None and hasattr(self._tunnel, "daemon_token"):
+                self._daemon_token = self._tunnel.daemon_token
             self._port = self._tunnel.port
             return VirtuosoResult(
                 status=ExecutionStatus.SUCCESS,
@@ -1083,7 +1085,7 @@ let((result winName ciwNum)
     def ciw_print(self, message: str, timeout: int | None = None) -> VirtuosoResult:
         effective_timeout = timeout if timeout is not None else self._timeout
         escaped = _escape_skill_string(message)
-        return self.execute_skill(f'printf("{escaped}\\n")', timeout=effective_timeout)
+        return self.execute_skill(f'printf("%s\\n" "{escaped}")', timeout=effective_timeout)
 
     def ciw_log(self, skill_code: str, timeout: int | None = None) -> VirtuosoResult:
         effective_timeout = timeout if timeout is not None else self._timeout
@@ -1167,12 +1169,16 @@ let((result winName ciwNum)
         from virtuoso_bridge.virtuoso.skill_output import parse_sexpr
 
         effective_timeout = timeout if timeout is not None else self._timeout
-        escaped = _escape_skill_string(cmd).replace("\n", "\\n")  # keep line breaks
+        escaped = _escape_for_skill_evalstring_source(cmd)
+        vb_dir = f"/tmp/vb_shell_{secrets.token_hex(12)}"
         skill = (
-            "let((vbScript vbOut vbOk vbPort vbLine vbText) "
-            'vbScript = makeTempFileName("/tmp/vb_shell_cmd") '
-            'vbOut = makeTempFileName("/tmp/vb_shell_out") '
+            "let((vbDir vbScript vbOut vbOk vbPort vbLine vbText) "
+            f'vbDir = "{vb_dir}" '
+            'if(csh(strcat("umask 077; mkdir -m 700 " vbDir)) then '
+            'vbScript = strcat(vbDir "/cmd") '
+            'vbOut = strcat(vbDir "/out") '
             "vbPort = outfile(vbScript) "
+            "if(vbPort then "
             f'fprintf(vbPort "%s\\n" "{escaped}") '
             "close(vbPort) "
             'vbOk = csh(strcat("umask 077; ( source " vbScript " ) >& " vbOut)) '
@@ -1180,9 +1186,13 @@ let((result winName ciwNum)
             "when(vbPort = infile(vbOut) "
             "while(gets(vbLine vbPort) vbText = strcat(vbText vbLine)) "
             "close(vbPort)) "
-            "deleteFile(vbScript) "
-            "deleteFile(vbOut) "
-            "list(if(vbOk t nil) vbText))"
+            "else "
+            'vbOk = nil vbText = "failed to open private shell command script") '
+            "when(isFile(vbScript) deleteFile(vbScript)) "
+            "when(isFile(vbOut) deleteFile(vbOut)) "
+            "deleteDir(vbDir) "
+            "list(if(vbOk t nil) vbText) "
+            'else list(nil "failed to create private temp directory")))'
         )
         result = self.execute_skill(skill, timeout=effective_timeout)
         if result.status != ExecutionStatus.SUCCESS:
@@ -2026,7 +2036,7 @@ let((result winName ciwNum)
 
         if self._log_to_ciw and result.status == ExecutionStatus.SUCCESS:
             self.ciw_log(
-                f'printf("[RAMIC] loaded {_escape_skill_string(prepared)}\\n")',
+                f'printf("%s\\n" "[RAMIC] loaded {_escape_skill_string(prepared)}")',
                 timeout=5,
             )
 
@@ -2092,18 +2102,20 @@ let((result winName ciwNum)
                     _profiled_bridge_leaf(getattr(self._tunnel, '_profile', None)),
                     resolve_client_id(getattr(self._tunnel, '_profile', None)),
                 )
+            resolved_key = str(p.resolve())
+            path_tag = hashlib.sha256(resolved_key.encode("utf-8")).hexdigest()[:12]
             remote_dir = work_dir.rstrip("/")
-            remote_path = f"{remote_dir}/{p.name}"
+            remote_path = f"{remote_dir}/{path_tag}_{p.name}"
             content = p.read_bytes()
             md5 = hashlib.md5(content).hexdigest()
-            cached = self._il_upload_cache.get(str(p))
-            if cached and cached[0] == md5:
+            cached = self._il_upload_cache.get(resolved_key)
+            if cached and cached[0] == md5 and cached[1] == _path_to_posix(remote_path):
                 return cached[1], False
             up = self._tunnel.upload_text(content.decode("utf-8"), remote_path)
             if up.returncode != 0:
                 raise RuntimeError(f"Failed to upload IL file {p.name}: {up.stderr.strip()}")
             remote_posix = _path_to_posix(remote_path)
-            self._il_upload_cache[str(p)] = (md5, remote_posix)
+            self._il_upload_cache[resolved_key] = (md5, remote_posix)
             return remote_posix, True
         return _path_to_posix(p), False
 

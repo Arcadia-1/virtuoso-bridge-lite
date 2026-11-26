@@ -96,3 +96,23 @@ def test_remote_publisher_executes_real_bounded_shell(tmp_path):
                             capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == []
+
+
+def test_private_directory_allows_inherited_setgid_parent(tmp_path):
+    from virtuoso_bridge.virtuoso.basic.resources import ramic_deploy, ramic_registry
+    parent = tmp_path / "setgid-parent"
+    parent.mkdir(mode=0o700)
+    parent.chmod(0o2700)
+    assert parent.stat().st_mode & 0o7777 == 0o2700
+
+    root = parent / "private"
+    registry = ramic_registry.Registry(root=str(root))
+    try:
+        assert (root.stat().st_mode & 0o777) == 0o700
+        assert (root / "runs").stat().st_mode & 0o777 == 0o700
+    finally:
+        registry.close()
+
+    published = ramic_deploy.publish(str(root / "daemon"), {"code.py": "trusted"})
+    assert published["path"] == str(root / "daemon")
+    assert (root / "daemon" / "code.py").read_text() == "trusted"

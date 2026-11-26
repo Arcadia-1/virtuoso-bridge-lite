@@ -438,3 +438,220 @@ def test_start_reports_unreconcilable_state_without_misdiagnosing_ssh(monkeypatc
     out = capsys.readouterr().out
     assert "Cannot reconcile retained tunnel state at '/state.json'" in out
     assert "status --inspect-state" in out and "SSH" not in out
+
+
+def test_ramic_paths_check_private_allows_setgid_and_rejects_unsafe_modes(monkeypatch):
+    import stat
+    from types import SimpleNamespace
+    from virtuoso_bridge.virtuoso.basic.resources import ramic_paths
+
+    monkeypatch.setattr(ramic_paths.os, "geteuid", lambda: 1000, raising=False)
+    for mode in (0o0700, 0o2700):
+        info = SimpleNamespace(st_mode=stat.S_IFDIR | mode, st_uid=1000)
+        ramic_paths.check_private(info, "/proj/private")
+
+    for mode, uid in (
+        (0o4700, 1000),  # setuid rejected
+        (0o6700, 1000),  # setuid + setgid rejected
+        (0o2750, 1000),  # group bits rejected
+        (0o2710, 1000),  # group exec rejected
+        (0o2701, 1000),  # other exec rejected
+        (0o2500, 1000),  # missing owner write rejected
+        (0o2700, 1001),  # foreign owner rejected
+    ):
+        info = SimpleNamespace(st_mode=stat.S_IFDIR | mode, st_uid=uid)
+        with pytest.raises(ValueError, match="mode 0700"):
+            ramic_paths.check_private(info, "/proj/private")
+
+    reg_info = SimpleNamespace(st_mode=stat.S_IFREG | 0o2700, st_uid=1000)
+    with pytest.raises(ValueError, match="mode 0700"):
+        ramic_paths.check_private(reg_info, "/proj/private")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX open flags and fcntl")
+def test_registry_nfs_safe_locking_and_eacces_fallback(tmp_path, monkeypatch):
+    import errno as errno_mod
+    import fcntl
+    import pwd
+
+    real_registry = registry.Registry
+
+    # Anchor Registry to tmp_path without needing Linux /proc/self/fd.
+    class FakeRegistry:
+        def __init__(self, path=None, create=True, root=None, legacy=False):
+            if legacy:
+                raise OSError(errno_mod.ENOENT, "no legacy dir")
+            self.anchor = str(tmp_path)
+
+        def files(self, temporaries=False):
+            return real_registry.files(self, temporaries=temporaries)
+
+        def sweep(self):
+            return real_registry.sweep(self)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(registry, "Registry", FakeRegistry)
+    uid = os.geteuid()
+    user = pwd.getpwuid(uid).pw_name
+
+    live_id = "1" * 32
+    stale_id = "2" * 32
+    live_path = tmp_path / f"{live_id}.json"
+    stale_path = tmp_path / f"{stale_id}.json"
+    live_meta = dict(
+        port=65111, pid=1234, daemon_pid=1235, uid=uid, user=user,
+        work_dir="/proj/a", instance=live_id,
+    )
+    live_path.write_bytes(json.dumps(live_meta).encode("utf-8"))
+    live_path.chmod(0o600)
+    stale_path.write_bytes(b"stale")
+    stale_path.chmod(0o600)
+
+    fd_flags = {}
+    fd_paths = {}
+    lock_calls = []
+    real_open = os.open
+    real_close = os.close
+
+    def tracked_open(path, flags, *args):
+        fd = real_open(path, flags, *args)
+        fd_flags[fd] = flags
+        fd_paths[fd] = path
+        return fd
+
+    def tracked_close(fd):
+        fd_flags.pop(fd, None)
+        fd_paths.pop(fd, None)
+        return real_close(fd)
+
+    def nfs_flock(fd, op):
+        acc = fd_flags[fd] & os.O_ACCMODE
+        lock_calls.append((os.path.basename(fd_paths[fd]), acc, op))
+        # Simulate Linux NFS: LOCK_EX on O_RDONLY raises EBADF.
+        if op == fcntl.LOCK_EX and acc == os.O_RDONLY:
+            raise OSError(errno_mod.EBADF, "Bad file descriptor")
+        if os.path.basename(fd_paths[fd]) == f"{live_id}.json":
+            raise IOError(errno_mod.EAGAIN, "Resource temporarily unavailable")
+
+    monkeypatch.setattr(registry.os, "open", tracked_open)
+    monkeypatch.setattr(registry.os, "close", tracked_close)
+    monkeypatch.setattr(registry, "_flock", nfs_flock)
+
+    # 1. Read-only discovery probes with LOCK_SH on O_RDONLY; keeps stale file.
+    rows = registry.discover(directory=str(tmp_path), read_only=True)
+    assert rows == [live_meta]
+    assert stale_path.exists()
+    assert lock_calls
+    assert all(acc == os.O_RDONLY and op == fcntl.LOCK_SH for _, acc, op in lock_calls)
+
+    # 2. Sweep opens O_RDWR before LOCK_EX; unlinks stale file, keeps live file.
+    lock_calls.clear()
+    FakeRegistry().sweep()
+    assert not stale_path.exists()
+    assert live_path.exists()
+    assert lock_calls
+    assert all(acc == os.O_RDWR and op == fcntl.LOCK_EX for _, acc, op in lock_calls)
+
+    # 3. Read-write discovery opens O_RDWR before LOCK_EX and removes newly stale records.
+    stale_path.write_bytes(b"stale-again")
+    stale_path.chmod(0o600)
+    lock_calls.clear()
+    rows = registry.discover(directory=str(tmp_path), read_only=False)
+    assert rows == [live_meta]
+    assert not stale_path.exists()
+    assert lock_calls
+    assert all(acc == os.O_RDWR and op == fcntl.LOCK_EX for _, acc, op in lock_calls)
+
+    # 4. EACCES and EROFS on O_RDWR fall back cleanly to O_RDONLY + LOCK_SH without unlinking.
+    for open_errno in (errno_mod.EACCES, errno_mod.EROFS):
+        stale_path.write_bytes(b"ro-stale")
+        stale_path.chmod(0o600)
+
+        def ro_open(path, flags, *args, _err=open_errno):
+            if (flags & os.O_ACCMODE) == os.O_RDWR:
+                raise OSError(_err, "open denied")
+            return tracked_open(path, flags, *args)
+
+        monkeypatch.setattr(registry.os, "open", ro_open)
+        lock_calls.clear()
+        rows = registry.discover(directory=str(tmp_path), read_only=False)
+        assert rows == [live_meta]
+        assert stale_path.exists()
+        assert lock_calls
+        assert all(acc == os.O_RDONLY and op == fcntl.LOCK_SH for _, acc, op in lock_calls)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX pwd and directory descriptors")
+def test_registry_decodes_utf8_bytes_for_non_ascii_work_dir_and_user(tmp_path, monkeypatch):
+    import errno as errno_mod
+    import pwd
+    from types import SimpleNamespace
+
+    real_registry = registry.Registry
+
+    # Exercise bytes inputs (as Python 2.7 str provides from os.getcwd()/env/pwd).
+    work_dir_text = "/proj/caf\u00e9_\u4e2d"
+    work_dir_bytes = work_dir_text.encode("utf-8")
+    assert registry._scope(work_dir_bytes) == work_dir_text
+    assert registry._request_name(work_dir_bytes) == registry._request_name(work_dir_text)
+
+    class FakeRegistry:
+        def __init__(self, path=None, create=True, root=None, legacy=False):
+            if legacy:
+                raise OSError(errno_mod.ENOENT, "no legacy dir")
+            self.fd = os.open(str(tmp_path), os.O_RDONLY)
+            self.anchor = str(tmp_path)
+
+        def files(self, temporaries=False):
+            return real_registry.files(self, temporaries=temporaries)
+
+        def sweep(self):
+            pass
+
+        def close(self):
+            os.close(self.fd)
+
+    class FakeSock:
+        def bind(self, addr):
+            self.addr = addr
+
+        def listen(self, backlog):
+            pass
+
+        def getsockname(self):
+            return ("127.0.0.1", self.addr[1] or 65222)
+
+    monkeypatch.setattr(registry, "Registry", FakeRegistry)
+    monkeypatch.setattr(registry, "_flock", lambda fd, op: None)
+    monkeypatch.setattr(
+        pwd, "getpwuid",
+        lambda _uid: SimpleNamespace(pw_name="user_\u00e9".encode("utf-8")),
+    )
+
+    registry.configure_port(65222, work_dir_bytes, directory=str(tmp_path))
+    reg = FakeRegistry()
+    try:
+        assert registry.requested_port(reg, work_dir_bytes) == 65222
+    finally:
+        reg.close()
+
+    sock = FakeSock()
+    lease = registry.bind_instance(sock, "127.0.0.1", directory=str(tmp_path), work_dir=work_dir_bytes)
+    try:
+        assert lease.metadata["port"] == 65222
+        assert lease.metadata["work_dir"] == work_dir_text
+        assert lease.metadata["user"] == "user_\u00e9"
+        # Discovery also matches decoded non-ASCII pw_name and work_dir.
+        monkeypatch.setattr(
+            registry, "_flock",
+            lambda fd, op: (_ for _ in ()).throw(IOError(errno_mod.EAGAIN, "locked")),
+        )
+        rows = registry.discover(directory=str(tmp_path), read_only=True)
+        assert rows == [lease.metadata]
+    finally:
+        # Lease.close uses /proc/self/fd on Linux; clean up directly on non-Linux.
+        os.close(lease.directory_fd)
+        os.close(lease.fd)
+        lease.fd = None

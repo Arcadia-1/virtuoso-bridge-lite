@@ -22,6 +22,22 @@ except (ImportError, ValueError):
     from ramic_paths import private_directory, private_child
 
 
+try:
+    _TEXT = unicode
+except NameError:
+    _TEXT = str
+
+
+def _as_text(value):
+    if value is None:
+        return None
+    if isinstance(value, _TEXT):
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    return _TEXT(value)
+
+
 def _flock(fd, operation):
     import fcntl
     fcntl.flock(fd, operation | fcntl.LOCK_NB)
@@ -90,7 +106,7 @@ class Registry(object):
         for path in self.files(temporaries=True):
             fd = None
             try:
-                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
                 info = os.fstat(fd)
                 if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
                         or info.st_mode & 0o077 or info.st_nlink != 1):
@@ -119,9 +135,10 @@ def _read_record(fd):
 
 
 def _scope(work_dir):
+    work_dir = _as_text(work_dir)
     if work_dir and not os.path.isabs(work_dir):
         raise ValueError("Expected working directory must be absolute")
-    return os.path.normpath(work_dir) if work_dir else ""
+    return os.path.normpath(work_dir) if work_dir else u""
 
 
 def _request_name(work_dir):
@@ -165,7 +182,7 @@ def configure_port(port=None, work_dir="", directory=None, root=None):
 
 
 def requested_port(registry, work_dir):
-    for scope in (_scope(work_dir), ""):
+    for scope in (_scope(work_dir), u""):
         path = registry.anchor + "/" + _request_name(scope)
         try:
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -209,7 +226,7 @@ def bind_instance(sock, host, port=0, directory=None, pid=None, work_dir=None, b
     """Bind once (zero means OS ephemeral), then publish a live record."""
     import fcntl
     import pwd
-    work_dir = work_dir or os.getcwd()
+    work_dir = _as_text(work_dir or os.getcwd())
     registry = Registry(directory)
     fd = None
     published = False
@@ -224,8 +241,8 @@ def bind_instance(sock, host, port=0, directory=None, pid=None, work_dir=None, b
         sock.listen(backlog)
         actual_port = sock.getsockname()[1]
         metadata = dict(port=actual_port, pid=pid or os.getpid(), daemon_pid=os.getpid(),
-                        uid=os.geteuid(), user=pwd.getpwuid(os.geteuid()).pw_name,
-                        work_dir=work_dir, instance=uuid.uuid4().hex)
+                        uid=os.geteuid(), user=_as_text(pwd.getpwuid(os.geteuid()).pw_name),
+                        work_dir=work_dir, instance=_as_text(uuid.uuid4().hex))
         fd = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         _flock(fd, fcntl.LOCK_EX)
         payload = json.dumps(metadata).encode("utf-8")
@@ -234,7 +251,7 @@ def bind_instance(sock, host, port=0, directory=None, pid=None, work_dir=None, b
         os.lseek(fd, 0, os.SEEK_SET)
         if _read_record(fd) != metadata:
             raise RuntimeError("Instance record failed readback")
-        name = metadata["instance"] + ".json"
+        name = str(metadata["instance"]) + ".json"
         path = registry.anchor + "/" + name
         os.rename(temporary, path)
         lease = Lease(registry, name, fd, metadata)
@@ -271,29 +288,41 @@ def _discover(directory=None, root=None, legacy=False, read_only=False):
         for path in registry.files():
             fd = None
             try:
-                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                flags = os.O_RDONLY if read_only else os.O_RDWR
+                lock_op = fcntl.LOCK_SH if read_only else fcntl.LOCK_EX
+                can_unlink = not read_only
+                try:
+                    fd = os.open(path, flags | os.O_NOFOLLOW | os.O_NONBLOCK)
+                except OSError as exc:
+                    if not read_only and exc.errno in (errno.EACCES, errno.EROFS):
+                        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                        lock_op = fcntl.LOCK_SH
+                        can_unlink = False
+                    else:
+                        raise
                 info = os.fstat(fd)
                 if (not stat.S_ISREG(info.st_mode) or info.st_size > 16384
                         or info.st_uid != os.geteuid() or info.st_mode & 0o077 or info.st_nlink != 1):
                     continue
                 try:
-                    _flock(fd, fcntl.LOCK_EX)
+                    _flock(fd, lock_op)
                     # A daemon can die after sweep. Remove this newly stale
                     # record too, without ever returning it to the selector.
-                    if not read_only and _same_file(fd, path):
+                    if can_unlink and _same_file(fd, path):
                         os.unlink(path)
                     continue
-                except IOError as exc:
+                except (IOError, OSError) as exc:
                     if exc.errno not in (errno.EACCES, errno.EAGAIN):
                         raise
                 row = _read_record(fd)
                 if (not isinstance(row, dict) or row.get("uid") != os.geteuid()
-                        or row.get("user") != pwd.getpwuid(os.geteuid()).pw_name
+                        or row.get("user") != _as_text(pwd.getpwuid(os.geteuid()).pw_name)
                         or type(row.get("port")) is not int or not 1 <= row["port"] <= 65535
                         or type(row.get("pid")) is not int or row["pid"] <= 0
-                        or not isinstance(row.get("work_dir"), type(u""))
-                        or not row["work_dir"].startswith("/")
-                        or row.get("instance") + ".json" != os.path.basename(path)
+                        or not isinstance(row.get("work_dir"), _TEXT)
+                        or not row["work_dir"].startswith(u"/")
+                        or not isinstance(row.get("instance"), _TEXT)
+                        or row.get("instance") + u".json" != _as_text(os.path.basename(path))
                         or not _same_file(fd, path)):
                     continue
                 rows.append(row)

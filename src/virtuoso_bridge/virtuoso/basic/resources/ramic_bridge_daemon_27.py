@@ -497,6 +497,25 @@ _RECOVERY = RecoverableRequestManager()
 _REPLY_TAGS = os.environ.get("RB_REPLY_TAGS") == "1"
 
 
+def _to_utf8_bytes(value):
+    if isinstance(value, unicode):
+        return value.encode("utf-8")
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _format_exception(exc):
+    try:
+        text = str(exc)
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        try:
+            text = unicode(exc)
+        except Exception:
+            text = repr(exc)
+    return _to_utf8_bytes(text)
+
+
 def _safe_sendall(conn, data):
     try:
         conn.settimeout(_RESPONSE_WRITE_TIMEOUT)
@@ -878,12 +897,12 @@ def handle_external_connection(conn, addr):
                 request_data["skill"], request_data["timeout"]
             )
         except RequestNotStarted as exc:
-            return_data = "\x15" + str(exc)
+            return_data = "\x15" + _format_exception(exc)
         except ExecutionUncertain as exc:
-            poison = str(exc) or "legacy execution outcome is unknown"
+            poison = _format_exception(exc) or "legacy execution outcome is unknown"
             return_data = "\x15" + poison
         except Exception as exc:
-            poison = "unexpected legacy failure after possible transmission: %s" % exc
+            poison = "unexpected legacy failure after possible transmission: " + _format_exception(exc)
             return_data = "\x15" + poison
         finally:
             _RECOVERY.finish_legacy(poison)
@@ -906,19 +925,13 @@ def handle_external_connection(conn, addr):
 
     except ValueError as e:
         # Python 2.7 compatibility: handle JSON decode errors
-        error_msg = "\x15JSONDecodeError: {0}".format(str(e))
-        if hasattr(error_msg, 'encode'):  # Check if it's unicode
-            error_msg = error_msg.encode('utf-8')
-        _safe_sendall(conn, error_msg)
+        _safe_sendall(conn, "\x15JSONDecodeError: " + _format_exception(e))
     except socket.timeout:
         _safe_sendall(conn, "\x15TimeoutError: incomplete request")
     except Exception as e:
         # Python 2.7 compatibility: except Exception, e syntax
         traceback.print_exc()
-        error_msg = "\x15{0}".format(str(e))
-        if hasattr(error_msg, 'encode'):  # Check if it's unicode
-            error_msg = error_msg.encode('utf-8')
-        _safe_sendall(conn, error_msg)
+        _safe_sendall(conn, "\x15" + _format_exception(e))
     finally:
         _safe_close_connection(conn)
 
