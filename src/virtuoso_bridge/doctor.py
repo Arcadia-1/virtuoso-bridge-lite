@@ -254,6 +254,12 @@ class DoctorContext:
         """
         ssh = self.ssh
         if getattr(ssh, "_discover_instances", False):
+            if (
+                self.roles is not None
+                and not _is_localhost(self.roles.daemon_host)
+                and self.ssh_failed(self.roles.daemon_host)
+            ):
+                return None, False
             return ssh.read_daemon_token(), False
         if getattr(ssh, "ssh_runner", None) is None:
             return daemon_auth.read_local_token(), False
@@ -264,6 +270,12 @@ class DoctorContext:
         return self.fetch_remote_token(), False
 
     def fetch_remote_token(self) -> Optional[str]:
+        if (
+            self.roles is not None
+            and not _is_localhost(self.roles.daemon_host)
+            and self.ssh_failed(self.roles.daemon_host)
+        ):
+            return None
         if getattr(self.ssh, "_discover_instances", False):
             return self.ssh.read_daemon_token()
         runner = self.runner("daemon")
@@ -425,6 +437,59 @@ def _handshake_failure(name: str, ctx: DoctorContext, where: str, error: Excepti
     )
 
 
+def _check_daemon_user_out_of_band(
+    ctx: DoctorContext, caps: dict[str, Any], runner: Optional[ReadOnlyRunner],
+) -> Any:
+    """Verify daemon owner without SKILL when the CIW lane is busy/poisoned."""
+    from virtuoso_bridge.daemon_guard import (
+        DaemonUserCheck,
+        _process_owner,
+        cross_user_override_enabled,
+        expected_remote_user,
+    )
+
+    pid = caps.get("virtuoso_pid") if caps.get("auth") == "on" else None
+    has_signed_pid = not isinstance(pid, bool) and isinstance(pid, int) and pid > 0
+    if (
+        runner is None
+        or not has_signed_pid
+        or (not _is_localhost(ctx.roles.daemon_host) and ctx.ssh_failed(ctx.roles.daemon_host))
+    ):
+        return DaemonUserCheck(
+            ok=False,
+            busy=True,
+            error=f"skipped SKILL owner check while {ctx.skill_blocker}",
+        )
+    timeout = int(ctx.timeout)
+    owner = _process_owner(runner, pid, timeout)
+    if not owner:
+        return DaemonUserCheck(
+            ok=False,
+            busy=True,
+            error=f"could not determine owner of Virtuoso pid {pid} out of band while {ctx.skill_blocker}",
+        )
+    expected = expected_remote_user(ctx.profile, runner=runner, timeout=timeout)
+    if cross_user_override_enabled():
+        return DaemonUserCheck(ok=True, expected_user=expected, daemon_user=owner)
+    if not expected:
+        return DaemonUserCheck(
+            ok=False,
+            daemon_user=owner,
+            error="could not determine the SSH login user; refusing an unverified remote session",
+        )
+    if owner != expected:
+        return DaemonUserCheck(
+            ok=False,
+            expected_user=expected,
+            daemon_user=owner,
+            error=(
+                f"daemon Unix user {owner!r} does not match configured "
+                f"or tunnel user {expected!r}"
+            ),
+        )
+    return DaemonUserCheck(ok=True, expected_user=expected, daemon_user=owner)
+
+
 def check_daemon(ctx: DoctorContext) -> CheckResult:
     name = "tunnel/daemon"
     if not ctx.config_ok:
@@ -459,6 +524,9 @@ def check_daemon(ctx: DoctorContext) -> CheckResult:
 
     automatic = getattr(ctx.ssh, "_discover_instances", False)
     if automatic:
+        if not local and ctx.ssh_failed(ctx.roles.daemon_host):
+            ctx.skill_blocker = "SSH to the daemon host failed"
+            return _ssh_failure(name, ctx, ctx.roles.daemon_host)
         from virtuoso_bridge.instance_discovery import validate_record
         try:
             rows = ctx.ssh.list_instances()
@@ -524,8 +592,12 @@ def check_daemon(ctx: DoctorContext) -> CheckResult:
             "once the CIW answers. Doctor sends no SKILL meanwhile."
         )
 
-    check = check_daemon_user(client, profile=ctx.profile, timeout=int(ctx.timeout),
-                              runner=ctx.runner("daemon"))
+    runner = ctx.runner("daemon")
+    if ctx.skill_blocker:
+        check = _check_daemon_user_out_of_band(ctx, caps, runner)
+    else:
+        check = check_daemon_user(client, profile=ctx.profile, timeout=int(ctx.timeout),
+                                  runner=runner)
     if check.busy:
         status = WARN
         facts.append(f"daemon user not verified: {check.error}")
@@ -556,6 +628,44 @@ def check_daemon(ctx: DoctorContext) -> CheckResult:
 BIND_QUERY = "if(boundp('RBLastBind) RBLastBind \"\")"
 
 
+def _read_daemon_identity(ctx: DoctorContext) -> dict[str, str]:
+    """Read the daemon banner file through ReadOnlyRunner (never raw SSHClient)."""
+    identity_path = str(
+        getattr(ctx.ssh, "_remote_identity_path", "")
+        or (ctx.state or {}).get("identity_path")
+        or ""
+    )
+    if not identity_path:
+        return {}
+    deploy_host = ctx.roles.deploy_host
+    if _is_localhost(deploy_host):
+        try:
+            text = Path(identity_path).read_text(encoding="utf-8")
+        except OSError:
+            return {}
+    else:
+        if ctx.ssh_failed(deploy_host):
+            return {}
+        runner = ctx.runner("deploy")
+        if runner is None:
+            return {}
+        try:
+            result = runner.run_command(
+                f"test -r {shlex.quote(identity_path)} && cat {shlex.quote(identity_path)}"
+            )
+        except Exception:  # noqa: BLE001 - recorded on runner/ctx.ssh_failures
+            return {}
+        if getattr(result, "returncode", 1) != 0:
+            return {}
+        text = result.stdout or ""
+    identity: dict[str, str] = {}
+    for line in text.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key in {"host", "ip", "pid", "bind"}:
+            identity[key] = value.strip()
+    return identity
+
+
 def check_listen_address(ctx: DoctorContext) -> CheckResult:
     name = "listen address"
     if not ctx.config_ok:
@@ -568,7 +678,7 @@ def check_listen_address(ctx: DoctorContext) -> CheckResult:
     if ctx.state:
         try:
             # The banner the CIW-side loader saved next to the setup file.
-            bind = str(ctx.ssh.read_daemon_identity().get("bind") or "")
+            bind = str(_read_daemon_identity(ctx).get("bind") or "")
             source = "daemon banner"
         except Exception:  # noqa: BLE001 - fall back to the CIW or the configuration
             bind = ""

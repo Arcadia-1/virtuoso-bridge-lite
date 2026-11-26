@@ -237,11 +237,12 @@ def _safe_roots() -> list[Path]:
 
 def _safe_path(p: str, must_exist: bool = True) -> Path:
     """Resolve user path. Reject anything outside _safe_roots()."""
-    q = (Path(p).expanduser() if Path(p).is_absolute() else (Path.cwd() / p)).resolve()
-    if must_exist and not q.exists():
-        raise ValueError("file not found: %s" % p)
+    raw = Path(p).expanduser()
+    q = (raw if raw.is_absolute() else (Path.cwd() / raw)).resolve()
     if not any(q == r or r in q.parents for r in _safe_roots()):
         raise ValueError("path outside allowed roots: %s" % p)
+    if must_exist and not q.exists():
+        raise ValueError("file not found: %s" % p)
     return q
 
 
@@ -451,6 +452,15 @@ _CLIENT: dict = {"obj": None, "at": 0.0}
 _CLIENT_LOCK = threading.Lock()
 
 
+def _close_quietly(client) -> None:
+    close = getattr(client, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            pass
+
+
 def _client():
     now = time.monotonic()
     with _CLIENT_LOCK:
@@ -460,6 +470,41 @@ def _client():
         _CLIENT["obj"] = obj = _AdapterClient.from_env()
         _CLIENT["at"] = now
         return obj
+
+
+def _running_daemon_install_root(profile: str | None) -> str | None:
+    """Install root reported by an already running bridge daemon, or None."""
+    from virtuoso_bridge.transport.tunnel import SSHClient
+    from virtuoso_bridge.virtuoso.basic.bridge import _INSTALL_ROOT_QUERY_TIMEOUT
+
+    client = None
+    try:
+        if not SSHClient.is_running(profile):
+            return None
+        client = _AdapterClient.from_env(
+            profile=profile,
+            timeout=int(_INSTALL_ROOT_QUERY_TIMEOUT),
+            log_to_ciw=False,
+        )
+        return client._query_install_root()
+    except Exception:
+        return None
+    finally:
+        if client is not None:
+            _close_quietly(client)
+
+
+def _docs_client():
+    """Non-CIW client for doc lookups; never poisons _CLIENT or probes CIW owner."""
+    from virtuoso_bridge.profile import resolve_profile
+    from virtuoso_bridge.transport.tunnel import SSHClient
+
+    profile = resolve_profile(None)
+    ssh = SSHClient.from_env(keep_remote_files=True, profile=profile)
+    client = _AdapterClient(host="127.0.0.1", port=ssh.port, tunnel=ssh, log_to_ciw=False)
+    # Consulted only when SSH discovery finds no documentation.
+    client._install_root_probe = lambda: _running_daemon_install_root(profile)
+    return client
 
 
 def _eval_skill(expr: str, timeout: int):
@@ -553,6 +598,15 @@ def _impl_bridge_start(a: dict) -> dict:
     output = ((result.stdout or "") + (result.stderr or "")).strip()
     if result.returncode:
         return _tool_error("Bridge setup failed: " + output)
+    with _CLIENT_LOCK:
+        obj = _CLIENT["obj"]
+        if obj is not None and (
+            getattr(obj, "_daemon_token", None) is None
+            or getattr(obj, "_daemon_caps", None) is None
+        ):
+            _CLIENT["obj"] = None
+            _CLIENT["at"] = 0.0
+            _close_quietly(obj)
     return _text_result(output, {"setup_complete": True, "output": output,
         "guidance": "If setup printed a load() line, load it in the selected idle CIW. "
                     "Setup success alone does not confirm live SKILL readiness."})
@@ -680,13 +734,24 @@ def _impl_schematic_check_save(a: dict) -> dict:
 
 
 def _impl_maestro_read(a: dict) -> dict:
+    from virtuoso_bridge.virtuoso.maestro.reader import NoResults
     if not a.get("session") or not a.get("history") or "test" in a:
         raise ValueError("test_results requires an explicit session and history, not a test name")
     data = _client().maestro.read_results(a["session"], history=a["history"])
+    if isinstance(data, NoResults):
+        reason = data.reason or "no Maestro results available"
+        response = _tool_error(reason)
+        response["structuredContent"] = {
+            "session": a["session"],
+            "history": a["history"],
+            "reason": reason,
+        }
+        return response
     return _text_result(json.dumps(data, default=str, indent=2)[:TEXT_LIMIT], data)
 
 
 def _impl_maestro_run(a: dict) -> dict:
+    from virtuoso_bridge.virtuoso.maestro.reader import NoResults
     if not a.get("session") or "test" in a:
         raise ValueError("run_test requires a session and runs its enabled tests; test-name arguments are unsupported")
     c = _client()
@@ -705,6 +770,16 @@ def _impl_maestro_run(a: dict) -> dict:
         response = _exception_result(exc)
         response.setdefault("structuredContent", {}).update(
             session=session, history=history, completion_status=status)
+        return response
+    if isinstance(data, NoResults):
+        reason = data.reason or "no Maestro results available"
+        response = _tool_error(reason)
+        response["structuredContent"] = {
+            "session": session,
+            "history": history,
+            "status": status,
+            "reason": reason,
+        }
         return response
     return _text_result(json.dumps(data, default=str),
                         {"session": session, "history": history, "status": status,
@@ -1379,8 +1454,10 @@ def _impl_netlist_check(a: dict) -> dict:
 
 def _impl_library_list(a: dict) -> dict:
     import re
-    r = _eval_skill("out=list(nil) foreach(l ddGetLibList() out=cons(l->name out)) out",
-                    timeout=TIMEOUT_SKILL)
+    r = _eval_skill(
+        "let((vbOut) foreach(vbLib ddGetLibList() vbOut=cons(vbLib->name vbOut)) vbOut)",
+        timeout=TIMEOUT_SKILL,
+    )
     if not r.ok:
         return _bridge_result(r)
     libs = sorted(set(re.findall(r'"([^"]+)"', str(r.output or ""))))
@@ -1388,31 +1465,60 @@ def _impl_library_list(a: dict) -> dict:
 
 
 def _impl_cell_list(a: dict) -> dict:
-    import re
+    from virtuoso_bridge.virtuoso.ops import escape_skill_string
     lib = a["lib"]
     r = _eval_skill(
-        'lib=ddGetObj("%s") if(lib then out="" '
-        'foreach(c lib~>cells vs="" '
-        'foreach(v c~>views vs=strcat(vs v~>name ",")) '
-        'out=strcat(out c~>name ":" vs ";")) out '
-        'else "error: no lib")' % lib.replace('"', ''),
-        timeout=TIMEOUT_SKILL)
+        'let((vbLib vbOut vbVs) '
+        'vbLib=ddGetObj("%s") '
+        'if(vbLib then vbOut="" '
+        'foreach(vbCell vbLib~>cells vbVs="" '
+        'foreach(vbView vbCell~>views vbVs=strcat(vbVs vbView~>name ",")) '
+        'vbOut=strcat(vbOut vbCell~>name ":" vbVs ";")) vbOut '
+        'else "error: no lib"))' % escape_skill_string(lib),
+        timeout=TIMEOUT_SKILL,
+    )
     if not r.ok:
         return _bridge_result(r)
-    return _text_result(str(r.output)[:TEXT_LIMIT], {"lib": lib, "cells": str(r.output)[:8000]})
+    raw = str(r.output or "")
+    if raw.strip().strip('"') == "error: no lib":
+        return _tool_error("library not found: %s" % lib)
+    truncated = len(raw) > 8000
+    return _text_result(raw, {"lib": lib, "cells": raw[:8000], "truncated": truncated})
 
 
 
 
 
 def _impl_skill_find(a: dict) -> dict:
-    hits = _client().find_skill(a['query'])[:20]
+    c = _docs_client()
+    try:
+        hits = c.find_skill(a['query'])[:20]
+    finally:
+        _close_quietly(c)
     return _text_result(json.dumps(hits, default=str)[:TEXT_LIMIT], {'hits': hits})
 
 
 def _impl_skill_info(a: dict) -> dict:
-    hits = _client().find_skill(a['func'])[:20]
-    return _text_result(json.dumps(hits, default=str)[:TEXT_LIMIT], {'hits': hits})
+    from virtuoso_bridge.virtuoso.skill_finder import SKILLFinderNotFoundError
+    c = _docs_client()
+    try:
+        info = c.get_skill_more_info(a['func'], missing_ok=False)
+    except SKILLFinderNotFoundError as exc:
+        return _tool_error(str(exc))
+    finally:
+        _close_quietly(c)
+    if not info:
+        return _tool_error("no documentation found for SKILL function: %s" % a['func'])
+    payload = {
+        "func_name": info.get("func_name") or a["func"],
+        "file_path": info.get("file_path") or "",
+        "topic": info.get("topic"),
+        "plain_text": info.get("plain_text") or "",
+    }
+    topic_suffix = ("#" + payload["topic"]) if payload["topic"] else ""
+    header = "%s (%s%s)" % (payload["func_name"], payload["file_path"], topic_suffix)
+    text = ("%s\n\n%s" % (header, payload["plain_text"])).strip()
+    return _text_result(text, payload)
 
 
 
@@ -1491,7 +1597,11 @@ IMPL = {
 
 
 def _impl_doc_search(a: dict) -> dict:
-    result = _client().search_docs(a['query'], limit=int(a.get('limit', 10)))
+    c = _docs_client()
+    try:
+        result = c.search_docs(a['query'], limit=int(a.get('limit', 10)))
+    finally:
+        _close_quietly(c)
     return _text_result(json.dumps(result, default=str)[:TEXT_LIMIT], result)
 
 
@@ -1644,9 +1754,13 @@ def _skill_frontmatter(path: Path) -> dict:
 
 def _skill_entry(d: Path) -> dict | None:
     f = d / "SKILL.md"
-    if not f.exists():
+    if not f.is_file():
         return None
-    files = [f] + sorted([p for p in d.rglob("*") if p.is_file() and p.stat().st_size < 2_000_000])[:200]
+    extras = sorted(
+        p for p in d.rglob("*")
+        if p != f and p.is_file() and p.stat().st_size < 2_000_000
+    )[:200]
+    files = [f] + extras
     res = []
     for p in files:
         b = p.read_bytes()
@@ -1656,6 +1770,25 @@ def _skill_entry(d: Path) -> dict | None:
     fm = _skill_frontmatter(f)
     fm.setdefault("name", d.name)
     return {"uri": "skill://%s/SKILL.md" % d.name, "frontmatter": fm, "resources": res}
+
+
+def _skill_get(uri: str) -> dict | None:
+    if not isinstance(uri, str) or not uri.startswith("skill://"):
+        return None
+    rest = uri[len("skill://"):]
+    if not rest or "\\" in rest:
+        return None
+    parts = rest.split("/")
+    name = parts[0]
+    if not name or name in (".", "..") or "/" in name or "\\" in name:
+        return None
+    if any(part == ".." for part in parts[1:]):
+        return None
+    skills_root = SKILLS_DIR.resolve()
+    candidate = (SKILLS_DIR / name).resolve()
+    if candidate.parent != skills_root or not candidate.is_dir():
+        return None
+    return _skill_entry(candidate)
 
 
 def _skills_list() -> list[dict]:
@@ -1782,8 +1915,7 @@ def handle(req: dict):
             _reply(rid, r)
         elif method == "skills/get":
             uri = (params or {}).get("uri", "")
-            name = uri[len("skill://"):].split("/")[0] if uri.startswith("skill://") else ""
-            e = _skill_entry(SKILLS_DIR / name) if name else None
+            e = _skill_get(uri)
             if e is None:
                 _reply(rid, None, _rpc_error(-32602, "unknown skill uri"))
             else:
