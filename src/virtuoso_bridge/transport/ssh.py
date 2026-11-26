@@ -1958,8 +1958,8 @@ class SSHRunner:
             "base64 <\"$__vb_stdout\" | tr -d '\\n'\n"
             f"printf '\\n%s\\n' '{stderr_marker}'\n"
             "base64 <\"$__vb_stderr\" | tr -d '\\n'\n"
-            f"printf '\\n{rc_prefix}%s\\n' \"$__vb_rc\"\n"
             "rm -f \"$__vb_stdout\" \"$__vb_stderr\"\n"
+            f"printf '\\n{rc_prefix}%s\\n' \"$__vb_rc\"\n"
         )
 
         budget.remaining(budget_label)
