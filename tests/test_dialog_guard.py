@@ -25,7 +25,14 @@ def _payload(status="clear", **overrides):
 
 def _client(monkeypatch, payload=None):
     client = VirtuosoClient(daemon_token="a" * 64)
-    client._tunnel = SimpleNamespace(gui_host="gui", daemon_host="gui", gui_runner=SimpleNamespace(user="tester"))
+    client._tunnel = SimpleNamespace(
+        gui_host="gui",
+        daemon_host="gui",
+        gui_runner=SimpleNamespace(
+            user="tester",
+            run_command=lambda *a, **k: SimpleNamespace(returncode=1, stdout="", stderr=""),
+        ),
+    )
     client._daemon_caps = {"auth": "on", "virtuoso_pid": 42}
     monkeypatch.setattr(client, "_ensure_daemon_capabilities", lambda deadline, **kw: client._daemon_caps)
     monkeypatch.setattr(x11, "inspect_dialogs", lambda *args, **kw: _payload() if payload is None else payload)

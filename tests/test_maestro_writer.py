@@ -477,3 +477,170 @@ def test_nil_history_retains_context_when_diagnostic_inspection_fails(monkeypatc
     assert metadata["outcome"] == "unknown"
     if guard_enabled:
         assert metadata["dialog_inspection_error"] == "inspection unavailable"
+
+
+def test_delete_var_unquotes_default_session_and_escapes_names() -> None:
+    class _SeqClient(_RecordingClient):
+        def __init__(self, responses):
+            super().__init__()
+            self._responses = list(responses)
+
+        def execute_skill(self, expression: str, **kwargs):
+            self.expressions.append(expression)
+            self.skill_kwargs.append(kwargs)
+            return SimpleNamespace(errors=[], output=self._responses.pop(0))
+
+    client = _SeqClient(['"fnxSession0"', "t"])
+    writer.delete_var(client, 'v"1')
+    assert client.expressions == [
+        "car(maeGetSessions())",
+        'axlRemoveElement(axlGetVar(axlGetMainSetupDB("fnxSession0") "v\\"1"))',
+    ]
+
+    client_test = _SeqClient(['"fnxSession0"', "t"])
+    writer.delete_var(client_test, "vdd", test='T"1')
+    assert client_test.expressions == [
+        "car(maeGetSessions())",
+        'axlRemoveElement(axlGetVar(axlGetTest(axlGetMainSetupDB("fnxSession0") "T\\"1") "vdd"))',
+    ]
+
+
+@pytest.mark.parametrize("raw_session", ["nil", "", '""'])
+def test_delete_var_and_setup_corner_raise_when_no_default_session(raw_session: str) -> None:
+    class _NilSessionClient(_RecordingClient):
+        def execute_skill(self, expression: str, **kwargs):
+            self.expressions.append(expression)
+            return SimpleNamespace(errors=[], output=raw_session)
+
+    with pytest.raises(RuntimeError, match="No active Maestro session"):
+        writer.delete_var(_NilSessionClient(), "vdd")
+
+    with pytest.raises(RuntimeError, match="No active Maestro session"):
+        writer.setup_corner(_NilSessionClient(), "tt", model_file="/pdk/model.scs")
+
+
+def test_setup_corner_unquotes_default_session_and_escapes_expressions() -> None:
+    class _SeqClient(_RecordingClient):
+        def __init__(self, responses):
+            super().__init__()
+            self._responses = list(responses)
+
+        def execute_skill(self, expression: str, **kwargs):
+            self.expressions.append(expression)
+            out = self._responses.pop(0) if self._responses else "t"
+            return SimpleNamespace(errors=[], output=out)
+
+    client = _SeqClient(["t", "t", '"fnxSession0"', "t"])
+    writer.setup_corner(
+        client,
+        'tt"25',
+        model_file='/pdk/a"b/model.scs',
+        model_section='tt"sec',
+        variables={"vcm": 'VAR("vdd")/2'},
+    )
+
+    assert client.expressions[0] == 'maeSetCorner("tt\\"25")'
+    assert client.expressions[1] == (
+        'maeSetVar("vcm" "VAR(\\"vdd\\")/2" '
+        '?typeName "corner" ?typeValue \'("tt\\"25"))'
+    )
+    assert client.expressions[2] == "car(maeGetSessions())"
+    assert 'axlGetMainSetupDB("fnxSession0")' in client.expressions[3]
+    assert '""fnxSession0""' not in client.expressions[3]
+    assert 'axlGetCorner(sdb "tt\\"25")' in client.expressions[3]
+    assert 'axlSetModelFile(model "/pdk/a\\"b/model.scs")' in client.expressions[3]
+    assert 'axlSetModelSection(model "tt\\"sec")' in client.expressions[3]
+
+
+def test_writer_escapes_var_expressions_and_preserves_raw_skill_lists() -> None:
+    client = _RecordingClient()
+
+    writer.set_var(
+        client,
+        "vcm",
+        'VAR("vdd")/2',
+        type_name="test",
+        type_value='("IB_PSS")',
+        session='s"1',
+    )
+    writer.set_parameter(
+        client,
+        "cload",
+        'VAR("c0")*2',
+        type_name="corner",
+        type_value='("myCorner")',
+        session='s"1',
+    )
+    writer.set_analysis(
+        client,
+        'T"1',
+        "tran",
+        options='(("stop" "1u"))',
+        session='s"1',
+    )
+    writer.set_env_option(
+        client,
+        'T"1',
+        '(("modelFiles" (("/pdk/m.scs" "tt"))))',
+        session='s"1',
+    )
+    writer.set_sim_option(
+        client,
+        'T"1',
+        '(("temp" "85"))',
+        session='s"1',
+    )
+    writer.set_corner(client, 'c"1', disable_tests='("AC")', session='s"1')
+    writer.load_corners(client, '/tmp/a"b.csv')
+
+    assert client.expressions[0] == (
+        'maeSetVar("vcm" "VAR(\\"vdd\\")/2" '
+        '?typeName "test" ?typeValue \'("IB_PSS") ?session "s\\"1")'
+    )
+    assert client.expressions[1] == (
+        'maeSetParameter("cload" "VAR(\\"c0\\")*2" '
+        '?typeName "corner" ?typeValue `("myCorner") ?session "s\\"1")'
+    )
+    assert 'maeSetAnalysis("T\\"1" "tran" ?enable t ?options `(("stop" "1u")) ?session "s\\"1")' in client.expressions[2]
+    assert 'maeGetTestSession("T\\"1" ?session "s\\"1")' in client.expressions[2]
+    assert client.expressions[3] == (
+        'maeSetEnvOption("T\\"1" ?options `(("modelFiles" (("/pdk/m.scs" "tt")))) ?session "s\\"1")'
+    )
+    assert client.expressions[4] == (
+        'maeSetSimOption("T\\"1" ?options `(("temp" "85")) ?session "s\\"1")'
+    )
+    assert client.expressions[5] == 'maeSetCorner("c\\"1" ?disableTests `("AC") ?session "s\\"1")'
+    assert client.expressions[6] == 'maeLoadCorners("/tmp/a\\"b.csv" ?sections "corners" ?operation "overwrite")'
+
+
+def test_run_and_wait_polls_gui_runner_on_split_host(monkeypatch) -> None:
+    gui_commands: list[str] = []
+    daemon_commands: list[str] = []
+
+    class _GuiRunner:
+        def run_command(self, cmd, *, timeout):
+            gui_commands.append(cmd)
+            if cmd.startswith("cat "):
+                return SimpleNamespace(returncode=0, stdout="done\n")
+            return SimpleNamespace(returncode=0, stdout="")
+
+    class _DaemonRunner:
+        def run_command(self, cmd, *, timeout):
+            daemon_commands.append(cmd)
+            return SimpleNamespace(returncode=1, stdout="")
+
+    client = _RecordingClient()
+    client.gui_runner = _GuiRunner()
+    client.ssh_runner = _DaemonRunner()
+    monkeypatch.setattr(writer, "run_simulation", lambda *a, **kw: '"Interactive.5"')
+    monkeypatch.setattr(writer.uuid, "uuid4", lambda: SimpleNamespace(hex="cafebabe"))
+
+    history, status = run_and_wait(client, session="s1", timeout=10, dialog_check=False)
+
+    assert (history, status) == ('"Interactive.5"', "done")
+    assert daemon_commands == []
+    assert gui_commands == [
+        "rm -f /tmp/vb_sim_done_cafebabe",
+        "cat /tmp/vb_sim_done_cafebabe 2>/dev/null",
+        "rm -f /tmp/vb_sim_done_cafebabe",
+    ]

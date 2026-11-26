@@ -8,6 +8,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import threading
 import time
 import uuid
 import warnings
@@ -282,6 +283,55 @@ def _run_spectre_local(
 # Remote execution
 # ---------------------------------------------------------------------------
 
+def _non_persistent_runner(runner: SSHRunner) -> SSHRunner:
+    """Return a runner that executes commands without a serialized persistent shell."""
+    if not (isinstance(runner, SSHRunner) and getattr(runner, "persistent_shell_enabled", False)):
+        return runner
+    sibling = SSHRunner(
+        host=runner.host,
+        user=runner.user,
+        jump_host=getattr(runner, "_jump_host", None),
+        jump_user=getattr(runner, "_jump_user", None),
+        ssh_key_path=getattr(runner, "_ssh_key_path", None),
+        ssh_config_path=getattr(runner, "_ssh_config_path", None),
+        ssh_cmd=getattr(runner, "_ssh_cmd", None),
+        timeout=getattr(runner, "_timeout", 600),
+        connect_timeout=getattr(runner, "_connect_timeout", 30),
+        persistent_shell=False,
+        backend=getattr(runner, "backend", None),
+        max_sessions=getattr(runner, "max_sessions", None),
+        verbose=getattr(runner, "_verbose", False),
+        proxy_url=getattr(runner, "_proxy_url", None),
+    )
+    sibling._use_control_master = getattr(runner, "_use_control_master", sibling._use_control_master)
+    sibling._control_path = getattr(runner, "_control_path", sibling._control_path)
+    return sibling
+
+
+def _terminate_remote_spectre(runner: SSHRunner, pid_file: str) -> None:
+    """Best-effort termination of a timed-out remote Spectre process and children."""
+    quoted_pid = shlex.quote(pid_file)
+    kill_body = (
+        f'if [ -r {quoted_pid} ]; then '
+        f'p=$(cat {quoted_pid} 2>/dev/null); '
+        f'case "$p" in ""|*[!0-9]*) exit 0 ;; esac; '
+        f'if kill -0 "$p" 2>/dev/null; then '
+        f'kill -TERM -"$p" 2>/dev/null || true; '
+        f'command -v pkill >/dev/null 2>&1 && pkill -TERM -P "$p" 2>/dev/null || true; '
+        f'kill -TERM "$p" 2>/dev/null || true; '
+        f'sleep 1; '
+        f'if kill -0 "$p" 2>/dev/null; then '
+        f'kill -KILL -"$p" 2>/dev/null || true; '
+        f'command -v pkill >/dev/null 2>&1 && pkill -KILL -P "$p" 2>/dev/null || true; '
+        f'kill -KILL "$p" 2>/dev/null || true; '
+        f'fi; fi; fi'
+    )
+    try:
+        runner.run_command(f"sh -c {shlex.quote(kill_body)}", timeout=15)
+    except Exception:  # noqa: S110
+        logger.warning("Failed to terminate remote Spectre process from %s", pid_file)
+
+
 def _run_spectre_remote(
     *,
     netlist: Path,
@@ -298,6 +348,7 @@ def _run_spectre_remote(
     license_queue_timeout: int | None = 900,
 ) -> _SpectreRunResult:
     """Run Spectre on a remote host: upload netlist, run, download results."""
+    runner = _non_persistent_runner(runner)
     run_id = uuid.uuid4().hex[:8]
     remote_dir = f"{remote_work_dir}/{run_id}"
 
@@ -329,60 +380,89 @@ def _run_spectre_remote(
         run_command = CadenceEnvironment(mentor_script).wrap(run_command)
     run_command = environment.wrap(run_command)
     pid_file = f"{remote_dir}/spectre.pid"
+    quoted_raw = shlex.quote(remote_raw_dir)
+    quoted_pid = shlex.quote(pid_file)
+    quoted_run = shlex.quote(run_command)
+    timeout_arg = shlex.quote(f"{timeout:g}s")
     exec_body = (
-        f"mkdir -p {shlex.quote(remote_raw_dir)} || exit $?; "
-        f"{run_command} & "
-        f'SPID=$!; echo "$SPID" > {shlex.quote(pid_file)}; wait "$SPID"'
+        f"mkdir -p {quoted_raw} || exit $?; "
+        f"if command -v timeout >/dev/null 2>&1; then "
+        f"timeout -k 5s {timeout_arg} sh -c {quoted_run} & "
+        f"else "
+        f"sh -c {quoted_run} & "
+        f"fi; "
+        f'SPID=$!; echo "$SPID" > {quoted_pid}; wait "$SPID"'
     )
     exec_cmd = f"sh -c {shlex.quote(exec_body)}"
 
     logger.info("[remote] %s", exec_cmd)
-    task = run_remote_task(
-        runner,
-        work_dir_base=remote_work_dir,
-        run_id=run_id,
-        uploads=uploads,
-        command=exec_cmd,
-        timeout=timeout,
-    )
-
-    if not task.success:
-        return _SpectreRunResult(
-            success=False, output_dir=None, returncode=-1,
-            stdout=task.stdout, stderr=task.stderr,
-            error=task.error or "Remote task failed",
-            metadata={
-                "timings": dict(task.timings),
-                "command": exec_cmd,
-                "spectre_command": spectre_command,
-            },
-        )
-
-    if task.returncode != 0:
-        stdout = (task.stdout or "").strip()
-        stderr = (task.stderr or "").strip()
-        if stdout or stderr:
-            logger.warning(
-                "Spectre exited with %s\n[stdout]\n%s\n[stderr]\n%s",
-                task.returncode, stdout, stderr,
-            )
+    target_remote_dir: str | None = remote_dir
 
     def _cleanup_remote_run_dir() -> None:
-        if not keep_remote_files and task.remote_dir:
+        if not keep_remote_files and target_remote_dir:
             try:
-                runner.run_command(f"rm -rf {task.remote_dir}")
-                logger.debug("Cleaned up remote Spectre directory: %s", task.remote_dir)
+                runner.run_command(f"rm -rf {shlex.quote(target_remote_dir)}", timeout=30)
+                logger.debug("Cleaned up remote Spectre directory: %s", target_remote_dir)
             except Exception:  # noqa: S110
-                logger.warning("Failed to clean up remote Spectre directory: %s", task.remote_dir)
-
-    # Kept remote files stay usable from the remote host (e.g. ViVA
-    # openResults on remote_raw_dir); deleted ones are not reported.
-    kept = (
-        {"remote_dir": task.remote_dir or remote_dir, "remote_raw_dir": remote_raw_dir}
-        if keep_remote_files else {}
-    )
+                logger.warning("Failed to clean up remote Spectre directory: %s", target_remote_dir)
 
     try:
+        task = run_remote_task(
+            runner,
+            work_dir_base=remote_work_dir,
+            run_id=run_id,
+            uploads=uploads,
+            command=exec_cmd,
+            timeout=timeout,
+        )
+        target_remote_dir = task.remote_dir
+
+        if not task.success:
+            err_lower = (task.error or "").lower()
+            if "local file not found for upload" in err_lower:
+                target_remote_dir = None
+            elif "timed out" in err_lower or "ssh execution error" in err_lower:
+                _terminate_remote_spectre(runner, pid_file)
+            return _SpectreRunResult(
+                success=False, output_dir=None, returncode=-1,
+                stdout=task.stdout, stderr=task.stderr,
+                error=task.error or "Remote task failed",
+                metadata={
+                    "timings": dict(task.timings),
+                    "command": exec_cmd,
+                    "spectre_command": spectre_command,
+                },
+            )
+
+        if task.returncode == 124:
+            _terminate_remote_spectre(runner, pid_file)
+            return _SpectreRunResult(
+                success=False, output_dir=None, returncode=124,
+                stdout=task.stdout, stderr=task.stderr,
+                error=f"Spectre simulation timed out after {timeout} seconds",
+                metadata={
+                    "timings": dict(task.timings),
+                    "command": exec_cmd,
+                    "spectre_command": spectre_command,
+                },
+            )
+
+        if task.returncode != 0:
+            stdout = (task.stdout or "").strip()
+            stderr = (task.stderr or "").strip()
+            if stdout or stderr:
+                logger.warning(
+                    "Spectre exited with %s\n[stdout]\n%s\n[stderr]\n%s",
+                    task.returncode, stdout, stderr,
+                )
+
+        # Kept remote files stay usable from the remote host (e.g. ViVA
+        # openResults on remote_raw_dir); deleted ones are not reported.
+        kept = (
+            {"remote_dir": task.remote_dir or remote_dir, "remote_raw_dir": remote_raw_dir}
+            if keep_remote_files else {}
+        )
+
         base_output_dir = Path(base_output_dir).resolve()
         timings = dict(task.timings)
         download_total = 0.0
@@ -731,7 +811,9 @@ class SpectreSimulator:
         # or parallel_pool() for incremental submission.
         self._legacy_max_workers = DEFAULT_PARALLEL_WORKERS
         self._legacy_pool: SpectrePool | None = None
+        self._init_lock = threading.Lock()
         self._ssh_runner: SSHRunner | None = ssh_runner
+        self._concurrent_ssh_runner: SSHRunner | None = None
         self._profile = profile
         self._ssh_backend: str | None = None
         self._ssh_max_sessions: int | None = None
@@ -1079,21 +1161,49 @@ class SpectreSimulator:
 
     def _get_ssh_runner(self) -> SSHRunner:
         if self._ssh_runner is None:
-            self._ssh_runner = SSHRunner(
-                host=self._remote_host,  # type: ignore[arg-type]
-                user=self._remote_user,
-                jump_host=self._jump_host,
-                jump_user=self._jump_user,
-                ssh_key_path=self._ssh_key_path,
-                ssh_config_path=self._ssh_config_path,
-                timeout=self._timeout,
-                persistent_shell=True,
-                backend=self._ssh_backend,
-                max_sessions=self._ssh_max_sessions,
-                proxy_url=self._ssh_proxy_url,
-                verbose=True,
-            )
+            with self._init_lock:
+                if self._ssh_runner is None:
+                    self._ssh_runner = SSHRunner(
+                        host=self._remote_host,  # type: ignore[arg-type]
+                        user=self._remote_user,
+                        jump_host=self._jump_host,
+                        jump_user=self._jump_user,
+                        ssh_key_path=self._ssh_key_path,
+                        ssh_config_path=self._ssh_config_path,
+                        timeout=self._timeout,
+                        persistent_shell=False,
+                        backend=self._ssh_backend,
+                        max_sessions=self._ssh_max_sessions,
+                        proxy_url=self._ssh_proxy_url,
+                        verbose=True,
+                    )
         return self._ssh_runner
+
+    def _get_remote_exec_runner(self) -> SSHRunner:
+        runner = self._get_ssh_runner()
+        if not (isinstance(runner, SSHRunner) and getattr(runner, "persistent_shell_enabled", False)):
+            return runner
+        if self._concurrent_ssh_runner is None:
+            with self._init_lock:
+                if self._concurrent_ssh_runner is None:
+                    self._concurrent_ssh_runner = _non_persistent_runner(runner)
+        return self._concurrent_ssh_runner
+
+    def _resolve_remote_work_dir(self, runner: SSHRunner) -> str | None:
+        if not self._remote_work_dir_set:
+            with self._init_lock:
+                if not self._remote_work_dir_set:
+                    username = resolve_remote_username(
+                        configured_user=self._remote_user or getattr(runner, "user", None),
+                        runner=runner,
+                    )
+                    self._remote_work_dir = default_remote_spectre_work_dir(
+                        username,
+                        resolve_client_id(self._profile),
+                    )
+                    self._remote_work_dir_set = True
+                    logger.info("Remote work dir: %s", self._remote_work_dir)
+        return self._remote_work_dir
 
     def _run_remote(
         self,
@@ -1102,21 +1212,12 @@ class SpectreSimulator:
         *,
         work_dir: Path | None,
     ) -> SimulationResult:
-        runner = self._get_ssh_runner()
+        runner = self._get_remote_exec_runner()
         timings: dict[str, float] = {}
         overall_started = time.perf_counter()
 
-        if not self._remote_work_dir_set:
-            username = resolve_remote_username(
-                configured_user=self._remote_user or runner.user,
-                runner=runner,
-            )
-            self._remote_work_dir = default_remote_spectre_work_dir(
-                username,
-                resolve_client_id(self._profile),
-            )
-            logger.info("Remote work dir: %s", self._remote_work_dir)
-        if self._remote_work_dir is None:
+        remote_work_dir = self._resolve_remote_work_dir(runner)
+        if remote_work_dir is None:
             return SimulationResult(
                 status=ExecutionStatus.ERROR,
                 errors=["Remote work dir is not configured"],
@@ -1132,7 +1233,7 @@ class SpectreSimulator:
             netlist=netlist,
             params=params,
             runner=runner,
-            remote_work_dir=self._remote_work_dir,
+            remote_work_dir=remote_work_dir,
             base_output_dir=base_output_dir,
             spectre_cmd=self._spectre_cmd,
             spectre_args=self._spectre_args,

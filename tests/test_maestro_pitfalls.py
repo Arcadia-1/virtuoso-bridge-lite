@@ -57,8 +57,10 @@ def test_export_output_view_fails_when_no_file_was_written() -> None:
     client = _Client()
     export_output_view(client, "/tmp/out.csv")
     skill = client.expressions[0]
+    assert 'when(isFile("/tmp/out.csv") deleteFile("/tmp/out.csv"))' in skill
     assert 'errset(maeExportOutputView(?view "Detail" ?fileName "/tmp/out.csv") t)' in skill
-    assert 'unless(isFile("/tmp/out.csv") error(' in skill
+    assert 'unless(vbRun && isFile("/tmp/out.csv") error(' in skill
+    assert skill.index('deleteFile("/tmp/out.csv")') < skill.index("maeExportOutputView(")
 
 
 # -- "done" with failed points ----------------------------------------------

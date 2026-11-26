@@ -56,6 +56,8 @@ def _spectre_psf_scan_root(raw_dir: Path) -> Path:
         has_psf = (
             any(inner.glob("*.dc"))
             or any(inner.glob("*.info"))
+            or any(inner.glob("*.tran"))
+            or any(inner.glob("*.ac"))
             or inner.joinpath("logFile").is_file()
         )
         if has_psf:
@@ -63,7 +65,12 @@ def _spectre_psf_scan_root(raw_dir: Path) -> Path:
     for child in sorted(raw_dir.iterdir()):
         if not child.is_dir():
             continue
-        if any(child.glob("*.dc")) or any(child.glob("*.info")):
+        if (
+            any(child.glob("*.dc"))
+            or any(child.glob("*.info"))
+            or any(child.glob("*.tran"))
+            or any(child.glob("*.ac"))
+        ):
             return child
     return raw_dir
 
@@ -95,7 +102,10 @@ def parse_psf_ascii_directory(output_dir: Path) -> dict[str, Any]:
             tran_found = True
             break
     if not tran_found:
-        for tran_file in sorted(output_dir.glob("*.tran.tran")):
+        tran_globs = list(sorted(output_dir.glob("*.tran.tran")))
+        seen_tran = set(tran_globs)
+        tran_globs.extend(p for p in sorted(output_dir.glob("*.tran")) if p not in seen_tran)
+        for tran_file in tran_globs:
             result = parse_spectre_psf_ascii(tran_file)
             if result.data:
                 merged_data.update(result.data)
@@ -175,7 +185,10 @@ def parse_psf_ascii_directory(output_dir: Path) -> dict[str, Any]:
             ac_found = True
             break
     if not ac_found:
-        for ac_file in sorted(output_dir.glob("*.ac.ac")):
+        ac_globs = list(sorted(output_dir.glob("*.ac.ac")))
+        seen_ac = set(ac_globs)
+        ac_globs.extend(p for p in sorted(output_dir.glob("*.ac")) if p not in seen_ac)
+        for ac_file in ac_globs:
             result = parse_spectre_psf_ascii(ac_file)
             if result.data:
                 for key, val in result.data.items():
@@ -245,7 +258,7 @@ def parse_sweep_psf_directory(output_dir: Path) -> dict[int, dict[str, Any]]:
                 continue
             point_data = parse_psf_ascii_directory(point_dir)
             if point_data:
-                sweep_data[point_idx] = point_data
+                sweep_data.setdefault(point_idx, {}).update(point_data)
 
     if sweep_data:
         return sweep_data
@@ -264,7 +277,7 @@ def parse_sweep_psf_directory(output_dir: Path) -> dict[int, dict[str, Any]]:
         point_idx = int(m.group(1)) + 1
         result = parse_spectre_psf_ascii(psf_file)
         if result.data:
-            sweep_data[point_idx] = result.data
+            sweep_data.setdefault(point_idx, {}).update(result.data)
 
     return sweep_data
 
@@ -333,7 +346,9 @@ def _parse_psf_swept_data(
     sweep_end = sections.get("TRACE", sections.get("VALUE", n))
     for i in range(sweep_start, sweep_end):
         stripped = lines[i].strip()
-        if not stripped or stripped in ("TRACE", "VALUE", "END"):
+        if not stripped:
+            continue
+        if stripped in ("TRACE", "VALUE", "END"):
             break
         m = re.match(r'"([^"]+)"', stripped)
         if m:
@@ -355,7 +370,9 @@ def _parse_psf_swept_data(
         trace_end = sections.get("VALUE", n)
         for i in range(trace_start, trace_end):
             stripped = lines[i].strip()
-            if not stripped or stripped in ("VALUE", "END"):
+            if not stripped:
+                continue
+            if stripped in ("VALUE", "END"):
                 break
             # GROUP marker: " N" GROUP 1
             m_group = re.match(r'"(\s*\d+)"\s+GROUP\s+\d+', stripped)
@@ -390,10 +407,16 @@ def _parse_psf_swept_data(
     raw_entries: list[tuple[str | None, float | complex | None]] = []
     for i in range(value_start, value_end):
         stripped = lines[i].strip()
-        if not stripped or stripped == "END":
+        if not stripped:
+            continue
+        if stripped == "END":
             break
         # Complex value: "name" (real imag) → store as Python complex
-        m_complex = re.match(r'"([^"]+)"\s+\(\s*([-+0-9.eE]+)\s+([-+0-9.eE]+)\s*\)', stripped)
+        m_complex = re.match(
+            rf'"([^"]+)"\s+\(\s*({_PSF_FLOAT})\s+({_PSF_FLOAT})\s*\)',
+            stripped,
+            re.IGNORECASE,
+        )
         if m_complex:
             raw_key = m_complex.group(1)
             sig_name = group_to_name.get(raw_key, raw_key)
@@ -470,6 +493,190 @@ def _parse_psf_swept_data(
 
     return data  # type: ignore[return-value]
 
+_PSF_FLOAT = r"(?:[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?|[-+]?(?:nan|inf(?:inity)?))"
+_PSF_QUOTED = r'"((?:[^"\\]|\\.)*)"'
+_RE_PSF_TYPED_PAREN = re.compile(rf"^{_PSF_QUOTED}\s+{_PSF_QUOTED}\s+\((.*)$")
+_RE_PSF_TYPED_STR = re.compile(rf"^{_PSF_QUOTED}\s+{_PSF_QUOTED}\s+{_PSF_QUOTED}(.*)$")
+_RE_PSF_TYPED_NUM = re.compile(
+    rf"^{_PSF_QUOTED}\s+{_PSF_QUOTED}\s+({_PSF_FLOAT})(?=\s|$)(.*)$",
+    re.IGNORECASE,
+)
+_RE_PSF_TYPED_TOKEN = re.compile(rf"^{_PSF_QUOTED}\s+{_PSF_QUOTED}\s+(\S+)(.*)$")
+_RE_PSF_UNTYPED_COMPLEX = re.compile(
+    rf"^{_PSF_QUOTED}\s+\(\s*({_PSF_FLOAT})\s+({_PSF_FLOAT})\s*\)(.*)$",
+    re.IGNORECASE,
+)
+_RE_PSF_UNTYPED_NUM = re.compile(
+    rf"^{_PSF_QUOTED}\s+({_PSF_FLOAT})(?=\s|$)(.*)$",
+    re.IGNORECASE,
+)
+_RE_PSF_UNTYPED_STR = re.compile(rf"^{_PSF_QUOTED}\s+{_PSF_QUOTED}(.*)$")
+_RE_PSF_UNTYPED_TOKEN = re.compile(rf"^{_PSF_QUOTED}\s+(\S+)(.*)$")
+_RE_PSF_COMPLEX_PAIR = re.compile(rf"^\s*({_PSF_FLOAT})\s+({_PSF_FLOAT})\s*$", re.IGNORECASE)
+
+
+def _unescape_psf_string(raw: str) -> str:
+    return raw.replace('\\"', '"').replace("\\\\", "\\")
+
+
+def _paren_delta(text: str) -> int:
+    """Return net parenthesis depth change outside double-quoted strings."""
+    depth = 0
+    in_quotes = False
+    escaped = False
+    for ch in text:
+        if escaped:
+            escaped = False
+            continue
+        if in_quotes:
+            if ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_quotes = False
+            continue
+        if ch == '"':
+            in_quotes = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+    return depth
+
+
+def _skip_balanced_parens(
+    lines: list[str],
+    start_idx: int,
+    end_idx: int,
+    initial_text: str,
+) -> int:
+    """Advance past a balanced ``(...)`` block starting in *initial_text*."""
+    depth = _paren_delta(initial_text)
+    idx = start_idx + 1
+    while depth > 0 and idx < end_idx:
+        depth += _paren_delta(lines[idx])
+        idx += 1
+    return idx
+
+
+def _advance_past_trailing_prop(
+    lines: list[str],
+    idx: int,
+    end_idx: int,
+    tail: str,
+) -> int:
+    prop_idx = tail.find("PROP(")
+    if prop_idx != -1:
+        return _skip_balanced_parens(lines, idx, end_idx, tail[prop_idx:])
+    return idx + 1
+
+
+def _read_balanced_group(
+    lines: list[str],
+    start_idx: int,
+    end_idx: int,
+    initial_rest: str,
+) -> tuple[str, str, int]:
+    """Read inside a ``(...)`` group starting after ``(``; return ``(body, trailing, close_idx)``."""
+    body_parts: list[str] = []
+    depth = 1
+    idx = start_idx
+    segment = initial_rest
+
+    while True:
+        in_quotes = False
+        escaped = False
+        closed_at: int | None = None
+        for pos, ch in enumerate(segment):
+            if escaped:
+                escaped = False
+                continue
+            if in_quotes:
+                if ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_quotes = False
+                continue
+            if ch == '"':
+                in_quotes = True
+            elif ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    closed_at = pos
+                    break
+        if closed_at is not None:
+            body_parts.append(segment[:closed_at])
+            return "\n".join(body_parts), segment[closed_at + 1 :], idx
+        body_parts.append(segment)
+        idx += 1
+        if idx >= end_idx:
+            return "\n".join(body_parts), "", end_idx - 1
+        segment = lines[idx]
+
+
+def _tokenize_psf_struct_values(body: str) -> list[Any]:
+    """Extract ordered scalar/complex/string members from a STRUCT body."""
+    values: list[Any] = []
+    pos = 0
+    length = len(body)
+    while pos < length:
+        while pos < length and body[pos].isspace():
+            pos += 1
+        if pos >= length:
+            break
+        ch = body[pos]
+        if ch == '"':
+            end = pos + 1
+            escaped = False
+            while end < length:
+                c = body[end]
+                if escaped:
+                    escaped = False
+                elif c == "\\":
+                    escaped = True
+                elif c == '"':
+                    break
+                end += 1
+            values.append(_unescape_psf_string(body[pos + 1 : end]))
+            pos = end + 1
+        elif ch == "(":
+            depth = 1
+            end = pos + 1
+            in_quotes = False
+            escaped = False
+            while end < length and depth > 0:
+                c = body[end]
+                if escaped:
+                    escaped = False
+                elif in_quotes:
+                    if c == "\\":
+                        escaped = True
+                    elif c == '"':
+                        in_quotes = False
+                elif c == '"':
+                    in_quotes = True
+                elif c == "(":
+                    depth += 1
+                elif c == ")":
+                    depth -= 1
+                end += 1
+            inner = body[pos + 1 : end - 1 if depth == 0 else end]
+            m_pair = _RE_PSF_COMPLEX_PAIR.match(inner)
+            if m_pair:
+                values.append(complex(float(m_pair.group(1)), float(m_pair.group(2))))
+            else:
+                values.append(body[pos:end].strip())
+            pos = end
+        else:
+            end = pos
+            while end < length and not body[end].isspace():
+                end += 1
+            values.append(_parse_psf_scalar(body[pos:end]))
+            pos = end
+    return values
+
+
 def _parse_psf_non_swept_data(
     lines: list[str],
     n: int,
@@ -487,58 +694,105 @@ def _parse_psf_non_swept_data(
     value_start = sections["VALUE"] + 1
     value_end = sections.get("END", n)
 
-    for i in range(value_start, value_end):
+    i = value_start
+    while i < value_end:
         stripped = lines[i].strip()
-        if not stripped or stripped == "END":
+        if not stripped:
+            i += 1
+            continue
+        if stripped == "END":
             break
+        if stripped.startswith("PROP("):
+            i = _skip_balanced_parens(lines, i, value_end, stripped)
+            continue
 
-        # Per-instance operating-point values use a type-defined STRUCT:
+        # Typed parenthesized value: either a type-defined STRUCT or a typed complex tuple:
         #   "M0" "mos" ( <gm> <vth> ... ) PROP(...)
-        # Keep the public result flat so callers can use ``M0:gm`` directly.
-        m_struct = re.match(r'^"([^"]+)"\s+"([^"]+)"\s+\($', stripped)
-        if m_struct and m_struct.group(2) in struct_fields:
-            instance, type_name = m_struct.groups()
-            values: list[Any] = []
-            for j in range(i + 1, value_end):
-                value_line = lines[j].strip()
-                if value_line == ")" or value_line.startswith(") PROP("):
-                    break
-                if value_line:
-                    values.append(_parse_psf_scalar(value_line))
-            for field, value in zip(struct_fields[type_name], values):
-                data[f"{instance}:{field}"] = value
+        #   "Z11" "Ohm" (50.0 -12.5) PROP(...)
+        m_paren = _RE_PSF_TYPED_PAREN.match(stripped)
+        if m_paren:
+            name, type_name, rest = m_paren.groups()
+            body, trailing, close_idx = _read_balanced_group(lines, i, value_end, rest)
+            if type_name in struct_fields:
+                values = _tokenize_psf_struct_values(body)
+                for field, value in zip(struct_fields[type_name], values):
+                    data[f"{name}:{field}"] = value
+            else:
+                m_complex = _RE_PSF_COMPLEX_PAIR.match(body)
+                if m_complex:
+                    data[name] = complex(float(m_complex.group(1)), float(m_complex.group(2)))
+            i = _advance_past_trailing_prop(lines, close_idx, value_end, trailing)
             continue
 
-        # DC OP lines: "M0:gm" "S" 1.906e-04 PROP( ... )
-        m_typed = re.match(
-            r'^"([^"]+)"\s+(?:"[^"]+"\s+)([-+0-9.eE]+)',
-            stripped,
-        )
-        if m_typed:
+        # Typed string value: "M0:model" "STRING" "nch" [PROP(...)]
+        m_typed_str = _RE_PSF_TYPED_STR.match(stripped)
+        if m_typed_str:
+            name, _type_name, raw_str, tail = m_typed_str.groups()
+            data[name] = _unescape_psf_string(raw_str)
+            i = _advance_past_trailing_prop(lines, i, value_end, tail)
+            continue
+
+        # Typed numeric value (including nan/inf): "M0:gm" "S" 1.906e-04 [PROP(...)]
+        m_typed_num = _RE_PSF_TYPED_NUM.match(stripped)
+        if m_typed_num:
+            name, _type_name, raw_num, tail = m_typed_num.groups()
             try:
-                data[m_typed.group(1)] = float(m_typed.group(2))
+                data[name] = float(raw_num)
             except ValueError:
                 pass
+            i = _advance_past_trailing_prop(lines, i, value_end, tail)
             continue
 
-        # "name" numeric_value (no unit type token)
-        m_num = re.match(r'^"([^"]+)"\s+([-+0-9.eE]+)', stripped)
+        # Typed unquoted non-numeric value: "M0:mode" "ENUM" sat [PROP(...)]
+        m_typed_tok = _RE_PSF_TYPED_TOKEN.match(stripped)
+        if m_typed_tok and not m_typed_tok.group(3).startswith("PROP("):
+            name, _type_name, raw_tok, tail = m_typed_tok.groups()
+            data[name] = _parse_psf_scalar(raw_tok)
+            i = _advance_past_trailing_prop(lines, i, value_end, tail)
+            continue
+
+        # Untyped complex value: "VO" (1.0 -0.5) [PROP(...)]
+        m_untyped_complex = _RE_PSF_UNTYPED_COMPLEX.match(stripped)
+        if m_untyped_complex:
+            name, real_s, imag_s, tail = m_untyped_complex.groups()
+            data[name] = complex(float(real_s), float(imag_s))
+            i = _advance_past_trailing_prop(lines, i, value_end, tail)
+            continue
+
+        # Untyped numeric value (including nan/inf): "name" numeric_value [PROP(...)]
+        m_num = _RE_PSF_UNTYPED_NUM.match(stripped)
         if m_num:
+            name, raw_num, tail = m_num.groups()
             try:
-                data[m_num.group(1)] = float(m_num.group(2))
+                data[name] = float(raw_num)
             except ValueError:
                 pass
+            i = _advance_past_trailing_prop(lines, i, value_end, tail)
             continue
 
-        # Legacy: "name" token (string or unquoted remainder)
-        m = re.match(r'^"([^"]+)"\s+(\S+)', stripped)
+        # Legacy untyped quoted string: "name" "value" [PROP(...)]
+        m_str = _RE_PSF_UNTYPED_STR.match(stripped)
+        if m_str:
+            name, raw_str, tail = m_str.groups()
+            data[name] = _unescape_psf_string(raw_str)
+            i = _advance_past_trailing_prop(lines, i, value_end, tail)
+            continue
+
+        # Legacy untyped bare token: "name" token [PROP(...)]
+        m = _RE_PSF_UNTYPED_TOKEN.match(stripped)
         if m:
-            name = m.group(1)
-            raw_value = m.group(2)
+            name, raw_value, tail = m.groups()
+            if raw_value.startswith("PROP("):
+                i = _skip_balanced_parens(lines, i, value_end, stripped[stripped.find("PROP(") :])
+                continue
             try:
                 data[name] = float(raw_value)
             except ValueError:
                 data[name] = raw_value.strip('"')
+            i = _advance_past_trailing_prop(lines, i, value_end, tail)
+            continue
+
+        i += 1
 
     return data
 
@@ -564,7 +818,7 @@ def _parse_psf_struct_types(lines: list[str], start: int, end: int) -> dict[str,
         if depth == 1 and member:
             structs[current_type].append(member.group(1))
 
-        depth += stripped.count("(") - stripped.count(")")
+        depth += _paren_delta(stripped)
         if depth <= 0:
             current_type = None
             depth = 0

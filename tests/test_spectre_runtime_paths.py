@@ -370,3 +370,280 @@ def test_simulation_result_exposes_kept_remote_paths(monkeypatch, tmp_path) -> N
     assert seen["keep"] is True
     assert result.metadata["remote_raw_dir"] == "/tmp/spectre-runs/abcd1234/tb_amp.raw"
     assert result.metadata["remote_dir"] == "/tmp/spectre-runs/abcd1234"
+
+
+@pytest.mark.parametrize("keep_remote_files", [False, True])
+def test_remote_timeout_terminates_pid_and_cleans_quoted_dir(
+    monkeypatch, tmp_path, keep_remote_files: bool
+) -> None:
+    from virtuoso_bridge.transport.ssh import CommandResult, RemoteTaskResult
+
+    captured_exec: list[str] = []
+
+    def fake_run_remote_task(_runner, *, work_dir_base, run_id, command, **_kwargs):
+        captured_exec.append(command)
+        return RemoteTaskResult(
+            success=False,
+            returncode=-1,
+            stdout="",
+            stderr="",
+            remote_dir=f"{work_dir_base}/{run_id}",
+            error="Remote command timed out after 5 seconds",
+            timings={"upload_total": 0.1},
+        )
+
+    monkeypatch.setattr(runner, "run_remote_task", fake_run_remote_task)
+    commands: list[str] = []
+
+    class _Runner:
+        host = "eda-host"
+
+        def run_command(self, command, **_kwargs):
+            commands.append(command)
+            return CommandResult(returncode=0, stdout="", stderr="")
+
+    netlist = tmp_path / "fixture.scs"
+    netlist.write_text("simulator lang=spectre\n", encoding="utf-8")
+
+    result = runner._run_spectre_remote(
+        netlist=netlist,
+        params={},
+        runner=_Runner(),
+        remote_work_dir="/remote/work dir",
+        base_output_dir=tmp_path / "out",
+        timeout=5,
+        keep_remote_files=keep_remote_files,
+        cadence_env=runner.CadenceEnvironment(""),
+    )
+
+    assert not result.success
+    assert "timeout -k 5s 5s" in captured_exec[0]
+    assert "spectre.pid" in captured_exec[0]
+    assert any("spectre.pid" in cmd and "kill -TERM" in cmd for cmd in commands)
+    if keep_remote_files:
+        assert not any(cmd.startswith("rm -rf ") for cmd in commands)
+    else:
+        rm_cmds = [cmd for cmd in commands if cmd.startswith("rm -rf ")]
+        assert len(rm_cmds) == 1
+        assert rm_cmds[0].startswith("rm -rf '/remote/work dir/")
+        # Termination must happen before deleting the directory holding spectre.pid.
+        kill_idx = next(i for i, c in enumerate(commands) if "spectre.pid" in c)
+        rm_idx = next(i for i, c in enumerate(commands) if c.startswith("rm -rf "))
+        assert kill_idx < rm_idx
+
+
+def test_remote_timeout_exit_124_fails_and_cleans_up(monkeypatch, tmp_path) -> None:
+    from virtuoso_bridge.transport.ssh import CommandResult, RemoteTaskResult
+
+    monkeypatch.setattr(
+        runner,
+        "run_remote_task",
+        lambda *_a, **kw: RemoteTaskResult(
+            success=True,
+            returncode=124,
+            stdout="",
+            stderr="",
+            remote_dir=f"{kw['work_dir_base']}/{kw['run_id']}",
+            error=None,
+            timings={},
+        ),
+    )
+    commands: list[str] = []
+
+    class _Runner:
+        host = "eda-host"
+
+        def run_command(self, command, **_kwargs):
+            commands.append(command)
+            return CommandResult(returncode=0, stdout="", stderr="")
+
+    netlist = tmp_path / "fixture.scs"
+    netlist.write_text("simulator lang=spectre\n", encoding="utf-8")
+
+    result = runner._run_spectre_remote(
+        netlist=netlist,
+        params={},
+        runner=_Runner(),
+        remote_work_dir="/remote/work",
+        base_output_dir=tmp_path / "out",
+        timeout=5,
+        keep_remote_files=False,
+        cadence_env=runner.CadenceEnvironment(""),
+    )
+
+    assert not result.success
+    assert result.returncode == 124
+    assert "timed out" in (result.error or "").lower()
+    assert any(cmd.startswith("rm -rf /remote/work/") for cmd in commands)
+
+
+def test_remote_timeout_kills_real_hanging_process_and_removes_spaced_dir(tmp_path) -> None:
+    import os
+    import shlex
+    import shutil
+    import subprocess
+    import sys
+
+    if os.name == "nt" or not shutil.which("sh"):
+        pytest.skip("requires POSIX sh")
+
+    from virtuoso_bridge.transport.ssh import CommandResult
+
+    pid_log = tmp_path / "spawned.pid"
+    hang_script = tmp_path / "fake spectre.py"
+    hang_script.write_text(
+        f"import os, pathlib, time\n"
+        f"pathlib.Path({str(pid_log)!r}).write_text(str(os.getpid()))\n"
+        f"time.sleep(30)\n",
+        encoding="utf-8",
+    )
+
+    class _LocalPosixRunner:
+        host = "fixture-host"
+
+        def upload_batch(self, uploads):
+            for src, dst in uploads:
+                target = Path(dst)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, target)
+            return CommandResult(0, "", "")
+
+        def run_command(self, command, timeout=None):
+            completed = subprocess.run(
+                ["sh", "-c", command],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            return CommandResult(completed.returncode, completed.stdout, completed.stderr)
+
+    remote_base = tmp_path / "remote work dir"
+    netlist = tmp_path / "fixture.scs"
+    netlist.write_text("simulator lang=spectre\n", encoding="utf-8")
+
+    result = runner._run_spectre_remote(
+        netlist=netlist,
+        params={},
+        runner=_LocalPosixRunner(),
+        remote_work_dir=str(remote_base),
+        base_output_dir=tmp_path / "out",
+        spectre_cmd=shlex.join([sys.executable, str(hang_script)]),
+        timeout=1,
+        keep_remote_files=False,
+        cadence_env=runner.CadenceEnvironment(""),
+    )
+
+    assert not result.success
+    assert "timed out" in (result.error or "").lower()
+    if pid_log.exists():
+        pid = int(pid_log.read_text())
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
+    assert list(remote_base.iterdir()) == []
+
+
+def test_parallel_remote_initializes_ssh_runner_and_work_dir_once(monkeypatch, tmp_path) -> None:
+    import threading
+    import time
+
+    netlist = tmp_path / "tb_amp.scs"
+    netlist.write_text("simulator lang=spectre\n", encoding="utf-8")
+
+    runner_inits = 0
+    username_calls = 0
+    count_lock = threading.Lock()
+    barrier = threading.Barrier(4, timeout=3.0)
+
+    class _FakeSSHRunner:
+        user = None
+        persistent_shell_enabled = False
+
+        def __init__(self, **kwargs):
+            nonlocal runner_inits
+            time.sleep(0.02)
+            with count_lock:
+                runner_inits += 1
+            self.kwargs = kwargs
+
+    def fake_resolve_username(**_kwargs):
+        nonlocal username_calls
+        time.sleep(0.02)
+        with count_lock:
+            username_calls += 1
+        return "designer"
+
+    def fake_run_spectre_remote(**kwargs):
+        barrier.wait()
+        return _successful_run(kwargs["base_output_dir"] / "tb_amp.raw")
+
+    monkeypatch.setattr(runner, "SSHRunner", _FakeSSHRunner)
+    monkeypatch.setattr(runner, "resolve_remote_username", fake_resolve_username)
+    monkeypatch.setattr(runner, "resolve_client_id", lambda _p: "client1")
+    monkeypatch.setattr(runner, "_run_spectre_remote", fake_run_spectre_remote)
+    monkeypatch.setattr(runner, "load_vb_env", lambda: None)
+
+    sim = runner.SpectreSimulator(remote_host="compute-host", work_dir=tmp_path / "runs")
+    results = sim.run_parallel([(netlist, {}) for _ in range(4)], max_workers=4)
+
+    assert all(r.ok for r in results)
+    assert runner_inits == 1
+    assert username_calls == 1
+    assert sim._remote_work_dir_set is True
+    assert sim._ssh_runner.kwargs["persistent_shell"] is False
+
+    # Subsequent calls must not re-run username discovery.
+    more = sim.run_parallel([(netlist, {}) for _ in range(4)], max_workers=4)
+    assert all(r.ok for r in more)
+    assert username_calls == 1
+
+
+def test_parallel_remote_does_not_serialize_on_persistent_shell_lock(monkeypatch, tmp_path) -> None:
+    import threading
+    from virtuoso_bridge.transport.ssh import CommandResult, SSHRunner
+
+    netlist = tmp_path / "tb_amp.scs"
+    netlist.write_text("simulator lang=spectre\n", encoding="utf-8")
+
+    # Simulate an OpenSSH runner inherited from SSHClient (persistent_shell=True).
+    persistent = SSHRunner(host="compute-host", user="designer", persistent_shell=True)
+    persistent._persistent_shell_enabled = True
+
+    def forbid_persistent(*_args, **_kwargs):
+        raise AssertionError("Spectre remote execution must not use persistent shell _shell_lock")
+
+    monkeypatch.setattr(SSHRunner, "_run_via_persistent_shell_with_retry", forbid_persistent)
+
+    exec_barrier = threading.Barrier(2, timeout=3.0)
+
+    def fake_upload_batch(self, _uploads, timeout=None):
+        return CommandResult(0, "", "")
+
+    def fake_download(self, _remote, local, recursive=False, timeout=None):
+        if recursive:
+            Path(local).mkdir(parents=True, exist_ok=True)
+        return CommandResult(0, "", "")
+
+    def fake_run_command_once(self, command, timeout=None, *, _budget=None):
+        if "spectre.pid" in command:
+            # Both workers must reach remote execution concurrently; serialization deadlocks here.
+            exec_barrier.wait()
+        return CommandResult(0, "", "")
+
+    monkeypatch.setattr(SSHRunner, "upload_batch", fake_upload_batch)
+    monkeypatch.setattr(SSHRunner, "download", fake_download)
+    monkeypatch.setattr(SSHRunner, "_run_command_once", fake_run_command_once)
+    monkeypatch.setattr(runner, "load_vb_env", lambda: None)
+    monkeypatch.setattr(runner.CadenceEnvironment, "from_env", lambda *a: runner.CadenceEnvironment(""))
+
+    sim = runner.SpectreSimulator(
+        remote_host="compute-host",
+        remote_work_dir="/tmp/spectre-runs",
+        work_dir=tmp_path / "runs",
+        ssh_runner=persistent,
+        output_format=None,
+    )
+    results = sim.run_parallel([(netlist, {}), (netlist, {})], max_workers=2)
+
+    assert all(r.ok for r in results), [r.errors for r in results]
+    assert sim._ssh_runner is persistent
+    assert persistent.persistent_shell_enabled is True
