@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import math
 import os
 from pathlib import Path
@@ -13,6 +12,7 @@ import tempfile
 import time
 
 from virtuoso_bridge.cadence_env import CadenceEnvironment
+from virtuoso_bridge.virtuoso.ops import escape_skill_string
 
 
 def _text(value, name):
@@ -54,7 +54,8 @@ def _request(results_dir, signals, start, stop, step, max_samples):
 
 
 def _script(results_dir, signals, start, stop, step, count):
-    queries = " ".join(json.dumps(s) for s in signals)
+    queries = " ".join(f'"{escape_skill_string(s)}"' for s in signals)
+    escaped_dir = escape_skill_string(results_dir)
     return f'''procedure(vbWindowSignal(fp idx query)
  let((wave xx yy n first last at val)
   wave=getData(query ?result 'tran)
@@ -65,17 +66,17 @@ def _script(results_dir, signals, start, stop, step, count):
   unless(n>0 error("No committed samples"))
   first=drGetElem(xx 0) last=drGetElem(xx n-1)
   unless(numberp(first) && numberp(last) && first<=last error("Invalid time axis"))
-  fprintf(fp "C\\t%d\\t%d\\t%.17g\\t%.17g\\n" idx n first last)
+  fprintf(fp "C\\t%d\\t%d\\t%.17g\\t%.17g\\n" idx n float(first) float(last))
   for(k 0 {count - 1}
-   at={start:.17g}+k*{step:.17g}
-   when(at>={start:.17g} && at<={stop:.17g} && at>=first && at<=last
+   at=float({start:.17g})+k*float({step:.17g})
+   when(at>=float({start:.17g}) && at<=float({stop:.17g}) && at>=first && at<=last
     val=value(wave at)
     unless(numberp(val) error("Not a real scalar waveform"))
-    fprintf(fp "D\\t%d\\t%.17g\\t%.17g\\n" idx at val)))
+    fprintf(fp "D\\t%d\\t%.17g\\t%.17g\\n" idx float(at) float(val))))
   t))
 unless(errset(progn(
  fp=outfile("window.tsv" "w") unless(fp error("Cannot create output"))
- opened=errset(openResults({json.dumps(results_dir)}) t)
+ opened=errset(openResults("{escaped_dir}") t)
  idx=0
  foreach(query '({queries})
   if(opened && car(opened)

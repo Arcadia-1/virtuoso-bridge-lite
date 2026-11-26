@@ -95,6 +95,16 @@ def _simulation_failure(client, exc: Exception, *, timeout: float, **context) ->
     return result
 
 
+def _resolve_session(client: VirtuosoClient, session: str) -> str:
+    """Return *session* or the unquoted current Maestro session name."""
+    if session:
+        return session
+    resolved = _strip_skill_atom(_q(client, "car(maeGetSessions())"))
+    if not resolved or resolved == "nil":
+        raise RuntimeError("No active Maestro session found.")
+    return resolved
+
+
 # ---------------------------------------------------------------------------
 # Test
 # ---------------------------------------------------------------------------
@@ -103,19 +113,22 @@ def create_test(client: VirtuosoClient, test: str, *,
                 lib: str, cell: str, view: str = "schematic",
                 simulator: str = "spectre", session: str = "") -> str:
     """maeCreateTest — create a new test."""
-    s = f' ?session "{session}"' if session else ""
+    s = f' ?session "{escape_skill_string(session)}"' if session else ""
     return _q(client,
-        f'maeCreateTest("{test}" ?lib "{lib}" ?cell "{cell}" '
-        f'?view "{view}" ?simulator "{simulator}"{s})')
+        f'maeCreateTest("{escape_skill_string(test)}" '
+        f'?lib "{escape_skill_string(lib)}" ?cell "{escape_skill_string(cell)}" '
+        f'?view "{escape_skill_string(view)}" '
+        f'?simulator "{escape_skill_string(simulator)}"{s})')
 
 
 def set_design(client: VirtuosoClient, test: str, *,
                lib: str, cell: str, view: str = "schematic",
                session: str = "") -> str:
     """maeSetDesign — change the DUT for an existing test."""
-    s = f' ?session "{session}"' if session else ""
+    s = f' ?session "{escape_skill_string(session)}"' if session else ""
     return _q(client,
-        f'maeSetDesign("{test}" "{lib}" "{cell}" "{view}"{s})')
+        f'maeSetDesign("{escape_skill_string(test)}" "{escape_skill_string(lib)}" '
+        f'"{escape_skill_string(cell)}" "{escape_skill_string(view)}"{s})')
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +148,7 @@ def set_analysis(client: VirtuosoClient, test: str, analysis: str, *,
     ``_EXPR_1=302n``. The cached entries of the fields set here are dropped,
     so the netlist takes the new value.
     """
-    s = f' ?session "{session}"' if session else ""
+    s = f' ?session "{escape_skill_string(session)}"' if session else ""
     en = "t" if enable else "nil"
     opts = f" ?options `{options}" if options else ""
     noise = sorted(set(_option_names(options)) & _TRAN_NOISE_OPTIONS)
@@ -144,14 +157,16 @@ def set_analysis(client: VirtuosoClient, test: str, analysis: str, *,
             "set_analysis: %s are netlisted only while transient noise is "
             "enabled, and Maestro accepts them silently otherwise; verify the "
             "netlist with check_netlist_options()", ", ".join(noise))
-    call = f'maeSetAnalysis("{test}" "{analysis}" ?enable {en}{opts}{s})'
+    etest = escape_skill_string(test)
+    eanalysis = escape_skill_string(analysis)
+    call = f'maeSetAnalysis("{etest}" "{eanalysis}" ?enable {en}{opts}{s})'
     fields = [f"{analysis}_{name}" for name in _option_names(options)]
     if not fields:
         return _q(client, call)
     keys = " ".join(f'"{escape_skill_string(f)}"' for f in fields)
     return _q(client, (
         f"let((vbR vbS vbT vbK) vbR = {call} "
-        f'errset(progn(vbS = asiGetSession(maeGetTestSession("{escape_skill_string(test)}"{s})) '
+        f'errset(progn(vbS = asiGetSession(maeGetTestSession("{etest}"{s})) '
         f"vbT = vbS->data['expressionTable] "
         f"when(tablep(vbT) "
         f"foreach(k vbT when(listp(vbT[k]) && member(symbolToString(car(vbT[k])) '({keys})) vbK = cons(k vbK))) "
@@ -243,12 +258,12 @@ def add_output(client: VirtuosoClient, name: str, test: str, *,
 def set_spec(client: VirtuosoClient, name: str, test: str, *,
              lt: str = "", gt: str = "", session: str = "") -> str:
     """maeSetSpec — set pass/fail spec on an output."""
-    s = f' ?session "{session}"' if session else ""
-    parts = f'maeSetSpec("{name}" "{test}"'
+    s = f' ?session "{escape_skill_string(session)}"' if session else ""
+    parts = f'maeSetSpec("{escape_skill_string(name)}" "{escape_skill_string(test)}"'
     if lt:
-        parts += f' ?lt "{lt}"'
+        parts += f' ?lt "{escape_skill_string(lt)}"'
     if gt:
-        parts += f' ?gt "{gt}"'
+        parts += f' ?gt "{escape_skill_string(gt)}"'
     parts += f'{s})'
     return _q(client, parts)
 
@@ -276,10 +291,13 @@ def set_var(client: VirtuosoClient, name: str, value: str, *,
     of corners; read the netlisted value back, or set the variable per
     corner with :func:`setup_corner` ``variables=``.
     """
-    s = f' ?session "{session}"' if session else ""
-    parts = f'maeSetVar("{name}" "{value}"'
+    s = f' ?session "{escape_skill_string(session)}"' if session else ""
+    parts = (
+        f'maeSetVar("{escape_skill_string(name)}" '
+        f'"{escape_skill_string(value)}"'
+    )
     if type_name:
-        parts += f' ?typeName "{type_name}"'
+        parts += f' ?typeName "{escape_skill_string(type_name)}"'
     if type_value:
         parts += f" ?typeValue '{type_value}"
     parts += f'{s})'
@@ -288,8 +306,8 @@ def set_var(client: VirtuosoClient, name: str, value: str, *,
 
 def get_var(client: VirtuosoClient, name: str, *, session: str = "") -> str:
     """maeGetVar — get the value of a design variable."""
-    s = f' ?session "{session}"' if session else ""
-    return _q(client, f'maeGetVar("{name}"{s})')
+    s = f' ?session "{escape_skill_string(session)}"' if session else ""
+    return _q(client, f'maeGetVar("{escape_skill_string(name)}"{s})')
 
 
 def delete_var(client: VirtuosoClient, name: str, *,
@@ -302,13 +320,15 @@ def delete_var(client: VirtuosoClient, name: str, *,
     Note: to delete a global variable, you must first delete it
     from all tests that have a local copy.
     """
-    sess = session or _q(client, 'car(maeGetSessions())')
+    sess = escape_skill_string(_resolve_session(client, session))
+    ename = escape_skill_string(name)
     if test:
+        etest = escape_skill_string(test)
         expr = (f'axlRemoveElement(axlGetVar('
-                f'axlGetTest(axlGetMainSetupDB("{sess}") "{test}") "{name}"))')
+                f'axlGetTest(axlGetMainSetupDB("{sess}") "{etest}") "{ename}"))')
     else:
         expr = (f'axlRemoveElement(axlGetVar('
-                f'axlGetMainSetupDB("{sess}") "{name}"))')
+                f'axlGetMainSetupDB("{sess}") "{ename}"))')
     return _q(client, expr)
 
 
@@ -320,10 +340,10 @@ def get_parameter(client: VirtuosoClient, name: str, *,
                   type_name: str = "", type_value: str = "",
                   session: str = "") -> str:
     """maeGetParameter — get value of a parameter for a test or corner."""
-    s = f' ?session "{session}"' if session else ""
-    parts = f'maeGetParameter("{name}"'
+    s = f' ?session "{escape_skill_string(session)}"' if session else ""
+    parts = f'maeGetParameter("{escape_skill_string(name)}"'
     if type_name:
-        parts += f' ?typeName "{type_name}"'
+        parts += f' ?typeName "{escape_skill_string(type_name)}"'
     if type_value:
         parts += f' ?typeValue `{type_value}'
     parts += f'{s})'
@@ -339,10 +359,13 @@ def set_parameter(client: VirtuosoClient, name: str, value: str, *,
     For corner:  set_parameter(client, "cload", "1p 2p",
                                type_name="corner", type_value='("myCorner")')
     """
-    s = f' ?session "{session}"' if session else ""
-    parts = f'maeSetParameter("{name}" "{value}"'
+    s = f' ?session "{escape_skill_string(session)}"' if session else ""
+    parts = (
+        f'maeSetParameter("{escape_skill_string(name)}" '
+        f'"{escape_skill_string(value)}"'
+    )
     if type_name:
-        parts += f' ?typeName "{type_name}"'
+        parts += f' ?typeName "{escape_skill_string(type_name)}"'
     if type_value:
         parts += f' ?typeValue `{type_value}'
     parts += f'{s})'
@@ -360,9 +383,9 @@ def set_env_option(client: VirtuosoClient, test: str, options: str, *,
     options: SKILL alist string, e.g.
       '(("modelFiles" (("/path/model.scs" "tt"))))'
     """
-    s = f' ?session "{session}"' if session else ""
+    s = f' ?session "{escape_skill_string(session)}"' if session else ""
     return _q(client,
-        f'maeSetEnvOption("{test}" ?options `{options}{s})')
+        f'maeSetEnvOption("{escape_skill_string(test)}" ?options `{options}{s})')
 
 
 def set_sim_option(client: VirtuosoClient, test: str, options: str, *,
@@ -372,9 +395,9 @@ def set_sim_option(client: VirtuosoClient, test: str, options: str, *,
     options: SKILL alist string, e.g.
       '(("temp" "85") ("reltol" "1e-5"))'
     """
-    s = f' ?session "{session}"' if session else ""
+    s = f' ?session "{escape_skill_string(session)}"' if session else ""
     return _q(client,
-        f'maeSetSimOption("{test}" ?options `{options}{s})')
+        f'maeSetSimOption("{escape_skill_string(test)}" ?options `{options}{s})')
 
 
 # ---------------------------------------------------------------------------
@@ -387,9 +410,9 @@ def set_corner(client: VirtuosoClient, name: str, *,
 
     disable_tests: SKILL list string, e.g. '("AC" "TRAN")'
     """
-    s = f' ?session "{session}"' if session else ""
+    s = f' ?session "{escape_skill_string(session)}"' if session else ""
     dt = f' ?disableTests `{disable_tests}' if disable_tests else ""
-    return _q(client, f'maeSetCorner("{name}"{dt}{s})')
+    return _q(client, f'maeSetCorner("{escape_skill_string(name)}"{dt}{s})')
 
 
 def setup_corner(client: VirtuosoClient, name: str, *,
@@ -423,7 +446,8 @@ def setup_corner(client: VirtuosoClient, name: str, *,
         variables: Corner-specific variables, e.g. {"temperature": "25", "vdd": "1.2"}
         session: Maestro session ID
     """
-    s = f' ?session "{session}"' if session else ""
+    s = f' ?session "{escape_skill_string(session)}"' if session else ""
+    ename = escape_skill_string(name)
 
     # Create the corner
     set_corner(client, name, session=session)
@@ -432,20 +456,24 @@ def setup_corner(client: VirtuosoClient, name: str, *,
     if variables:
         for var_name, var_value in variables.items():
             _q(client,
-               f'maeSetVar("{var_name}" "{var_value}" '
-               f'?typeName "corner" ?typeValue \'("{name}"){s})')
+               f'maeSetVar("{escape_skill_string(var_name)}" '
+               f'"{escape_skill_string(var_value)}" '
+               f'?typeName "corner" ?typeValue \'("{ename}"){s})')
 
     # Set model file + section via axl* setup-DB API
     if model_file:
-        sess_id = session or _q(client, "car(maeGetSessions())")
+        sess_id = escape_skill_string(_resolve_session(client, session))
         model_name = model_file.rsplit("/", 1)[-1] if "/" in model_file else model_file
+        emodel_name = escape_skill_string(model_name)
+        emodel_file = escape_skill_string(model_file)
+        emodel_section = escape_skill_string(model_section)
         expr = (
             f'let((sdb corn model) '
             f'sdb = axlGetMainSetupDB("{sess_id}") '
-            f'corn = axlGetCorner(sdb "{name}") '
-            f'model = axlPutModel(corn "{model_name}") '
-            f'axlSetModelFile(model "{model_file}") '
-            f'{f"""axlSetModelSection(model "{model_section}") """ if model_section else ""}'
+            f'corn = axlGetCorner(sdb "{ename}") '
+            f'model = axlPutModel(corn "{emodel_name}") '
+            f'axlSetModelFile(model "{emodel_file}") '
+            f'{f"""axlSetModelSection(model "{emodel_section}") """ if model_section else ""}'
             f'model)'
         )
         _q(client, expr)
@@ -458,8 +486,9 @@ def load_corners(client: VirtuosoClient, filepath: str, *,
                  operation: str = "overwrite") -> str:
     """maeLoadCorners — load corners from a CSV file."""
     return _q(client,
-        f'maeLoadCorners("{filepath}" ?sections "{sections}" '
-        f'?operation "{operation}")')
+        f'maeLoadCorners("{escape_skill_string(filepath)}" '
+        f'?sections "{escape_skill_string(sections)}" '
+        f'?operation "{escape_skill_string(operation)}")')
 
 
 # ---------------------------------------------------------------------------
@@ -472,28 +501,28 @@ def set_current_run_mode(client: VirtuosoClient, run_mode: str, *,
 
     run_mode: e.g. "Single Run, Sweeps and Corners"
     """
-    s = f' ?session "{session}"' if session else ""
+    s = f' ?session "{escape_skill_string(session)}"' if session else ""
     return _q(client,
-        f'maeSetCurrentRunMode(?runMode "{run_mode}"{s})')
+        f'maeSetCurrentRunMode(?runMode "{escape_skill_string(run_mode)}"{s})')
 
 
 def set_job_control_mode(client: VirtuosoClient, mode: str, *,
                          session: str = "") -> str:
     """maeSetJobControlMode — set job control mode (e.g. "Local", "LSCS")."""
-    s = f' ?session "{session}"' if session else ""
-    return _q(client, f'maeSetJobControlMode("{mode}"{s})')
+    s = f' ?session "{escape_skill_string(session)}"' if session else ""
+    return _q(client, f'maeSetJobControlMode("{escape_skill_string(mode)}"{s})')
 
 
 def set_job_policy(client: VirtuosoClient, policy, *,
                    test_name: str = "", job_type: str = "",
                    session: str = "") -> str:
     """maeSetJobPolicy — set job policy for a test."""
-    s = f' ?session "{session}"' if session else ""
+    s = f' ?session "{escape_skill_string(session)}"' if session else ""
     parts = f"maeSetJobPolicy({policy}"
     if test_name:
-        parts += f' ?testName "{test_name}"'
+        parts += f' ?testName "{escape_skill_string(test_name)}"'
     if job_type:
-        parts += f' ?jobType "{job_type}"'
+        parts += f' ?jobType "{escape_skill_string(job_type)}"'
     parts += f'{s})'
     return _q(client, parts)
 
@@ -567,7 +596,12 @@ def _remove_marker(runner, marker: str) -> None:
         except OSError:
             pass
     else:
-        runner.run_command(f"rm -f {marker}", timeout=10)
+        runner.run_command(f"rm -f {shlex.quote(marker)}", timeout=10)
+
+
+def _marker_runner(client: VirtuosoClient):
+    """Runner for the host where Virtuoso's SKILL callback writes /tmp markers."""
+    return getattr(client, "gui_runner", None) or getattr(client, "ssh_runner", None)
 
 
 # Without the opt-in guard, a modal dialog (an ASSEMBLER question, a disk
@@ -600,7 +634,7 @@ def _wait_until_done(client: VirtuosoClient, marker: str,
     import time as _time
     from pathlib import Path as _Path
 
-    runner = client.ssh_runner
+    runner = _marker_runner(client)
 
     deadline = _time.monotonic() + timeout
     next_dialog_check = 0.0
@@ -620,7 +654,7 @@ def _wait_until_done(client: VirtuosoClient, marker: str,
                     return content
         else:
             r = runner.run_command(
-                f"cat {marker} 2>/dev/null",
+                f"cat {shlex.quote(marker)} 2>/dev/null",
                 timeout=min(10.0, remaining),
             )
             if r.returncode == 0 and r.stdout.strip():
@@ -731,7 +765,7 @@ def run_and_wait(client: VirtuosoClient, *, session: str = "",
 
     # runner is None in local mode (Virtuoso on the same host); _remove_marker
     # and _wait_until_done both handle that case via local fs operations.
-    runner = client.ssh_runner
+    runner = _marker_runner(client)
 
     # The CIW PID for the read-only dialog checks during the wait: the
     # daemon cannot tell it once a dialog holds the CIW.
@@ -872,21 +906,24 @@ def create_netlist_for_corner(client: VirtuosoClient, test: str,
 
     If *session* is omitted, Cadence uses the current Maestro session.
     """
-    s = f' ?session "{session}"' if session else ""
+    s = f' ?session "{escape_skill_string(session)}"' if session else ""
     return _q(client,
-        f'maeCreateNetlistForCorner("{test}" "{corner}" "{output_dir}"{s})')
+        f'maeCreateNetlistForCorner("{escape_skill_string(test)}" '
+        f'"{escape_skill_string(corner)}" "{escape_skill_string(output_dir)}"{s})')
 
 
 def _export_output_view_skill(filepath: str, args: str) -> str:
     """SKILL running maeExportOutputView that fails unless *filepath* exists.
 
     maeExportOutputView can return without writing anything and without an
-    error; the file is the only reliable signal.
+    error; remove any stale destination first and require both errset success
+    and the exported file.
     """
     path = escape_skill_string(filepath)
     return (
-        f'let((vbRun) vbRun = errset(maeExportOutputView({args} ?fileName "{path}") t) '
-        f'unless(isFile("{path}") error("maeExportOutputView wrote no file %s: %L" '
+        f'let((vbRun) when(isFile("{path}") deleteFile("{path}")) '
+        f'vbRun = errset(maeExportOutputView({args} ?fileName "{path}") t) '
+        f'unless(vbRun && isFile("{path}") error("maeExportOutputView wrote no file %s: %L" '
         f'"{path}" if(vbRun car(vbRun) errset.errset))) '
         f'car(vbRun))'
     )
@@ -922,7 +959,7 @@ def copy_point_netlist(client: VirtuosoClient, source: str,
 
 def write_script(client: VirtuosoClient, filepath: str) -> str:
     """maeWriteScript — export entire setup as reproducible SKILL script."""
-    return _q(client, f'maeWriteScript("{filepath}")')
+    return _q(client, f'maeWriteScript("{escape_skill_string(filepath)}")')
 
 
 # ---------------------------------------------------------------------------
@@ -933,7 +970,8 @@ def migrate_adel_to_maestro(client: VirtuosoClient, lib: str, cell: str,
                             state: str) -> str:
     """maeMigrateADELStateToMaestro — convert ADE L state to maestro view."""
     return _q(client,
-        f'maeMigrateADELStateToMaestro("{lib}" "{cell}" "{state}")')
+        f'maeMigrateADELStateToMaestro("{escape_skill_string(lib)}" '
+        f'"{escape_skill_string(cell)}" "{escape_skill_string(state)}")')
 
 
 def migrate_adexl_to_maestro(client: VirtuosoClient, lib: str, cell: str,
@@ -941,8 +979,9 @@ def migrate_adexl_to_maestro(client: VirtuosoClient, lib: str, cell: str,
                              maestro_view: str = "maestro") -> str:
     """maeMigrateADEXLToMaestro — convert ADE XL view to maestro view."""
     return _q(client,
-        f'maeMigrateADEXLToMaestro("{lib}" "{cell}" "{view}" '
-        f'?maestroView "{maestro_view}")')
+        f'maeMigrateADEXLToMaestro("{escape_skill_string(lib)}" '
+        f'"{escape_skill_string(cell)}" "{escape_skill_string(view)}" '
+        f'?maestroView "{escape_skill_string(maestro_view)}")')
 
 
 # ---------------------------------------------------------------------------
@@ -952,9 +991,10 @@ def migrate_adexl_to_maestro(client: VirtuosoClient, lib: str, cell: str,
 def save_setup(client: VirtuosoClient, lib: str, cell: str, *,
                session: str = "") -> str:
     """maeSaveSetup — save the maestro setup to disk."""
-    s = f' ?session "{session}"' if session else ""
+    s = f' ?session "{escape_skill_string(session)}"' if session else ""
     return _q(client,
-        f'maeSaveSetup(?lib "{lib}" ?cell "{cell}" ?view "maestro"{s})')
+        f'maeSaveSetup(?lib "{escape_skill_string(lib)}" '
+        f'?cell "{escape_skill_string(cell)}" ?view "maestro"{s})')
 
 
 # ---------------------------------------------------------------------------
@@ -987,9 +1027,12 @@ def open_maestro_gui_with_history(client: VirtuosoClient, lib: str, cell: str,
             raise RuntimeError("No simulation history found")
         history = m.group(1)
 
-    _q(client, f'deOpenCellView("{lib}" "{cell}" "maestro" "maestro" nil "r")')
+    elib = escape_skill_string(lib)
+    ecell = escape_skill_string(cell)
+    ehistory = escape_skill_string(history)
+    _q(client, f'deOpenCellView("{elib}" "{ecell}" "maestro" "maestro" nil "r")')
     _q(client, 'maeMakeEditable()')
-    _q(client, f'maeRestoreHistory("{history}")')
-    _q(client, f'maeSaveSetup(?lib "{lib}" ?cell "{cell}" ?view "maestro")')
+    _q(client, f'maeRestoreHistory("{ehistory}")')
+    _q(client, f'maeSaveSetup(?lib "{elib}" ?cell "{ecell}" ?view "maestro")')
 
     return history

@@ -42,6 +42,29 @@ def test_parse_per_corner_columns() -> None:
     assert len(out["outputs"]) == 6
 
 
+IC23_NOMINAL_PLUS_CORNERS_CSV = (
+    ",Parameter,,,,,,Nominal,pn_tt_0p8,pn_ss_0p9\n"
+    ",design_wrapper.lib.scs,,,,,,,tt_pre,ss_pre\n"
+    ",vdd,,,,,,850e-3,800e-3,900e-3\n"
+    "\n"
+    "Test,Output,Spec,Weight,Pass/Fail,Min,Max,Nominal,pn_tt_0p8,pn_ss_0p9\n"
+    "PNOISE,noise,< 1m,,pass,365e-6,528.7e-6,410e-6,456e-6,528.7e-6\n"
+)
+
+
+def test_parse_per_corner_columns_including_nominal() -> None:
+    out = _parse_detail_csv(IC23_NOMINAL_PLUS_CORNERS_CSV, history="Interactive.6")
+    assert out["tests"] == ["PNOISE"]
+    assert [p["corner"] for p in out["points"]] == ["Nominal", "pn_tt_0p8", "pn_ss_0p9"]
+    nom, tt, ss = out["points"]
+    assert nom["parameters"] == {"vdd": "850e-3"}
+    assert tt["parameters"] == {"design_wrapper.lib.scs": "tt_pre", "vdd": "800e-3"}
+    assert nom["outputs"]["noise"]["value"] == "410e-6"
+    assert tt["outputs"]["noise"]["value"] == "456e-6"
+    assert ss["outputs"]["noise"]["value"] == "528.7e-6"
+    assert len(out["outputs"]) == 3
+
+
 class _Client:
     def __init__(self, responses, csv_text="") -> None:
         self._responses = list(responses)

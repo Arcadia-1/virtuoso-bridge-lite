@@ -183,6 +183,12 @@ def _parse_lock_payload(raw: str) -> bool:
 
 
 def _transport_outcome_unknown(result) -> bool:
+    metadata = getattr(result, "metadata", None)
+    if isinstance(metadata, dict):
+        if metadata.get("outcome") == "unknown":
+            return True
+        if metadata.get("request_handle") and not getattr(result, "ok", False):
+            return True
     detail = _result_errors(result).lower()
     return not getattr(result, "ok", False) and any(
         marker in detail for marker in _UNKNOWN_TRANSPORT_MARKERS
@@ -351,7 +357,7 @@ _HISTORY_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.\-]*")
 
 def _delete_history_skill(session: str, history: str) -> str:
     s, h = escape_skill_string(session), escape_skill_string(history)
-    return f'''prog((vbSdb vbRun vbEntry)
+    return f'''prog((vbProbe vbSdb vbRun vbEntry)
   foreach(vbFn '(axlGetMainSetupDB axlGetRunStatus axlGetHistoryEntry axlGetHistoryLock axlRemoveElement)
     unless(isCallable(vbFn) return(list("{_DELETE_TAG}" "unsupported" symbolToString(vbFn)))))
   vbSdb=car(errset(axlGetMainSetupDB("{s}")))
@@ -363,9 +369,13 @@ def _delete_history_skill(session: str, history: str) -> str:
     return(list("{_DELETE_TAG}" "running" sprintf(nil "%d of %d points done" car(vbRun) cadr(vbRun)))))
   vbEntry=car(errset(axlGetHistoryEntry(vbSdb "{h}")))
   unless(vbEntry return(list("{_DELETE_TAG}" "not_found" "{h}")))
-  when(car(errset(axlGetHistoryLock(vbEntry)))
+  vbProbe=errset(axlGetHistoryLock(vbEntry))
+  unless(vbProbe
+    return(list("{_DELETE_TAG}" "lock_check_failed" "{h}")))
+  when(car(vbProbe)
     return(list("{_DELETE_TAG}" "locked" "{h}")))
-  unless(errset(axlRemoveElement(vbEntry))
+  vbProbe=errset(axlRemoveElement(vbEntry))
+  unless(vbProbe && car(vbProbe)
     return(list("{_DELETE_TAG}" "remove_failed" "{h}")))
   when(isCallable('maeSaveSetup) errset(maeSaveSetup(?session "{s}")))
   return(list("{_DELETE_TAG}" "ok" "{h}"))
@@ -433,7 +443,11 @@ def delete_history(
             if root not in roots:
                 roots.append(root)
 
-    result = client.execute_skill(_delete_history_skill(session, history), timeout=timeout)
+    result = client.execute_skill(
+        _delete_history_skill(session, history),
+        timeout=timeout,
+        retry_connect=False,
+    )
     if not getattr(result, "ok", False):
         if _transport_outcome_unknown(result):
             raise MaestroHistoryOutcomeUnknown(

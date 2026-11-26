@@ -25,6 +25,7 @@ from pathlib import Path
 from virtuoso_bridge import VirtuosoClient
 
 from virtuoso_bridge.virtuoso.maestro.writer import _export_output_view_skill
+from virtuoso_bridge.virtuoso.ops import escape_skill_string
 
 from ._parse_skill import _parse_skill_str_list
 from ._skill import _q, _get_test, _session_lib_cell, _unique_remote_wave_path
@@ -155,24 +156,34 @@ def read_results(client: VirtuosoClient, session: str,
     # ``t``/``nil`` -- so the only reliable success signal is whether
     # the remote CSV materialised.  Let download_file be the arbiter.
     remote_csv = f"/tmp/vb_results_{uuid.uuid4().hex}.csv"
+    esess = escape_skill_string(session)
+    ehistory = escape_skill_string(latest_history)
     export_cmd = _export_output_view_skill(
         remote_csv,
         # No ?testName: it narrows the table to one test, and the first
         # test of the setup may have no points in this history.
-        f'?session "{session}" '
-        f'?historyName "{latest_history}" ?view "Detail"',
+        f'?session "{esess}" '
+        f'?historyName "{ehistory}" ?view "Detail"',
     )
     export = client.execute_skill(export_cmd)
     skill_out = export.output or ""
     export_error = "; ".join(getattr(export, "errors", None) or [])
+    export_metadata = getattr(export, "metadata", None)
+    export_ok = getattr(export, "ok", not bool(export_error))
     # A timed-out request may still be queued in the CIW: add nothing to it.
-    channel_lost = any(m in export_error.lower() for m in _CHANNEL_LOST_MARKERS)
+    channel_lost = any(m in export_error.lower() for m in _CHANNEL_LOST_MARKERS) or (
+        isinstance(export_metadata, dict)
+        and (
+            export_metadata.get("outcome") == "unknown"
+            or (bool(export_metadata.get("request_handle")) and not export_ok)
+        )
+    )
 
     local_csv = Path(tempfile.gettempdir()) / f"vb_results_{uuid.uuid4().hex}.csv"
     csv_text = ""
     try:
-        if export_error:
-            raise RuntimeError(export_error)
+        if export_error or channel_lost:
+            raise RuntimeError(export_error or "maeExportOutputView outcome unknown")
         client.download_file(remote_csv, str(local_csv))
         csv_text = local_csv.read_text(encoding="utf-8", errors="replace")
     except Exception as exc:
@@ -192,13 +203,13 @@ def read_results(client: VirtuosoClient, session: str,
         # Best-effort remote cleanup, not over a channel that just timed out.
         if not channel_lost:
             try:
-                client.execute_skill(f'deleteFile("{remote_csv}")')
+                client.execute_skill(f'deleteFile("{escape_skill_string(remote_csv)}")')
             except Exception:
                 pass
 
     raw_overall = q("maeGetOverallSpecStatus", 'maeGetOverallSpecStatus()')
     raw_yield   = q("maeGetOverallYield",
-                    f'maeGetOverallYield("{latest_history}")')
+                    f'maeGetOverallYield("{ehistory}")')
 
     structured = _parse_detail_csv(csv_text, history=latest_history)
     structured["overall_spec"]  = _unquote_atom(raw_overall)
@@ -232,10 +243,14 @@ def _find_latest_history_with_results(client: VirtuosoClient, *,
     """Scan the results dir newest-first; return the first history
     that successfully opens with at least one result output.  Returns
     ``""`` when none qualify."""
+    elib = escape_skill_string(lib)
+    ecell = escape_skill_string(cell)
+    etest = escape_skill_string(test)
+    esess = escape_skill_string(session)
     r = client.execute_skill(
         f'let((p d) '
-        f'p = ddGetObj("{lib}")~>readPath '
-        f'd = strcat(p "/{cell}/maestro/results/maestro") '
+        f'p = ddGetObj("{elib}")~>readPath '
+        f'd = strcat(p "/{ecell}/maestro/results/maestro") '
         f'if(isDir(d) getDirFiles(d) nil))'
     )
     files = _parse_skill_str_list(r.output or "")
@@ -243,14 +258,15 @@ def _find_latest_history_with_results(client: VirtuosoClient, *,
     # Any test with outputs counts: the first test may not have run in a
     # history that only ran the others.
     tests_outputs = (
-        f'foreach(mapcan vbT maeGetSetup(?typeName "tests" ?session "{session}") '
+        f'foreach(mapcan vbT maeGetSetup(?typeName "tests" ?session "{esess}") '
         f'copy(maeGetResultOutputs(?testName vbT)))'
-        if session else f'maeGetResultOutputs(?testName "{test}")')
+        if session else f'maeGetResultOutputs(?testName "{etest}")')
     # Without ?session the history opens in whichever session is current.
-    session_arg = f' ?session "{session}"' if session else ""
+    session_arg = f' ?session "{esess}"' if session else ""
     for h in reversed(hist_list):
+        eh = escape_skill_string(h)
         r = client.execute_skill(
-            f'when(maeOpenResults(?history "{h}"{session_arg}) '
+            f'when(maeOpenResults(?history "{eh}"{session_arg}) '
             f'  let((outs) '
             f'    outs = {tests_outputs} '
             f'    maeCloseResults() '
@@ -347,9 +363,12 @@ def _parse_detail_csv(text: str, *, history: str) -> dict:
             }
             continue
         # Data row: point, test, output, nominal, spec, weight, pass_fail
-        if current is None:
-            current = {"point": int(first), "parameters": {}, "outputs": {}}
+        point_num = int(first)
+        if current is None or (point_num != current["point"] and current["outputs"]):
+            current = {"point": point_num, "parameters": {}, "outputs": {}}
             points.append(current)
+        elif not current["outputs"]:
+            current["point"] = point_num
         # Cadence sometimes inserts cells with quoted commas; csv module
         # handles the quoting so columns line up.
         def field(key: str) -> str:
@@ -411,11 +430,11 @@ def _parse_corner_columns(text: str):
     if header_at is None:
         return None
     header = [c.strip() for c in rows[header_at]]
-    if "Nominal" in header:
-        return None
     columns = [(i, name) for i, name in enumerate(header)
                if name and name not in _DETAIL_FIXED_COLUMNS]
     if not columns:
+        return None
+    if header[:3] == ["Test", "Output", "Nominal"] and len(columns) == 1:
         return None
     fixed = {name: i for i, name in enumerate(header) if name in _DETAIL_FIXED_COLUMNS}
 
@@ -494,7 +513,7 @@ def check_points(client: VirtuosoClient, history: str, *,
           "errors": ["ERROR (SPECTRE-18): ..."]}, ...]
     """
     history = (history or "").strip().strip('"')
-    r = client.execute_skill(f'ddGetObj("{lib}")~>readPath')
+    r = client.execute_skill(f'ddGetObj("{escape_skill_string(lib)}")~>readPath')
     lib_path = (r.output or "").strip().strip('"')
     if not lib_path or lib_path == "nil":
         raise RuntimeError(f"check_points: library {lib!r} not found")
@@ -668,7 +687,8 @@ def export_waveform(
 
     # First maeOpenResults to point asiGetResultsDir at the correct history,
     # then use OCEAN openResults with that path.
-    client.execute_skill(f'maeOpenResults(?history "{history}")')
+    ehistory = escape_skill_string(history)
+    client.execute_skill(f'maeOpenResults(?history "{ehistory}")')
     r = client.execute_skill('asiGetResultsDir(asiGetCurrentSession())')
     results_dir = (r.output or "").strip('"')
     client.execute_skill('maeCloseResults()')
@@ -680,12 +700,13 @@ def export_waveform(
             f"History mismatch: expected {history}, got resultsDir={results_dir}"
         )
 
-    client.execute_skill(f'openResults("{results_dir}")')
-    client.execute_skill(f'selectResults("{analysis}")')
+    eremote = escape_skill_string(remote_path)
+    client.execute_skill(f'openResults("{escape_skill_string(results_dir)}")')
+    client.execute_skill(f'selectResults("{escape_skill_string(analysis)}")')
     client.execute_skill(
         f'ocnPrint({expression}{format_args} ?numSpaces 1 '
-        f'?output "{remote_path}")')
+        f'?output "{eremote}")')
 
     client.download_file(remote_path, local_path)
-    client.execute_skill(f'deleteFile("{remote_path}")')
+    client.execute_skill(f'deleteFile("{eremote}")')
     return local_path

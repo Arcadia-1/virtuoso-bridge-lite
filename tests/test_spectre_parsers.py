@@ -23,7 +23,9 @@ from types import SimpleNamespace
 import pytest
 
 from virtuoso_bridge.spectre.parsers import (
+    _parse_psf_ascii_content,
     _parse_psf_swept_data,
+    parse_psf_ascii_directory,
     parse_spectre_psf_ascii,
     parse_sweep_psf_directory,
 )
@@ -334,3 +336,144 @@ def test_build_result_marks_pss_convergence_failure_with_zero_exit(tmp_path):
 
     assert not result.ok
     assert "convergence failure" in result.errors
+
+
+# ---------------------------------------------------------------------------
+# Issue #312 regressions: non-swept PROP/typed values, blank lines, globs, sweep merge
+# ---------------------------------------------------------------------------
+
+def test_non_swept_excludes_prop_and_parses_typed_string_nan_inf_complex():
+    content = """\
+HEADER
+"analysis type" "info"
+TYPE
+"nmos" STRUCT(
+"gm" FLOAT DOUBLE PROP(
+"units" "S"
+"desc" "gain (S)"
+)
+) PROP(
+"key" "inst"
+)
+VALUE
+"M0" "nmos" (1.9e-04) PROP("model" "nmos")
+
+"M1" "nmos" (
+2.5e-04
+) PROP(
+"model" "nmos_lvt"
+"nested" (1 2)
+)
+"vout" "V" 1.23 PROP(
+"key" "node"
+)
+"M0:model" "STRING" "nch"
+"M0:note" "STRING" "quoted \\"note\\" text" PROP(
+"ignore" "me"
+)
+"M0:ron" "Ohm" inf PROP("key" "param")
+"M0:voff" "V" -inf
+"M0:err" "V" nan
+"Z11" "Ohm" (50.0 -12.5) PROP(
+"unit" "Ohm"
+)
+"Y11" (0.02 0.005)
+"legacy_str" "ok"
+END
+"""
+    data = _parse_psf_ascii_content(content)
+
+    assert data["M0:gm"] == pytest.approx(1.9e-04)
+    assert data["M1:gm"] == pytest.approx(2.5e-04)
+    assert data["vout"] == pytest.approx(1.23)
+    assert data["M0:model"] == "nch"
+    assert data["M0:note"] == 'quoted "note" text'
+    assert math.isinf(data["M0:ron"]) and data["M0:ron"] > 0
+    assert math.isinf(data["M0:voff"]) and data["M0:voff"] < 0
+    assert math.isnan(data["M0:err"])
+    assert data["Z11"] == complex(50.0, -12.5)
+    assert data["Y11"] == complex(0.02, 0.005)
+    assert data["legacy_str"] == "ok"
+    for leaked in ("model", "key", "nested", "ignore", "unit"):
+        assert leaked not in data
+
+
+def test_swept_parser_survives_blank_lines_in_sweep_trace_and_value():
+    content = """\
+HEADER
+SWEEP
+
+"time" 1
+
+TRACE
+
+"sig_a" "V"
+
+"sig_b" "V"
+
+VALUE
+
+"time" 0.0
+"sig_a" 1.0
+
+"time" 1e-9
+"sig_a" 2.0
+"sig_b" 0.5
+
+END
+"""
+    data = _parse_psf_ascii_content(content)
+    assert data["time"] == [0.0, 1e-9]
+    assert data["sig_a"] == [1.0, 2.0]
+    assert math.isnan(data["sig_b"][0])
+    assert data["sig_b"][1] == 0.5
+
+
+def test_parse_psf_ascii_directory_falls_back_to_custom_tran_and_ac(tmp_path):
+    (tmp_path / "mytran.tran").write_text(_PSF_TEMPLATE.format(a=0.2, b=0.8), encoding="utf-8")
+    (tmp_path / "myac.ac").write_text(
+        """\
+HEADER
+SWEEP
+"freq" 1
+TRACE
+"VO" "V"
+VALUE
+"freq" 1e6
+"VO" (1.0 -0.5)
+END
+""",
+        encoding="utf-8",
+    )
+
+    data = parse_psf_ascii_directory(tmp_path)
+    assert data["time"] == [0.0, 1e-9]
+    assert data["v_out"] == [0.2, 0.8]
+    assert data["ac_freq"] == [1e6]
+    assert data["ac_VO"] == [complex(1.0, -0.5)]
+
+
+def test_parse_sweep_psf_directory_merges_multiple_flat_analyses_per_point(tmp_path):
+    (tmp_path / "sw1-000_dc.dc").write_text(
+        'HEADER\nVALUE\n"vdc" "V" 0.9\nEND\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "sw1-000_tran.tran.tran").write_text(
+        _PSF_TEMPLATE.format(a=0.1, b=0.9),
+        encoding="utf-8",
+    )
+    (tmp_path / "sw1-001_dc.dc").write_text(
+        'HEADER\nVALUE\n"vdc" "V" 1.1\nEND\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "sw1-001_tran.tran.tran").write_text(
+        _PSF_TEMPLATE.format(a=0.2, b=1.1),
+        encoding="utf-8",
+    )
+
+    sweep = parse_sweep_psf_directory(tmp_path)
+    assert sorted(sweep.keys()) == [1, 2]
+    assert sweep[1]["vdc"] == pytest.approx(0.9)
+    assert sweep[1]["v_out"] == [0.1, 0.9]
+    assert sweep[2]["vdc"] == pytest.approx(1.1)
+    assert sweep[2]["v_out"] == [0.2, 1.1]

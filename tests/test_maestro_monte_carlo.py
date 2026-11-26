@@ -25,8 +25,13 @@ from virtuoso_bridge.virtuoso.maestro.monte_carlo import (
 from virtuoso_bridge.virtuoso.maestro.reader.state import MaestroSessionState
 
 
-def _result(output: str = "t", *, ok: bool = True, errors=()):
-    return SimpleNamespace(ok=ok, output=output, errors=list(errors))
+def _result(output: str = "t", *, ok: bool = True, errors=(), metadata=None):
+    return SimpleNamespace(
+        ok=ok,
+        output=output,
+        errors=list(errors),
+        metadata={} if metadata is None else dict(metadata),
+    )
 
 
 def _payload(*rows: str, mode: str = MC_RUN_MODE, status: str = "ok") -> str:
@@ -466,3 +471,49 @@ def test_export_uses_explicit_history_filters_and_output_path() -> None:
     assert '?outputPath "/tmp/mc csv/"' in skill
     assert "?outputName" not in skill
     assert kwargs == {"timeout": 30}
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"outcome": "unknown"},
+        {"request_handle": {"request_id": "mc-req-1"}},
+    ],
+)
+def test_configure_treats_recoverable_unknown_metadata_as_unknown(monkeypatch, metadata) -> None:
+    requested = MonteCarloConfig(points=200)
+    reads = iter((MonteCarloConfig(), requested))
+    modes = iter((MC_RUN_MODE, MC_RUN_MODE))
+    monkeypatch.setattr(mc, "get_monte_carlo_config", lambda *args, **kwargs: next(reads))
+    monkeypatch.setattr(mc, "list_session_states", lambda *args, **kwargs: [_editing_state()])
+    monkeypatch.setattr(mc, "_get_run_mode", lambda *args, **kwargs: next(modes))
+    client = _Client(_result(ok=False, errors=["channel interrupted"], metadata=metadata))
+
+    with pytest.raises(MaestroMonteCarloOutcomeUnknown, match="persistence is unknown"):
+        configure_monte_carlo(client, requested, session="fnxSession4")
+    assert len(client.calls) == 1
+
+
+def test_run_treats_recovery_error_with_unknown_metadata_as_unknown(monkeypatch) -> None:
+    from virtuoso_bridge.models import ExecutionStatus, VirtuosoResult
+    from virtuoso_bridge.virtuoso.requests import RequestHandle, RequestRecoveryError
+
+    monkeypatch.setattr(mc, "_get_run_mode", lambda *args, **kwargs: MC_RUN_MODE)
+    res = VirtuosoResult(
+        status=ExecutionStatus.ERROR,
+        errors=["daemon reply lost"],
+        metadata={
+            "outcome": "unknown",
+            "request_handle": RequestHandle(
+                request_id="a" * 32,
+                daemon_instance="b" * 32,
+                virtuoso_pid=42,
+            ).model_dump(),
+        },
+    )
+    err = RequestRecoveryError(res)
+    monkeypatch.setattr(mc, "run_and_wait", lambda *a, **kw: (_ for _ in ()).throw(err))
+
+    with pytest.raises(MaestroMonteCarloOutcomeUnknown) as caught:
+        run_monte_carlo_and_wait(SimpleNamespace(), session="s", timeout=30)
+    assert caught.value.__cause__ is err

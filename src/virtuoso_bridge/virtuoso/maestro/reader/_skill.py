@@ -7,6 +7,7 @@ import time
 import uuid
 
 from virtuoso_bridge import VirtuosoClient
+from virtuoso_bridge.virtuoso.ops import escape_skill_string
 
 
 def _history_token(history: str) -> str:
@@ -24,10 +25,11 @@ def _unique_remote_wave_path(history: str) -> str:
 
 def _q(client: VirtuosoClient, label: str, expr: str) -> str:
     """Execute SKILL, print a CIW breadcrumb, return raw output string."""
+    elabel = escape_skill_string(label)
     wrapped = (
         f'let((rbResult) '
         f'rbResult = {expr} '
-        f'printf("[%s read] {label}\\n" nth(2 parseString(getCurrentTime()))) '
+        f'printf("[%s read] {elabel}\\n" nth(2 parseString(getCurrentTime()))) '
         f'rbResult)'
     )
     r = client.execute_skill(wrapped)
@@ -36,7 +38,8 @@ def _q(client: VirtuosoClient, label: str, expr: str) -> str:
 
 def _get_test(client: VirtuosoClient, session: str) -> str:
     """Get the first test name from a session."""
-    r = client.execute_skill(f'maeGetSetup(?session "{session}")')
+    esess = escape_skill_string(session)
+    r = client.execute_skill(f'maeGetSetup(?session "{esess}")')
     raw = r.output or ""
     if raw and raw != "nil":
         m = re.findall(r'"([^"]+)"', raw)
@@ -58,14 +61,15 @@ def _session_lib_cell(client: VirtuosoClient, session: str) -> tuple[str, str]:
 
     lib = cell = ""
     if session:
-        name = session.replace("\\", "\\\\").replace('"', '\\"')
+        name = escape_skill_string(session)
         lib = atom(f'car(errset(axlGetSessionLibName("{name}")))')
         cell = atom(f'car(errset(axlGetSessionCellName("{name}")))')
     if not lib or not cell:
         test = _get_test(client, session)
         if test:
-            s = f' ?session "{session}"' if session else ""
-            lib = lib or atom(f'maeGetEnvOption("{test}" ?option "lib"{s})')
-            cell = cell or atom(f'maeGetEnvOption("{test}" ?option "cell"{s})')
+            s = f' ?session "{escape_skill_string(session)}"' if session else ""
+            etest = escape_skill_string(test)
+            lib = lib or atom(f'maeGetEnvOption("{etest}" ?option "lib"{s})')
+            cell = cell or atom(f'maeGetEnvOption("{etest}" ?option "cell"{s})')
     return lib, cell
 

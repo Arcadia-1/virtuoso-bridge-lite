@@ -263,6 +263,12 @@ def _result_errors(result) -> str:
 
 
 def _transport_outcome_unknown(result) -> bool:
+    metadata = getattr(result, "metadata", None)
+    if isinstance(metadata, dict):
+        if metadata.get("outcome") == "unknown":
+            return True
+        if metadata.get("request_handle") and not getattr(result, "ok", False):
+            return True
     detail = _result_errors(result).lower()
     return not getattr(result, "ok", False) and any(
         marker in detail for marker in _UNKNOWN_TRANSPORT_MARKERS
@@ -272,6 +278,10 @@ def _transport_outcome_unknown(result) -> bool:
 def _exception_outcome_unknown(exc: Exception) -> bool:
     if isinstance(exc, TimeoutError):
         return True
+    for attr in ("result", "virtuoso_result"):
+        res = getattr(exc, attr, None)
+        if res is not None and _transport_outcome_unknown(res):
+            return True
     detail = str(exc).lower()
     return any(marker in detail for marker in _UNKNOWN_TRANSPORT_MARKERS)
 

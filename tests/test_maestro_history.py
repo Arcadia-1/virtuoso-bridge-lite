@@ -7,6 +7,8 @@ import pytest
 from virtuoso_bridge.virtuoso.maestro.history import (
     MaestroHistoryError,
     MaestroHistoryOutcomeUnknown,
+    _delete_history_skill,
+    delete_history,
     get_history,
     list_histories,
     lock_history,
@@ -44,8 +46,13 @@ class _Client:
         return result
 
 
-def _result(output: str = "nil", *, ok: bool = True, errors=()):
-    return SimpleNamespace(ok=ok, output=output, errors=list(errors))
+def _result(output: str = "nil", *, ok: bool = True, errors=(), metadata=None):
+    return SimpleNamespace(
+        ok=ok,
+        output=output,
+        errors=list(errors),
+        metadata={} if metadata is None else dict(metadata),
+    )
 
 
 def test_list_histories_returns_lock_and_current_state() -> None:
@@ -270,3 +277,92 @@ def test_set_history_lock_requires_bool() -> None:
     with pytest.raises(TypeError, match="bool"):
         set_history_lock(client, "Interactive.1", "yes", session="s")
     assert client.calls == []
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"outcome": "unknown"},
+        {"request_handle": {"request_id": "req-1"}},
+    ],
+)
+def test_set_history_lock_classifies_recoverable_unknown_metadata(metadata) -> None:
+    client = _Client(
+        _result(_inventory(_row("Interactive.1"))),
+        _result(ok=False, errors=["channel interrupted"], metadata=metadata),
+        _result(_inventory(_row("Interactive.1", locked=True))),
+    )
+
+    result = lock_history(client, "Interactive.1", session="s")
+
+    assert result.outcome == "confirmed_after_unknown"
+    assert len(client.calls) == 3
+
+
+def test_delete_history_skill_checks_lock_probe_and_car_of_remove() -> None:
+    skill = _delete_history_skill("fnxSession0", "Interactive.3")
+
+    assert "prog((vbProbe vbSdb vbRun vbEntry)" in skill
+    assert "vbProbe=errset(axlGetHistoryLock(vbEntry))" in skill
+    assert 'unless(vbProbe\n    return(list("VB_MAESTRO_HISTORY_DELETE_V1" "lock_check_failed" "Interactive.3")))' in skill
+    assert 'when(car(vbProbe)\n    return(list("VB_MAESTRO_HISTORY_DELETE_V1" "locked" "Interactive.3")))' in skill
+    assert "vbProbe=errset(axlRemoveElement(vbEntry))" in skill
+    assert 'unless(vbProbe && car(vbProbe)\n    return(list("VB_MAESTRO_HISTORY_DELETE_V1" "remove_failed" "Interactive.3")))' in skill
+    assert skill.count("(") == skill.count(")")
+
+
+@pytest.mark.parametrize("status", ["remove_failed", "lock_check_failed", "locked"])
+def test_delete_history_preserves_disk_files_when_sdb_removal_or_lock_check_fails(
+    tmp_path, status: str
+) -> None:
+    lib = tmp_path / "lib"
+    res = lib / "cell" / "maestro" / "results" / "maestro"
+    (res / "Interactive.3" / "1").mkdir(parents=True)
+    for suffix in (".rdb", ".log", ".msg.db"):
+        (res / f"Interactive.3{suffix}").write_bytes(b"keep")
+
+    client = _Client(
+        _result("(16 16)"),
+        _result(f'"{lib}"'),
+        _result("nil"),
+        _result(f'("VB_MAESTRO_HISTORY_DELETE_V1" "{status}" "Interactive.3")'),
+    )
+    client.ssh_runner = None
+
+    with pytest.raises(MaestroHistoryError, match=status):
+        delete_history(client, "Interactive.3", session="s1", lib="LIB", cell="cell")
+
+    assert client.calls[-1][1]["retry_connect"] is False
+    assert (res / "Interactive.3" / "1").is_dir()
+    for suffix in (".rdb", ".log", ".msg.db"):
+        assert (res / f"Interactive.3{suffix}").exists()
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"outcome": "unknown"},
+        {"request_handle": {"request_id": "req-2"}},
+    ],
+)
+def test_delete_history_raises_outcome_unknown_on_recoverable_metadata_and_keeps_files(
+    tmp_path, metadata
+) -> None:
+    lib = tmp_path / "lib"
+    res = lib / "cell" / "maestro" / "results" / "maestro"
+    (res / "Interactive.3" / "1").mkdir(parents=True)
+    (res / "Interactive.3.rdb").write_bytes(b"keep")
+
+    client = _Client(
+        _result("(16 16)"),
+        _result(f'"{lib}"'),
+        _result("nil"),
+        _result(ok=False, errors=["request uncertain"], metadata=metadata),
+    )
+    client.ssh_runner = None
+
+    with pytest.raises(MaestroHistoryOutcomeUnknown, match="unknown outcome"):
+        delete_history(client, "Interactive.3", session="s1", lib="LIB", cell="cell")
+
+    assert client.calls[-1][1]["retry_connect"] is False
+    assert (res / "Interactive.3.rdb").exists()

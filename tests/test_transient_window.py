@@ -147,6 +147,18 @@ def test_script_preserves_raw_keys_and_contains_only_bounded_reads():
         assert forbidden not in script
 
 
+def test_script_coerces_fixnums_with_float_and_avoids_unicode_escapes():
+    script = wf._script("/tmp/设计/psf", ["信号_OUT"], 0.0, 10.0, 1.0, 11)
+    assert 'fprintf(fp "C\\t%d\\t%d\\t%.17g\\t%.17g\\n" idx n float(first) float(last))' in script
+    assert "at=float(0)+k*float(1)" in script
+    assert "when(at>=float(0) && at<=float(10) && at>=first && at<=last" in script
+    assert 'fprintf(fp "D\\t%d\\t%.17g\\t%.17g\\n" idx float(at) float(val))' in script
+    assert 'openResults("/tmp/设计/psf")' in script
+    assert '"信号_OUT"' in script
+    assert "\\u" not in script
+    assert script.count("(") == script.count(")")
+
+
 def test_parse_complete_window_does_not_claim_simulation_completion():
     result = wf._parse(FULL, ["OUT"], 0, 1, 0.5, 3)
     assert result["state"] == "ok"

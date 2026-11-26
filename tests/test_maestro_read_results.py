@@ -320,3 +320,63 @@ def test_parse_detail_csv_without_value_column_reads_no_value():
     assert outputs["t_conv"] == {"value": "", "spec": "< 914p", "weight": "", "pass_fail": ""}
     assert outputs["dout1"]["value"] == ""
     assert out["tests"] == ["CODE"]
+
+
+MULTI_POINT_NO_PARAMETERS_CSV = (
+    "Point,Test,Output,Nominal,Spec,Weight,Pass/Fail\n"
+    "1,TRAN,Gain,20.1,,,\n"
+    "1,TRAN,BW,10M,,,\n"
+    "2,TRAN,Gain,21.5,,,\n"
+    "2,TRAN,BW,11M,,,\n"
+)
+
+
+def test_parse_detail_csv_multi_point_without_parameters_headers():
+    out = _parse_detail_csv(MULTI_POINT_NO_PARAMETERS_CSV, history="Interactive.2")
+    assert out["tests"] == ["TRAN"]
+    assert len(out["points"]) == 2
+    p1, p2 = out["points"]
+    assert p1["point"] == 1
+    assert p1["outputs"]["Gain"]["value"] == "20.1"
+    assert p1["outputs"]["BW"]["value"] == "10M"
+    assert p2["point"] == 2
+    assert p2["outputs"]["Gain"]["value"] == "21.5"
+    assert p2["outputs"]["BW"]["value"] == "11M"
+    assert len(out["outputs"]) == 4
+
+
+def test_parse_detail_csv_preserves_non_contiguous_point_numbers_after_parameters():
+    csv_text = (
+        "Point,Test,Output,Nominal,Spec,Weight,Pass/Fail\n"
+        "Parameters: VDD=0.9,,,,,,\n"
+        "5,TRAN,Gain,20.1,,,\n"
+        "5,TRAN,BW,10M,,,\n"
+        "Parameters: VDD=1.1,,,,,,\n"
+        "10,TRAN,Gain,21.5,,,\n"
+    )
+    out = _parse_detail_csv(csv_text, history="Interactive.8")
+    assert [(p["point"], p["parameters"]) for p in out["points"]] == [
+        (5, {"VDD": "0.9"}),
+        (10, {"VDD": "1.1"}),
+    ]
+    assert out["points"][0]["outputs"]["Gain"]["value"] == "20.1"
+    assert out["points"][0]["outputs"]["BW"]["value"] == "10M"
+    assert out["points"][1]["outputs"]["Gain"]["value"] == "21.5"
+
+
+def test_reader_escapes_session_and_history_in_skill_calls():
+    client = _FakeClient(
+        skill_responses=['("inv_test")', "t", "t", '"passed"', "nil"],
+        on_download=_csv_dropper(SAMPLE_CSV),
+    )
+    out = read_results(
+        client,
+        session='sess"1',
+        lib="test_LIB",
+        cell="inverter",
+        history='Hist"7',
+    )
+    assert out["history"] == 'Hist"7'
+    assert 'maeGetSetup(?session "sess\\"1")' == client.skill_calls[0]
+    assert '?session "sess\\"1" ?historyName "Hist\\"7"' in client.skill_calls[1]
+    assert 'maeGetOverallYield("Hist\\"7")' in client.skill_calls[-1]

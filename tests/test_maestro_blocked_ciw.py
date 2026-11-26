@@ -40,20 +40,31 @@ class _Dialogs:
 class _Client:
     ssh_runner = None
 
-    def __init__(self, outputs=(), dialogs=None, errors=None):
+    def __init__(self, outputs=(), dialogs=None, errors=None, metadata=None):
         self.outputs = list(outputs)
         self.errors = errors or {}
+        self.metadata = metadata or {}
         self.calls: list[str] = []
+        self.call_kwargs: list[dict] = []
         if dialogs is not None:
             self.dialogs = dialogs
 
-    def execute_skill(self, code, timeout=None):
+    def execute_skill(self, code, timeout=None, **kwargs):
         self.calls.append(code)
+        self.call_kwargs.append({"timeout": timeout, **kwargs})
         n = len(self.calls)
         if n in self.errors:
-            return VirtuosoResult(status=ExecutionStatus.ERROR, errors=[self.errors[n]])
+            return VirtuosoResult(
+                status=ExecutionStatus.ERROR,
+                errors=[self.errors[n]],
+                metadata=dict(self.metadata.get(n, {})),
+            )
         out = self.outputs.pop(0) if self.outputs else "t"
-        return VirtuosoResult(status=ExecutionStatus.SUCCESS, output=out)
+        return VirtuosoResult(
+            status=ExecutionStatus.SUCCESS,
+            output=out,
+            metadata=dict(self.metadata.get(n, {})),
+        )
 
 
 @pytest.fixture
@@ -107,6 +118,25 @@ def test_read_results_sends_nothing_to_a_blocked_ciw():
 def test_read_results_adds_no_calls_after_an_export_timeout():
     # 1 maeGetSetup, 2 export (times out): no deleteFile, no spec/yield after it.
     client = _Client(outputs=['("TEST")'], errors={2: "Socket timeout after 30s"})
+    client.download_file = lambda remote, local: pytest.fail("no download")
+    out = read_results(client, "s1", lib="LIB", cell="cell", history="Interactive.7")
+    assert out == {}
+    assert len(client.calls) == 2
+
+
+@pytest.mark.parametrize(
+    "meta",
+    [
+        {"outcome": "unknown"},
+        {"request_handle": {"request_id": "abc123"}},
+    ],
+)
+def test_read_results_treats_recoverable_unknown_metadata_as_channel_lost(meta):
+    client = _Client(
+        outputs=['("TEST")'],
+        errors={2: "request outcome uncertain"},
+        metadata={2: meta},
+    )
     client.download_file = lambda remote, local: pytest.fail("no download")
     out = read_results(client, "s1", lib="LIB", cell="cell", history="Interactive.7")
     assert out == {}
