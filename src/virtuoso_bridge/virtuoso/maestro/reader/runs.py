@@ -57,7 +57,8 @@ def read_results(client: VirtuosoClient, session: str,
                   lib: str = "", cell: str = "",
                   history: str = "",
                   *,
-                  include_raw: bool = False) -> dict:
+                  include_raw: bool = False,
+                  compact: bool = False) -> dict:
     """Read simulation results: per-point × per-output values + specs.
 
     Uses Cadence's ``maeExportOutputView ?view "Detail"`` to dump the
@@ -93,6 +94,10 @@ def read_results(client: VirtuosoClient, session: str,
     With ``include_raw=True`` the raw exported CSV text is attached
     under ``"raw_csv"`` for debug / audit.
 
+    ``compact=True`` omits only the redundant top-level ``outputs`` flat
+    list. All points, parameters, per-output values/specs and overall status
+    remain available; no sampling or numeric rounding is performed.
+
     Args:
         session: active session string
         lib: library name (auto-detected if empty)
@@ -100,6 +105,7 @@ def read_results(client: VirtuosoClient, session: str,
         history: explicit history name; otherwise picks the latest
             history that has results.
         include_raw: include raw CSV text under ``"raw_csv"``.
+        compact: omit the legacy flattened duplicate of per-point outputs.
     """
     def q(label, expr):
         return _q(client, label, expr)
@@ -211,7 +217,7 @@ def read_results(client: VirtuosoClient, session: str,
     raw_yield   = q("maeGetOverallYield",
                     f'maeGetOverallYield("{ehistory}")')
 
-    structured = _parse_detail_csv(csv_text, history=latest_history)
+    structured = _parse_detail_csv(csv_text, history=latest_history, compact=compact)
     structured["overall_spec"]  = _unquote_atom(raw_overall)
     structured["overall_yield"] = _unquote_atom(raw_yield)
     if include_raw:
@@ -289,11 +295,11 @@ def _find_latest_history_with_results(client: VirtuosoClient, *,
 #
 # A "Parameters: ..." row marks the start of each new point.
 
-def _parse_detail_csv(text: str, *, history: str) -> dict:
+def _parse_detail_csv(text: str, *, history: str, compact: bool = False) -> dict:
     """Parse maeExportOutputView Detail CSV → per-point dict.  Pure."""
     corner_points = _parse_corner_columns(text)
     if corner_points is not None:
-        return _detail_result(corner_points[0], corner_points[1], history)
+        return _detail_result(corner_points[0], corner_points[1], history, compact=compact)
     points: list[dict] = []
     current: dict | None = None
     tests_seen: set[str] = set()
@@ -386,10 +392,13 @@ def _parse_detail_csv(text: str, *, history: str) -> dict:
                 "pass_fail": pass_fail.strip(),
             }
 
-    return _detail_result(points, tests_seen, history)
+    return _detail_result(points, tests_seen, history, compact=compact)
 
 
-def _detail_result(points: list[dict], tests_seen, history: str) -> dict:
+def _detail_result(points: list[dict], tests_seen, history: str, *, compact: bool = False) -> dict:
+    result = {"history": history, "tests": sorted(tests_seen), "points": points}
+    if compact:
+        return result
     # Back-compat flat list: (test, name, value, spec_status) per point×output.
     flat_outputs: list[dict] = []
     for p in points:
@@ -401,12 +410,8 @@ def _detail_result(points: list[dict], tests_seen, history: str) -> dict:
                 "spec_status": info["pass_fail"],
             })
 
-    return {
-        "history": history,
-        "tests":   sorted(tests_seen),
-        "points":  points,
-        "outputs": flat_outputs,
-    }
+    result["outputs"] = flat_outputs
+    return result
 
 
 # IC23.1 writes the Detail view with one column per point (corner/sweep)::

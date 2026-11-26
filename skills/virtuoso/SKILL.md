@@ -21,6 +21,9 @@ Keep one-host use simple. Multiple servers/accounts/processes are optional;
 do not require profile inventory or process metadata for ordinary work.
 For GUI-equivalent simulation, preserve the netlist, models, corner and solver
 options and refresh the applicable PDK/CDF callbacks.
+For scalar result consumption, use the optional compact mode in
+[maestro-python-api.md](references/maestro-python-api.md) when the active package
+supports it; this removes duplicate representations, not measurement values.
 
 ## Before a live operation
 

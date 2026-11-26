@@ -289,7 +289,9 @@ def _tool_defs() -> list[dict]:
         ("test_results", "Read scalar results from an explicit Maestro session and history. For waveform values use read_waveform.",
          {"type": "object", "properties": {
              "session": {"type": "string", "minLength": 1, "maxLength": 200},
-             "history": {"type": "string", "minLength": 1, "maxLength": 200}},
+             "history": {"type": "string", "minLength": 1, "maxLength": 200},
+             "compact": {"type": "boolean", "default": False,
+                         "description": "Omit duplicate flat outputs and use summary text with full structured data. Requires a client that exposes structuredContent."}},
           "required": ["session", "history"], "additionalProperties": False},
          {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False}),
         ("run_test", "Run the enabled tests in an explicit Maestro session and wait for confirmed completion before reading its acknowledged history. For .scs netlists use simulate.",
@@ -737,6 +739,30 @@ def _impl_maestro_read(a: dict) -> dict:
     from virtuoso_bridge.virtuoso.maestro.reader import NoResults
     if not a.get("session") or not a.get("history") or "test" in a:
         raise ValueError("test_results requires an explicit session and history, not a test name")
+    if a.get("compact", False):
+        data = _client().maestro.read_results(a["session"], history=a["history"], compact=True)
+        payload = {"session": a["session"], "history": a["history"], **data}
+        if getattr(data, "reason", None):
+            payload["no_results_reason"] = data.reason
+        # Do not send the generic truncation placeholder as successful data.
+        if len(json.dumps(payload, default=str)) > STRUCT_LIMIT:
+            response = _tool_error(
+                "Compact Maestro results exceed the structured response limit. "
+                "Export this history to a local file through the Python API; do not rerun the simulation."
+            )
+            response["structuredContent"] = {
+                "session": a["session"], "history": a["history"], "reason": "result_too_large",
+            }
+            return response
+        points = data.get("points", [])
+        count = sum(len(point.get("outputs", {})) for point in points)
+        summary = (
+            f"Maestro results: {len(points)} points, {count} scalar outputs. "
+            "Complete measurements and provenance are in structuredContent; no values were sampled."
+        )
+        if "no_results_reason" in payload:
+            summary = "No Maestro results: " + payload["no_results_reason"]
+        return _text_result(summary, payload)
     data = _client().maestro.read_results(a["session"], history=a["history"])
     if isinstance(data, NoResults):
         reason = data.reason or "no Maestro results available"
