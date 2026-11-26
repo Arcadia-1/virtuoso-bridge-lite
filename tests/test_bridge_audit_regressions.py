@@ -148,6 +148,7 @@ def test_py27_resource_files_are_pure_ascii() -> None:
     for name in (
         "ramic_registry.py",
         "ramic_bridge_daemon_27.py",
+        "ramic_deploy.py",
         "ramic_paths.py",
         "ramic_request_recovery.py",
     ):
@@ -259,3 +260,339 @@ def test_py27_daemon_except_handlers_format_non_ascii_without_dropping_socket(
         module.handle_external_connection(conn, ("127.0.0.1", 0))
         assert conn.sent == [prefix + exc.args[0]]
         assert conn.closed
+
+
+def test_py27_daemon_accept_and_signed_busy_rejection(monkeypatch, tmp_path) -> None:
+    import errno
+    import json
+    import threading
+    from virtuoso_bridge import daemon_auth
+
+    fcntl_stub = SimpleNamespace(fcntl=lambda *args, **kwargs: 0, F_GETFL=3, F_SETFL=4)
+    monkeypatch.setitem(sys.modules, "fcntl", fcntl_stub)
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        SimpleNamespace(fileno=lambda: 0, buffer=SimpleNamespace(read=lambda n=1: b"")),
+    )
+    token = "ab" * 32
+    token_path = tmp_path / "bridge_token"
+    token_path.write_text(token + "\n", encoding="ascii")
+    monkeypatch.setenv("RB_TOKEN_PATH", str(token_path))
+    monkeypatch.setattr(sys, "argv", ["daemon", "127.0.0.1", "1"])
+
+    spec = importlib.util.spec_from_file_location(
+        "vb_daemon27_accept_busy_" + uuid.uuid4().hex,
+        str(_RESOURCES / "ramic_bridge_daemon_27.py"),
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.unicode = bytes  # no str instance is bytes; keeps _to_utf8_bytes working in Py3
+    module.basestring = (str, bytes)
+    module.BRIDGE_TOKEN = token.encode("ascii")
+    # Mirror Python 2.7 _frame where str is bytes (encode text to bytes for hmac in Py3).
+    monkeypatch.setattr(
+        module,
+        "_mac_hex",
+        lambda *parts: daemon_auth._mac_hex(
+            token, *[p.decode("latin1") if isinstance(p, bytes) else p for p in parts]
+        ),
+    )
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(module.time, "sleep", sleeps.append)
+
+    class _FakeServer:
+        def __init__(self, exc):
+            self._exc = exc
+
+        def accept(self):
+            raise self._exc
+
+    for transient in (errno.EINTR, errno.ECONNABORTED, errno.ECONNRESET, errno.EAGAIN):
+        assert module._accept_next(_FakeServer(OSError(transient, "transient"))) is None
+    assert sleeps == []
+    assert module._accept_next(_FakeServer(OSError(errno.EMFILE, "too many files"))) is None
+    assert module._accept_next(_FakeServer(OSError(errno.ENFILE, "file table"))) is None
+    assert sleeps == [0.05, 0.05]
+    assert module._accept_next(_FakeServer(OSError(errno.EBADF, "closed"))) is module._ACCEPT_STOP
+
+    class _FakeConn:
+        def __init__(self, payload: str) -> None:
+            self._chunks = [payload, ""]
+            self.sent: list[str] = []
+            self.closed = False
+
+        def settimeout(self, _value) -> None:
+            pass
+
+        def recv(self, _n):
+            return self._chunks.pop(0) if self._chunks else ""
+
+        def sendall(self, data) -> None:
+            self.sent.append(data)
+
+        def shutdown(self, _how) -> None:
+            pass
+
+        def close(self) -> None:
+            self.closed = True
+
+    # Validly signed hello -> signed BusyError, slot released, nonce NOT consumed.
+    nonce = "12" * 16
+    hello_payload = json.dumps({
+        "proto": 1,
+        "op": "hello",
+        "nonce": nonce,
+        "mac": daemon_auth.hello_mac(token, nonce=nonce),
+    })
+    sem = threading.BoundedSemaphore(1)
+    assert sem.acquire(False)
+    conn = _FakeConn(hello_payload)
+    module._reject_connection_limit(conn, sem)
+    assert conn.closed
+    assert sem.acquire(False)  # released
+    assert len(conn.sent) == 1
+    verified = daemon_auth.verify_response(conn.sent[0], token, nonce)
+    assert verified == "\x15BusyError: daemon connection limit reached"
+    assert nonce not in module._NONCE_MARK
+
+    # Wrong token -> unsigned AuthError.
+    bad_payload = json.dumps({
+        "proto": 1,
+        "op": "hello",
+        "nonce": nonce,
+        "mac": daemon_auth.hello_mac("cd" * 32, nonce=nonce),
+    })
+    conn_bad = _FakeConn(bad_payload)
+    module._reject_connection_limit(conn_bad, sem)
+    assert conn_bad.closed
+    assert conn_bad.sent and conn_bad.sent[0].startswith("\x15AuthError:")
+
+
+def test_ramic_deploy_redacts_anchor_in_both_str_and_py2_unicode(monkeypatch) -> None:
+    from virtuoso_bridge.virtuoso.basic.resources import ramic_deploy
+
+    class _FakePy2Unicode:
+        """Non-str text object modeling Python 2 unicode (isinstance(..., str) is False)."""
+
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+        def replace(self, old: str, new: str) -> "_FakePy2Unicode":
+            return _FakePy2Unicode(self.text.replace(old, new))
+
+        def __str__(self) -> str:
+            return self.text
+
+    assert not isinstance(_FakePy2Unicode("x"), str)
+    monkeypatch.setattr(ramic_deploy, "_TEXT_TYPES", (str, _FakePy2Unicode))
+
+    closed_fds: list[int] = []
+    monkeypatch.setattr(ramic_deploy, "private_directory", lambda _root, create=True: 42)
+    monkeypatch.setattr(ramic_deploy.os, "close", closed_fds.append)
+
+    # 1) Non-str unicode-like exception argument (Python 2 unicode).
+    def fail_runtime(dest, files, replace, timeout, root_fd):
+        raise RuntimeError(_FakePy2Unicode(f"Differs at {dest}"))
+
+    monkeypatch.setattr(ramic_deploy, "_publish_at", fail_runtime)
+    with pytest.raises(RuntimeError) as caught_rt:
+        ramic_deploy.publish("/home/alice/private/daemon", {"daemon.py": "pass"})
+    assert "/proc/self/fd/" not in str(caught_rt.value)
+    assert str(caught_rt.value) == "Differs at /home/alice/private/daemon"
+
+    # 2) OSError strerror/filename/filename2 redaction.
+    def fail_oserror(dest, files, replace, timeout, root_fd):
+        raise OSError(
+            13,
+            f"Permission denied: {dest}/daemon.py",
+            f"{dest}/daemon.py",
+            None,
+            f"{dest}/backup",
+        )
+
+    monkeypatch.setattr(ramic_deploy, "_publish_at", fail_oserror)
+    with pytest.raises(OSError) as caught:
+        ramic_deploy.publish("/home/alice/private/daemon", {"daemon.py": "pass"})
+
+    exc = caught.value
+    assert closed_fds == [42, 42]
+    assert "/proc/self/fd/" not in str(exc)
+    assert exc.strerror == "Permission denied: /home/alice/private/daemon/daemon.py"
+    assert exc.filename == "/home/alice/private/daemon/daemon.py"
+    assert exc.filename2 == "/home/alice/private/daemon/backup"
+
+
+def test_get_current_design_uses_cellview_slots_not_dd_path(monkeypatch) -> None:
+    client = VirtuosoClient(host="127.0.0.1", port=9, timeout=5)
+    sent: list[str] = []
+
+    outputs = iter([
+        VirtuosoResult(
+            status=ExecutionStatus.SUCCESS,
+            output='("logical_alias_lib" "innocent_sch" "schematic")',
+        ),
+        VirtuosoResult(
+            status=ExecutionStatus.SUCCESS,
+            output='("lib with space" "cell\\"1" "layout")',
+        ),
+        VirtuosoResult(
+            status=ExecutionStatus.SUCCESS,
+            output='("unsaved_lib" "unsaved_cell" nil)',
+        ),
+        VirtuosoResult(status=ExecutionStatus.SUCCESS, output="nil"),
+        VirtuosoResult(status=ExecutionStatus.ERROR, errors=["boom"]),
+    ])
+
+    def fake_exec(skill, timeout=None, **_kw):
+        sent.append(skill)
+        return next(outputs)
+
+    monkeypatch.setattr(client, "execute_skill", fake_exec)
+
+    assert client.get_current_design() == ("logical_alias_lib", "innocent_sch", "schematic")
+    assert "geGetEditCellView()" in sent[0]
+    assert "cv~>libName" in sent[0] and "cv~>cellName" in sent[0] and "cv~>viewName" in sent[0]
+    assert "ddGetObjReadPath" not in sent[0]
+
+    assert client.get_current_design() == ("lib with space", 'cell"1', "layout")
+    assert client.get_current_design() == ("unsaved_lib", "unsaved_cell", None)
+    assert client.get_current_design() == (None, None, None)
+    assert client.get_current_design() == (None, None, None)
+
+
+def test_screenshot_rejects_bool_target() -> None:
+    client = VirtuosoClient(host="127.0.0.1", port=9, timeout=5)
+    for bad in (True, False):
+        with pytest.raises(ValueError, match="bool"):
+            client.screenshot(target=bad)
+
+
+def test_screenshot_int_target_checks_ciw_handles_nil_save_uses_gui_runner_and_sanitizes(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", "~/vb_scratch")
+    monkeypatch.setenv("VB_CLIENT_ID", "laptop")
+
+    class _DaemonRunner:
+        def run_command(self, cmd, **kw):
+            pytest.fail(f"daemon runner must not be used for screenshot: {cmd}")
+
+        def download(self, *a, **kw):
+            pytest.fail("daemon runner must not download screenshots")
+
+    class _GuiRunner:
+        user = "alice"
+
+        def __init__(self) -> None:
+            self.commands: list[str] = []
+            self.downloads: list[tuple[str, Path]] = []
+
+        def run_command(self, cmd: str, **kw) -> CommandResult:
+            self.commands.append(cmd)
+            if cmd == 'getent passwd "$(id -u)" | cut -d: -f6':
+                return CommandResult(0, "/home/alice\n", "")
+            return CommandResult(0, "", "")
+
+        def download(self, remote_path: str, local_path: Path, **kw) -> CommandResult:
+            self.downloads.append((remote_path, Path(local_path)))
+            Path(local_path).write_bytes(b"png-bytes")
+            return CommandResult(0, "", "")
+
+    gui_runner = _GuiRunner()
+    tunnel = SimpleNamespace(
+        _ssh_runner=_DaemonRunner(),
+        ssh_runner=_DaemonRunner(),
+        gui_runner=gui_runner,
+        _remote_user="alice",
+        _profile=None,
+    )
+    client = VirtuosoClient(host="127.0.0.1", port=9, tunnel=tunnel)
+    sent_skills: list[str] = []
+
+    # 1) target=1 checks hiGetCIWindow() first, expands ~/vb_scratch, uses gui_runner.
+    def ok_exec(skill, timeout=None, **_kw):
+        sent_skills.append(skill)
+        return VirtuosoResult(status=ExecutionStatus.SUCCESS, output='"ok"')
+
+    monkeypatch.setattr(client, "execute_skill", ok_exec)
+    out1 = tmp_path / "ciw.png"
+    res1 = client.screenshot(output=out1, target=1)
+    assert res1.ok
+    assert out1.read_bytes() == b"png-bytes"
+    assert "ciw=hiGetCIWindow()" in sent_skills[0]
+    assert "ciw~>windowNum==1" in sent_skills[0]
+    assert 'if(hiWindowSaveImage(' in sent_skills[0]
+    assert "/home/alice/vb_scratch/virtuoso_bridge_alice/laptop/screenshots/1_" in sent_skills[0]
+    assert "~/" not in sent_skills[0]
+    assert any(
+        cmd.startswith("mkdir -p /home/alice/vb_scratch/virtuoso_bridge_alice/laptop/screenshots")
+        for cmd in gui_runner.commands
+    )
+    assert len(gui_runner.downloads) == 1
+
+    # 2) hiWindowSaveImage returning nil -> clean ExecutionStatus.ERROR, no download attempted.
+    gui_runner.downloads.clear()
+    monkeypatch.setattr(
+        client,
+        "execute_skill",
+        lambda skill, timeout=None, **_kw: VirtuosoResult(
+            status=ExecutionStatus.SUCCESS, output='"error: image save failed"'
+        ),
+    )
+    res2 = client.screenshot(output=tmp_path / "fail.png", target=1)
+    assert res2.status == ExecutionStatus.ERROR
+    assert "hiWindowSaveImage failed" in res2.errors[0]
+    assert gui_runner.downloads == []
+
+    # 3) Path-traversal target string is sanitized before forming remote_path.
+    import re as _re
+
+    sent_skills.clear()
+    monkeypatch.setattr(client, "execute_skill", ok_exec)
+    res3 = client.screenshot(output=tmp_path, target="../../etc/passwd")
+    assert res3.ok
+    saved_path = _re.search(r'\?path "([^"]+)"', sent_skills[0]).group(1)
+    assert ".." not in saved_path
+    assert saved_path.startswith("/home/alice/vb_scratch/virtuoso_bridge_alice/laptop/screenshots/etc_passwd_")
+    remote_dl, local_dl = gui_runner.downloads[0]
+    assert remote_dl == saved_path
+    assert local_dl.parent == tmp_path
+    assert local_dl.name.startswith("etc_passwd_")
+
+
+def test_prepare_il_path_expands_tilde_scratch_root(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", "~/vb_scratch")
+    monkeypatch.setenv("VB_CLIENT_ID", "laptop")
+
+    il_file = tmp_path / "script.il"
+    il_file.write_text("1+1\n", encoding="utf-8")
+
+    uploads: list[tuple[str, str]] = []
+
+    class _Runner:
+        def run_command(self, cmd: str, **kw) -> CommandResult:
+            if cmd == 'getent passwd "$(id -u)" | cut -d: -f6':
+                return CommandResult(0, "/home/alice\n", "")
+            return CommandResult(0, "", "")
+
+    class _Tunnel:
+        ssh_runner = _Runner()
+        remote_work_dir = None
+        _remote_user = "alice"
+        _profile = None
+        port = 65432
+
+        def upload_text(self, text: str, remote_path: str) -> CommandResult:
+            uploads.append((remote_path, text))
+            return CommandResult(0, "", "")
+
+    client = VirtuosoClient(host="127.0.0.1", port=65432, tunnel=_Tunnel())
+    remote_path, uploaded = client._prepare_il_path(il_file)
+    assert uploaded is True
+    assert remote_path.startswith("/home/alice/vb_scratch/virtuoso_bridge_alice/laptop/")
+    assert "~/" not in remote_path
+    assert uploads[0][0] == remote_path

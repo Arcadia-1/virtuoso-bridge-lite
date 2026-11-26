@@ -1095,6 +1095,185 @@ class TestRealDaemon:
                 proc.kill()
                 proc.communicate(timeout=5)
 
+    def test_connection_limit_signed_busy_triggers_retry_under_token_auth(
+        self, tmp_path
+    ) -> None:
+        """Hitting _MAX_CONNECTIONS under token auth returns a signed BusyError
+        that retries cleanly (both on handshake and execute) instead of raising
+        a false DaemonAuthError, while unauthorized peers get AuthError."""
+        daemon_src = _resources_dir() / "ramic_bridge_daemon_3.py"
+        token_path = tmp_path / "bridge_token"
+        port = _free_port()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("RB_")}
+        env["RB_TOKEN_PATH"] = str(token_path)
+        proc = subprocess.Popen(
+            [sys.executable, str(daemon_src), "127.0.0.1", str(port)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, env=env,
+        )
+        holders: list[socket.socket] = []
+
+        # Responder feeding synthetic Virtuoso STX replies on stdin.
+        stop_responder = threading.Event()
+
+        def responder() -> None:
+            while not stop_responder.is_set():
+                line = proc.stdout.readline()
+                if not line:
+                    return
+                try:
+                    proc.stdin.write(b'\x02"2"\x1e')
+                    proc.stdin.flush()
+                except OSError:
+                    return
+
+        responder_thread = threading.Thread(target=responder, daemon=True)
+        responder_thread.start()
+
+        try:
+            _wait_for_listener(proc, port)
+            token = daemon_auth.read_local_token(token_path)
+            assert token
+
+            # Occupy all 8 daemon worker slots with idle open connections.
+            for _ in range(8):
+                s = socket.create_connection(("127.0.0.1", port), timeout=5)
+                holders.append(s)
+            # Wait briefly so accept() has handed all 8 sockets to worker threads.
+            time.sleep(0.15)
+
+            # 1) Unauthorized peer hitting connection limit gets AuthError, not signed BusyError.
+            bad_nonce = "99" * 16
+            unauth_reply = _raw_exchange(
+                port,
+                {
+                    "proto": 1,
+                    "op": "hello",
+                    "nonce": bad_nonce,
+                    "mac": daemon_auth.hello_mac(WRONG_TOKEN, nonce=bad_nonce),
+                },
+            )
+            assert unauth_reply.startswith(NAK) and "AuthError" in unauth_reply
+
+            # 2) Authorized raw hello hitting connection limit gets a VALIDLY SIGNED BusyError.
+            ok_nonce = "88" * 16
+            busy_hello = _raw_exchange(
+                port,
+                {
+                    "proto": 1,
+                    "op": "hello",
+                    "nonce": ok_nonce,
+                    "mac": daemon_auth.hello_mac(token, nonce=ok_nonce),
+                },
+            )
+            verified_busy = daemon_auth.verify_response(busy_hello, token, ok_nonce)
+            assert verified_busy == NAK + "BusyError: daemon connection limit reached"
+
+            # 3) VirtuosoClient hitting connection limit on handshake retries and succeeds
+            #    as soon as a slot is freed (never false DaemonAuthError).
+            def release_one_soon() -> None:
+                time.sleep(0.2)
+                if holders:
+                    holders.pop().close()
+
+            releaser = threading.Thread(target=release_one_soon, daemon=True)
+            releaser.start()
+            client = VirtuosoClient(host="127.0.0.1", port=port, daemon_token=token)
+            res = client.execute_skill("1+1", timeout=5)
+            releaser.join(timeout=2)
+            assert res.status is ExecutionStatus.SUCCESS, res.errors
+            assert res.output == '"2"'
+            assert res.metadata.get("busy_retries", 0) >= 1
+
+            # 4) Re-fill the 8th slot; now handshake is cached so execute_skill itself
+            #    hits connection limit, verifies signed BusyError, retries, and succeeds.
+            holders.append(socket.create_connection(("127.0.0.1", port), timeout=5))
+            time.sleep(0.15)
+            releaser2 = threading.Thread(target=release_one_soon, daemon=True)
+            releaser2.start()
+            res2 = client.execute_skill("1+1", timeout=5)
+            releaser2.join(timeout=2)
+            assert res2.status is ExecutionStatus.SUCCESS, res2.errors
+            assert res2.output == '"2"'
+            assert res2.metadata.get("busy_retries", 0) >= 1
+        finally:
+            stop_responder.set()
+            for s in holders:
+                try:
+                    s.close()
+                except OSError:
+                    pass
+            proc.terminate()
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate(timeout=5)
+
+    def test_connection_limit_retry_under_explicit_auth_off(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        daemon_src = _resources_dir() / "ramic_bridge_daemon_3.py"
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a dir")
+        port = _free_port()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("RB_")}
+        env["RB_TOKEN_PATH"] = str(blocker / "sub" / "token")
+        env[daemon_auth.DAEMON_UNAUTH_OPTIN_ENV] = "1"
+        monkeypatch.setenv(daemon_auth.UNAUTH_OPTIN_ENV, "1")
+        proc = subprocess.Popen(
+            [sys.executable, str(daemon_src), "127.0.0.1", str(port)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, env=env,
+        )
+        holders: list[socket.socket] = []
+        stop_responder = threading.Event()
+
+        def responder() -> None:
+            while not stop_responder.is_set():
+                line = proc.stdout.readline()
+                if not line:
+                    return
+                try:
+                    proc.stdin.write(b'\x02"2"\x1e')
+                    proc.stdin.flush()
+                except OSError:
+                    return
+
+        threading.Thread(target=responder, daemon=True).start()
+        try:
+            _wait_for_listener(proc, port)
+            for _ in range(8):
+                holders.append(socket.create_connection(("127.0.0.1", port), timeout=5))
+            time.sleep(0.15)
+
+            def release_one_soon() -> None:
+                time.sleep(0.2)
+                if holders:
+                    holders.pop().close()
+
+            releaser = threading.Thread(target=release_one_soon, daemon=True)
+            releaser.start()
+            client = VirtuosoClient(host="127.0.0.1", port=port, daemon_token=None)
+            res = client.execute_skill("1+1", timeout=5)
+            releaser.join(timeout=2)
+            assert res.status is ExecutionStatus.SUCCESS, res.errors
+            assert res.output == '"2"'
+            assert res.metadata.get("busy_retries", 0) >= 1
+        finally:
+            stop_responder.set()
+            for s in holders:
+                try:
+                    s.close()
+                except OSError:
+                    pass
+            proc.terminate()
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate(timeout=5)
+
 
 def test_daemon_scripts_compile() -> None:
     resources = _resources_dir()
@@ -1484,3 +1663,38 @@ def test_real_daemon_nonblocking_wait_obeys_timeout(tmp_path, monkeypatch, prefi
 
     monkeypatch.setattr(sys.stdin.buffer, "read", read)
     assert module.read_until_delimiter() == b"\x15TimeoutError"
+
+
+@pytest.mark.parametrize(
+    "transient_errno,expects_sleep",
+    [
+        (errno.EINTR, False),
+        (errno.ECONNABORTED, False),
+        (errno.ECONNRESET, False),
+        (errno.EAGAIN, False),
+        (errno.EMFILE, True),
+        (errno.ENFILE, True),
+    ],
+)
+def test_py3_daemon_accept_survives_transient_errors_and_stops_on_fatal(
+    tmp_path, monkeypatch, transient_errno, expects_sleep
+) -> None:
+    module = _import_py3_daemon(monkeypatch, tmp_path)
+    sleeps: list[float] = []
+    monkeypatch.setattr(module.time, "sleep", sleeps.append)
+
+    class _FakeServerSock:
+        def __init__(self, exc):
+            self._exc = exc
+
+        def accept(self):
+            raise self._exc
+
+    assert module._accept_next(_FakeServerSock(OSError(transient_errno, "transient"))) is None
+    if expects_sleep:
+        assert sleeps == [0.05]
+    else:
+        assert sleeps == []
+
+    # Fatal listener error stops the accept loop cleanly.
+    assert module._accept_next(_FakeServerSock(OSError(errno.EBADF, "bad fd"))) is module._ACCEPT_STOP

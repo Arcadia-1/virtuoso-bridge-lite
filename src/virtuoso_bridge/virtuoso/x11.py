@@ -18,7 +18,14 @@ from pathlib import Path
 from typing import Any
 
 from virtuoso_bridge.env import load_vb_env
-from virtuoso_bridge.transport.remote_paths import default_virtuoso_bridge_dir, resolve_client_id
+from virtuoso_bridge.transport.remote_paths import (
+    default_virtuoso_bridge_dir,
+    private_dir_shell_prelude,
+    private_dirs_below,
+    resolve_client_id,
+    resolve_remote_scratch_root,
+    resolve_remote_username,
+)
 from virtuoso_bridge.transport.ssh import SSHRunner
 
 logger = logging.getLogger(__name__)
@@ -47,7 +54,47 @@ class X11HelperDeploymentError(RuntimeError):
                                       "returncode": self.returncode, "stderr": self.stderr}}
 
 
-def _deploy_helper(runner, local: Path, remote: str, *, timeout: float | None = None) -> None:
+def _resolve_user(runner: SSHRunner | None, user: str | None) -> str:
+    if isinstance(user, str) and user.strip():
+        return user.strip()
+    configured = getattr(runner, "user", None) if runner is not None else None
+    if not isinstance(configured, str) or not configured.strip():
+        configured = None
+    return resolve_remote_username(configured_user=configured, runner=runner)
+
+
+def _private_dir_command(parent: str, scratch_root: str | None = None) -> str:
+    """Shell command creating/verifying private 0700 user-owned directories."""
+    prelude = private_dir_shell_prelude("X11")
+    parent_norm = parent.rstrip("/") or "/"
+    if scratch_root is not None:
+        root = scratch_root.rstrip("/") or "/"
+        prefix = root if root.endswith("/") else root + "/"
+        if parent_norm.startswith(prefix):
+            dirs = private_dirs_below(root, parent_norm)
+            ensure_root = ""
+            if root != "/":
+                q_root = shlex.quote(root)
+                ensure_root = (
+                    f"if [ ! -e {q_root} ] && [ ! -L {q_root} ]; then "
+                    f"mkdir -p {q_root} || exit $?; fi\n"
+                )
+            return (
+                prelude
+                + ensure_root
+                + "".join(f"vb_ensure_dir {shlex.quote(d)} || exit $?\n" for d in dirs)
+            )
+    return prelude + f"vb_ensure_dir {shlex.quote(parent_norm)} || exit $?\n"
+
+
+def _deploy_helper(
+    runner,
+    local: Path,
+    remote: str,
+    *,
+    timeout: float | None = None,
+    scratch_root: str | None = None,
+) -> None:
     """Verify deployment, keeping runner defaults unless a budget is supplied."""
     deadline = None if timeout is None else time.monotonic() + timeout
     for stage in ("directory", "upload", "readability"):
@@ -59,8 +106,11 @@ def _deploy_helper(runner, local: Path, remote: str, *, timeout: float | None = 
                     raise TimeoutError("X11 helper deployment budget exhausted")
                 kwargs["timeout"] = remaining
             if stage == "directory":
-                parent = remote.rsplit("/", 1)[0]
-                result = runner.run_command(f"mkdir -p {shlex.quote(parent)}", **kwargs)
+                parent = remote.rsplit("/", 1)[0] or "/"
+                result = runner.run_command(
+                    _private_dir_command(parent, scratch_root=scratch_root),
+                    **kwargs,
+                )
             elif stage == "upload":
                 result = runner.upload(local, remote, **kwargs)
             else:
@@ -158,9 +208,13 @@ def _ensure_helper(
     """
     if runner is None:
         return str(_HELPER_SCRIPT)
-    remote_dir = default_virtuoso_bridge_dir(user, "x11", resolve_client_id(profile))
+    resolved_user = _resolve_user(runner, user)
+    scratch_root = resolve_remote_scratch_root(runner, error_context="X11 helper deployment")
+    remote_dir = default_virtuoso_bridge_dir(
+        resolved_user, "x11", resolve_client_id(profile), root=scratch_root
+    )
     remote_path = f"{remote_dir}/x11_dismiss_dialog.py"
-    _deploy_helper(runner, _HELPER_SCRIPT, remote_path)
+    _deploy_helper(runner, _HELPER_SCRIPT, remote_path, scratch_root=scratch_root)
     return remote_path
 
 
@@ -181,9 +235,9 @@ def find_dialogs(
         return [exc.as_error()]
     py = _detect_remote_python(runner)
     resolved = _get_display(display)
-    cmd = f"{py} {script}"
+    cmd = f"{shlex.quote(py)} {shlex.quote(script)}"
     if resolved:
-        cmd += f" {resolved}"
+        cmd += f" {shlex.quote(resolved)}"
     result = _run(runner, cmd, timeout=15)
     return _parse_result(result)
 
@@ -203,11 +257,11 @@ def list_windows(
         return [exc.as_error()]
     py = _detect_remote_python(runner)
     resolved = _get_display(display)
-    cmd = f"{py} {script} --list-windows --json"
+    cmd = f"{shlex.quote(py)} {shlex.quote(script)} --list-windows --json"
     if top_level:
         cmd += " --top-level"
     if resolved:
-        cmd += f" {resolved}"
+        cmd += f" {shlex.quote(resolved)}"
     result = _run(runner, cmd, timeout=15)
     return _parse_result(result)
 
@@ -251,8 +305,9 @@ def inspect_dialogs(
     else:
         # A content-addressed helper cannot be overwritten by another installed
         # Bridge version sharing the same profile scratch directory.
+        resolved_user = _resolve_user(runner, user)
         digest = hashlib.sha256(_HELPER_SCRIPT.read_bytes()).hexdigest()[:16]
-        key = (user, profile, digest)
+        key = (resolved_user, profile, digest)
         cached = getattr(runner, "_vb_dialog_helper", None)
         if cached is not None and cached[0] == key:
             script, py = cached[1:]
@@ -260,9 +315,16 @@ def inspect_dialogs(
                 runner._vb_dialog_helper = None
                 cached = None
         if cached is None or cached[0] != key:
-            root = default_virtuoso_bridge_dir(user, "x11", resolve_client_id(profile))
+            scratch_root = resolve_remote_scratch_root(
+                runner, error_context="X11 helper deployment"
+            )
+            root = default_virtuoso_bridge_dir(
+                resolved_user, "x11", resolve_client_id(profile), root=scratch_root
+            )
             script = f"{root}/dialog_inspect_{digest}.py"
-            _deploy_helper(runner, _HELPER_SCRIPT, script, timeout=remaining())
+            _deploy_helper(
+                runner, _HELPER_SCRIPT, script, timeout=remaining(), scratch_root=scratch_root
+            )
             py = _detect_remote_python(runner, timeout=remaining())
             runner._vb_dialog_helper = (key, script, py)
     cmd = f"{shlex.quote(py)} {shlex.quote(script)} --inspect-dialogs --pid {pid}"
@@ -312,8 +374,9 @@ def dialog_close_exchange(
         script = str(helper)
         py = _detect_remote_python(None, timeout=remaining())
     else:
+        resolved_user = _resolve_user(runner, user)
         digest = hashlib.sha256(_HELPER_SCRIPT.read_bytes() + helper.read_bytes()).hexdigest()[:16]
-        key = (user, profile, digest)
+        key = (resolved_user, profile, digest)
         cached = getattr(runner, "_vb_dialog_close_helper", None)
         if cached is not None and cached[0] == key:
             script, py = cached[1:]
@@ -324,10 +387,21 @@ def dialog_close_exchange(
                     cached = None
                     break
         if cached is None or cached[0] != key:
-            root = default_virtuoso_bridge_dir(user, "x11", resolve_client_id(profile))
+            scratch_root = resolve_remote_scratch_root(
+                runner, error_context="X11 helper deployment"
+            )
+            root = default_virtuoso_bridge_dir(
+                resolved_user, "x11", resolve_client_id(profile), root=scratch_root
+            )
             directory = f"{root}/close_{digest}"
             for local in (_HELPER_SCRIPT, helper):
-                _deploy_helper(runner, local, f"{directory}/{local.name}", timeout=remaining())
+                _deploy_helper(
+                    runner,
+                    local,
+                    f"{directory}/{local.name}",
+                    timeout=remaining(),
+                    scratch_root=scratch_root,
+                )
             script = f"{directory}/{helper.name}"
             py = _detect_remote_python(runner, timeout=remaining())
             runner._vb_dialog_close_helper = (key, script, py)
@@ -375,7 +449,7 @@ def dismiss_window(
     py = _detect_remote_python(runner)
     resolved = _get_display(display)
     cmd = (
-        f"{py} {script} --dismiss-window {shlex.quote(window_id)} "
+        f"{shlex.quote(py)} {shlex.quote(script)} --dismiss-window {shlex.quote(window_id)} "
         f"--action {shlex.quote(action)}"
     )
     if pid is not None:
@@ -404,11 +478,11 @@ def bootstrap_ciw(
     py = _detect_remote_python(runner)
     resolved = _get_display(display)
     cmd = (
-        f"{py} {script} --bootstrap-window {shlex.quote(window_id)} "
+        f"{shlex.quote(py)} {shlex.quote(script)} --bootstrap-window {shlex.quote(window_id)} "
         f"--setup-path {shlex.quote(setup_path)}"
     )
     if resolved:
-        cmd += f" {resolved}"
+        cmd += f" {shlex.quote(resolved)}"
     result = _run(runner, cmd, timeout=20)
     parsed = _parse_result(result)
     selected = [
@@ -455,9 +529,9 @@ def dismiss_dialogs(
         if val is not None and val != "":
             env_prefix += f"{key}={shlex.quote(val)} "
 
-    cmd = f"{env_prefix}{py} {script} --dismiss"
+    cmd = f"{env_prefix}{shlex.quote(py)} {shlex.quote(script)} --dismiss"
     if resolved:
-        cmd += f" {resolved}"
+        cmd += f" {shlex.quote(resolved)}"
     result = _run(runner, cmd, timeout=15)
     return _parse_result(result)
 

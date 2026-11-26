@@ -60,8 +60,9 @@ class DialogActionOps:
 
         owner = self._dialogs._owner
         runner = owner.gui_runner
+        user = self._dialogs._resolve_gui_user(runner)
         return x11.dialog_close_exchange(
-            runner, "",
+            runner, user,
             payload, profile=getattr(owner._tunnel, "_profile", None),
             timeout=_timeout(deadline - time.monotonic()),
         )

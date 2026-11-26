@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+import socket
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal, TYPE_CHECKING
@@ -155,6 +156,24 @@ class DialogOps:
     def target(self) -> DialogTarget | None:
         return self._target
 
+    def _resolve_gui_user(self, runner: Any) -> str:
+        from virtuoso_bridge.transport.remote_paths import resolve_remote_username
+
+        tunnel = getattr(self._owner, "_tunnel", None)
+        configured_user: str | None = None
+        if runner is not None:
+            for candidate in (
+                getattr(runner, "user", None),
+                getattr(tunnel, "remote_user", None),
+                getattr(tunnel, "_remote_user", None),
+            ):
+                if isinstance(candidate, str) and candidate.strip():
+                    configured_user = candidate.strip()
+                    break
+            if configured_user is None and not callable(getattr(runner, "run_command", None)):
+                return ""
+        return resolve_remote_username(configured_user=configured_user, runner=runner)
+
     def inspect(
         self, *, pid: int | None = None, display: str | None = None,
         ciw_window: str | None = None, timeout: float = 15,
@@ -182,8 +201,9 @@ class DialogOps:
         profile = getattr(self._owner._tunnel, "_profile", None)
         try:
             runner = self._owner.gui_runner
+            user = self._resolve_gui_user(runner)
             payload = x11.inspect_dialogs(
-                runner, "",
+                runner, user,
                 pid=target.pid, display=target.display, ciw_window=target.ciw_window,
                 profile=profile, timeout=timeout,
             )
@@ -247,7 +267,7 @@ class DialogOps:
         try:
             self._probe_pid = self.connected_pid(timeout=timeout)
             self._probe_endpoint = endpoint
-        except TimeoutError:
+        except (TimeoutError, socket.timeout):
             return self._probe_pid is not None
         except Exception:
             self._probe_pid = None
