@@ -645,11 +645,15 @@ def _send_recovery_reply(conn, request_nonce, payload):
     _safe_sendall(conn, _signed_response(request_nonce, "\x02" + body))
 
 
-# Multi-line code is loaded from a temp file because the IPC channel is
-# line-buffered. An error raised inside a loaded file reaches the caller only
-# as load's own "error while loading file ... at line N"; the real message is
-# printed to the CIW alone. So the file runs the code under errset, and the
-# command re-raises the captured error after load() returns, outside the file.
+# Multi-line, comment-bearing, CR-containing, or long (>2048-byte) code is
+# loaded from a temp file because the IPC channel is line-buffered, inline
+# progn(...) wrapping cannot safely enclose trailing ';' SKILL comments, and
+# single-line payloads above cdsServIpc's chunk size split mid-expression.
+# An error raised inside a loaded file reaches the caller only as load's own
+# "error while loading file ... at line N"; the real message is printed to
+# the CIW alone. So the file runs the code under errset, and the command
+# re-raises the captured error after load() returns, outside the file.
+_INLINE_SKILL_MAX_BYTES = 2048
 _MULTILINE_PREFIX = "_vb_eval_ok = errset(progn(\n"
 _MULTILINE_SUFFIX = "\n) t)\n_vb_eval_err = unless(_vb_eval_ok errset.errset)\n"
 _MULTILINE_RESULT = (
@@ -666,7 +670,12 @@ def _prepare_skill(skill_code, tag=None):
         skill_code = skill_code.encode("utf-8")
     tmp_il_path = None
     try:
-        if "\n" in skill_code:
+        if (
+            "\n" in skill_code
+            or "\r" in skill_code
+            or ";" in skill_code
+            or len(skill_code) > _INLINE_SKILL_MAX_BYTES
+        ):
             fd, tmp_il_path = tempfile.mkstemp(suffix=".il", prefix="vb_eval_")
             with os.fdopen(fd, "wb") as handle:
                 handle.write(_MULTILINE_PREFIX + skill_code + _MULTILINE_SUFFIX)
