@@ -20,7 +20,10 @@ dict parsing.
 
 from __future__ import annotations
 
+import shlex
+
 from virtuoso_bridge import VirtuosoClient
+from virtuoso_bridge.virtuoso.ops import escape_skill_string
 
 from ._parse_skill import _parse_skill_str_list, _tokenize_top_level
 
@@ -70,13 +73,20 @@ def brief_bundle(client: VirtuosoClient, *,
     """
     if not sess:
         return {"raw_sections": []}
+    esess = escape_skill_string(sess)
+    elib = escape_skill_string(lib)
     expr = f'''
-list(
-  ddGetObj("{lib}")~>readPath
-  maeGetSetup(?session "{sess}")
-  maeGetEnabledAnalysis(car(maeGetSetup(?session "{sess}")) ?session "{sess}")
-  mapcar(lambda((a) maeGetAnalysis(car(maeGetSetup(?session "{sess}")) a ?session "{sess}"))
-         maeGetEnabledAnalysis(car(maeGetSetup(?session "{sess}")) ?session "{sess}"))
+let((vbSetup vbTest vbEnabled)
+  vbSetup = car(errset(maeGetSetup(?session "{esess}")))
+  vbTest = when(listp(vbSetup) car(vbSetup))
+  vbEnabled = when(stringp(vbTest) car(errset(maeGetEnabledAnalysis(vbTest ?session "{esess}"))))
+  list(
+    car(errset(ddGetObj("{elib}")~>readPath))
+    vbSetup
+    vbEnabled
+    when(stringp(vbTest) && listp(vbEnabled)
+      mapcar(lambda((a) car(errset(maeGetAnalysis(vbTest a ?session "{esess}")))) vbEnabled))
+  )
 )
 '''
     r = client.execute_skill(expr)
@@ -84,17 +94,22 @@ list(
 
     tests = _parse_skill_str_list(_unwrap_errset(s_setup))
     test = tests[0] if tests else ""
+    etest = escape_skill_string(test)
     enabled = _parse_skill_str_list(_unwrap_errset(s_enabled))
 
     sections = [
-        (f'ddGetObj("{lib}")~>readPath',                          s_lib),
-        (f'maeGetSetup(?session "{sess}")',                       s_setup),
-        (f'maeGetEnabledAnalysis("{test}" ?session "{sess}")',    s_enabled),
+        (f'ddGetObj("{elib}")~>readPath',    s_lib),
+        (f'maeGetSetup(?session "{esess}")', s_setup),
     ]
-    per_ana = _split_top_level(s_analyses, expected=len(enabled)) if enabled else []
-    for ana, raw in zip(enabled, per_ana):
+    if test:
         sections.append(
-            (f'maeGetAnalysis("{test}" "{ana}" ?session "{sess}")', raw))
+            (f'maeGetEnabledAnalysis("{etest}" ?session "{esess}")', s_enabled),
+        )
+        per_ana = _split_top_level(s_analyses, expected=len(enabled)) if enabled else []
+        for ana, raw in zip(enabled, per_ana):
+            eana = escape_skill_string(ana)
+            sections.append(
+                (f'maeGetAnalysis("{etest}" "{eana}" ?session "{esess}")', raw))
     return {"raw_sections": sections}
 
 
@@ -105,23 +120,28 @@ list(
 # Each entry below is a self-contained SKILL expression — no internal
 # let-var references.  Templates use ``{sess}`` / ``{lib}`` / ``{cell}``
 # / ``{view}`` / ``{test}`` placeholders, .format()-substituted at run
-# time so the formatted string IS the section label printed to the user.
+# time with escaped SKILL strings so the formatted string IS the section
+# label printed to the user.
 #
 # Per-analysis maeGetAnalysis calls are generated dynamically from the
 # enabled list discovered in the first round-trip.
 
-_PROBES_TEMPLATE: tuple[str, ...] = (
-    'ddGetObj("{lib}")~>readPath',
-    'maeGetSetup(?session "{sess}")',
-    'maeGetEnabledAnalysis("{test}" ?session "{sess}")',
-    # per-analysis maeGetAnalysis(...) probes inserted here at run-time
-    'maeGetEnvOption("{test}" ?session "{sess}")',
-    'maeGetSimOption("{test}" ?session "{sess}")',
-    'mapcar(lambda((o) list(o~>name o~>type o~>signal o~>expression'
+_HEAD_PROBES_TEMPLATE: tuple[str, ...] = (
+    'car(errset(ddGetObj("{lib}")~>readPath))',
+    'errset(maeGetSetup(?session "{sess}"))',
+)
+
+_TEST_ENV_PROBES_TEMPLATE: tuple[str, ...] = (
+    'errset(maeGetEnvOption("{test}" ?session "{sess}"))',
+    'errset(maeGetSimOption("{test}" ?session "{sess}"))',
+    'errset(mapcar(lambda((o) list(o~>name o~>type o~>signal o~>expression'
         ' o~>plot o~>save o~>evalType o~>yaxisUnit o~>spec))'
-        ' maeGetTestOutputs("{test}" ?session "{sess}"))',
-    'maeGetCurrentRunMode(?session "{sess}")',
-    'maeGetJobControlMode(?session "{sess}")',
+        ' maeGetTestOutputs("{test}" ?session "{sess}")))',
+)
+
+_TAIL_PROBES_TEMPLATE: tuple[str, ...] = (
+    'errset(maeGetCurrentRunMode(?session "{sess}"))',
+    'errset(maeGetJobControlMode(?session "{sess}"))',
     'errset(maeGetRunPlan(?session "{sess}"))',
     # Currently-loaded history name (ground truth for "which history is
     # the user looking at").  IC6.1.8 returns a runHistory object whose
@@ -135,8 +155,16 @@ _PROBES_TEMPLATE: tuple[str, ...] = (
     # Plain file listing (works on every IC version). Mtime-based
     # ordering is filled in by a separate shell call in bundle.py
     # because SKILL's getFileWriteTime is unavailable in some builds.
-    'getDirFiles(strcat(ddGetObj("{lib}")~>readPath "/{cell}/{view}/results/maestro"))',
+    'errset(let((p) p=ddGetObj("{lib}")~>readPath '
+        'when(stringp(p) getDirFiles(strcat(p "/{cell}/{view}/results/maestro")))))',
     'errset(asiGetAnalogRunDir(asiGetSession("{sess}")))',
+)
+
+_PROBES_TEMPLATE: tuple[str, ...] = (
+    _HEAD_PROBES_TEMPLATE
+    + ('errset(maeGetEnabledAnalysis("{test}" ?session "{sess}"))',)
+    + _TEST_ENV_PROBES_TEMPLATE
+    + _TAIL_PROBES_TEMPLATE
 )
 
 
@@ -160,29 +188,44 @@ def full_bundle(client: VirtuosoClient, *,
         return {"raw_sections": [], "test": "", "current_history": "",
                 "hist_files": [], "hist_files_mtime": []}
 
+    esess = escape_skill_string(sess)
+    elib = escape_skill_string(lib)
+    ecell = escape_skill_string(cell)
+    eview = escape_skill_string(view)
+
     # --- Round 1: discover the test name + enabled analyses ---
-    # Both are needed to format the per-analysis probes in round 2 (so
-    # their printed labels show the actual test/analysis names).
+    # Guard maeGetSetup so empty / newly created Maestro views do not
+    # abort subsequent probes.
     r = client.execute_skill(
-        f'list('
-        f'maeGetSetup(?session "{sess}") '
-        f'maeGetEnabledAnalysis(car(maeGetSetup(?session "{sess}")) ?session "{sess}"))'
+        'let((vbSetup vbTest vbEnabled) '
+        f'vbSetup = car(errset(maeGetSetup(?session "{esess}"))) '
+        'vbTest = when(listp(vbSetup) car(vbSetup)) '
+        f'vbEnabled = when(stringp(vbTest) car(errset(maeGetEnabledAnalysis(vbTest ?session "{esess}")))) '
+        'list(vbSetup vbEnabled))'
     )
     d = _split_top_level(r.output or "", expected=2)
     tests = _parse_skill_str_list(_unwrap_errset(d[0]))
     test = tests[0] if tests else ""
-    enabled = _parse_skill_str_list(_unwrap_errset(d[1]))
+    etest = escape_skill_string(test)
+    enabled = _parse_skill_str_list(_unwrap_errset(d[1])) if test else []
 
     # --- Round 2: every probe, formatted into self-contained SKILL ---
-    fmt = {"sess": sess, "lib": lib, "cell": cell, "view": view, "test": test}
-    # Insert per-analysis probes after maeGetEnabledAnalysis (index 3).
-    head = [p.format(**fmt) for p in _PROBES_TEMPLATE[:3]]
-    per_ana = [
-        f'maeGetAnalysis("{test}" "{ana}" ?session "{sess}")'
-        for ana in enabled
-    ]
-    tail = [p.format(**fmt) for p in _PROBES_TEMPLATE[3:]]
-    probes = head + per_ana + tail
+    fmt = {
+        "sess": esess,
+        "lib": elib,
+        "cell": ecell,
+        "view": eview,
+        "test": etest,
+    }
+    probes = [p.format(**fmt) for p in _HEAD_PROBES_TEMPLATE]
+    if test:
+        probes.append(f'errset(maeGetEnabledAnalysis("{etest}" ?session "{esess}"))')
+        probes.extend(
+            f'errset(maeGetAnalysis("{etest}" "{escape_skill_string(ana)}" ?session "{esess}"))'
+            for ana in enabled
+        )
+        probes.extend(p.format(**fmt) for p in _TEST_ENV_PROBES_TEMPLATE)
+    probes.extend(p.format(**fmt) for p in _TAIL_PROBES_TEMPLATE)
 
     list_body = "\n  ".join(probes)
     r2 = client.execute_skill(f'list(\n  {list_body}\n)')
@@ -195,13 +238,14 @@ def full_bundle(client: VirtuosoClient, *,
     current_history = ""
     hist_files: list[str] = []
     for label, raw in zip(probes, outputs):
-        if label.startswith('ddGetObj('):
-            lib_path = (raw or "").strip().strip('"')
+        if "ddGetObj(" in label and "getDirFiles(" not in label:
+            val = (raw or "").strip().strip('"')
+            lib_path = "" if val == "nil" else val
         elif label.startswith('errset(let((h) h=axlGetCurrentHistory'):
             # Probe returned list(~>name ~>historyName ~>run ~>runName);
             # pick the first non-nil string value.
             current_history = _first_nonnil_string(_unwrap_errset(raw))
-        elif label.startswith("getDirFiles("):
+        elif "getDirFiles(" in label:
             hist_files = _parse_skill_str_list(_unwrap_errset(raw))
         elif label.startswith("errset(asiGetAnalogRunDir"):
             run_dir = _unwrap_errset(raw).strip().strip('"')
@@ -217,27 +261,26 @@ def full_bundle(client: VirtuosoClient, *,
     # caused snapshot to follow a stale GUI-loaded history
     # (e.g. ExplorerRun.0) instead of the actual newest run.
     #
-    # We scan *two* locations and merge:
+    # We scan *two* locations and merge, keeping the newest mtime per
+    # filename so newer scratch_root timestamps are preserved alongside
+    # project-side entries:
     #   project maestro  — the authoritative history DB for runs that
     #                      checkpoint back (regular Interactive.N, etc.)
     #   scratch_root maestro — where Explorer-derived `.RO` runs and
     #                          any run that stays local-only materialize.
-    # Without the scratch side, `.RO` histories (which live only there)
-    # are invisible to snapshot() and it falls back to the stale
-    # project-side mtime champion.
-    hist_files_mtime: list[tuple[str, int]] = []
+    merged_mtimes: dict[str, int] = {}
     if lib_path and hist_files:
-        hist_files_mtime = _fetch_mtimes_via_shell(
+        for f, m in _fetch_mtimes_via_shell(
             client, f"{lib_path}/{cell}/{view}/results/maestro",
-        )
+        ):
+            if f not in merged_mtimes or m > merged_mtimes[f]:
+                merged_mtimes[f] = m
     if scratch_root:
         scratch_maestro = f"{scratch_root}/{lib}/{cell}/{view}/results/maestro"
-        scratch_mtimes = _fetch_mtimes_via_shell(client, scratch_maestro)
-        seen = {f for f, _ in hist_files_mtime}
-        for f, m in scratch_mtimes:
-            if f not in seen:
-                hist_files_mtime.append((f, m))
-                seen.add(f)
+        for f, m in _fetch_mtimes_via_shell(client, scratch_maestro):
+            if f not in merged_mtimes or m > merged_mtimes[f]:
+                merged_mtimes[f] = m
+    hist_files_mtime = list(merged_mtimes.items())
 
     return {
         "raw_sections":     list(zip(probes, outputs)),
@@ -267,7 +310,9 @@ def _fetch_mtimes_via_shell(client: VirtuosoClient, remote_dir: str,
     ``[(basename, unix_mtime), ...]``.  Returns ``[]`` on any failure
     (caller falls back to natural-sort-by-name)."""
     import re as _re
-    runner = getattr(getattr(client, "_tunnel", None), "_ssh_runner", None)
+    runner = getattr(client, "ssh_runner", None)
+    if runner is None:
+        runner = getattr(getattr(client, "_tunnel", None), "_ssh_runner", None)
     if runner is None:
         # Local mode: Virtuoso shares the filesystem; iterate directly.
         from pathlib import Path as _Path
@@ -281,7 +326,7 @@ def _fetch_mtimes_via_shell(client: VirtuosoClient, remote_dir: str,
             return []
     # %T@ prints unix mtime as a float; %f is basename. '\n' between
     # rows, ' ' between fields.
-    cmd = (f"find {remote_dir} -maxdepth 1 -type f "
+    cmd = (f"find {shlex.quote(remote_dir)} -maxdepth 1 -type f "
            f"-printf '%T@ %f\\n' 2>/dev/null")
     try:
         r = runner.run_command(cmd, timeout=15)

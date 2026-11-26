@@ -14,6 +14,8 @@ def _skill_string_list(values: Iterable[str]) -> str:
 
 
 def _skill_window_ref(window: int | str) -> str:
+    if isinstance(window, bool):
+        raise ValueError("window must be a window number or window:<number>")
     if isinstance(window, int):
         if window <= 0:
             raise ValueError("window must be a positive window number")

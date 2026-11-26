@@ -185,6 +185,11 @@ def _parse_lock_payload(raw: str) -> bool:
 def _transport_outcome_unknown(result) -> bool:
     metadata = getattr(result, "metadata", None)
     if isinstance(metadata, dict):
+        if (
+            metadata.get("outcome") == "not_started"
+            or metadata.get("request_sent") is False
+        ):
+            return False
         if metadata.get("outcome") == "unknown":
             return True
         if metadata.get("request_handle") and not getattr(result, "ok", False):

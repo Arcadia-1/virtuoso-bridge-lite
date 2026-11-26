@@ -10,6 +10,9 @@ Always use the GUI functions for simulation workflows.
 from __future__ import annotations
 
 import logging
+import os
+import shlex
+from pathlib import Path
 
 from virtuoso_bridge import VirtuosoClient
 from virtuoso_bridge.virtuoso.ops import escape_skill_string
@@ -17,6 +20,7 @@ from virtuoso_bridge.virtuoso.maestro.reader.state import (
     get_session_state,
     list_session_states,
 )
+from virtuoso_bridge.virtuoso.x11 import _detect_remote_python
 
 logger = logging.getLogger(__name__)
 
@@ -53,73 +57,144 @@ def _x11_run(runner, cmd: str, timeout: int = 5):
     )
 
 
-def _detect_virtuoso_display(runner) -> str:
-    """Detect the DISPLAY used by the Virtuoso process.
+def _resolve_connected_pid(client: VirtuosoClient, *, timeout: float = 5) -> int | None:
+    """Resolve the verified connected CIW PID from ``client.dialogs``, else ``None``."""
+    dialogs = getattr(client, "dialogs", None)
+    if dialogs is None:
+        return None
+    connected_pid = getattr(dialogs, "connected_pid", None)
+    if callable(connected_pid):
+        try:
+            pid = connected_pid(timeout=timeout)
+        except Exception as exc:
+            logger.warning(
+                "Cannot verify connected Virtuoso PID for X11 dialog dismissal: %s", exc
+            )
+            return None
+        if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
+            return pid
+        return None
+    target = getattr(dialogs, "target", None)
+    target_pid = getattr(target, "pid", None)
+    if (
+        getattr(dialogs, "enabled", False)
+        and isinstance(target_pid, int)
+        and not isinstance(target_pid, bool)
+        and target_pid > 0
+    ):
+        return target_pid
+    return None
 
-    Order: ``$VB_DISPLAY`` → ``/proc/<virtuoso_pid>/environ`` → in local
-    mode, the caller's own ``$DISPLAY`` (last resort: same X server as
-    the script's terminal).
+
+def _detect_virtuoso_display(runner, *, pid: int | None = None) -> str:
+    """Detect the DISPLAY used by the verified Virtuoso process.
+
+    Order: ``$VB_DISPLAY`` → ``/proc/<verified_pid>/environ``.
+    Never falls back to ``pgrep | head -1`` across arbitrary Virtuoso processes.
     """
-    import os
-    display = os.getenv("VB_DISPLAY", "")
+    if pid is not None and (isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0):
+        raise ValueError("pid must be a positive integer")
+
+    display = os.getenv("VB_DISPLAY", "").strip()
     if display:
+        if any(ch in display for ch in "\x00\r\n"):
+            logger.warning("Ignoring VB_DISPLAY containing control characters")
+            return ""
         return display
-    r = _x11_run(
-        runner,
-        'strings /proc/$(pgrep -u $(whoami) -f "64bit/virtuoso" | head -1)/environ 2>/dev/null '
-        '| grep ^DISPLAY= | head -1',
-        timeout=5,
-    )
-    display = (r.stdout or "").strip().replace("DISPLAY=", "")
-    if not display and runner is None:
-        # Local mode last-resort: assume Virtuoso shares this terminal's
-        # X server.  Same-host, same-user runs typically do.
-        display = os.getenv("DISPLAY", "")
-    if not display:
-        logger.warning("Cannot detect DISPLAY for X11 key sending")
+
+    if pid is None:
+        logger.warning(
+            "Cannot detect DISPLAY for X11 key sending without a verified Virtuoso PID"
+        )
+        return ""
+
+    if runner is None:
+        try:
+            data = Path(f"/proc/{pid}/environ").read_bytes()
+        except OSError:
+            display = ""
+        else:
+            display = ""
+            for chunk in data.split(b"\x00"):
+                if chunk.startswith(b"DISPLAY="):
+                    display = chunk.split(b"=", 1)[1].decode("utf-8", errors="replace").strip()
+                    break
+    else:
+        r = _x11_run(
+            runner,
+            f"tr '\\0' '\\n' < /proc/{pid}/environ 2>/dev/null | grep '^DISPLAY=' | head -1",
+            timeout=5,
+        )
+        line = (r.stdout or "").strip()
+        display = line[len("DISPLAY="):].strip() if line.startswith("DISPLAY=") else ""
+
+    if not display or any(ch in display for ch in "\x00\r\n"):
+        logger.warning("Cannot detect DISPLAY for Virtuoso PID %d", pid)
+        return ""
     return display
 
 
-def _send_x11_key(runner, keysym: int) -> None:
-    """Send a single keypress to the Virtuoso X11 display."""
-    display = _detect_virtuoso_display(runner)
-    if not display:
-        return
-    _x11_run(
-        runner,
-        f'DISPLAY={display} python2.7 -c "'
-        f'import ctypes,ctypes.util;'
-        f'xlib=ctypes.cdll.LoadLibrary(ctypes.util.find_library(chr(88)+chr(49)+chr(49)));'
-        f'xtst=ctypes.cdll.LoadLibrary(ctypes.util.find_library(chr(88)+chr(116)+chr(115)+chr(116)));'
-        f'dpy=xlib.XOpenDisplay(None);'
-        f'kc=xlib.XKeysymToKeycode(dpy,{keysym});'
-        f'xtst.XTestFakeKeyEvent(dpy,kc,True,0);'
-        f'xtst.XTestFakeKeyEvent(dpy,kc,False,0);'
-        f'xlib.XFlush(dpy);xlib.XCloseDisplay(dpy)"',
-        timeout=5,
+def _build_x11_key_script(events: list[tuple[int, int]]) -> str:
+    """Build an LP64-safe, Python 2/3-compatible ctypes XTest key script."""
+    event_tuples: list[str] = []
+    for keysym, is_press in events:
+        if isinstance(keysym, bool) or not isinstance(keysym, int) or keysym <= 0:
+            raise ValueError(f"keysym must be a positive integer, got {keysym!r}")
+        if is_press not in (0, 1):
+            raise ValueError(f"is_press must be 0 or 1, got {is_press!r}")
+        event_tuples.append(f"({keysym},{is_press})")
+    events_literal = "[" + ",".join(event_tuples) + "]"
+    return (
+        "import ctypes,ctypes.util;"
+        "x11_p=ctypes.util.find_library('X11');"
+        "xtst_p=ctypes.util.find_library('Xtst');"
+        "assert x11_p and xtst_p;"
+        "xlib=ctypes.cdll.LoadLibrary(x11_p);"
+        "xtst=ctypes.cdll.LoadLibrary(xtst_p);"
+        "xlib.XOpenDisplay.argtypes=[ctypes.c_char_p];"
+        "xlib.XOpenDisplay.restype=ctypes.c_void_p;"
+        "xlib.XCloseDisplay.argtypes=[ctypes.c_void_p];"
+        "xlib.XCloseDisplay.restype=ctypes.c_int;"
+        "xlib.XFlush.argtypes=[ctypes.c_void_p];"
+        "xlib.XFlush.restype=ctypes.c_int;"
+        "xlib.XKeysymToKeycode.argtypes=[ctypes.c_void_p,ctypes.c_ulong];"
+        "xlib.XKeysymToKeycode.restype=ctypes.c_uint;"
+        "xtst.XTestFakeKeyEvent.argtypes=[ctypes.c_void_p,ctypes.c_uint,ctypes.c_int,ctypes.c_ulong];"
+        "xtst.XTestFakeKeyEvent.restype=ctypes.c_int;"
+        "dpy=xlib.XOpenDisplay(None);"
+        "dpy and ("
+        "lambda d: ("
+        "[xtst.XTestFakeKeyEvent(d,kc,pr,0) for ks,pr in "
+        + events_literal
+        + " for kc in (xlib.XKeysymToKeycode(d,ks),) if kc],"
+        "xlib.XFlush(d),"
+        "xlib.XCloseDisplay(d)"
+        "))(dpy)"
     )
 
 
-def _send_x11_alt_n(runner) -> None:
-    """Send Alt+N (No/Don't Save) to the Virtuoso X11 display."""
-    display = _detect_virtuoso_display(runner)
+def _send_x11_events(runner, events: list[tuple[int, int]], *, pid: int | None = None) -> None:
+    """Send XTest key press/release events to the verified Virtuoso X11 display."""
+    display = _detect_virtuoso_display(runner, pid=pid)
     if not display:
         return
-    _x11_run(
+    py = _detect_remote_python(runner, timeout=5)
+    script = _build_x11_key_script(events)
+    cmd = f"DISPLAY={shlex.quote(display)} {shlex.quote(py)} -c {shlex.quote(script)}"
+    _x11_run(runner, cmd, timeout=5)
+
+
+def _send_x11_key(runner, keysym: int, *, pid: int | None = None) -> None:
+    """Send a single keypress to the verified Virtuoso X11 display."""
+    _send_x11_events(runner, [(keysym, 1), (keysym, 0)], pid=pid)
+
+
+def _send_x11_alt_n(runner, *, pid: int | None = None) -> None:
+    """Send Alt+N (No/Don't Save) to the verified Virtuoso X11 display."""
+    _send_x11_events(
         runner,
-        f'DISPLAY={display} python2.7 -c "'
-        f'import ctypes,ctypes.util;'
-        f'xlib=ctypes.cdll.LoadLibrary(ctypes.util.find_library(chr(88)+chr(49)+chr(49)));'
-        f'xtst=ctypes.cdll.LoadLibrary(ctypes.util.find_library(chr(88)+chr(116)+chr(115)+chr(116)));'
-        f'dpy=xlib.XOpenDisplay(None);'
-        f'ka=xlib.XKeysymToKeycode(dpy,0xffe9);'
-        f'kn=xlib.XKeysymToKeycode(dpy,0x006e);'
-        f'xtst.XTestFakeKeyEvent(dpy,ka,True,0);'
-        f'xtst.XTestFakeKeyEvent(dpy,kn,True,0);'
-        f'xtst.XTestFakeKeyEvent(dpy,kn,False,0);'
-        f'xtst.XTestFakeKeyEvent(dpy,ka,False,0);'
-        f'xlib.XFlush(dpy);xlib.XCloseDisplay(dpy)"',
-        timeout=5,
+        [(0xFFE9, 1), (0x006E, 1), (0x006E, 0), (0xFFE9, 0)],
+        pid=pid,
     )
 
 
@@ -203,7 +278,8 @@ def _close_background_sessions(client: VirtuosoClient) -> list[str]:
                 if state.context == "headless" and state.session]
     closed = []
     for s in sessions:
-        result = client.execute_skill(f'maeCloseSession(?session "{s}" ?forceClose t)')
+        escaped_s = escape_skill_string(s)
+        result = client.execute_skill(f'maeCloseSession(?session "{escaped_s}" ?forceClose t)')
         if result.errors:
             raise RuntimeError(f"Could not close headless session {s}: {result.errors}")
         if get_session_state(client, s).context == "not_found":
@@ -220,10 +296,15 @@ def _close_background_sessions(client: VirtuosoClient) -> list[str]:
 
 def open_session(client: VirtuosoClient, lib: str, cell: str) -> str:
     """Open maestro in background via maeOpenSetup. Returns session string."""
+    escaped_lib = escape_skill_string(lib)
+    escaped_cell = escape_skill_string(cell)
     r = client.execute_skill(
-        f'let((session) session = maeOpenSetup("{lib}" "{cell}" "maestro") '
-        f'printf("[%s maeOpenSetup] %s/%s  session=%s\\n" nth(2 parseString(getCurrentTime())) "{lib}" "{cell}" session) '
+        f'let((session) session = maeOpenSetup("{escaped_lib}" "{escaped_cell}" "maestro") '
+        f'printf("[%s maeOpenSetup] %s/%s  session=%s\\n" nth(2 parseString(getCurrentTime())) '
+        f'"{escaped_lib}" "{escaped_cell}" session) '
         f'session)')
+    if getattr(r, "errors", None) or getattr(r, "ok", True) is False:
+        raise RuntimeError(f"maeOpenSetup failed for {lib}/{cell}: {getattr(r, 'errors', None)}")
     session = (r.output or "").strip('"')
     if not session or session in ("nil", "t"):
         raise RuntimeError(f"maeOpenSetup failed for {lib}/{cell}")
@@ -238,12 +319,19 @@ def close_session(client: VirtuosoClient, session: str) -> None:
     function applied to the close result (which silently swallows the
     error and leaves the session alive).
     """
-    client.execute_skill(
+    escaped_session = escape_skill_string(session)
+    result = client.execute_skill(
         'progn('
-        f'maeCloseSession(?session "{session}" ?forceClose t) '
+        f'maeCloseSession(?session "{escaped_session}" ?forceClose t) '
         f'printf("[%s maeCloseSession] session=%s closed\\n" '
-        f'nth(2 parseString(getCurrentTime())) "{session}"))'
+        f'nth(2 parseString(getCurrentTime())) "{escaped_session}"))'
     )
+    errors = getattr(result, "errors", None) or []
+    if errors or getattr(result, "ok", True) is False:
+        detail = "; ".join(str(err) for err in errors) if errors else (
+            getattr(result, "output", "") or "unknown error"
+        )
+        raise RuntimeError(f"maeCloseSession failed for {session}: {detail}")
 
 
 def find_open_session(client: VirtuosoClient) -> str | None:
@@ -323,14 +411,11 @@ def open_gui_session(client: VirtuosoClient, lib: str, cell: str,
     if closed_bg:
         logger.info("Closed background sessions: %s", closed_bg)
 
-    # Step 2: check existing GUI sessions
+    # Step 2: verify all existing GUI sessions and check for a reusable
+    # editable target *before* closing any windows.
     windows = _get_session_windows(client)
 
     for w in windows:
-        is_target = (
-            w["lib"] == lib and w["cell"] == cell and w["view"] == "maestro"
-        )
-
         if w["mode"] == "unknown" or w["modified"] is None or not w["session"]:
             detail = "; ".join(w.get("diagnostics") or ())
             raise RuntimeError(
@@ -338,11 +423,31 @@ def open_gui_session(client: VirtuosoClient, lib: str, cell: str,
                 + (f" {detail}" if detail else "")
             )
 
-        if is_target and w["mode"] == "editing":
-            # Already editable for our cell — reuse
-            logger.info("Reusing existing editable session: %s", w["session"])
-            return w["session"]
+    matching_editable = [
+        w for w in windows
+        if w["lib"] == lib and w["cell"] == cell and w["view"] == "maestro"
+        and w["mode"] == "editing"
+    ]
+    if len(matching_editable) > 1:
+        raise RuntimeError(
+            f"More than one editable ADE window matches {lib}/{cell}/maestro."
+        )
+    if matching_editable:
+        # Already editable for our cell — reuse without disturbing other windows
+        logger.info("Reusing existing editable session: %s", matching_editable[0]["session"])
+        return matching_editable[0]["session"]
 
+    for w in windows:
+        if w["modified"] and w["mode"] != "editing":
+            raise RuntimeError(
+                f"Session {w['session']} is read-only but reports unsaved changes; "
+                "refusing to promote or discard it implicitly."
+            )
+
+    for w in windows:
+        is_target = (
+            w["lib"] == lib and w["cell"] == cell and w["view"] == "maestro"
+        )
         # Close windows that are:
         # - for a different cell (must release edit lock)
         # - for our cell but in reading mode
@@ -355,8 +460,10 @@ def open_gui_session(client: VirtuosoClient, lib: str, cell: str,
     # Do NOT call maeOpenSetup afterwards — it creates a second
     # background session with its own lock, causing 8127 on next open.
     logger.info("Opening GUI (editable): %s/%s/maestro", lib, cell)
+    escaped_lib = escape_skill_string(lib)
+    escaped_cell = escape_skill_string(cell)
     r = client.execute_skill(
-        f'deOpenCellView("{lib}" "{cell}" "maestro" "maestro" nil "a")',
+        f'deOpenCellView("{escaped_lib}" "{escaped_cell}" "maestro" "maestro" nil "a")',
         timeout=timeout)
     if r.errors or not r.output or r.output.strip() in ("nil", ""):
         raise RuntimeError(f"deOpenCellView failed for {lib}/{cell}/maestro: {r.errors}")
@@ -410,7 +517,10 @@ def close_gui_session(client: VirtuosoClient, session: str,
                 f"Cannot safely close session {session}: context is {state.context}."
             )
         logger.info("No GUI window for %s, closing headless session", session)
-        result = client.execute_skill(f'maeCloseSession(?session "{session}" ?forceClose t)')
+        escaped_session = escape_skill_string(session)
+        result = client.execute_skill(
+            f'maeCloseSession(?session "{escaped_session}" ?forceClose t)'
+        )
         if result.errors:
             raise RuntimeError(f"maeCloseSession failed for {session}: {result.errors}")
         if get_session_state(client, session).context != "not_found":
@@ -426,7 +536,8 @@ def close_gui_session(client: VirtuosoClient, session: str,
         if target_window["mode"] == "editing":
             # Editing* — save, then close
             logger.info("Saving modified Editing session %s", session)
-            result = client.execute_skill(f'maeSaveSetup(?session "{session}")')
+            escaped_session = escape_skill_string(session)
+            result = client.execute_skill(f'maeSaveSetup(?session "{escaped_session}")')
             if result.errors:
                 raise RuntimeError(f"maeSaveSetup failed for {session}: {result.errors}")
             refreshed = [w for w in _get_session_windows(client) if w["session"] == session]
@@ -478,17 +589,24 @@ def _close_gui_window(client: VirtuosoClient, window_info: dict,
         runner = getattr(client, "gui_runner", None)
         if runner is None:
             runner = client.ssh_runner
+        ciw_pid = _resolve_connected_pid(client, timeout=min(timeout, 5))
+        if ciw_pid is None:
+            logger.warning(
+                "Skipping X11 Alt+N dismissal for modified window %d: connected Virtuoso PID "
+                "could not be verified.",
+                wnum,
+            )
+        else:
+            def _dismiss_save_dialog():
+                """Send Alt+N after a short delay to dismiss save dialog."""
+                _time.sleep(0.5)
+                # Alt+N selects "No" (Don't Save) on save confirmation dialogs.
+                # Escape only cancels the dialog without closing the window.
+                _send_x11_alt_n(runner, pid=ciw_pid)
 
-        def _dismiss_save_dialog():
-            """Send Alt+N after a short delay to dismiss save dialog."""
-            _time.sleep(0.5)
-            # Alt+N selects "No" (Don't Save) on save confirmation dialogs.
-            # Escape only cancels the dialog without closing the window.
-            _send_x11_alt_n(runner)
-
-        dismiss_thread = threading.Thread(target=_dismiss_save_dialog, daemon=True)
-        dismiss_thread.start()
-        logger.info("Started dismiss thread for modified window %d", wnum)
+            dismiss_thread = threading.Thread(target=_dismiss_save_dialog, daemon=True)
+            dismiss_thread.start()
+            logger.info("Started dismiss thread for modified window %d (pid=%d)", wnum, ciw_pid)
 
     result = client.execute_skill(f'''
 let((w)
@@ -508,8 +626,9 @@ let((w)
     session = window_info["session"]
     state = get_session_state(client, session)
     if state.context == "headless":
+        escaped_session = escape_skill_string(session)
         result = client.execute_skill(
-            f'maeCloseSession(?session "{session}" ?forceClose t)'
+            f'maeCloseSession(?session "{escaped_session}" ?forceClose t)'
         )
         if result.errors:
             raise RuntimeError(f"maeCloseSession failed for {session}: {result.errors}")

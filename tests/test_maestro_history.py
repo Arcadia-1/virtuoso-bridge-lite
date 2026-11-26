@@ -366,3 +366,41 @@ def test_delete_history_raises_outcome_unknown_on_recoverable_metadata_and_keeps
 
     assert client.calls[-1][1]["retry_connect"] is False
     assert (res / "Interactive.3.rdb").exists()
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"outcome": "not_started", "request_sent": False, "request_handle": {"id": "req-1"}},
+        {"outcome": "not_started", "request_handle": {"id": "req-1"}},
+        {"request_sent": False, "request_handle": {"id": "req-1"}},
+    ],
+)
+def test_transport_outcome_unknown_returns_false_for_not_started(tmp_path, metadata) -> None:
+    from virtuoso_bridge.virtuoso.maestro import history as history_mod
+
+    failed = _result(ok=False, errors=["Shared CIW request not sent"], metadata=metadata)
+    assert history_mod._transport_outcome_unknown(failed) is False
+
+    client_lock = _Client(
+        _result(_inventory(_row("Interactive.1"))),
+        failed,
+    )
+    with pytest.raises(MaestroHistoryError) as caught_lock:
+        lock_history(client_lock, "Interactive.1", session="s")
+    assert not isinstance(caught_lock.value, MaestroHistoryOutcomeUnknown)
+    assert len(client_lock.calls) == 2
+
+    lib = tmp_path / "lib"
+    res = lib / "cell" / "maestro" / "results" / "maestro"
+    (res / "Interactive.3" / "1").mkdir(parents=True)
+    client_del = _Client(
+        _result("(16 16)"),
+        _result(f'"{lib}"'),
+        _result("nil"),
+        failed,
+    )
+    client_del.ssh_runner = None
+    with pytest.raises(MaestroHistoryError) as caught_del:
+        delete_history(client_del, "Interactive.3", session="s1", lib="LIB", cell="cell")
+    assert not isinstance(caught_del.value, MaestroHistoryOutcomeUnknown)

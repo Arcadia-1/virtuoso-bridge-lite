@@ -27,6 +27,7 @@ from .state import get_session_state, parse_maestro_title
 # directories matching Cadence's ``Interactive.N`` / ``MonteCarlo.N``
 # shape are also accepted for setups without .rdb anchors.
 _HISTORY_RDB_RE = re.compile(r"^(?!\.)[^/\\]+\.rdb$")
+_HISTORY_COMPANION_RE = re.compile(r"^(?!\.)([^/\\]+)\.(?:log|msg\.db)$")
 _HISTORY_DIR_RE = re.compile(r"^(Interactive|MonteCarlo)\.[0-9]+(?:\.[A-Z]{2,4})?$")
 
 
@@ -81,15 +82,14 @@ def _fetch_window_state(client: VirtuosoClient) -> dict:
 
 def _history_name_for_file(fname: str) -> str | None:
     """Return the history name a file belongs to, or None if it's not a
-    history artifact.  Recognises ``<name>.rdb`` anchors, the three
-    companion extensions ``.log`` / ``.msg.db``, and bare
-    ``Interactive.N`` / ``MonteCarlo.N`` directories."""
+    history artifact.  Recognises ``<name>.rdb`` anchors, companion
+    ``.log`` / ``.msg.db`` files (excluding dotfiles and path separators),
+    and bare ``Interactive.N`` / ``MonteCarlo.N`` directories."""
     if _HISTORY_RDB_RE.match(fname):
         return fname[:-4]   # strip .rdb
-    if fname.endswith(".msg.db"):
-        return fname[:-len(".msg.db")]
-    if fname.endswith(".log"):
-        return fname[:-4]   # strip .log
+    companion = _HISTORY_COMPANION_RE.match(fname)
+    if companion:
+        return companion.group(1)
     if _HISTORY_DIR_RE.match(fname):
         return fname
     return None
@@ -124,19 +124,23 @@ def sort_histories_by_mtime(
     """Extract history names from a ``[(filename, mtime), ...]`` listing
     and sort by newest mtime first.
 
-    A history is identified by its ``<name>.rdb`` anchor; companion
-    files (``<name>.log``, ``<name>.msg.db``) contribute too, and we
-    take the *maximum* mtime across all files of a given history as
-    that history's timestamp.  This handles the common mixed-naming
-    case where ``results/maestro/`` holds
-    ``Interactive.142..151.{rdb,log,msg.db}`` + ``ExplorerRun.0.*`` +
-    custom-named histories like ``calibre_rcc_norc_sch.*`` —
-    alphabetic / natural sort gives a meaningless "latest"; mtime
-    matches the user's "what did I last run" intuition.
+    Valid histories are anchored strictly by ``<name>.rdb`` files so
+    orphan logs (such as ``Job0.log``) and dotfiles (such as ``.log``)
+    are never promoted as histories.  Matching companion files
+    (``<name>.log``, ``<name>.msg.db``) update the timestamp only for
+    already-known ``.rdb`` histories, taking the maximum mtime across
+    all files belonging to that history.
     """
     bucket: dict[str, int] = {}
     for fname, mtime in hist_files_mtime:
-        hist = _history_name_for_file(fname)
-        if hist is not None:
-            bucket[hist] = max(bucket.get(hist, 0), mtime)
+        if _HISTORY_RDB_RE.match(fname):
+            hist = fname[:-4]
+            if hist not in bucket or mtime > bucket[hist]:
+                bucket[hist] = mtime
+    for fname, mtime in hist_files_mtime:
+        companion = _HISTORY_COMPANION_RE.match(fname)
+        if companion:
+            hist = companion.group(1)
+            if hist in bucket and mtime > bucket[hist]:
+                bucket[hist] = mtime
     return sorted(bucket, key=lambda h: bucket[h], reverse=True)

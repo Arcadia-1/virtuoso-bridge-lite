@@ -876,3 +876,70 @@ def test_native_current_process_start_identity(tmp_path):
     manager = MaestroJobManager.local(local_root=tmp_path / "local")
     identity = manager._process_start_identity(os.getpid())
     assert identity and identity.startswith("windows:" if os.name == "nt" else "linux:")
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or shutil.which("sh") is None,
+    reason="requires a real POSIX shell",
+)
+def test_remote_observe_stat_parser_handles_comm_containing_closing_paren_space() -> None:
+    runner = RecordingRunner()
+    manager = MaestroJobManager(
+        runner,
+        work_root="/tmp/bridge/maestro-jobs",
+        transport="ssh",
+        local_root=Path("/tmp/unused-local"),
+        profile="lab",
+    )
+    manager._observe_work_dir("/tmp/bridge/maestro-jobs/jobs/r1")
+    observe_cmd = runner.commands[-1]
+    assert "rest=${stat##*) }; set -- $rest;" in observe_cmd
+
+    fields = ["S"] + ["0"] * 18 + ["987654"]
+    fake_stat = f"4242 (virtuoso) (gui) {' '.join(fields)}"
+    completed = subprocess.run(
+        [
+            "sh", "-c",
+            'stat="$1"; rest=${stat##*) }; set -- $rest; printf "%s" "linux:${20}"',
+            "sh",
+            fake_stat,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=True,
+    )
+    assert completed.stdout == "linux:987654"
+    assert MaestroJobManager._linux_process_start(fake_stat) == "linux:987654"
+
+
+def test_from_env_and_from_client_expand_tilde_remote_scratch_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from virtuoso_bridge.transport import remote_paths
+
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", "~/vb_scratch")
+    monkeypatch.setenv("VB_CLIENT_ID_lab", "laptop1")
+    monkeypatch.setenv("VB_GUI_HOST_lab", "gui.example")
+    monkeypatch.setenv("VB_REMOTE_USER_lab", "designer")
+    monkeypatch.setattr(maestro_jobs, "load_vb_env", lambda: None)
+    monkeypatch.setattr(remote_paths, "load_vb_env", lambda: None)
+
+    class _HomeRunner(RecordingRunner):
+        def run_command(self, command: str, **kwargs) -> Result:
+            if 'getent passwd "$(id -u)"' in command:
+                self.commands.append(command)
+                return Result(stdout="/home/designer\n")
+            return super().run_command(command, **kwargs)
+
+    env_runner = _HomeRunner()
+    monkeypatch.setattr(maestro_jobs, "SSHRunner", lambda **kwargs: env_runner)
+
+    mgr_env = MaestroJobManager.from_env(local_root=tmp_path / "env-runs", profile="lab")
+    assert mgr_env._work_root == "/home/designer/vb_scratch/virtuoso_bridge_designer/laptop1/maestro-jobs"
+
+    client_runner = _HomeRunner()
+    client = FakeClient(client_runner)
+    client._tunnel = SimpleNamespace(_profile="lab")
+    mgr_client = MaestroJobManager.from_client(client, local_root=tmp_path / "client-runs")
+    assert mgr_client._work_root == "/home/designer/vb_scratch/virtuoso_bridge_designer/laptop1/maestro-jobs"
