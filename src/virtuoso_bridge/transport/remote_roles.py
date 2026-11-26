@@ -59,6 +59,7 @@ def remote_host_roles_from_os(
     *,
     load: bool = True,
     environ: Mapping[str, str] | None = None,
+    resolve: bool = True,
 ) -> RemoteHostRoles:
     """Read and resolve profile-aware host roles from ``VB_*`` variables.
 
@@ -73,9 +74,10 @@ def remote_host_roles_from_os(
     ``VB_DAEMON_HOST`` is sufficient to describe a split-host installation.
     """
     if environ is None:
-        profile = resolve_profile(profile)
         if load:
             load_vb_env()
+        if resolve:
+            profile = resolve_profile(profile)
         environ = os.environ
     suffix = f"_{profile}" if profile else ""
 

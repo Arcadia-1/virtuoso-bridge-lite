@@ -6,6 +6,7 @@ import atexit
 import base64
 import binascii
 import hashlib
+import io
 import logging
 import os
 import queue
@@ -13,6 +14,7 @@ import shlex
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -56,7 +58,26 @@ def _setup_command_log() -> None:
         return
     try:
         log_file = command_log_file()
-        log_file.parent.mkdir(parents=True, exist_ok=True)
+        log_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if os.name == "posix":
+            try:
+                parent_stat = log_file.parent.lstat()
+                if (
+                    stat.S_ISDIR(parent_stat.st_mode)
+                    and not log_file.parent.is_symlink()
+                    and parent_stat.st_uid == os.geteuid()
+                    and not (parent_stat.st_mode & stat.S_ISVTX)
+                ):
+                    os.chmod(log_file.parent, 0o700)
+            except OSError:
+                pass
+            flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(log_file, flags, 0o600)
+            os.close(fd)
+            try:
+                os.chmod(log_file, 0o600)
+            except OSError:
+                pass
         fh = logging.FileHandler(log_file, encoding="utf-8")
     except OSError as exc:
         logger.debug("Command file logging disabled: %s", exc)
@@ -114,6 +135,260 @@ def _pid_is_alive(pid: Any) -> bool:
         return False
 
 
+def _process_identity(pid: Any) -> dict[str, Any] | None:
+    """Capture a lightweight birth/command identity for *pid* owned by this user."""
+    try:
+        parsed = int(pid)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+
+    if os.name == "nt":
+        if parsed > 0xFFFFFFFF:
+            return None
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class _FileTime(ctypes.Structure):
+                _fields_ = [
+                    ("dwLowDateTime", wintypes.DWORD),
+                    ("dwHighDateTime", wintypes.DWORD),
+                ]
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            kernel32.WaitForSingleObject.restype = wintypes.DWORD
+            kernel32.GetProcessTimes.argtypes = [
+                wintypes.HANDLE,
+                ctypes.POINTER(_FileTime),
+                ctypes.POINTER(_FileTime),
+                ctypes.POINTER(_FileTime),
+                ctypes.POINTER(_FileTime),
+            ]
+            kernel32.GetProcessTimes.restype = wintypes.BOOL
+            kernel32.QueryFullProcessImageNameW.argtypes = [
+                wintypes.HANDLE,
+                wintypes.DWORD,
+                wintypes.LPWSTR,
+                ctypes.POINTER(wintypes.DWORD),
+            ]
+            kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+
+            # SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION
+            handle = kernel32.OpenProcess(0x00101000, False, parsed)
+            if not handle:
+                return None
+            try:
+                if kernel32.WaitForSingleObject(handle, 0) != 0x00000102:  # WAIT_TIMEOUT
+                    return None
+                creation = _FileTime()
+                exit_time = _FileTime()
+                kernel_time = _FileTime()
+                user_time = _FileTime()
+                if not kernel32.GetProcessTimes(
+                    handle,
+                    ctypes.byref(creation),
+                    ctypes.byref(exit_time),
+                    ctypes.byref(kernel_time),
+                    ctypes.byref(user_time),
+                ):
+                    return None
+                start_ticks = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+                size = wintypes.DWORD(32768)
+                buf = ctypes.create_unicode_buffer(size.value)
+                image = ""
+                if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                    image = buf.value
+                return {
+                    "platform": "nt",
+                    "start_time": str(start_ticks),
+                    "image": image,
+                }
+            finally:
+                kernel32.CloseHandle(handle)
+        except (OSError, ValueError, TypeError, AttributeError):
+            return None
+
+    # Linux: read /proc directly without spawning a subprocess.
+    if sys.platform.startswith("linux") and Path("/proc").is_dir():
+        try:
+            proc_dir = Path("/proc") / str(parsed)
+            if proc_dir.stat().st_uid != os.geteuid():
+                return None
+            stat_text = (proc_dir / "stat").read_text(encoding="utf-8", errors="replace")
+            fields = stat_text.rsplit(")", 1)[1].split()
+            if fields[0] in ("Z", "X"):
+                return None
+            start_time = fields[19]
+            boot_id: str | None = None
+            try:
+                boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip() or None
+            except OSError:
+                boot_id = None
+            raw_cmdline = (proc_dir / "cmdline").read_bytes()
+            argv = [part.decode("utf-8", errors="replace") for part in raw_cmdline.split(b"\x00") if part]
+            return {
+                "platform": "linux",
+                "boot_id": boot_id,
+                "start_time": start_time,
+                "argv0": argv[0] if argv else "",
+                "command": " ".join(argv),
+            }
+        except (OSError, IndexError, ValueError, AttributeError):
+            return None
+
+    # macOS and other POSIX systems without /proc: query ps with deterministic locale/TZ.
+    if not _pid_is_alive(parsed):
+        return None
+    try:
+        env = {**os.environ, "LC_ALL": "C", "TZ": "UTC"}
+        completed = subprocess.run(
+            ["ps", "-ww", "-o", "uid=,lstart=,command=", "-p", str(parsed)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=env,
+        )
+        if completed.returncode != 0:
+            return None
+        line = next((row.strip() for row in completed.stdout.splitlines() if row.strip()), "")
+        if not line:
+            return None
+        parts = line.split(None, 6)
+        if len(parts) < 6:
+            return None
+        if int(parts[0]) != os.geteuid():
+            return None
+        start_time = " ".join(parts[1:6])
+        command = parts[6].strip() if len(parts) > 6 else ""
+        argv0 = command.split(None, 1)[0] if command else ""
+        return {
+            "platform": "posix",
+            "start_time": start_time,
+            "argv0": argv0,
+            "command": command,
+        }
+    except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError):
+        return None
+
+
+def _process_identity_matches(
+    saved: dict[str, Any] | None,
+    current: dict[str, Any] | None,
+) -> bool:
+    """Return True only when *current* matches the *saved* birth/command identity."""
+    if not isinstance(saved, dict) or not isinstance(current, dict):
+        return False
+    if not saved.get("platform") or saved.get("platform") != current.get("platform"):
+        return False
+    saved_start = saved.get("start_time")
+    if not saved_start or saved_start != current.get("start_time"):
+        return False
+    if "boot_id" in saved or "boot_id" in current:
+        if saved.get("boot_id") != current.get("boot_id"):
+            return False
+    if "image" in saved:
+        if str(saved.get("image") or "").lower() != str(current.get("image") or "").lower():
+            return False
+    if saved.get("command"):
+        if saved.get("command") != current.get("command"):
+            return False
+    return True
+
+
+def _identity_looks_like_ssh_tunnel(
+    identity: dict[str, Any] | None,
+    *,
+    local_port: int | None = None,
+    remote_port: int | None = None,
+) -> bool:
+    """Fallback check for older state files that lack a saved ``tunnel_identity``."""
+    if not isinstance(identity, dict):
+        return False
+    if "image" in identity:
+        exe = Path(str(identity.get("image") or "").replace("\\", "/")).name.lower()
+        return exe in ("ssh.exe", "ssh")
+    command = str(identity.get("command") or "")
+    argv0 = str(identity.get("argv0") or "")
+    try:
+        tokens = shlex.split(command) if command else []
+    except ValueError:
+        tokens = command.split()
+    exe_candidates = []
+    if argv0:
+        exe_candidates.append(Path(argv0.lstrip("-").replace("\\", "/")).name.lower())
+    if tokens:
+        exe_candidates.append(Path(tokens[0].lstrip("-").replace("\\", "/")).name.lower())
+    if not any(exe in ("ssh", "ssh.exe") for exe in exe_candidates):
+        return False
+    has_no_cmd = "-N" in tokens
+    has_forward = any(token == "-L" or token.startswith("-L") for token in tokens)
+    if not (has_no_cmd and has_forward):
+        return False
+    if local_port is not None and remote_port is not None:
+        return (
+            f"{local_port}:127.0.0.1:{remote_port}" in command
+            or f"{local_port}:localhost:{remote_port}" in command
+        )
+    return True
+
+
+def _saved_tunnel_pid_matches(
+    pid: Any,
+    saved_identity: dict[str, Any] | None = None,
+    *,
+    local_port: int | None = None,
+    remote_port: int | None = None,
+) -> bool:
+    """Verify that *pid* still belongs to the expected SSH tunnel process."""
+    current = _process_identity(pid)
+    if current is None:
+        return False
+    if saved_identity is not None:
+        return _process_identity_matches(saved_identity, current)
+    return _identity_looks_like_ssh_tunnel(
+        current,
+        local_port=local_port,
+        remote_port=remote_port,
+    )
+
+
+def _unlink_quietly(path: str | Path | None) -> bool:
+    """Best-effort unlink returning True when removed or already absent."""
+    if not path:
+        return True
+    try:
+        os.unlink(path)
+        return True
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+
+
+def _terminate_process(proc: subprocess.Popen[Any]) -> None:
+    """Terminate a spawned subprocess and wait briefly for handle release."""
+    if proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=2)
+    except OSError:
+        pass
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+            proc.wait(timeout=2)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+
 def _windows_no_window_kwargs(
     *,
     detached: bool = False,
@@ -162,10 +437,17 @@ def _profile_or_global_ssh_setting(name: str, profile: str | None) -> str:
     return os.environ.get(name, "").strip()
 
 
-def ssh_backend_env_from_os(profile: str | None = None) -> SshBackendEnv:
+def ssh_backend_env_from_os(
+    profile: str | None = None,
+    *,
+    load: bool = True,
+    resolve: bool = True,
+) -> SshBackendEnv:
     """Read profile-specific SSH backend settings with global fallback."""
-    profile = resolve_profile(profile)
-    load_vb_env()
+    if load:
+        load_vb_env()
+    if resolve:
+        profile = resolve_profile(profile)
 
     backend = _profile_or_global_ssh_setting("VB_SSH_BACKEND", profile) or None
     raw_max_sessions = _profile_or_global_ssh_setting(
@@ -183,10 +465,17 @@ def ssh_backend_env_from_os(profile: str | None = None) -> SshBackendEnv:
     return SshBackendEnv(backend=backend, max_sessions=max_sessions)
 
 
-def ssh_proxy_url_from_os(profile: str | None = None) -> str | None:
+def ssh_proxy_url_from_os(
+    profile: str | None = None,
+    *,
+    load: bool = True,
+    resolve: bool = True,
+) -> str | None:
     """Read the profile-aware Paramiko SOCKS5 proxy URL."""
-    profile = resolve_profile(profile)
-    load_vb_env()
+    if load:
+        load_vb_env()
+    if resolve:
+        profile = resolve_profile(profile)
     return _profile_or_global_ssh_setting("VB_SSH_PROXY", profile) or None
 
 
@@ -438,7 +727,11 @@ class SSHRunner:
         # Port-forwarding tunnel state
         self._tunnel_proc: subprocess.Popen[Any] | None = None
         self._tunnel_pid: int | None = None
+        self._tunnel_identity: dict[str, Any] | None = None
+        self._tunnel_ports: tuple[int, int] | None = None
         self._tunnel_using_external = False
+        self._tunnel_stderr_path: str | None = None
+        self._last_tunnel_stderr: str = ""
 
         self._paramiko_backend: Any | None = None
         if self._backend == "paramiko":
@@ -522,6 +815,8 @@ class SSHRunner:
         if self._verbose:
             print(f"[cmd] {' '.join(cmd)}", file=sys.stderr, flush=True)
 
+        self._last_tunnel_stderr = ""
+
         if os.name == "nt":
             # Capture stderr so we can surface "banner exchange timeout"
             # / "permission denied" etc. to the user.  Previously this
@@ -531,13 +826,18 @@ class SSHRunner:
             )
             tunnel_stderr_path = tunnel_stderr_file.name
             tunnel_stderr_file.close()
-            proc = subprocess.Popen(
-                cmd,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=open(tunnel_stderr_path, "wb"),
-                **_windows_no_window_kwargs(detached=True, new_process_group=True),
-            )
+            try:
+                with open(tunnel_stderr_path, "wb") as stderr_fh:
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=stderr_fh,
+                        **_windows_no_window_kwargs(detached=True, new_process_group=True),
+                    )
+            except Exception:
+                _unlink_quietly(tunnel_stderr_path)
+                raise
             # Jump-host cold handshakes can exceed 10 s (slow PAM,
             # flaky banner exchange).  The previous 3 s budget was
             # below the P50 of observed cold handshakes and made the
@@ -546,26 +846,30 @@ class SSHRunner:
             jh_settle = max(settle, 30.0) if self._jump_host else max(settle, 10.0)
             deadline = time.monotonic() + jh_settle
             while time.monotonic() < deadline:
-                if self.can_reach_port(port):
-                    self._tunnel_proc = proc
-                    self._tunnel_pid = proc.pid
-                    self._tunnel_using_external = False
-                    return proc
                 if proc.poll() is not None:
                     break
+                if self.can_reach_port(port):
+                    if proc.poll() is not None:
+                        break
+                    self._tunnel_proc = proc
+                    self._tunnel_pid = proc.pid
+                    self._tunnel_identity = _process_identity(proc.pid)
+                    self._tunnel_ports = (port, remote_port)
+                    self._tunnel_using_external = False
+                    self._tunnel_stderr_path = (
+                        None if _unlink_quietly(tunnel_stderr_path) else tunnel_stderr_path
+                    )
+                    return proc
                 time.sleep(0.1)
             if self.can_reach_port(port):
+                _terminate_process(proc)
+                _unlink_quietly(tunnel_stderr_path)
                 logger.info("Reusing existing tunnel at localhost:%d", port)
                 self._tunnel_using_external = True
                 return None
-            try:
-                proc.terminate()
-                proc.wait(timeout=2)
-            except OSError:
-                pass
-            except subprocess.TimeoutExpired:
-                proc.kill()
+            _terminate_process(proc)
             rc = proc.poll()
+            raw = ""
             stderr_tail = ""
             try:
                 with open(tunnel_stderr_path, "rb") as f:
@@ -574,73 +878,118 @@ class SSHRunner:
                     stderr_tail = " | " + raw.splitlines()[-1]
             except OSError:
                 pass
-            try:
-                os.unlink(tunnel_stderr_path)
-            except OSError:
-                pass
+            self._last_tunnel_stderr = raw
+            _unlink_quietly(tunnel_stderr_path)
             detail = f" (rc={rc})" if rc is not None else ""
             raise RuntimeError(
                 f"SSH tunnel failed to start on Windows{detail}{stderr_tail}"
             )
 
-        popen_kwargs: dict[str, Any] = {
-            "stdin": subprocess.DEVNULL,
-            "stdout": subprocess.DEVNULL,
-            "start_new_session": True,
-            "stderr": subprocess.PIPE,
-        }
-        # On Windows, suppress the console window the long-lived tunnel
-        # ssh.exe would otherwise pop up.  Detached + new process group
-        # so the tunnel survives the parent's exit.
-        popen_kwargs.update(_windows_no_window_kwargs(
-            detached=True, new_process_group=True
-        ))
-        proc = subprocess.Popen(cmd, **popen_kwargs)
+        stderr_fd, tunnel_stderr_path = tempfile.mkstemp(
+            prefix="vb_tunnel_stderr_", suffix=".log"
+        )
+        try:
+            with os.fdopen(stderr_fd, "wb") as stderr_fh:
+                popen_kwargs: dict[str, Any] = {
+                    "stdin": subprocess.DEVNULL,
+                    "stdout": subprocess.DEVNULL,
+                    "start_new_session": True,
+                    "stderr": stderr_fh,
+                }
+                proc = subprocess.Popen(cmd, **popen_kwargs)
+        except Exception:
+            _unlink_quietly(tunnel_stderr_path)
+            raise
 
-        jh_settle = max(settle, 3.0) if self._jump_host else settle
-        deadline = time.monotonic() + jh_settle
-        while time.monotonic() < deadline:
+        try:
+            jh_settle = max(settle, 3.0) if self._jump_host else settle
+            deadline = time.monotonic() + jh_settle
+            while time.monotonic() < deadline:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.1)
+
             if proc.poll() is not None:
-                break
-            time.sleep(0.1)
-
-        if proc.poll() is not None:
-            err_msg = ""
-            if proc.stderr and proc.stderr.readable():
+                err_msg = ""
                 try:
-                    err_msg = proc.stderr.read().decode("utf-8", errors="ignore")
-                except (OSError, ValueError):
+                    with open(tunnel_stderr_path, "rb") as f:
+                        err_msg = f.read().decode("utf-8", errors="ignore")
+                except OSError:
                     pass
-            # A different, already-running forward may own the local port.
-            if self.can_reach_port(port):
-                logger.info("Port forward active at localhost:%d (external process)", port)
-                self._tunnel_using_external = True
-                return None
-            if "address already in use" in err_msg.lower():
-                logger.info("Reusing existing tunnel at localhost:%d", port)
-                self._tunnel_using_external = True
-                return None
-            return proc  # failed — caller inspects poll/stderr
-        self._tunnel_proc = proc
-        self._tunnel_pid = proc.pid
-        return proc  # running
+                if not err_msg and proc.stderr and proc.stderr.readable():
+                    try:
+                        err_msg = proc.stderr.read().decode("utf-8", errors="ignore")
+                    except (OSError, ValueError):
+                        pass
+                    try:
+                        proc.stderr.close()
+                    except OSError:
+                        pass
+                self._last_tunnel_stderr = err_msg
+                # A different, already-running forward may own the local port.
+                if self.can_reach_port(port):
+                    logger.info("Port forward active at localhost:%d (external process)", port)
+                    self._tunnel_using_external = True
+                    return None
+                if "address already in use" in err_msg.lower():
+                    logger.info("Reusing existing tunnel at localhost:%d", port)
+                    self._tunnel_using_external = True
+                    return None
+                try:
+                    proc.stderr = io.BytesIO(err_msg.encode("utf-8"))
+                except (AttributeError, TypeError):
+                    pass
+                return proc  # failed — caller inspects poll/stderr
+            self._tunnel_proc = proc
+            self._tunnel_pid = proc.pid
+            self._tunnel_identity = _process_identity(proc.pid)
+            self._tunnel_ports = (port, remote_port)
+            self._tunnel_using_external = False
+            return proc  # running
+        finally:
+            # On POSIX, unlinking while ssh -N holds the fd removes the temp
+            # path immediately without leaving an unread pipe buffer.
+            _unlink_quietly(tunnel_stderr_path)
 
     def stop_port_forward(self) -> None:
         """Stop the standalone port-forwarding process by PID."""
-        pid = None
-        if self._tunnel_proc is not None and self._tunnel_proc.poll() is None:
-            pid = self._tunnel_proc.pid
+        if self._tunnel_proc is not None:
+            if self._tunnel_proc.poll() is None:
+                logger.info("Terminating SSH tunnel (PID %d)", self._tunnel_proc.pid)
+                try:
+                    os.kill(self._tunnel_proc.pid, signal.SIGTERM)
+                except (OSError, PermissionError):
+                    pass
+                try:
+                    self._tunnel_proc.wait(timeout=2)
+                except (AttributeError, OSError, subprocess.TimeoutExpired):
+                    pass
         elif self._tunnel_pid:
-            pid = self._tunnel_pid
-        if pid:
-            logger.info("Terminating SSH tunnel (PID %d)", pid)
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except (OSError, PermissionError):
-                pass
+            local_port, remote_port = self._tunnel_ports or (None, None)
+            if _saved_tunnel_pid_matches(
+                self._tunnel_pid,
+                self._tunnel_identity,
+                local_port=local_port,
+                remote_port=remote_port,
+            ):
+                logger.info("Terminating SSH tunnel (PID %d)", self._tunnel_pid)
+                try:
+                    os.kill(self._tunnel_pid, signal.SIGTERM)
+                except (OSError, PermissionError):
+                    pass
+            else:
+                logger.warning(
+                    "Refusing to terminate PID %d: process identity does not match saved SSH tunnel",
+                    self._tunnel_pid,
+                )
+        if self._tunnel_stderr_path:
+            _unlink_quietly(self._tunnel_stderr_path)
         self._tunnel_proc = None
         self._tunnel_pid = None
+        self._tunnel_identity = None
+        self._tunnel_ports = None
         self._tunnel_using_external = False
+        self._tunnel_stderr_path = None
 
     @property
     def is_tunnel_alive(self) -> bool:
@@ -654,7 +1003,10 @@ class SSHRunner:
         """Forget an attached forward without terminating its SSH process."""
         self._tunnel_proc = None
         self._tunnel_pid = None
+        self._tunnel_identity = None
+        self._tunnel_ports = None
         self._tunnel_using_external = False
+        self._tunnel_stderr_path = None
 
     @property
     def tunnel_pid(self) -> int | None:
@@ -667,6 +1019,14 @@ class SSHRunner:
         self._tunnel_pid = value
         if value is not None:
             self._tunnel_using_external = True
+
+    @property
+    def tunnel_identity(self) -> dict[str, Any] | None:
+        return self._tunnel_identity
+
+    @tunnel_identity.setter
+    def tunnel_identity(self, value: dict[str, Any] | None) -> None:
+        self._tunnel_identity = value
 
     @staticmethod
     def can_reach_port(port: int) -> bool:
@@ -1002,10 +1362,12 @@ class SSHRunner:
             )
             return CommandResult(returncode=rc, stdout=stdout, stderr=stderr)
         if self._persistent_shell_enabled:
+            log_summary = f"upload_text ({len(text_bytes)} bytes) -> {remote_path}"
             try:
                 return self._run_via_persistent_shell_with_retry(
                     plan.persistent_command(text_bytes),
                     _budget=budget,
+                    log_summary=log_summary,
                 )
             except subprocess.TimeoutExpired:
                 raise
@@ -1505,17 +1867,20 @@ class SSHRunner:
         timeout: float | None = None,
         *,
         _budget: _TimeoutBudget | None = None,
+        log_summary: str | None = None,
     ) -> CommandResult:
         budget = _budget or _TimeoutBudget.start(timeout, self._timeout)
+        budget_label = log_summary if log_summary is not None else command
         last_exc: Exception | None = None
         for attempt in range(2):
-            budget.remaining(command)
+            budget.remaining(budget_label)
             try:
                 with self._shell_lock:
                     self.ensure_persistent_shell(_budget=budget)
                     return self._run_command_via_persistent_shell_locked(
                         command,
                         _budget=budget,
+                        log_summary=log_summary,
                     )
             except subprocess.TimeoutExpired:
                 raise
@@ -1550,28 +1915,33 @@ class SSHRunner:
         timeout: float | None = None,
         *,
         _budget: _TimeoutBudget | None = None,
+        log_summary: str | None = None,
     ) -> CommandResult:
         budget = _budget or _TimeoutBudget.start(timeout, self._timeout)
+        budget_label = log_summary if log_summary is not None else command
         proc = self._shell_proc
         out_queue = self._shell_queue
         if proc is None or proc.stdin is None or proc.poll() is not None or out_queue is None:
             raise RuntimeError("Persistent SSH shell is not running.")
 
-        logger.info("[server] %s", command)
+        logger.info("[server] %s", budget_label)
         if self._verbose:
-            # Show a compact summary: first non-empty, non-mkdir, non-probe line
-            lines = [l.strip() for l in command.splitlines() if l.strip()]
-            summary = next(
-                (l for l in lines if not l.startswith("mkdir ") and l not in (":", "{", "}")),
-                None,
-            )
-            if summary is None:
-                pass  # suppress pure probe/mkdir-only commands
+            if log_summary is not None:
+                print(f"[cmd] {self._host}: {log_summary}", file=sys.stderr, flush=True)
             else:
-                # Trim heredoc payload: cat > path <<'TOKEN' → cat > path
-                if "<<'" in summary:
-                    summary = summary.split("<<'")[0].rstrip()
-                print(f"[cmd] {self._host}: {summary}", file=sys.stderr, flush=True)
+                # Show a compact summary: first non-empty, non-mkdir, non-probe line
+                lines = [l.strip() for l in command.splitlines() if l.strip()]
+                summary = next(
+                    (l for l in lines if not l.startswith("mkdir ") and l not in (":", "{", "}", "(", ")")),
+                    None,
+                )
+                if summary is None:
+                    pass  # suppress pure probe/mkdir-only commands
+                else:
+                    # Trim heredoc payload: cat > path <<'TOKEN' → cat > path
+                    if "<<'" in summary:
+                        summary = summary.split("<<'")[0].rstrip()
+                    print(f"[cmd] {self._host}: {summary}", file=sys.stderr, flush=True)
         token = uuid.uuid4().hex
         begin_marker = f"__vb_STDOUT_B64_BEGIN_{token}__"
         stderr_marker = f"__vb_STDERR_B64_BEGIN_{token}__"
@@ -1579,9 +1949,10 @@ class SSHRunner:
         script = (
             "__vb_stdout=$(mktemp)\n"
             "__vb_stderr=$(mktemp)\n"
-            "{\n"
+            "(\n"
+            ":\n"
             f"{command}\n"
-            "} >\"$__vb_stdout\" 2>\"$__vb_stderr\"\n"
+            ") >\"$__vb_stdout\" 2>\"$__vb_stderr\"\n"
             "__vb_rc=$?\n"
             f"printf '%s\\n' '{begin_marker}'\n"
             "base64 <\"$__vb_stdout\" | tr -d '\\n'\n"
@@ -1591,7 +1962,7 @@ class SSHRunner:
             "rm -f \"$__vb_stdout\" \"$__vb_stderr\"\n"
         )
 
-        budget.remaining(command)
+        budget.remaining(budget_label)
         try:
             proc.stdin.write(script.encode("utf-8"))
             proc.stdin.flush()
@@ -1608,12 +1979,12 @@ class SSHRunner:
             remaining = budget.available()
             if remaining <= 0:
                 self._close_persistent_shell_locked(_budget=budget)
-                raise subprocess.TimeoutExpired(cmd=command, timeout=budget.timeout)
+                raise subprocess.TimeoutExpired(cmd=budget_label, timeout=budget.timeout)
             try:
                 line = out_queue.get(timeout=remaining)
             except queue.Empty as exc:
                 self._close_persistent_shell_locked(_budget=budget)
-                raise subprocess.TimeoutExpired(cmd=command, timeout=budget.timeout) from exc
+                raise subprocess.TimeoutExpired(cmd=budget_label, timeout=budget.timeout) from exc
 
             if line is None:
                 self._close_persistent_shell_locked(_budget=budget)

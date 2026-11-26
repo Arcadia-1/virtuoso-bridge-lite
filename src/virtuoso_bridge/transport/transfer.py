@@ -264,7 +264,7 @@ def build_text_upload_plan(remote_path: str, payload: bytes) -> TextUploadPlan:
     """Build a same-directory staged text upload."""
     normalized_remote = remote_path.replace("\\", "/")
     remote_basename = posixpath.basename(normalized_remote)
-    if not remote_basename:
+    if remote_basename in ("", ".", ".."):
         raise ValueError(f"Invalid remote file path: {remote_path}")
     remote_dir = posixpath.dirname(normalized_remote) or "."
     work_path = posixpath.join(remote_dir, f".vbtmp-{uuid.uuid4().hex}")
@@ -298,14 +298,20 @@ def build_tar_upload_plans(
     grouped: dict[tuple[str, Path], list[tuple[Path, str]]] = {}
     remote_targets: set[str] = set()
     for local_path, remote_path in files:
-        normalized_remote = remote_path.replace("\\", "/")
+        normalized_remote = remote_path.replace("\\", "/").rstrip("/")
+        remote_basename = posixpath.basename(normalized_remote)
+        if remote_basename in ("", ".", ".."):
+            raise ValueError(f"Invalid remote upload path: {remote_path}")
         if normalized_remote in remote_targets:
             raise ValueError(f"Duplicate remote upload target: {remote_path}")
         remote_targets.add(normalized_remote)
         remote_dir = posixpath.dirname(normalized_remote) or "."
-        local_parent = local_path.absolute().parent
+        local_abs = Path(os.path.abspath(local_path))
+        if local_abs.name in ("", ".", ".."):
+            raise ValueError(f"Invalid local upload path: {local_path}")
+        local_parent = local_abs.parent
         grouped.setdefault((remote_dir, local_parent), []).append(
-            (local_path, normalized_remote)
+            (local_abs, normalized_remote)
         )
 
     plans: list[TarUploadPlan] = []
@@ -363,7 +369,7 @@ def build_tar_download_plan(
     """Build a recursive download that extracts beside the final target."""
     normalized_remote = remote_path.replace("\\", "/").rstrip("/")
     remote_basename = posixpath.basename(normalized_remote)
-    if not remote_basename:
+    if remote_basename in ("", ".", ".."):
         raise ValueError(f"Invalid remote directory path: {remote_path}")
 
     quoted_remote = shlex.quote(normalized_remote)

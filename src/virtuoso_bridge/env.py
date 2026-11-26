@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
-from dotenv import dotenv_values, load_dotenv
+from dotenv import dotenv_values
+from dotenv.main import DotEnv
 
 logger = logging.getLogger(__name__)
 
@@ -37,15 +39,9 @@ def _normalize_env_path(path: str | Path, *, cwd: Path | None = None) -> Path:
     return p.resolve()
 
 
-def resolve_env_path(explicit: str | Path | None = None, *, cwd: Path | None = None) -> Path | None:
+def discover_workspace_env_path(*, cwd: Path | None = None) -> Path | None:
+    """Walk *cwd* upward and pick the first VB ``.env`` file, if any."""
     base_cwd = (cwd or Path.cwd()).resolve()
-    requested = explicit if explicit is not None else _RUNTIME_ENV_FILE
-    if requested is not None:
-        env_path = _normalize_env_path(requested, cwd=base_cwd)
-        if not env_path.is_file():
-            raise FileNotFoundError(f".env file not found: {env_path}")
-        return env_path
-
     # Walk cwd upward and pick the first .env that looks like a VB config
     # (contains a VB host role or VB_LOCAL_PORT).  Skips unrelated .env files
     # belonging to other projects between the user's cwd and the VB workspace.
@@ -64,8 +60,23 @@ def resolve_env_path(explicit: str | Path | None = None, *, cwd: Path | None = N
             "VB_DAEMON_HOST",
             "VB_SPECTRE_HOST",
         )
-        if any(key in text for key in host_keys) or "VB_LOCAL_PORT" in text:
+        if any(key in text for key in host_keys) or "VB_LOCAL_PORT" in text or "VB_PROFILE" in text:
             return candidate
+    return None
+
+
+def resolve_env_path(explicit: str | Path | None = None, *, cwd: Path | None = None) -> Path | None:
+    base_cwd = (cwd or Path.cwd()).resolve()
+    requested = explicit if explicit is not None else _RUNTIME_ENV_FILE
+    if requested is not None:
+        env_path = _normalize_env_path(requested, cwd=base_cwd)
+        if not env_path.is_file():
+            raise FileNotFoundError(f".env file not found: {env_path}")
+        return env_path
+
+    discovered = discover_workspace_env_path(cwd=base_cwd)
+    if discovered is not None:
+        return discovered
 
     user_env = default_user_env_path()
     if user_env.is_file():
@@ -107,7 +118,22 @@ def load_vb_env(explicit: str | Path | None = None, *, override: bool = True, cw
     env_path = resolve_env_path(explicit, cwd=cwd)
     if env_path is None:
         return None
-    load_dotenv(env_path, override=override)
+    # Never inject .env-defined VB_PROFILE into os.environ: process environment
+    # VB_PROFILE has higher precedence than virtualenv bindings, whereas
+    # discovered/user .env files have lower precedence.  Profile resolution
+    # reads VB_PROFILE directly from the resolved .env at its documented tier.
+    values = DotEnv(
+        dotenv_path=env_path,
+        verbose=False,
+        override=override,
+        interpolate=True,
+        encoding="utf-8",
+    ).dict()
+    for key, value in values.items():
+        if key == "VB_PROFILE" or value is None:
+            continue
+        if override or key not in os.environ:
+            os.environ[key] = value
     if report_parent and explicit is None and _RUNTIME_ENV_FILE is None:
         _report_parent_env(env_path, cwd)
     return env_path

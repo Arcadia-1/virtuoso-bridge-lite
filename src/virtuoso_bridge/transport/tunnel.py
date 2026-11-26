@@ -36,6 +36,7 @@ from virtuoso_bridge.transport.remote_paths import (
     private_dirs_below,
     remote_scratch_root,
     resolve_client_id,
+    resolve_remote_scratch_root,
     resolve_remote_username,
 )
 from virtuoso_bridge.transport.remote_roles import remote_host_roles_from_os
@@ -43,6 +44,8 @@ from virtuoso_bridge.transport.ssh import (
     CommandResult,
     SSHRunner,
     _pid_is_alive,
+    _process_identity,
+    _saved_tunnel_pid_matches,
     ssh_backend_env_from_os,
     ssh_proxy_url_from_os,
     verbose_from_env,
@@ -252,6 +255,8 @@ def _validate_state(state: Any) -> dict[str, Any]:
                 or not (state.get("daemon_host") or state.get("remote_host"))
                 or (state.get("remote_user") is not None and not isinstance(state["remote_user"], str))):
             raise ValueError("Invalid saved tunnel endpoint/PID")
+    if state.get("tunnel_identity") is not None and not isinstance(state["tunnel_identity"], dict):
+        raise ValueError("Invalid saved tunnel process identity")
     if state.get("instance_record") is not None:
         from virtuoso_bridge.instance_discovery import validate_record
         record = validate_record(state["instance_record"])
@@ -585,8 +590,8 @@ class SSHClient:
         etc.  Otherwise resolves a profile binding before falling back to the
         default unsuffixed variables.
         """
-        profile = resolve_profile(profile)
         load_vb_env()
+        profile = resolve_profile(profile)
 
         suffix = f"_{profile}" if profile else ""
 
@@ -595,7 +600,7 @@ class SSHClient:
             raise ValueError(f"VB_AUTO_SESSIONS{suffix} must be 0 or 1")
         discover_instances = auto_sessions == "1"
 
-        roles = remote_host_roles_from_os(profile, load=False)
+        roles = remote_host_roles_from_os(profile, load=False, resolve=False)
         remote_host = roles.legacy_host or roles.daemon_host
         if not remote_host or not roles.daemon_host or not roles.deploy_host:
             raise RuntimeError(
@@ -607,8 +612,8 @@ class SSHClient:
         remote_user = roles.remote_user
         jump_host = roles.jump_host
         jump_user = roles.jump_user
-        backend_env = ssh_backend_env_from_os(profile)
-        ssh_proxy_url = ssh_proxy_url_from_os(profile)
+        backend_env = ssh_backend_env_from_os(profile, load=False, resolve=False)
+        ssh_proxy_url = ssh_proxy_url_from_os(profile, load=False, resolve=False)
 
         # Port
         from virtuoso_bridge.virtuoso.basic.bridge import _default_remote_port
@@ -1049,10 +1054,12 @@ class SSHClient:
             configured_user=self._remote_user,
             runner=runner,
         )
+        scratch_root = resolve_remote_scratch_root(runner)
         self._remote_work_dir = default_virtuoso_bridge_dir(
             remote_username,
             _profiled_bridge_leaf(self._profile),
             resolve_client_id(self._profile),
+            root=scratch_root,
         )
 
         remote_daemon = f"{self._remote_work_dir}/{daemon_filename}"
@@ -1065,7 +1072,6 @@ class SSHClient:
         # The CIW loads (and .cdsinit may autoload) code from this directory,
         # so every level below the scratch root must be ours and private.
         logger.info("Creating remote directory: %s", self._remote_work_dir)
-        scratch_root = remote_scratch_root()
         mkdir_result = runner.run_command(
             private_dir_shell_prelude("bridge")
             + "".join(
@@ -1310,9 +1316,17 @@ class SSHClient:
         pid = state.get("tunnel_pid")
         if not endpoints_match or not _pid_is_alive(pid):
             return False
+        saved_identity = state.get("tunnel_identity")
+        if saved_identity is not None and not _saved_tunnel_pid_matches(pid, saved_identity):
+            return False
         if not SSHRunner.can_reach_port(local_port):
             return False
-        self._require_runner().tunnel_pid = int(pid)
+        runner = self._require_runner()
+        runner.tunnel_pid = int(pid)
+        if hasattr(runner, "tunnel_identity"):
+            runner.tunnel_identity = saved_identity
+        if hasattr(runner, "_tunnel_ports"):
+            runner._tunnel_ports = (local_port, self._port)
         self._tunnel_endpoint = (local_port, self._port, int(pid))
         return True
 
@@ -1329,10 +1343,14 @@ class SSHClient:
         self._local_port = local_port
         _update_env_file(_profiled_env_key("VB_LOCAL_PORT", self._profile), str(local_port))
 
-    def ensure_tunnel(self) -> None:
-        """Ensure SSH tunnel is running, auto-retry on port conflict."""
+    def ensure_tunnel(self) -> bool:
+        """Ensure SSH tunnel is running, auto-retry on port conflict.
+
+        Returns True when this call spawned a new port-forwarding process,
+        or False when local mode / an already-running / adopted forward is used.
+        """
         if _is_localhost(self._remote_host):
-            return
+            return False
         relevant_paths = {_state_file(self._profile, self.target), _selection_file(self._profile),
                           *_legacy_state_files(self._profile)}
         unsafe = [item for item in self.inspect_states(self._profile)
@@ -1344,7 +1362,7 @@ class SSHClient:
         runner = self._require_runner()
         if runner.is_tunnel_alive:
             if self._active_tunnel_matches():
-                return
+                return False
             # Leave the old forward alive for its users, but do not reuse or
             # stop it after this client selects another daemon.
             runner.detach_port_forward()
@@ -1356,7 +1374,7 @@ class SSHClient:
             if SSHRunner.can_reach_port(local_port):
                 if self._adopt_saved_tunnel(local_port):
                     self._select_local_port(local_port)
-                    return
+                    return False
                 logger.info("Local port %d is held by an unknown listener", local_port)
                 local_port += 1
                 continue
@@ -1367,7 +1385,7 @@ class SSHClient:
             if proc is None:
                 if self._adopt_saved_tunnel(local_port):
                     self._select_local_port(local_port)
-                    return
+                    return False
                 logger.info("Local port %d became occupied by an unknown listener", local_port)
                 local_port += 1
                 continue
@@ -1379,10 +1397,18 @@ class SSHClient:
                     "SSH tunnel established (PID %d): localhost:%d -> %s:localhost:%d",
                     proc.pid, local_port, self._remote_host, self._port,
                 )
-                return
+                return True
             # Failed
-            stderr = proc.stderr
-            err_msg = stderr.read().decode("utf-8", errors="ignore") if stderr else ""
+            stderr = getattr(proc, "stderr", None)
+            err_msg = ""
+            if stderr is not None:
+                try:
+                    raw = stderr.read()
+                    err_msg = raw.decode("utf-8", errors="ignore") if isinstance(raw, bytes) else str(raw)
+                except (OSError, ValueError):
+                    err_msg = ""
+            if not err_msg:
+                err_msg = getattr(runner, "_last_tunnel_stderr", "") or ""
             if "address already in use" in err_msg.lower() or "cannot listen" in err_msg.lower():
                 logger.info("Local port %d in use, trying %d", local_port, local_port + 1)
                 local_port += 1
@@ -1401,7 +1427,10 @@ class SSHClient:
             raise DiscoveryError("Local instance discovery requires Linux with /proc/self/fd; "
                                  "set VB_REMOTE_HOST to the Linux daemon host. Spectre is independent.")
         from virtuoso_bridge.virtuoso.basic.resources.ramic_registry import expand_root
-        return expand_root(instance_scratch_root())
+        local_root = instance_scratch_root()
+        if local_root == "~":
+            local_root = "~/"
+        return expand_root(local_root).rstrip("/") or "/"
 
     def list_instances(self, *, timeout: float | None = None) -> list[dict]:
         """Read live records without changing allocation, credentials or selection."""
@@ -1503,6 +1532,7 @@ class SSHClient:
             self._verify_discovered_instance(timeout)
             self.save_state()
             return
+        spawned_tunnel = False
         try:
             self.ensure_remote_setup()
             self._daemon_token = self.ensure_daemon_token()
@@ -1511,10 +1541,17 @@ class SSHClient:
                 if runner.persistent_shell_enabled:
                     runner.ensure_persistent_shell(timeout=timeout)
             self._daemon_endpoint_hostname = self.probe_daemon_endpoint_hostname()
-            self.ensure_tunnel()
+            spawned_tunnel = bool(self.ensure_tunnel())
             self._verify_discovered_instance(timeout)
             self.save_state()
+            spawned_tunnel = False
         except Exception:
+            if spawned_tunnel and self._ssh_runner is not None:
+                try:
+                    self._ssh_runner.stop_port_forward()
+                except Exception:
+                    pass
+                self._tunnel_endpoint = None
             try:
                 self.close()
             except Exception:
@@ -1572,11 +1609,22 @@ class SSHClient:
         self._daemon_token = self.read_daemon_token()
         if not self._daemon_token:
             raise daemon_auth.DaemonTokenError("Cannot read the private daemon credential")
-        if self._ssh_runner is not None:
-            self.ensure_tunnel()
-        self.verify_instance(timeout)
-        if publish:
-            self.save_state()
+        spawned_tunnel = False
+        try:
+            if self._ssh_runner is not None:
+                spawned_tunnel = bool(self.ensure_tunnel())
+            self.verify_instance(timeout)
+            if publish:
+                self.save_state()
+            spawned_tunnel = False
+        except Exception:
+            if spawned_tunnel and self._ssh_runner is not None:
+                try:
+                    self._ssh_runner.stop_port_forward()
+                except Exception:
+                    pass
+                self._tunnel_endpoint = None
+            raise
 
     def ciw_process_identity(self, record: dict, *, timeout: float = 10) -> str:
         """Read the selected CIW's Linux birth identity without sending SKILL."""
@@ -1829,7 +1877,23 @@ class SSHClient:
             if state:
                 pid = state.get("tunnel_pid")
                 if pid:
-                    runner.tunnel_pid = pid
+                    saved_identity = state.get("tunnel_identity")
+                    if _saved_tunnel_pid_matches(
+                        pid,
+                        saved_identity,
+                        local_port=state.get("port"),
+                        remote_port=state.get("remote_port"),
+                    ):
+                        runner.tunnel_pid = pid
+                        if hasattr(runner, "tunnel_identity"):
+                            runner.tunnel_identity = saved_identity
+                        if hasattr(runner, "_tunnel_ports") and isinstance(state.get("port"), int) and isinstance(state.get("remote_port"), int):
+                            runner._tunnel_ports = (state["port"], state["remote_port"])
+                    else:
+                        logger.warning(
+                            "Refusing to terminate saved tunnel PID %s: process identity no longer matches",
+                            pid,
+                        )
 
         try:
             runner.stop_port_forward()
@@ -1941,8 +2005,13 @@ class SSHClient:
         state_dir().mkdir(parents=True, exist_ok=True)
         is_local = _is_localhost(self._daemon_host)
         tunnel_pid = None
+        tunnel_identity = None
         if not is_local:
-            tunnel_pid = self._require_runner().tunnel_pid
+            runner = self._require_runner()
+            tunnel_pid = runner.tunnel_pid
+            tunnel_identity = getattr(runner, "tunnel_identity", None)
+            if tunnel_identity is None and tunnel_pid:
+                tunnel_identity = _process_identity(tunnel_pid)
         state = {
             "mode": "local" if is_local else "remote",
             "port": self._port if is_local else self._local_port,
@@ -1961,6 +2030,8 @@ class SSHClient:
             "profile": self._profile,
             "started_at": time.time(),
         }
+        if tunnel_identity is not None:
+            state["tunnel_identity"] = tunnel_identity
         # Credentials never enter connection metadata. Keep the old complete
         # state until atomic replacement succeeds.
         if self._discover_instances and self.instance_record:
@@ -2094,6 +2165,9 @@ class SSHClient:
         if state.get("target") and not _state_target_matches(state, state["target"]):
             return False
         if not 1 <= local_port <= 65535 or not _pid_is_alive(pid):
+            return False
+        saved_identity = state.get("tunnel_identity")
+        if saved_identity is not None and not _saved_tunnel_pid_matches(pid, saved_identity):
             return False
         return SSHRunner.can_reach_port(local_port)
 

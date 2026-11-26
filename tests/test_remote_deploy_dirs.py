@@ -128,3 +128,39 @@ def test_deploy_refuses_a_directory_owned_by_someone_else(monkeypatch, tmp_path)
 
     assert runner.uploads == {}
     assert not (scratch / "virtuoso_bridge_designer" / "client1").exists()
+
+
+@pytest.mark.parametrize(
+    ("scratch_setting", "subdir"),
+    [("~/", ""), ("~/scratch", "scratch")],
+)
+def test_deploy_expands_tilde_scratch_root_via_remote_home(
+    monkeypatch, tmp_path, scratch_setting, subdir
+):
+    fake_home = tmp_path / "remote_home"
+    fake_home.mkdir(mode=0o700)
+    expected_root = fake_home / subdir if subdir else fake_home
+    expected_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    work_cwd = tmp_path / "cwd"
+    work_cwd.mkdir()
+    monkeypatch.chdir(work_cwd)
+
+    runner = _LocalShellRunner(env={**os.environ, "HOME": str(fake_home)})
+    # Ensure getent (on Linux) doesn't return the real account home instead of synthetic fake_home.
+    real_run = runner.run_command
+
+    def synthetic_run(command: str, timeout=None) -> CommandResult:
+        if command == 'getent passwd "$(id -u)" | cut -d: -f6':
+            return CommandResult(returncode=0, stdout=f"{fake_home}\n", stderr="")
+        return real_run(command, timeout=timeout)
+
+    runner.run_command = synthetic_run  # type: ignore[method-assign]
+    client = _deploy(monkeypatch, scratch_setting, runner)
+
+    assert client.remote_work_dir == str(_chain(expected_root)[-1])
+    assert [_mode(path) for path in _chain(expected_root)] == [0o700, 0o700, 0o700]
+    assert not (work_cwd / "~").exists()
+    setup_path = f"{client.remote_work_dir}/virtuoso_setup.il"
+    assert setup_path in runner.uploads
+    assert "~/" not in runner.uploads[setup_path]
+    assert str(expected_root) in runner.uploads[setup_path]

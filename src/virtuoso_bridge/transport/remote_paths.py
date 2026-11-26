@@ -20,7 +20,11 @@ CLIENT_ID_ENV = "VB_CLIENT_ID"
 def remote_scratch_root() -> str:
     """Base directory for remote scratch (default ``/tmp``)."""
     load_vb_env()
-    return os.environ.get(REMOTE_SCRATCH_ROOT_ENV, "/tmp").rstrip("/")
+    raw = os.environ.get(REMOTE_SCRATCH_ROOT_ENV, "").strip()
+    if not raw:
+        return "/tmp"
+    stripped = raw.rstrip("/")
+    return stripped or "/"
 
 
 def sanitize_username_for_path(username: str) -> str:
@@ -98,10 +102,34 @@ def resolve_remote_username(
     return fallback
 
 
+def resolve_remote_scratch_root(
+    runner: SSHRunner | None = None,
+    *,
+    error_context: str = "remote scratch root",
+) -> str:
+    """Return ``remote_scratch_root()``, expanding ``~``/``~/...`` on *runner*."""
+    root = remote_scratch_root()
+    if (root == "~" or root.startswith("~/")) and runner is not None:
+        home = runner.run_command('getent passwd "$(id -u)" | cut -d: -f6')
+        home_dir = home.stdout.strip() if home.returncode == 0 else ""
+        if not home_dir.startswith("/"):
+            fallback = runner.run_command('printf %s "$HOME"')
+            home_dir = fallback.stdout.strip() if fallback.returncode == 0 else ""
+        if not home_dir.startswith("/"):
+            raise ValueError(f"Cannot resolve the remote account home for {error_context}")
+        resolved_home = home_dir.rstrip("/") or "/"
+        if root == "~":
+            return resolved_home
+        return ("" if resolved_home == "/" else resolved_home) + root[1:]
+    return root
+
+
 def default_virtuoso_bridge_dir(
     username: str,
     leaf: str,
     client_id: str | None = None,
+    *,
+    root: str | None = None,
 ) -> str:
     """Return the default remote scratch directory for bridge artifacts.
 
@@ -110,22 +138,18 @@ def default_virtuoso_bridge_dir(
     multiple local machines.
     """
     safe = sanitize_username_for_path(username)
-    root = remote_scratch_root()
+    base = remote_scratch_root() if root is None else (root.rstrip("/") or "/")
+    prefix = "" if base == "/" else base
     leaf_norm = leaf.strip("/").replace("\\", "/")
     if client_id:
         safe_client = sanitize_client_id_for_path(client_id)
-        return f"{root}/virtuoso_bridge_{safe}/{safe_client}/{leaf_norm}"
-    return f"{root}/virtuoso_bridge_{safe}/{leaf_norm}"
+        return f"{prefix}/virtuoso_bridge_{safe}/{safe_client}/{leaf_norm}"
+    return f"{prefix}/virtuoso_bridge_{safe}/{leaf_norm}"
 
 
 def instance_scratch_root(runner: SSHRunner | None = None) -> str:
     """Registry root; keep the shared /tmp parent outside the registry."""
-    root = remote_scratch_root()
-    if root.startswith("~/") and runner is not None:
-        home = runner.run_command('getent passwd "$(id -u)" | cut -d: -f6')
-        if home.returncode or not home.stdout.strip().startswith("/"):
-            raise ValueError("Cannot resolve the remote account home for instance discovery")
-        root = home.stdout.strip().rstrip("/") + root[1:]
+    root = resolve_remote_scratch_root(runner, error_context="instance discovery")
     if root == "/tmp":
         user = resolve_remote_username(configured_user=None, runner=runner)
         return root + "/virtuoso_bridge_" + user

@@ -735,3 +735,209 @@ def test_a_daemon_launched_moments_ago_is_not_killed_as_a_zombie() -> None:
     assert "compareTime(getCurrentTime() RBLaunchedAt) < RBStartGraceSeconds" in zombie
     assert start.index("] already starting (launched at") < start.index("running_bind=%s] already running")
     assert start.index("RBLaunchedAt = getCurrentTime()") < start.index("ipcBeginProcess(")
+
+
+@pytest.mark.parametrize("entrypoint", ["warm", "connect_instance"])
+@pytest.mark.parametrize("spawned", [True, False])
+def test_verification_failure_stops_only_newly_spawned_tunnel(
+    monkeypatch, entrypoint: str, spawned: bool
+) -> None:
+    from tests.test_instance_discovery import row
+
+    stopped: list[bool] = []
+
+    class _FakeVerifyRunner:
+        persistent_shell_enabled = False
+        is_tunnel_alive = True
+        tunnel_pid = 43210
+
+        def stop_port_forward(self) -> None:
+            stopped.append(True)
+
+        def close(self) -> None:
+            pass
+
+    client = SSHClient(remote_host="eda-host", remote_user="designer", port=65001, local_port=65100)
+    runner = _FakeVerifyRunner()
+    client._ssh_runner = runner
+    client._deployment_runner = runner
+    client._role_runners["daemon"] = runner
+    client._tunnel_endpoint = (65100, 65001, 43210)
+    monkeypatch.setattr(client, "ensure_remote_setup", lambda: None)
+    monkeypatch.setattr(client, "ensure_daemon_token", lambda: "ab" * 32)
+    monkeypatch.setattr(client, "read_daemon_token", lambda: "ab" * 32)
+    monkeypatch.setattr(client, "probe_daemon_endpoint_hostname", lambda: "eda-host")
+    monkeypatch.setattr(client, "ensure_tunnel", lambda: spawned)
+    monkeypatch.setattr(client, "save_state", lambda: pytest.fail("state must not be saved"))
+
+    def fail_verify(_timeout: int) -> None:
+        raise RuntimeError("daemon handshake rejected")
+
+    monkeypatch.setattr(client, "_verify_discovered_instance", fail_verify)
+    monkeypatch.setattr(client, "verify_instance", fail_verify)
+
+    with pytest.raises(RuntimeError, match="daemon handshake rejected"):
+        if entrypoint == "warm":
+            client.warm()
+        else:
+            client.connect_instance(row(65001))
+
+    if spawned:
+        assert stopped == [True]
+        assert client._tunnel_endpoint is None
+    else:
+        assert stopped == []
+
+
+def test_save_state_records_tunnel_identity_and_stop_refuses_mismatched_pid(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import os
+    import subprocess
+    import sys
+    from virtuoso_bridge.transport import ssh as ssh_mod, tunnel
+
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel.state_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.tunnel.legacy_cache_state_file",
+        lambda profile=None: tmp_path / "legacy.json",
+    )
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        client = SSHClient(
+            remote_host="eda-host",
+            remote_user="designer",
+            port=65062,
+            local_port=65061,
+            profile="idtest",
+        )
+        client._ssh_runner._tunnel_pid = proc.pid
+        client.save_state()
+
+        state = SSHClient.read_state("idtest", target=client.target)
+        assert state is not None
+        assert isinstance(state.get("tunnel_identity"), dict)
+        inspected = SSHClient.inspect_states("idtest")
+        assert any(row.get("birth_identity_saved") is True for row in inspected)
+
+        # Case 1: saved tunnel_identity does not match the live process (PID reuse).
+        mismatched = dict(state, tunnel_identity={**state["tunnel_identity"], "start_time": "stale-start"})
+        state_path = tunnel._state_file("idtest", client.target)
+        tunnel._write_private_json(state_path, mismatched)
+
+        killed: list[int] = []
+        real_kill = os.kill
+
+        def spy_kill(pid: int, sig: int) -> None:
+            if sig != 0:
+                killed.append(pid)
+            real_kill(pid, sig)
+
+        monkeypatch.setattr(ssh_mod.os, "kill", spy_kill)
+
+        fresh = SSHClient(
+            remote_host="eda-host",
+            remote_user="designer",
+            port=65062,
+            local_port=65061,
+            profile="idtest",
+        )
+        fresh.stop()
+        assert proc.poll() is None
+        assert proc.pid not in killed
+
+        # Case 2: legacy state without tunnel_identity pointing at a non-ssh process.
+        legacy_state = {k: v for k, v in state.items() if k != "tunnel_identity"}
+        tunnel._write_private_json(state_path, legacy_state)
+        fresh2 = SSHClient(
+            remote_host="eda-host",
+            remote_user="designer",
+            port=65062,
+            local_port=65061,
+            profile="idtest",
+        )
+        fresh2.stop()
+        assert proc.poll() is None
+        assert proc.pid not in killed
+
+        # Case 3: matching tunnel_identity is stopped cleanly.
+        tunnel._write_private_json(state_path, state)
+        fresh3 = SSHClient(
+            remote_host="eda-host",
+            remote_user="designer",
+            port=65062,
+            local_port=65061,
+            profile="idtest",
+        )
+        fresh3.stop()
+        assert proc.pid in killed
+        assert proc.wait(timeout=5) is not None
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+
+
+def test_identity_looks_like_ssh_tunnel_filters_non_tunnel_processes() -> None:
+    from virtuoso_bridge.transport.ssh import _identity_looks_like_ssh_tunnel
+
+    assert _identity_looks_like_ssh_tunnel(
+        {
+            "platform": "posix",
+            "start_time": "Thu Nov 26 11:00:00 2026",
+            "argv0": "/usr/bin/ssh",
+            "command": "/usr/bin/ssh -o ExitOnForwardFailure=yes -N -L 65061:127.0.0.1:65062 designer@eda",
+        },
+        local_port=65061,
+        remote_port=65062,
+    )
+    assert not _identity_looks_like_ssh_tunnel(
+        {
+            "platform": "posix",
+            "start_time": "Thu Nov 26 11:00:00 2026",
+            "argv0": "/usr/bin/ssh",
+            "command": "/usr/bin/ssh -o ExitOnForwardFailure=yes -N -L 65999:127.0.0.1:65062 designer@eda",
+        },
+        local_port=65061,
+        remote_port=65062,
+    )
+    assert not _identity_looks_like_ssh_tunnel(
+        {
+            "platform": "posix",
+            "start_time": "Thu Nov 26 11:00:00 2026",
+            "argv0": "ssh",
+            "command": "ssh designer@eda",
+        },
+        local_port=65061,
+        remote_port=65062,
+    )
+    assert not _identity_looks_like_ssh_tunnel(
+        {
+            "platform": "posix",
+            "start_time": "Thu Nov 26 11:00:00 2026",
+            "argv0": "python3",
+            "command": "python3 -c 'import time; time.sleep(30)'",
+        },
+        local_port=65061,
+        remote_port=65062,
+    )
+    assert _identity_looks_like_ssh_tunnel(
+        {"platform": "nt", "start_time": "12345", "image": r"C:\Windows\System32\OpenSSH\ssh.exe"},
+        local_port=65061,
+        remote_port=65062,
+    )
+    assert not _identity_looks_like_ssh_tunnel(
+        {"platform": "nt", "start_time": "12345", "image": r"C:\Python311\python.exe"},
+        local_port=65061,
+        remote_port=65062,
+    )

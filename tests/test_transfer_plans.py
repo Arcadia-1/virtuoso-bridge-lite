@@ -590,3 +590,97 @@ def test_installed_item_remains_successful_when_backup_cleanup_fails(
     assert not stage_path.exists()
     assert "could not remove previous content" in caplog.text
     assert str(backups[0]) in caplog.text
+
+
+def test_upload_plan_normalizes_trailing_slash_and_catches_duplicates(tmp_path: Path) -> None:
+    source = tmp_path / "out_dir"
+    source.mkdir()
+    (source / "input.scs").write_text("simulator lang=spectre\n", encoding="utf-8")
+
+    plan = build_tar_upload_plans("tar", [(source, "/remote/out/")])[0]
+
+    assert plan.remote_dir == "/remote"
+    script = _decode_remote_script(plan.remote_command)
+    assert re.search(r"work=/remote/\.vbtmp-[0-9a-f]{32}", script)
+    assert 'mv -- /remote/out "$state/backup-0"' in script
+    assert 'mv -- "$payload"/out_dir /remote/out' in script
+
+    other = tmp_path / "other_dir"
+    other.mkdir()
+    with pytest.raises(ValueError, match="Duplicate remote upload target"):
+        build_tar_upload_plans(
+            "tar",
+            [
+                (source, "/remote/out"),
+                (other, "/remote/out/"),
+            ],
+        )
+
+
+@pytest.mark.skipif(os.name == "nt" or not shutil.which("bash"), reason="requires POSIX tar and bash")
+def test_trailing_slash_upload_replaces_existing_directory_in_real_shell(tmp_path: Path) -> None:
+    source = tmp_path / "src_dir"
+    source.mkdir()
+    (source / "new.scs").write_text("new\n", encoding="utf-8")
+    target = tmp_path / "remote" / "out"
+    target.mkdir(parents=True)
+    (target / "old.scs").write_text("old\n", encoding="utf-8")
+
+    plan = build_tar_upload_plans("tar", [(source, target.as_posix() + "/")])[0]
+    archive = subprocess.run(plan.local_command, capture_output=True, check=True).stdout
+    completed = subprocess.run(
+        shlex.split(plan.remote_command),
+        input=archive,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr.decode("utf-8", errors="replace")
+    assert (target / "new.scs").read_text(encoding="utf-8") == "new\n"
+    assert not (target / "old.scs").exists()
+    assert not list(target.parent.glob(".vbtmp-*"))
+
+
+def test_upload_plan_handles_dot_local_path_and_rejects_root_local_path(
+    monkeypatch, tmp_path: Path
+) -> None:
+    project = tmp_path / "my_project"
+    project.mkdir()
+    (project / "design.scs").write_text("data\n", encoding="utf-8")
+    monkeypatch.chdir(project)
+
+    plan = build_tar_upload_plans("tar", [(Path("."), "/remote/my_project")])[0]
+
+    assert plan.local_command == (
+        "tar",
+        "cf",
+        "-",
+        "-C",
+        str(tmp_path.absolute()).replace("\\", "/"),
+        "--",
+        "my_project",
+    )
+    script = _decode_remote_script(plan.remote_command)
+    assert 'mv -- "$payload"/my_project /remote/my_project' in script
+
+    root_path = Path(project.anchor)
+    with pytest.raises(ValueError, match="Invalid local upload path"):
+        build_tar_upload_plans("tar", [(root_path, "/remote/root")])
+
+
+@pytest.mark.parametrize(
+    "bad_remote",
+    ["", "/", "///", ".", "..", "/remote/.", "/remote/..", "/remote/../"],
+)
+def test_transfer_plans_reject_invalid_remote_basenames(tmp_path: Path, bad_remote: str) -> None:
+    sample = tmp_path / "sample.txt"
+    sample.write_text("x", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Invalid remote upload path"):
+        build_tar_upload_plans("tar", [(sample, bad_remote)])
+
+    with pytest.raises(ValueError, match="Invalid remote directory path"):
+        build_tar_download_plan("tar", bad_remote, tmp_path / "dest")
+
+    with pytest.raises(ValueError, match="Invalid remote file path"):
+        build_text_upload_plan(bad_remote, b"payload")

@@ -9,7 +9,11 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
-from virtuoso_bridge.env import default_user_env_path, get_runtime_env_file
+from virtuoso_bridge.env import (
+    default_user_env_path,
+    discover_workspace_env_path,
+    get_runtime_env_file,
+)
 
 PROFILE_BINDING_FILENAME = ".virtuoso-bridge-profile"
 
@@ -67,7 +71,8 @@ def resolve_profile_info(explicit: str | None = None) -> ProfileResolution:
     2. process environment ``VB_PROFILE``
     3. runtime ``--env`` file, when one was explicitly selected
     4. active virtualenv binding file
-    5. user-level ``~/.virtuoso-bridge/.env`` ``VB_PROFILE``
+    5. discovered workspace/parent ``.env`` or user-level
+       ``~/.virtuoso-bridge/.env`` ``VB_PROFILE``
     6. ``None`` for the legacy default profile
     """
     profile = _clean_profile(explicit)
@@ -88,10 +93,24 @@ def resolve_profile_info(explicit: str | None = None) -> ProfileResolution:
     if profile:
         return ProfileResolution(profile, "venv", venv_path)
 
-    user_env = default_user_env_path()
-    profile = _profile_from_env_file(user_env)
-    if profile:
-        return ProfileResolution(profile, "user_env", user_env)
+    if runtime_env is None:
+        discovered_env = discover_workspace_env_path()
+        if discovered_env is not None:
+            profile = _profile_from_env_file(discovered_env)
+            if profile:
+                user_env = default_user_env_path()
+                try:
+                    is_user_env = discovered_env.resolve() == user_env.resolve()
+                except OSError:
+                    is_user_env = discovered_env == user_env
+                source = "user_env" if is_user_env else "env_file"
+                return ProfileResolution(profile, source, discovered_env)
+            return ProfileResolution(None, "default")
+
+        user_env = default_user_env_path()
+        profile = _profile_from_env_file(user_env)
+        if profile:
+            return ProfileResolution(profile, "user_env", user_env)
 
     return ProfileResolution(None, "default")
 
