@@ -39,7 +39,11 @@ from pathlib import Path
 from typing import Any
 
 from virtuoso_bridge.env import load_vb_env
-from virtuoso_bridge.transport.remote_paths import default_virtuoso_bridge_dir, resolve_client_id
+from virtuoso_bridge.transport.remote_paths import (
+    default_virtuoso_bridge_dir,
+    resolve_client_id,
+    resolve_remote_scratch_root,
+)
 from virtuoso_bridge.virtuoso.x11 import _get_display, _run
 
 REQUIRED_TOOLS = ("xdotool", "wmctrl", "xwininfo", "import", "convert")
@@ -293,10 +297,13 @@ class X11Gui:
         return output
 
     def _scratch_dir(self) -> str:
-        if self._runner is None:
-            return str(Path(default_virtuoso_bridge_dir(self._user, "screenshots",
-                                                        resolve_client_id(self._profile))).expanduser())
-        return default_virtuoso_bridge_dir(self._user, "screenshots", resolve_client_id(self._profile))
+        root = resolve_remote_scratch_root(self._runner, error_context="X11 GUI screenshots")
+        return default_virtuoso_bridge_dir(
+            self._user,
+            "screenshots",
+            resolve_client_id(self._profile),
+            root=root,
+        )
 
 
 def window_dict(window: GuiWindow) -> dict[str, Any]:

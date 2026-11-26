@@ -647,3 +647,33 @@ def test_parallel_remote_does_not_serialize_on_persistent_shell_lock(monkeypatch
     assert all(r.ok for r in results), [r.errors for r in results]
     assert sim._ssh_runner is persistent
     assert persistent.persistent_shell_enabled is True
+
+
+def test_spectre_remote_work_dir_expands_tilde_scratch_root(monkeypatch, tmp_path) -> None:
+    from virtuoso_bridge.transport.ssh import CommandResult
+
+    monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", "~/vb_scratch")
+    monkeypatch.setenv("VB_CLIENT_ID", "client1")
+
+    class _HomeRunner:
+        user = "designer"
+
+        def run_command(self, command: str, timeout=None) -> CommandResult:
+            if "getent" in command:
+                return CommandResult(0, "/home/remote\n", "")
+            return CommandResult(1, "", "")
+
+    sim = runner.SpectreSimulator(
+        remote_host="compute-host",
+        remote_user="designer",
+        work_dir=tmp_path / "runs",
+        ssh_runner=_HomeRunner(),
+    )
+
+    resolved = sim._resolve_remote_work_dir(sim._ssh_runner)
+
+    assert resolved == (
+        "/home/remote/vb_scratch/virtuoso_bridge_designer/client1/virtuoso_bridge_spectre"
+    )
+    assert not resolved.startswith("~")

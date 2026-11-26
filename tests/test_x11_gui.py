@@ -289,3 +289,29 @@ def test_real_bash_failing_xdotool_raises_and_stops_remaining_steps(tmp_path, mo
     with pytest.raises(GuiActionError, match="keys to .* failed"):
         g2.key("Choosing Analyses", "Return", settle=0.01)
     assert any("xdotool key Return" in line for line in trace2.read_text(encoding="utf-8").splitlines())
+
+
+def test_x11_gui_scratch_dir_expands_tilde_remote_and_local(monkeypatch, tmp_path):
+    monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", "~/vb_scratch")
+    monkeypatch.setenv("VB_CLIENT_ID", "client1")
+
+    class _TildeRunner:
+        def run_command(self, command, timeout=None):
+            if "getent" in command:
+                return SimpleNamespace(returncode=0, stdout="/home/remote\n", stderr="")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    remote_gui = X11Gui(_TildeRunner(), "u", display=":1")
+    assert (
+        remote_gui._scratch_dir()
+        == "/home/remote/vb_scratch/virtuoso_bridge_u/client1/screenshots"
+    )
+
+    local_home = tmp_path / "local_home"
+    monkeypatch.setenv("HOME", str(local_home))
+    monkeypatch.setenv("USERPROFILE", str(local_home))
+    local_gui = X11Gui(None, "u", display=":1")
+    local_dir = local_gui._scratch_dir()
+    assert local_dir == f"{str(local_home).rstrip('/')}/vb_scratch/virtuoso_bridge_u/client1/screenshots"
+    assert not local_dir.startswith("~")

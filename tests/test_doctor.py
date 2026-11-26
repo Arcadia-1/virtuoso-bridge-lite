@@ -687,6 +687,28 @@ def test_local_mode_has_no_remote_scratch(monkeypatch):
     assert doctor.check_scratch_dir(ctx).status == doctor.SKIP
 
 
+@posix_sh
+def test_scratch_dir_expands_tilde_scratch_root(monkeypatch, tmp_path):
+    remote_home = tmp_path / "remote_home"
+    scratch = remote_home / "vb_scratch"
+    work = scratch / "virtuoso_bridge_designer" / "client1" / "virtuoso_bridge"
+    for d in (remote_home, scratch, scratch / "virtuoso_bridge_designer",
+              scratch / "virtuoso_bridge_designer" / "client1", work):
+        d.mkdir(mode=0o700, exist_ok=True)
+        d.chmod(0o700)
+
+    runner = FakeRunner({"getent passwd": f"{remote_home}\n"})
+    ctx, _, client = _context(monkeypatch, tmp_path, runner=runner, deployed=False)
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", "~/vb_scratch")
+
+    result = doctor.check_scratch_dir(_configured(ctx))
+
+    assert result.status == doctor.OK, result
+    assert str(work) in result.detail
+    assert "~/" not in result.detail
+    _assert_read_only(runner, client)
+
+
 # -- 5. dialogs ---------------------------------------------------------------------------
 
 def test_a_blocking_dialog_fails_lists_titles_and_stops_skill(monkeypatch, tmp_path):

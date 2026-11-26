@@ -684,3 +684,78 @@ def test_transfer_plans_reject_invalid_remote_basenames(tmp_path: Path, bad_remo
 
     with pytest.raises(ValueError, match="Invalid remote file path"):
         build_text_upload_plan(bad_remote, b"payload")
+
+
+def test_download_plans_handle_dot_local_path_and_reject_root(
+    monkeypatch, tmp_path: Path
+) -> None:
+    target_dir = tmp_path / "workspace_dir"
+    target_dir.mkdir()
+    monkeypatch.chdir(target_dir)
+
+    file_plan = build_file_download_plan("/remote/output.raw", Path("."))
+    assert file_plan.local_path == target_dir
+    assert file_plan.stage_path.parent == tmp_path
+    assert file_plan.staged_item == file_plan.stage_path / "workspace_dir"
+    assert file_plan.staged_item != file_plan.stage_path
+
+    tar_plan = build_tar_download_plan("tar", "/remote/results", Path("."))
+    assert tar_plan.local_path == target_dir
+    assert tar_plan.stage_path.parent == tmp_path
+    assert tar_plan.staged_item == tar_plan.stage_path / "results"
+
+    root_path = Path(target_dir.anchor)
+    with pytest.raises(ValueError, match="Invalid local download path"):
+        build_file_download_plan("/remote/output.raw", root_path)
+    with pytest.raises(ValueError, match="Invalid local download path"):
+        build_tar_download_plan("tar", "/remote/results", root_path)
+
+
+def test_install_staged_item_refuses_to_overwrite_existing_dir_with_file(
+    tmp_path: Path,
+) -> None:
+    existing_dir = tmp_path / "existing"
+    existing_dir.mkdir()
+    preserved = existing_dir / "keep.txt"
+    preserved.write_text("important\n", encoding="utf-8")
+
+    plan = build_file_download_plan("/remote/file.txt", existing_dir)
+    plan.stage_path.mkdir(parents=True)
+    plan.staged_item.write_text("downloaded file\n", encoding="utf-8")
+
+    with pytest.raises(IsADirectoryError):
+        install_staged_item(plan.stage_path, plan.staged_item, plan.local_path)
+
+    assert existing_dir.is_dir()
+    assert preserved.read_text(encoding="utf-8") == "important\n"
+    assert not list(tmp_path.glob(".vbtmp-*"))
+    assert not list(tmp_path.glob(".vbbak-*"))
+
+
+def test_ssh_runner_nonrecursive_download_over_existing_dir_leaves_dir_intact(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from virtuoso_bridge.transport.ssh import SSHRunner
+
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh._setup_command_log", lambda: None)
+
+    existing_dir = tmp_path / "dest_dir"
+    existing_dir.mkdir()
+    preserved = existing_dir / "keep.txt"
+    preserved.write_text("do not delete\n", encoding="utf-8")
+
+    def fake_scp_run(cmd, **_kwargs):
+        Path(cmd[-1]).write_bytes(b"remote file payload")
+        return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.subprocess.run", fake_scp_run)
+
+    runner = SSHRunner(host="compute", user="designer", backend="openssh")
+    with pytest.raises(IsADirectoryError):
+        runner.download("/remote/file.txt", existing_dir, recursive=False)
+
+    assert existing_dir.is_dir()
+    assert preserved.read_text(encoding="utf-8") == "do not delete\n"
+    assert not list(tmp_path.glob(".vbtmp-*"))
+    assert not list(tmp_path.glob(".vbbak-*"))

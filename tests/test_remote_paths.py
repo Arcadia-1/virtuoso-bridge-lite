@@ -145,3 +145,54 @@ def test_tilde_expansion_falls_back_to_remote_home_env_when_getent_unavailable(m
     runner = SimpleNamespace(run_command=fake_run)
     assert resolve_remote_scratch_root(runner) == "/Users/remote"
     assert len(commands) == 2
+
+
+@pytest.mark.parametrize(
+    ("configured", "suffix"),
+    [
+        ("~", ""),
+        ("~/", ""),
+        ("~/vb_scratch", "/vb_scratch"),
+        ("~/vb_scratch/", "/vb_scratch"),
+    ],
+)
+def test_resolve_remote_scratch_root_expands_tilde_in_local_mode(
+    monkeypatch, tmp_path, configured, suffix
+) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", configured)
+    local_home = tmp_path / "local_home"
+    monkeypatch.setenv("HOME", str(local_home))
+    monkeypatch.setenv("USERPROFILE", str(local_home))
+
+    resolved = resolve_remote_scratch_root(None)
+
+    expected_home = str(local_home).rstrip("/")
+    assert resolved == expected_home + suffix
+    assert not resolved.startswith("~")
+
+
+def test_default_bridge_and_spectre_dirs_expand_tilde_when_runner_given(monkeypatch) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", "~/vb_scratch")
+    runner = SimpleNamespace(
+        run_command=lambda command: SimpleNamespace(
+            returncode=0 if "getent" in command else 1,
+            stdout="/home/remote\n" if "getent" in command else "",
+            stderr="",
+        )
+    )
+
+    assert (
+        default_virtuoso_bridge_dir("designer", "x11", "client1", runner=runner)
+        == "/home/remote/vb_scratch/virtuoso_bridge_designer/client1/x11"
+    )
+    assert (
+        default_remote_spectre_work_dir("designer", "client1", runner=runner)
+        == "/home/remote/vb_scratch/virtuoso_bridge_designer/client1/virtuoso_bridge_spectre"
+    )
+    # Explicit root= still takes precedence over runner/env.
+    assert (
+        default_virtuoso_bridge_dir("designer", "x11", "client1", root="/explicit", runner=runner)
+        == "/explicit/virtuoso_bridge_designer/client1/x11"
+    )

@@ -1200,6 +1200,7 @@ class SpectreSimulator:
                     self._remote_work_dir = default_remote_spectre_work_dir(
                         username,
                         resolve_client_id(self._profile),
+                        runner=runner,
                     )
                     self._remote_work_dir_set = True
                     logger.info("Remote work dir: %s", self._remote_work_dir)

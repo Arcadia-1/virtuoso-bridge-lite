@@ -1821,3 +1821,568 @@ def test_connect_uses_resolved_identity_files_and_does_not_rescan_home(
     assert client.connect_kwargs["key_filename"] == str(available_key)
     assert client.connect_kwargs["allow_agent"] is True
     assert client.connect_kwargs["look_for_keys"] is False
+
+
+def test_run_command_and_upload_text_handle_large_bidirectional_io_without_deadlock() -> None:
+    window_limit = 256 * 1024
+    payload_size = 3 * 1024 * 1024  # >2 MiB SSH channel window
+
+    class _WindowedEchoChannel:
+        def __init__(self) -> None:
+            self.command: str | None = None
+            self._pending_stdout = bytearray()
+            self._eof_sent = False
+            self._closed = False
+            self.received_total = 0
+
+        def settimeout(self, timeout: float) -> None:
+            assert timeout > 0
+
+        def exec_command(self, command: str) -> None:
+            self.command = command
+
+        def send_ready(self) -> bool:
+            if self._closed or self._eof_sent:
+                return True
+            # Remote cannot consume more stdin while its stdout buffer is full.
+            return len(self._pending_stdout) < window_limit
+
+        def send(self, data: bytes) -> int:
+            if self._closed:
+                raise OSError("Socket is closed")
+            if not self.send_ready():
+                raise AssertionError("send() called while send_ready() is False")
+            chunk = bytes(data[:32768])
+            self.received_total += len(chunk)
+            self._pending_stdout.extend(chunk)
+            return len(chunk)
+
+        def sendall(self, _data: bytes) -> None:
+            raise AssertionError("blocking sendall() would deadlock on full window")
+
+        def shutdown_write(self) -> None:
+            self._eof_sent = True
+
+        def recv_ready(self) -> bool:
+            return bool(self._pending_stdout)
+
+        def recv(self, size: int) -> bytes:
+            chunk = bytes(self._pending_stdout[:size])
+            del self._pending_stdout[:size]
+            return chunk
+
+        def recv_stderr_ready(self) -> bool:
+            return False
+
+        def recv_stderr(self, _size: int) -> bytes:
+            return b""
+
+        def exit_status_ready(self) -> bool:
+            return self._eof_sent and not self._pending_stdout
+
+        @property
+        def eof_received(self) -> bool:
+            return self.exit_status_ready()
+
+        @property
+        def closed(self) -> bool:
+            return self._closed
+
+        def recv_exit_status(self) -> int:
+            return 0
+
+        def close(self) -> None:
+            self._closed = True
+
+    channels: list[_WindowedEchoChannel] = []
+
+    class _WindowedTransport:
+        def is_active(self) -> bool:
+            return True
+
+        def is_authenticated(self) -> bool:
+            return True
+
+        def open_session(self, timeout: float) -> _WindowedEchoChannel:
+            assert timeout > 0
+            ch = _WindowedEchoChannel()
+            channels.append(ch)
+            return ch
+
+    backend = ParamikoSessionBackend.__new__(ParamikoSessionBackend)
+    backend._paramiko = SimpleNamespace(SSHException=_FakeSSHException)
+    backend._session_gate = threading.BoundedSemaphore(1)
+    backend._connect_lock = threading.RLock()
+    backend._target_client = _FakeClient(_WindowedTransport())
+    backend._jump_client = None
+    backend._jump_channel = None
+    backend.ensure_connected = lambda timeout=None: None
+
+    big_command = "x" * payload_size
+    rc, stdout, stderr = backend.run_command(big_command, timeout=10)
+    assert rc == 0
+    assert stderr == ""
+    assert len(stdout) == payload_size
+    assert channels[0].received_total == payload_size
+
+    big_payload = b"y" * payload_size
+    plan = build_text_upload_plan("/remote/large.scs", big_payload)
+    rc2, stdout2, stderr2 = backend.upload_text(plan, big_payload, timeout=10)
+    assert rc2 == 0
+    assert stderr2 == ""
+    assert len(stdout2) == payload_size
+    assert channels[1].received_total == payload_size
+
+
+def test_run_command_and_upload_text_preserve_remote_error_on_early_exit() -> None:
+    class _EarlyExitChannel:
+        def __init__(self) -> None:
+            self._writes = 0
+            self._stderr = bytearray(b"syntax error on line 1\n")
+            self._closed_by_remote = False
+            self._closed = False
+
+        def settimeout(self, timeout: float) -> None:
+            assert timeout > 0
+
+        def exec_command(self, _command: str) -> None:
+            pass
+
+        def send_ready(self) -> bool:
+            return True
+
+        def send(self, data: bytes) -> int:
+            if self._closed_by_remote:
+                raise OSError("Socket is closed")
+            self._writes += 1
+            if self._writes >= 2:
+                self._closed_by_remote = True
+                raise OSError("Socket is closed")
+            return min(len(data), 1024)
+
+        def shutdown_write(self) -> None:
+            if self._closed_by_remote:
+                raise OSError("Socket is closed")
+
+        def recv_ready(self) -> bool:
+            return False
+
+        def recv_stderr_ready(self) -> bool:
+            return bool(self._stderr)
+
+        def recv_stderr(self, size: int) -> bytes:
+            chunk = bytes(self._stderr[:size])
+            del self._stderr[:size]
+            return chunk
+
+        def exit_status_ready(self) -> bool:
+            return self._closed_by_remote
+
+        @property
+        def eof_received(self) -> bool:
+            return self._closed_by_remote
+
+        @property
+        def closed(self) -> bool:
+            return self._closed
+
+        def recv_exit_status(self) -> int:
+            return 42
+
+        def close(self) -> None:
+            self._closed = True
+
+    class _EarlyExitTransport:
+        def is_active(self) -> bool:
+            return True
+
+        def is_authenticated(self) -> bool:
+            return True
+
+        def open_session(self, timeout: float) -> _EarlyExitChannel:
+            assert timeout > 0
+            return _EarlyExitChannel()
+
+    backend = ParamikoSessionBackend.__new__(ParamikoSessionBackend)
+    backend._paramiko = SimpleNamespace(SSHException=_FakeSSHException)
+    backend._session_gate = threading.BoundedSemaphore(1)
+    backend._connect_lock = threading.RLock()
+    backend._target_client = _FakeClient(_EarlyExitTransport())
+    backend._jump_client = None
+    backend._jump_channel = None
+    backend.ensure_connected = lambda timeout=None: None
+
+    big_cmd = "badcmd\n" + ("#" * (256 * 1024))
+    assert backend.run_command(big_cmd, timeout=5) == (42, "", "syntax error on line 1\n")
+
+    big_payload = b"z" * (256 * 1024)
+    plan = build_text_upload_plan("/remote/readonly.scs", big_payload)
+    assert backend.upload_text(plan, big_payload, timeout=5) == (
+        42,
+        "",
+        "syntax error on line 1\n",
+    )
+
+
+def test_collect_channel_enforces_total_deadline_across_trickle_output() -> None:
+    class _TrickleChannel:
+        def __init__(self) -> None:
+            self.last = time.monotonic()
+
+        def settimeout(self, timeout: float) -> None:
+            assert timeout > 0
+
+        def recv_ready(self) -> bool:
+            return time.monotonic() - self.last >= 0.015
+
+        def recv(self, _size: int) -> bytes:
+            self.last = time.monotonic()
+            return b"."
+
+        def recv_stderr_ready(self) -> bool:
+            return False
+
+        def exit_status_ready(self) -> bool:
+            return False
+
+        @property
+        def eof_received(self) -> bool:
+            return False
+
+        @property
+        def closed(self) -> bool:
+            return False
+
+    backend = ParamikoSessionBackend.__new__(ParamikoSessionBackend)
+    with pytest.raises(subprocess.TimeoutExpired) as caught:
+        backend._collect_channel(_TrickleChannel(), _Deadline.start(0.08), "trickle")
+    assert caught.value.timeout == 0.08
+
+
+def test_recv_exit_status_minus_one_invalidates_transport_and_maps_to_255(
+    tmp_path: Path,
+) -> None:
+    class _DroppedChannel:
+        def __init__(self) -> None:
+            self._closed = False
+
+        def settimeout(self, _timeout: float) -> None:
+            pass
+
+        def exec_command(self, _command: str) -> None:
+            pass
+
+        def send_ready(self) -> bool:
+            return True
+
+        def send(self, _data: bytes) -> int:
+            raise OSError("Socket is closed")
+
+        def shutdown_write(self) -> None:
+            raise OSError("Socket is closed")
+
+        def recv_ready(self) -> bool:
+            return False
+
+        def recv_stderr_ready(self) -> bool:
+            return False
+
+        def exit_status_ready(self) -> bool:
+            return True
+
+        @property
+        def eof_received(self) -> bool:
+            return True
+
+        @property
+        def closed(self) -> bool:
+            return True
+
+        def recv_exit_status(self) -> int:
+            return -1
+
+        def makefile(self, _mode: str):
+            return io.BytesIO()
+
+        def makefile_stderr(self, _mode: str):
+            return io.BytesIO()
+
+        def close(self) -> None:
+            self._closed = True
+
+    class _DropTransport:
+        def is_active(self) -> bool:
+            return True
+
+        def is_authenticated(self) -> bool:
+            return True
+
+        def open_session(self, timeout: float) -> _DroppedChannel:
+            assert timeout > 0
+            return _DroppedChannel()
+
+    client1 = _FakeClient(_DropTransport())
+    backend = ParamikoSessionBackend.__new__(ParamikoSessionBackend)
+    backend._paramiko = SimpleNamespace(SSHException=_FakeSSHException)
+    backend._session_gate = threading.BoundedSemaphore(1)
+    backend._connect_lock = threading.RLock()
+    backend._target_client = client1
+    backend._jump_client = None
+    backend._jump_channel = None
+    backend.ensure_connected = lambda timeout=None: None
+
+    rc, stdout, stderr = backend.run_command("echo hi", timeout=5)
+    assert rc == 255
+    assert stdout == ""
+    assert stderr.strip() != ""
+    assert client1.closed
+    assert backend._target_client is None
+
+    # Verify upload_tar also invalidates transport and maps -1 -> 255.
+    client2 = _FakeClient(_DropTransport())
+    backend._target_client = client2
+    sample = tmp_path / "sample.scs"
+    sample.write_text("simulator lang=spectre\n", encoding="utf-8")
+    plan = build_tar_upload_plans("tar", [(sample, "/remote/sample.scs")])[0]
+
+    rc_tar, _out_tar, err_tar = backend.upload_tar(plan, timeout=5)
+    assert rc_tar == 255
+    assert err_tar.strip() != ""
+    assert client2.closed
+    assert backend._target_client is None
+
+
+def test_upload_tar_reports_remote_tar_stderr_instead_of_socket_closed(
+    tmp_path: Path,
+) -> None:
+    payload_file = tmp_path / "large.bin"
+    payload_file.write_bytes(b"A" * (512 * 1024))
+    plan = build_tar_upload_plans("tar", [(payload_file, "/readonly/large.bin")])[0]
+
+    class _FailingUploadChannel(_TarChannel):
+        def __init__(self) -> None:
+            super().__init__(wait_for_input=False)
+            self._chunks = 0
+
+        def makefile_stderr(self, _mode: str):
+            return io.BytesIO(b"mkdir: cannot create directory '/readonly': Permission denied\n")
+
+        def send(self, data: bytes) -> int:
+            self._chunks += 1
+            if self._chunks >= 2:
+                raise OSError("Socket is closed")
+            return min(len(data), 16384)
+
+        def sendall(self, _payload: bytes) -> None:
+            raise OSError("Socket is closed")
+
+        def shutdown_write(self) -> None:
+            raise OSError("Socket is closed")
+
+        def exit_status_ready(self) -> bool:
+            return True
+
+        def recv_exit_status(self) -> int:
+            return 1
+
+    rc, _stdout, stderr = _tar_backend(_FailingUploadChannel()).upload_tar(plan, timeout=5)
+    assert rc == 1
+    assert "Permission denied" in stderr
+    assert "Socket is closed" not in stderr
+
+
+def test_download_tar_reports_remote_and_local_tar_stderr_instead_of_broken_pipe(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    # 1) Remote tar fails early with stderr and exit code 2.
+    plan1 = build_tar_download_plan("tar", "/remote/missing", tmp_path / "dest1")
+
+    class _RemoteFailChannel(_TarChannel):
+        def makefile(self, _mode: str):
+            return io.BytesIO(b"not a valid gzip archive" * 1024)
+
+        def makefile_stderr(self, _mode: str):
+            return io.BytesIO(b"tar: /remote/missing: Cannot open: No such file or directory\n")
+
+        def recv_exit_status(self) -> int:
+            return 2
+
+    rc1, _out1, err1 = _tar_backend(_RemoteFailChannel()).download_tar(plan1, timeout=5)
+    assert rc1 == 2
+    assert "No such file or directory" in err1
+    assert "Broken pipe" not in err1
+    assert not list(tmp_path.glob(".vbtmp-*"))
+
+    # 2) Local tar dies early with disk-full error while remote channel is still streaming
+    # (blocking on a full window without exit_status_ready).
+    plan2 = build_tar_download_plan("tar", "/remote/big", tmp_path / "dest2")
+
+    class _SlowBigStdout:
+        def __init__(self) -> None:
+            self._emitted = 0
+
+        def read(self, size: int) -> bytes:
+            if self._emitted >= 2 * 1024 * 1024:
+                return b""
+            self._emitted += size
+            return b"\x00" * size
+
+        def close(self) -> None:
+            pass
+
+    class _StreamingChannel(_TarChannel):
+        def makefile(self, _mode: str):
+            return _SlowBigStdout()
+
+        def exit_status_ready(self) -> bool:
+            return False
+
+    class _BrokenPipeStdin:
+        def write(self, _data: bytes) -> int:
+            raise BrokenPipeError(32, "Broken pipe")
+
+        def flush(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class _FailingLocalTar:
+        def __init__(self) -> None:
+            self.stdin = _BrokenPipeStdin()
+            self.stderr = io.BytesIO(b"tar: write error: No space left on device\n")
+
+        def poll(self) -> int:
+            return 1
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 1
+
+        def kill(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.paramiko_backend.subprocess.Popen",
+        lambda *_a, **_kw: _FailingLocalTar(),
+    )
+
+    rc2, _out2, err2 = _tar_backend(_StreamingChannel()).download_tar(plan2, timeout=5)
+    assert rc2 == 1
+    assert "No space left on device" in err2
+    assert "Broken pipe" not in err2
+    assert not list(tmp_path.glob(".vbtmp-*"))
+
+
+def test_session_lease_acquires_gate_before_ensure_connected_and_releases_on_error() -> None:
+    events: list[str] = []
+    real_sem = threading.BoundedSemaphore(1)
+
+    class _RecordingGate:
+        def acquire(self, timeout: float | None = None) -> bool:
+            events.append("acquire")
+            return real_sem.acquire(timeout=timeout)
+
+        def release(self) -> None:
+            events.append("release")
+            real_sem.release()
+
+    backend = ParamikoSessionBackend.__new__(ParamikoSessionBackend)
+    backend._session_gate = _RecordingGate()
+    backend._connect_lock = threading.RLock()
+    backend._target_client = _FakeClient(_FakeTransport(_SessionTracker()))
+    backend._jump_client = None
+    backend._jump_channel = None
+
+    def ok_connect(_timeout=None) -> None:
+        events.append("ensure_connected")
+
+    backend.ensure_connected = ok_connect
+
+    with backend._session_lease(_Deadline.start(2), "cmd") as transport:
+        assert transport is backend._target_client.get_transport()
+        events.append("yielded")
+
+    assert events == ["acquire", "ensure_connected", "yielded", "release"]
+
+    events.clear()
+
+    def failing_connect(_timeout=None) -> None:
+        events.append("ensure_connected_fail")
+        raise OSError("handshake failed")
+
+    backend.ensure_connected = failing_connect
+    with pytest.raises(OSError, match="handshake failed"):
+        with backend._session_lease(_Deadline.start(2), "cmd"):
+            pass
+
+    assert events == ["acquire", "ensure_connected_fail", "release"]
+    # Permit must be returned to the semaphore after ensure_connected failure.
+    assert real_sem.acquire(blocking=False)
+    real_sem.release()
+
+
+def test_sftp_download_file_expands_tilde_sets_prefetch_and_refuses_existing_dir(
+    tmp_path: Path,
+) -> None:
+    backend = ParamikoSessionBackend.__new__(ParamikoSessionBackend)
+    captured: list[tuple[str, str, int | None]] = []
+
+    class _TildeSftp:
+        def __init__(self, home: str = "/home/designer") -> None:
+            self.home = home
+
+        def normalize(self, path: str) -> str:
+            assert path == "."
+            return self.home
+
+        def get(
+            self,
+            remote_path: str,
+            local_path: str,
+            callback=None,
+            max_concurrent_prefetch_requests=None,
+        ) -> None:
+            captured.append((remote_path, local_path, max_concurrent_prefetch_requests))
+            Path(local_path).write_text("from home\n", encoding="utf-8")
+            if callback is not None:
+                callback(10, 10)
+
+    @contextmanager
+    def tilde_sftp(_deadline, _command):
+        yield _TildeSftp("/home/designer/")
+
+    backend._sftp = tilde_sftp
+    local_file = tmp_path / "out.raw"
+    plan = build_file_download_plan("~/sim/out.raw", local_file)
+
+    result = backend.download_file(plan, timeout=5)
+
+    assert result == (0, "", "")
+    assert local_file.read_text(encoding="utf-8") == "from home\n"
+    assert len(captured) == 1
+    assert captured[0][0] == "/home/designer/sim/out.raw"
+    assert captured[0][2] == 64
+
+    # Root home "/" should not produce a double slash.
+    @contextmanager
+    def root_sftp(_deadline, _command):
+        yield _TildeSftp("/")
+
+    backend._sftp = root_sftp
+    local_file2 = tmp_path / "out2.raw"
+    plan2 = build_file_download_plan("~/out2.raw", local_file2)
+    assert backend.download_file(plan2, timeout=5) == (0, "", "")
+    assert captured[1][0] == "/out2.raw"
+
+    # Existing directory destination must raise IsADirectoryError and stay intact.
+    existing_dir = tmp_path / "existing_dir"
+    existing_dir.mkdir()
+    keep = existing_dir / "keep.txt"
+    keep.write_text("keep me\n", encoding="utf-8")
+    dir_plan = build_file_download_plan("/remote/out.raw", existing_dir)
+    with pytest.raises(IsADirectoryError):
+        backend.download_file(dir_plan, timeout=5)
+    assert existing_dir.is_dir()
+    assert keep.read_text(encoding="utf-8") == "keep me\n"
+    assert not list(tmp_path.glob(".vbtmp-*"))
