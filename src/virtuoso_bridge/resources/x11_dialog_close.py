@@ -798,7 +798,7 @@ class _NativeDialogConnection(object):
                 raise _Refused("XGetImage result exceeds bound")
             raw = ctypes.string_at(image.data, byte_count)
             title = self._text_property(window, "_NET_WM_NAME")
-            if title is None:
+            if not title:
                 title = self._text_property(window, "WM_NAME")
             if title is None:
                 title = ""

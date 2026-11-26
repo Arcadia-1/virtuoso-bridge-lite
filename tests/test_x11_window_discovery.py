@@ -158,7 +158,7 @@ WM_CLASS(STRING) = "virtuoso", "virtuoso"
 
     assert len(windows) == 1
     assert windows[0]["kind"] == "ciw"
-    assert windows[0]["title"] == "Virtuoso 6.1.8-64b - Log: /tmp/virtuoso.log"
+    assert windows[0]["title"] == "Virtuoso\u00ae 6.1.8-64b - Log: /tmp/virtuoso.log"
 
 
 def test_bootstrap_refuses_non_ciw_and_injects_only_generated_load(monkeypatch) -> None:

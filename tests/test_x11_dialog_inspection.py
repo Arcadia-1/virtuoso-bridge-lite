@@ -902,3 +902,174 @@ def test_inspect_cli_rejects_non_positive_pid_with_one_json_object(monkeypatch, 
     assert payload["status"] == "indeterminate"
     assert payload["target"]["pid"] == 0
     assert "positive integer" in payload["diagnostics"][0]
+
+
+def test_xprop_parser_prefers_net_wm_name_and_unescapes_ic23_titles(helper):
+    # Live IC23.10 evidence: WM_NAME turns ® into '?', while _NET_WM_NAME holds UTF-8.
+    utf8_locale = helper._parse_xprop_inspection("\n".join([
+        'WM_NAME(STRING) = "Virtuoso? Studio IC23.1 - Log: /tmp/CDS.log"',
+        '_NET_WM_NAME(UTF8_STRING) = "Virtuoso\u00ae Studio IC23.1 - Log: /tmp/CDS.log"',
+    ]))
+    assert utf8_locale["title"] == "Virtuoso\u00ae Studio IC23.1 - Log: /tmp/CDS.log"
+    assert helper._looks_like_ciw(utf8_locale["title"])
+
+    # Under C/POSIX locale xprop escapes non-ASCII bytes as octal and quotes/backslashes.
+    c_locale = helper._parse_xprop_inspection("\n".join([
+        'WM_NAME(STRING) = "Virtuoso? Studio IC23.1"',
+        r'_NET_WM_NAME(UTF8_STRING) = "Virtuoso\302\256 Studio \"Alert\" \\ path\t1"',
+    ]))
+    assert c_locale["title"] == 'Virtuoso\u00ae Studio "Alert" \\ path\t1'
+
+    # Empty or missing _NET_WM_NAME falls back to WM_NAME (including Latin-1 octal fallback).
+    fallback_empty = helper._parse_xprop_inspection("\n".join([
+        '_NET_WM_NAME(UTF8_STRING) = ""',
+        r'WM_NAME(STRING) = "Virtuoso\256 Legacy"',
+    ]))
+    assert fallback_empty["title"] == "Virtuoso\u00ae Legacy"
+
+
+def test_native_attributes_distinguishes_bad_window_from_other_x_errors(helper):
+    import ctypes
+
+    def run_with_error_code(code):
+        class FakeXlib:
+            def XGetWindowAttributes(self, _display, _window_id, _attributes_pointer):
+                if code is None:
+                    connection._handle_x_error(None, None)
+                else:
+                    event = helper._XErrorEvent()
+                    event.error_code = code
+                    connection._handle_x_error(None, ctypes.cast(ctypes.pointer(event), ctypes.c_void_p))
+                return 0
+
+        connection = object.__new__(helper._X11InventoryConnection)
+        connection._xlib = FakeXlib()
+        connection._display = 1
+        connection._root = 1
+        connection._x_error = False
+        connection._error_codes = []
+        connection.attributes(0xDEAD)
+
+    with pytest.raises(helper._InspectionBadWindow, match="cannot read X11 window attributes"):
+        run_with_error_code(3)
+
+    for non_bad_window in (10, None):
+        with pytest.raises(helper._InspectionFailure) as exc_info:
+            run_with_error_code(non_bad_window)
+        assert not isinstance(exc_info.value, helper._InspectionBadWindow)
+
+
+def test_unrelated_window_stale_transient_or_leader_badwindow_does_not_abort_inspection(
+    monkeypatch, helper
+):
+    ciw = 0x100
+    other_a = 0x300
+    other_b = 0x301
+    stale_xid = 0xDEAD01
+
+    class BadWindowInventory(_FakeX11Inventory):
+        def attributes(self, window_id):
+            self.calls.append(("attributes", window_id))
+            if window_id == stale_xid:
+                raise helper._InspectionBadWindow("cannot read X11 window attributes for 0xdead01")
+            return self.window_attributes.get(window_id)
+
+    connection = BadWindowInventory(
+        {1: [ciw, other_a, other_b]},
+        {
+            1: _xattrs(True, w=1920, h=1080),
+            ciw: _xattrs(True, w=900, h=200),
+            other_a: _xattrs(True, w=800, h=600),
+            other_b: _xattrs(True, w=800, h=600),
+        },
+    )
+    metadata = {
+        "0x100": _xprop(title="Virtuoso\u00ae Studio IC23.1 - Log: /tmp/CDS.log", pid=77, classes=("virtuoso", "Virtuoso")),
+        "0x300": _xprop(title="xterm", pid=9999, transient_for="0xdead01", classes=("xterm", "XTerm")),
+        "0x301": _xprop(title="xterm2", pid=9999, client_leader="0xdead01", classes=("xterm", "XTerm")),
+    }
+    monkeypatch.setattr(helper, "_open_x11_inventory", lambda *_args: connection)
+    monkeypatch.setattr(helper, "_bounded_check_output", lambda command, env=None, timeout=None: metadata[command[2]])
+    monkeypatch.setattr(helper, "_read_process_x11_env", lambda _pid: {
+        "DISPLAY": ":7", "XAUTHORITY": None, "HOSTNAME": "eda-local",
+    })
+
+    report = helper.inspect_dialogs(77)
+
+    assert report["status"] == "clear"
+    assert report["dialogs"] == []
+    assert report["diagnostics"] == []
+    assert connection.calls.count(("attributes", stale_xid)) == 1
+    assert connection.closed is True
+
+
+def test_candidate_dialog_stale_leader_badwindow_still_fails_closed(monkeypatch, helper):
+    ciw = 0x100
+    dialog = 0x110
+    stale_leader = 0xDEAD02
+
+    class BadWindowInventory(_FakeX11Inventory):
+        def attributes(self, window_id):
+            self.calls.append(("attributes", window_id))
+            if window_id == stale_leader:
+                raise helper._InspectionBadWindow("cannot read X11 window attributes for 0xdead02")
+            return self.window_attributes.get(window_id)
+
+    connection = BadWindowInventory(
+        {1: [ciw, dialog]},
+        {
+            1: _xattrs(True, w=1920, h=1080),
+            ciw: _xattrs(True, w=900, h=200),
+            dialog: _xattrs(True, w=320, h=180),
+        },
+    )
+    metadata = {
+        "0x100": _xprop(title="Virtuoso CIW", pid=77, classes=("virtuoso", "Virtuoso")),
+        "0x110": _xprop(title="Warning", client_leader="0xdead02", classes=("virtuoso", "Virtuoso"), modal=True),
+    }
+    monkeypatch.setattr(helper, "_open_x11_inventory", lambda *_args: connection)
+    monkeypatch.setattr(helper, "_bounded_check_output", lambda command, env=None, timeout=None: metadata[command[2]])
+    monkeypatch.setattr(helper, "_read_process_x11_env", lambda _pid: {
+        "DISPLAY": ":7", "XAUTHORITY": None, "HOSTNAME": "eda-local",
+    })
+
+    report = helper.inspect_dialogs(77)
+
+    assert report["status"] == "indeterminate"
+    assert any("missing window 0xdead02" in diag for diag in report["diagnostics"])
+
+
+def test_non_badwindow_error_on_related_window_still_aborts_inspection(monkeypatch, helper):
+    ciw = 0x100
+    other = 0x300
+    broken_xid = 0xDEAD03
+
+    class BrokenDisplayInventory(_FakeX11Inventory):
+        def attributes(self, window_id):
+            self.calls.append(("attributes", window_id))
+            if window_id == broken_xid:
+                raise helper._InspectionFailure("cannot read X11 window attributes for 0xdead03")
+            return self.window_attributes.get(window_id)
+
+    connection = BrokenDisplayInventory(
+        {1: [ciw, other]},
+        {
+            1: _xattrs(True, w=1920, h=1080),
+            ciw: _xattrs(True, w=900, h=200),
+            other: _xattrs(True, w=800, h=600),
+        },
+    )
+    metadata = {
+        "0x100": _xprop(title="Virtuoso CIW", pid=77, classes=("virtuoso", "Virtuoso")),
+        "0x300": _xprop(title="xterm", pid=9999, client_leader="0xdead03", classes=("xterm", "XTerm")),
+    }
+    monkeypatch.setattr(helper, "_open_x11_inventory", lambda *_args: connection)
+    monkeypatch.setattr(helper, "_bounded_check_output", lambda command, env=None, timeout=None: metadata[command[2]])
+    monkeypatch.setattr(helper, "_read_process_x11_env", lambda _pid: {
+        "DISPLAY": ":7", "XAUTHORITY": None, "HOSTNAME": "eda-local",
+    })
+
+    report = helper.inspect_dialogs(77)
+
+    assert report["status"] == "indeterminate"
+    assert any("0xdead03" in diag for diag in report["diagnostics"])

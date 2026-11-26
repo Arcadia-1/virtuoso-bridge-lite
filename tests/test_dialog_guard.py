@@ -492,3 +492,131 @@ def test_cli_without_pid_or_tunnel_is_indeterminate_and_starts_nothing(monkeypat
     report = json.loads(capsys.readouterr().out)
     assert report["status"] == "indeterminate" and report["target"] is None
     assert "pass --pid" in report["diagnostics"][0]
+
+
+def test_probe_when_guard_enabled_returns_none_after_endpoint_change(monkeypatch):
+    client = _client(monkeypatch)
+    client.dialogs.enable_guard()
+    assert client.dialogs.remember_pid() is True
+    client._port += 1
+    monkeypatch.setattr(x11, "inspect_dialogs", lambda *a, **k: pytest.fail("must not inspect stale endpoint"))
+    assert client.dialogs.probe(timeout=5) is None
+    assert client.dialogs.remember_pid() is False
+
+
+@pytest.mark.parametrize("diagnostic", [
+    "process 42 is unavailable or stale: [Errno 2] No such file or directory",
+    "process 42 metadata is unavailable",
+    "process 42 is a zombie",
+    "process 42 command line is unavailable",
+    "process 42 is not a live interactive Virtuoso process",
+    "process 42 has no DISPLAY in its environment",
+    "no mapped CIW belongs to PID 42",
+])
+def test_probe_invalidates_stale_pid_on_dead_process_indeterminate_and_reacquires(monkeypatch, diagnostic):
+    client = _client(monkeypatch)
+    pids = iter([42, 99])
+    inspected = []
+    monkeypatch.setattr(client.dialogs, "connected_pid", lambda timeout=15: next(pids))
+
+    def fake_inspect(*args, pid, **kwargs):
+        inspected.append(pid)
+        if pid == 42:
+            return _payload(
+                "indeterminate",
+                target={"pid": 42, "display": None, "ciw_window": None},
+                diagnostics=[diagnostic],
+            )
+        return _payload("clear", target={"pid": 99, "display": ":7", "ciw_window": "0x10"})
+
+    monkeypatch.setattr(x11, "inspect_dialogs", fake_inspect)
+    assert client.dialogs.remember_pid() is True
+    first = client.dialogs.probe(timeout=5)
+    assert first is not None and first.status == "indeterminate"
+    assert client.dialogs._probe_pid is None
+    assert client.dialogs._probe_endpoint is None
+    second = client.dialogs.probe(timeout=5)
+    assert second is not None and second.status == "clear"
+    assert second.target.pid == 99
+    assert inspected == [42, 99]
+
+
+def test_probe_preserves_cached_pid_on_transient_x11_indeterminate(monkeypatch):
+    client = _client(monkeypatch)
+    calls = [0]
+
+    def fake_connected_pid(timeout=15):
+        calls[0] += 1
+        if calls[0] == 1:
+            return 42
+        raise TimeoutError("handshake hangs while modal holds CIW")
+
+    monkeypatch.setattr(client.dialogs, "connected_pid", fake_connected_pid)
+    reports = iter([
+        _payload(
+            "indeterminate",
+            target={"pid": 42, "display": ":7", "ciw_window": None},
+            diagnostics=["X11 inspection budget exhausted"],
+        ),
+        _payload("blocked"),
+    ])
+    monkeypatch.setattr(x11, "inspect_dialogs", lambda *a, **k: next(reports))
+
+    assert client.dialogs.remember_pid() is True
+    first = client.dialogs.probe(timeout=5)
+    assert first is not None and first.status == "indeterminate"
+    assert client.dialogs._probe_pid == 42
+    second = client.dialogs.probe(timeout=5)
+    assert second is not None and second.status == "blocked"
+    assert calls[0] == 1
+
+
+def test_probe_and_remember_pid_track_endpoint_and_disable_guard(monkeypatch):
+    client = _client(monkeypatch)
+    current_pid = [42]
+    connected_calls = []
+
+    def fake_connected_pid(timeout=15):
+        connected_calls.append((client.host, client.port))
+        if current_pid[0] == "timeout":
+            raise TimeoutError("blocked")
+        if current_pid[0] == "refused":
+            raise ConnectionRefusedError("dead")
+        return current_pid[0]
+
+    inspected = []
+    monkeypatch.setattr(client.dialogs, "connected_pid", fake_connected_pid)
+    monkeypatch.setattr(
+        x11,
+        "inspect_dialogs",
+        lambda *a, pid, **k: inspected.append(pid) or _payload(
+            "clear", target={"pid": pid, "display": ":7", "ciw_window": "0x10"},
+        ),
+    )
+
+    assert client.dialogs.remember_pid() is True
+    assert client.dialogs.probe(timeout=5).target.pid == 42
+
+    # Same-endpoint restart is refreshed by remember_pid(); timeout preserves known PID.
+    current_pid[0] = 55
+    assert client.dialogs.remember_pid() is True
+    assert client.dialogs._probe_pid == 55
+    current_pid[0] = "timeout"
+    assert client.dialogs.remember_pid() is True
+    assert client.dialogs._probe_pid == 55
+
+    # Endpoint change invalidates the old PID in probe() and remember_pid().
+    client._port += 1
+    current_pid[0] = "refused"
+    assert client.dialogs.remember_pid() is False
+    assert client.dialogs._probe_pid is None
+    current_pid[0] = 88
+    assert client.dialogs.probe(timeout=5).target.pid == 88
+
+    # disable_guard() clears cached probe state too.
+    client.dialogs.disable_guard()
+    assert client.dialogs._probe_pid is None
+    assert client.dialogs._probe_endpoint is None
+    current_pid[0] = 99
+    assert client.dialogs.probe(timeout=5).target.pid == 99
+    assert inspected == [42, 88, 99]
