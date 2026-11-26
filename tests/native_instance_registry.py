@@ -542,7 +542,8 @@ def tracked_close(fd):
     fd_flags.pop(fd, None)
     return real_close(fd)
 def nfs_flock(fd, op):
-    acc = fd_flags.get(fd, os.O_RDWR) & os.O_ACCMODE
+    acc_mode = getattr(os, "O_ACCMODE", os.O_RDONLY | os.O_WRONLY | os.O_RDWR)
+    acc = fd_flags.get(fd, os.O_RDWR) & acc_mode
     if op == fcntl.LOCK_EX and acc == os.O_RDONLY:
         raise IOError(errno.EBADF, "Bad file descriptor")
     return real_flock(fd, op)
