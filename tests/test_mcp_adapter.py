@@ -517,6 +517,273 @@ def test_adapter_has_no_followup_feature_dependencies():
 
 def test_document_search_uses_existing_remote_aware_bridge(monkeypatch):
     search = Mock(return_value={'results': []})
-    monkeypatch.setattr(mcp, '_client', lambda: SimpleNamespace(search_docs=search))
+    close = Mock()
+    monkeypatch.setattr(mcp, '_docs_client', lambda: SimpleNamespace(search_docs=search, close=close))
+    monkeypatch.setattr(mcp, '_client', lambda: pytest.fail('doc lookup must not use CIW _client()'))
     mcp._impl_doc_search({'query': 'dbOpenCellViewByType', 'limit': 4})
     search.assert_called_once_with('dbOpenCellViewByType', limit=4)
+    close.assert_called_once_with()
+    assert mcp._CLIENT['obj'] is None
+
+
+def test_maestro_read_and_run_report_no_results_as_error(monkeypatch):
+    from virtuoso_bridge.virtuoso.maestro.reader import NoResults
+
+    blocked = NoResults('the CIW is blocked by a dialog (PDK info)')
+    read = Mock(return_value=blocked)
+    monkeypatch.setattr(mcp, '_client', lambda: SimpleNamespace(maestro=SimpleNamespace(read_results=read)))
+    resp_read = mcp.dispatch_tool('test_results', {'session': 's1', 'history': 'Interactive.3'}, {})
+    assert resp_read['isError'] is True
+    assert blocked.reason in resp_read['content'][0]['text']
+    assert resp_read['structuredContent'] == {
+        'session': 's1', 'history': 'Interactive.3', 'reason': blocked.reason,
+    }
+
+    missing_csv = NoResults('maeExportOutputView did not produce a CSV for Interactive.5')
+    maestro = SimpleNamespace(
+        run_and_wait=Mock(return_value=('"Interactive.5"', 'done')),
+        read_results=Mock(return_value=missing_csv),
+    )
+    monkeypatch.setattr(mcp, '_client', lambda: SimpleNamespace(maestro=maestro))
+    resp_run = mcp.dispatch_tool('run_test', {'session': 's1', 'timeout': 120}, {})
+    assert resp_run['isError'] is True
+    assert missing_csv.reason in resp_run['content'][0]['text']
+    assert resp_run['structuredContent'] == {
+        'session': 's1',
+        'history': 'Interactive.5',
+        'status': 'done',
+        'reason': missing_csv.reason,
+    }
+
+
+def test_docs_client_avoids_ciw_owner_check_and_does_not_cache_client(monkeypatch):
+    from virtuoso_bridge.transport.tunnel import SSHClient
+
+    fake_ssh = SimpleNamespace(port=65111, close=Mock())
+    monkeypatch.setattr(SSHClient, 'from_env', classmethod(lambda cls, **kw: fake_ssh))
+    monkeypatch.setattr(
+        mcp.VirtuosoClient,
+        '_reject_cross_user_daemon_if_reachable',
+        lambda *a, **kw: pytest.fail('docs client must not verify CIW owner'),
+    )
+    client = mcp._docs_client()
+    try:
+        assert isinstance(client, mcp._AdapterClient)
+        assert client._tunnel is fake_ssh
+        assert callable(client._install_root_probe)
+        assert mcp._CLIENT['obj'] is None
+    finally:
+        client.close()
+    fake_ssh.close.assert_called_once_with()
+
+
+def test_startup_refreshes_unauthenticated_cached_client_and_preserves_active_client(monkeypatch):
+    ok_proc = subprocess.CompletedProcess([], 0, 'load("setup.il")', '')
+    fail_proc = subprocess.CompletedProcess([], 1, '', 'ssh failed')
+
+    # Unauthenticated pre-startup client (_daemon_token=None, _daemon_caps=None) is closed and cleared.
+    pre_startup = SimpleNamespace(_daemon_token=None, _daemon_caps=None, close=Mock())
+    mcp._CLIENT['obj'] = pre_startup
+    mcp._CLIENT['at'] = 123.0
+    monkeypatch.setattr(subprocess, 'run', Mock(return_value=ok_proc))
+    resp = mcp._impl_bridge_start({})
+    assert not resp.get('isError')
+    pre_startup.close.assert_called_once_with()
+    assert mcp._CLIENT['obj'] is None
+    assert mcp._CLIENT['at'] == 0.0
+
+    # Cached client with token but never handshaked (_daemon_caps=None) is also cleared.
+    unconnected = SimpleNamespace(_daemon_token='ab' * 32, _daemon_caps=None, close=Mock())
+    mcp._CLIENT['obj'] = unconnected
+    resp = mcp._impl_bridge_start({})
+    assert not resp.get('isError')
+    unconnected.close.assert_called_once_with()
+    assert mcp._CLIENT['obj'] is None
+
+    # Active authenticated client preserves receipt context across startup.
+    active = SimpleNamespace(_daemon_token='ab' * 32, _daemon_caps={'proto': 1}, close=Mock())
+    mcp._CLIENT['obj'] = active
+    resp = mcp._impl_bridge_start({})
+    assert not resp.get('isError')
+    active.close.assert_not_called()
+    assert mcp._CLIENT['obj'] is active
+
+    # Failed startup does not clear the cached client.
+    stale = SimpleNamespace(_daemon_token=None, _daemon_caps=None, close=Mock())
+    mcp._CLIENT['obj'] = stale
+    monkeypatch.setattr(subprocess, 'run', Mock(return_value=fail_proc))
+    resp = mcp._impl_bridge_start({})
+    assert resp['isError'] is True
+    stale.close.assert_not_called()
+    assert mcp._CLIENT['obj'] is stale
+
+
+def test_describe_skill_uses_get_skill_more_info_and_handles_missing(monkeypatch):
+    from virtuoso_bridge.virtuoso.skill_finder import SKILLFinderNotFoundError
+
+    more_info = Mock(return_value={
+        'func_name': 'dbOpenCellViewByType',
+        'file_path': '$skdfref/cvio.html',
+        'topic': 'pgfId-123',
+        'raw_html': '<html><body>huge html</body></html>',
+        'plain_text': 'Opens a cellview in the specified mode.',
+    })
+    close = Mock()
+    monkeypatch.setattr(mcp, '_client', lambda: pytest.fail('describe_skill must not use _client()'))
+    monkeypatch.setattr(
+        mcp, '_docs_client',
+        lambda: SimpleNamespace(
+            get_skill_more_info=more_info,
+            find_skill=Mock(side_effect=AssertionError('must not call find_skill')),
+            close=close,
+        ),
+    )
+
+    resp = mcp.dispatch_tool('describe_skill', {'func': 'dbOpenCellViewByType'}, {})
+    assert not resp.get('isError')
+    more_info.assert_called_once_with('dbOpenCellViewByType', missing_ok=False)
+    close.assert_called_once_with()
+    sc = resp['structuredContent']
+    assert sc == {
+        'func_name': 'dbOpenCellViewByType',
+        'file_path': '$skdfref/cvio.html',
+        'topic': 'pgfId-123',
+        'plain_text': 'Opens a cellview in the specified mode.',
+    }
+    assert 'raw_html' not in sc
+    assert 'Opens a cellview in the specified mode.' in resp['content'][0]['text']
+    assert mcp._CLIENT['obj'] is None
+
+    # Missing function entry -> _tool_error
+    more_info.return_value = None
+    resp_none = mcp.dispatch_tool('describe_skill', {'func': 'noSuchFunc'}, {})
+    assert resp_none['isError'] is True
+    assert 'noSuchFunc' in resp_none['content'][0]['text']
+
+    # Missing doc installation -> _tool_error
+    more_info.side_effect = SKILLFinderNotFoundError('no SKILL Finder data on eda-host')
+    resp_err = mcp.dispatch_tool('describe_skill', {'func': 'dbOpenCellViewByType'}, {})
+    assert resp_err['isError'] is True
+    assert 'no SKILL Finder data' in resp_err['content'][0]['text']
+
+
+def test_lookup_skill_uses_docs_client_without_poisoning_client(monkeypatch):
+    find = Mock(return_value=[{'name': 'dbOpenCellViewByType', 'syntax': 'dbOpenCellViewByType(...)'}])
+    close = Mock()
+    monkeypatch.setattr(mcp, '_client', lambda: pytest.fail('lookup_skill must not use _client()'))
+    monkeypatch.setattr(mcp, '_docs_client', lambda: SimpleNamespace(find_skill=find, close=close))
+    resp = mcp.dispatch_tool('lookup_skill', {'query': 'dbOpen'}, {})
+    assert not resp.get('isError')
+    find.assert_called_once_with('dbOpen')
+    close.assert_called_once_with()
+    assert mcp._CLIENT['obj'] is None
+
+
+def test_safe_path_expands_tilde_and_enforces_roots_before_exists(monkeypatch, tmp_path):
+    fake_home = tmp_path / 'home'
+    pdk_dir = fake_home / 'pdks'
+    pdk_dir.mkdir(parents=True)
+    netlist = pdk_dir / 'model.scs'
+    netlist.write_text('// model\n', encoding='utf-8')
+    outside_existing = tmp_path / 'outside_exists.scs'
+    outside_existing.write_text('secret\n', encoding='utf-8')
+    outside_missing = tmp_path / 'outside_missing.scs'
+
+    monkeypatch.setenv('HOME', str(fake_home))
+    monkeypatch.setenv('USERPROFILE', str(fake_home))
+    monkeypatch.setattr(mcp, '_safe_roots', lambda: [pdk_dir.resolve()])
+
+    # Tilde path inside allowed root resolves properly.
+    assert mcp._safe_path('~/pdks/model.scs') == netlist.resolve()
+
+    # Outside paths fail with identical root error regardless of existence.
+    with pytest.raises(ValueError, match='path outside allowed roots'):
+        mcp._safe_path(str(outside_existing), must_exist=True)
+    with pytest.raises(ValueError, match='path outside allowed roots'):
+        mcp._safe_path(str(outside_missing), must_exist=True)
+
+    # Inside-root missing file reports file not found.
+    with pytest.raises(ValueError, match='file not found'):
+        mcp._safe_path('~/pdks/missing.scs', must_exist=True)
+
+
+def test_library_and_cell_list_escape_scope_errors_and_truncation(monkeypatch):
+    seen = []
+
+    def fake_eval(expr, timeout):
+        seen.append(expr)
+        if 'ddGetLibList' in expr:
+            return VirtuosoResult(status=ExecutionStatus.SUCCESS, output='("analogLib" "demo")')
+        if 'missingLib' in expr:
+            return VirtuosoResult(status=ExecutionStatus.SUCCESS, output='"error: no lib"')
+        if 'hugeLib' in expr:
+            return VirtuosoResult(status=ExecutionStatus.SUCCESS, output='c:v,;' * 2000)
+        return VirtuosoResult(status=ExecutionStatus.SUCCESS, output='"inv:schematic,symbol,;"')
+
+    monkeypatch.setattr(mcp, '_eval_skill', fake_eval)
+
+    lib_resp = mcp.dispatch_tool('list_libraries', {}, {})
+    assert not lib_resp.get('isError')
+    assert lib_resp['structuredContent']['libs'] == ['analogLib', 'demo']
+    assert seen[-1].startswith('let((vbOut) ')
+
+    # Escapes quotes and trailing backslashes and uses let((vbLib vbOut vbVs) ...).
+    tricky = 'bad"lib\\'
+    cell_resp = mcp.dispatch_tool('list_cells', {'lib': tricky}, {})
+    assert not cell_resp.get('isError')
+    assert cell_resp['structuredContent']['truncated'] is False
+    expr = seen[-1]
+    assert expr.startswith('let((vbLib vbOut vbVs) ')
+    assert 'ddGetObj("bad\\"lib\\\\")' in expr
+
+    # Missing library returns isError=True instead of swallowing "error: no lib".
+    miss_resp = mcp.dispatch_tool('list_cells', {'lib': 'missingLib'}, {})
+    assert miss_resp['isError'] is True
+    assert 'missingLib' in miss_resp['content'][0]['text']
+
+    # Over-8000-char cell list flags truncated=True and caps cells at 8000 chars.
+    huge_resp = mcp.dispatch_tool('list_cells', {'lib': 'hugeLib'}, {})
+    assert not huge_resp.get('isError')
+    assert huge_resp['structuredContent']['truncated'] is True
+    assert len(huge_resp['structuredContent']['cells']) == 8000
+
+
+def test_skills_get_rejects_traversal_and_deduplicates_skill_md(monkeypatch, tmp_path, capsys):
+    skills_dir = tmp_path / 'skills'
+    valid = skills_dir / 'demo'
+    (valid / 'references').mkdir(parents=True)
+    (valid / 'SKILL.md').write_text('---\nname: demo\n---\n# Demo\n', encoding='utf-8')
+    (valid / 'references' / 'guide.md').write_text('# Guide\n', encoding='utf-8')
+
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (outside / 'SKILL.md').write_text('# Secret\n', encoding='utf-8')
+    (skills_dir / 'escape').symlink_to(outside)
+
+    monkeypatch.setattr(mcp, 'SKILLS_DIR', skills_dir)
+
+    def call_get(uri):
+        mcp.handle({'jsonrpc': '2.0', 'id': 1, 'method': 'skills/get', 'params': {'uri': uri}})
+        return json.loads(capsys.readouterr().out)
+
+    # Valid skill returns SKILL.md exactly once.
+    ok = call_get('skill://demo/SKILL.md')
+    assert 'result' in ok
+    uris = [r['uri'] for r in ok['result']['skill']['resources']]
+    assert uris.count('skill://demo/SKILL.md') == 1
+    assert 'skill://demo/references/guide.md' in uris
+
+    # Every traversal / malformed / symlink-escape URI is rejected.
+    for bad_uri in (
+        '',
+        'skill://',
+        'skill://.',
+        'skill://..',
+        'skill:///etc/passwd',
+        'skill://../outside',
+        'skill://..\\outside',
+        'skill://demo/../../outside',
+        'skill://escape/SKILL.md',
+    ):
+        resp = call_get(bad_uri)
+        assert 'error' in resp and resp['error']['code'] == -32602, (bad_uri, resp)

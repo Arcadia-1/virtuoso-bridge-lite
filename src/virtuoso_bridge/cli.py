@@ -1741,36 +1741,36 @@ def cli_windows() -> int:
         _parse_skill_str_list,
     )
 
-    client = VirtuosoClient.from_env()
-    windows = client.list_windows()
-    if not windows:
-        print("No windows found.")
-        return 1
+    with VirtuosoClient.from_env(profile=_get_cli_profile()) as client:
+        windows = client.list_windows()
+        if not windows:
+            print("No windows found.")
+            return 1
 
-    # One SKILL call → focused window number + focused window's bound
-    # maestro session id (via davSession attribute) + all open sessions.
-    focused_num = ""
-    focused_session = ""
-    sessions: list[str] = []
-    try:
-        r = client.execute_skill(
-            "let((w) w = hiGetCurrentWindow() list("
-            "if(w sprintf(nil \"%d\" w~>windowNum) \"\")"
-            " if(w w->davSession \"\")"
-            " maeGetSessions()))"
-        )
-        out = (r.output or "").strip()
-        if out.startswith("(") and out.endswith(")"):
-            inner = out[1:-1].strip()
-            # First two tokens are quoted strings; the rest is the
-            # ``maeGetSessions()`` list literal.
-            m = re.match(r'\s*"([^"]*)"\s*"([^"]*)"\s*(.*)', inner, re.DOTALL)
-            if m:
-                focused_num = m.group(1).strip()
-                focused_session = m.group(2).strip()
-                sessions = _parse_skill_str_list(m.group(3).strip())
-    except Exception:
-        pass
+        # One SKILL call → focused window number + focused window's bound
+        # maestro session id (via davSession attribute) + all open sessions.
+        focused_num = ""
+        focused_session = ""
+        sessions: list[str] = []
+        try:
+            r = client.execute_skill(
+                "let((w) w = hiGetCurrentWindow() list("
+                "if(w sprintf(nil \"%d\" w~>windowNum) \"\")"
+                " if(w w->davSession \"\")"
+                " maeGetSessions()))"
+            )
+            out = (r.output or "").strip()
+            if out.startswith("(") and out.endswith(")"):
+                inner = out[1:-1].strip()
+                # First two tokens are quoted strings; the rest is the
+                # ``maeGetSessions()`` list literal.
+                m = re.match(r'\s*"([^"]*)"\s*"([^"]*)"\s*(.*)', inner, re.DOTALL)
+                if m:
+                    focused_num = m.group(1).strip()
+                    focused_session = m.group(2).strip()
+                    sessions = _parse_skill_str_list(m.group(3).strip())
+        except Exception:
+            pass
 
     use_color = sys.stdout.isatty()
     BOLD = "\033[1m" if use_color else ""
@@ -1816,53 +1816,52 @@ def cli_snapshot() -> int:
     from virtuoso_bridge.virtuoso import snapshot as poly_snapshot
     from virtuoso_bridge.virtuoso.snapshot import classify_window
 
-    client = VirtuosoClient.from_env()
     opts = _SNAPSHOT_OPTS
+    with VirtuosoClient.from_env(profile=_get_cli_profile()) as client:
+        # Focused window title — decode SKILL octal escapes (e.g. \256 -> ®).
+        title = (client.execute_skill(
+            'let((cw) cw = hiGetCurrentWindow() if(cw hiGetWindowName(cw) ""))'
+        ).output or "").strip().strip('"')
+        title = re.sub(r'\\(\d{3})', lambda m: chr(int(m.group(1), 8)), title)
+        kind = classify_window(title)
 
-    # Focused window title — decode SKILL octal escapes (e.g. \256 -> ®).
-    title = (client.execute_skill(
-        'let((cw) cw = hiGetCurrentWindow() if(cw hiGetWindowName(cw) ""))'
-    ).output or "").strip().strip('"')
-    title = re.sub(r'\\(\d{3})', lambda m: chr(int(m.group(1), 8)), title)
-    kind = classify_window(title)
+        # Mode 1: -o ROOT — full disk snapshot (maestro only for now).
+        if opts["output_root"] is not None:
+            if kind != "maestro":
+                print(f"[{kind}] {title}", file=sys.stderr)
+                print("-o ROOT only supports maestro for now.", file=sys.stderr)
+                return 1
+            result = client.maestro.snapshot(
+                output_root=opts["output_root"],
+                history=opts.get("history"),
+            )
+            hist = result.get("latest_history") or ""
+            if hist:
+                print(f"[snapshot] history: {hist}")
+            print(result.get("output_dir", ""))
+            return 0
 
-    # Mode 1: -o ROOT — full disk snapshot (maestro only for now).
-    if opts["output_root"] is not None:
-        if kind != "maestro":
-            print(f"[{kind}] {title}", file=sys.stderr)
-            print("-o ROOT only supports maestro for now.", file=sys.stderr)
+        # Mode 2: --json — full in-memory dict to stdout.
+        if opts["json"]:
+            result = poly_snapshot(client) if kind != "maestro" else poly_snapshot(client)
+            json.dump(result, sys.stdout, indent=2, ensure_ascii=False, default=str)
+            sys.stdout.write("\n")
+            return 0
+
+        # Mode 3 (default): brief stdout summary.
+        if kind == "unknown":
+            print(f"no Virtuoso window in focus  ({title or '(no title)'})", file=sys.stderr)
             return 1
-        result = client.maestro.snapshot(
-            output_root=opts["output_root"],
-            history=opts.get("history"),
-        )
-        hist = result.get("latest_history") or ""
-        if hist:
-            print(f"[snapshot] history: {hist}")
-        print(result.get("output_dir", ""))
-        return 0
+        if kind != "maestro":
+            # Other kinds: just identify, no commentary.
+            print(f"[{kind}] {title}")
+            return 0
 
-    # Mode 2: --json — full in-memory dict to stdout.
-    if opts["json"]:
-        result = poly_snapshot(client) if kind != "maestro" else poly_snapshot(client)
-        json.dump(result, sys.stdout, indent=2, ensure_ascii=False, default=str)
-        sys.stdout.write("\n")
+        # Maestro brief: just call snapshot() (no output_root) and render
+        # its sparse dict.  2 SKILL round-trips total, no scp.  ~150ms.
+        snap = client.maestro.snapshot()
+        _print_maestro_brief(snap)
         return 0
-
-    # Mode 3 (default): brief stdout summary.
-    if kind == "unknown":
-        print(f"no Virtuoso window in focus  ({title or '(no title)'})", file=sys.stderr)
-        return 1
-    if kind != "maestro":
-        # Other kinds: just identify, no commentary.
-        print(f"[{kind}] {title}")
-        return 0
-
-    # Maestro brief: just call snapshot() (no output_root) and render
-    # its sparse dict.  2 SKILL round-trips total, no scp.  ~150ms.
-    snap = client.maestro.snapshot()
-    _print_maestro_brief(snap)
-    return 0
 
 
 _BRIEF_INCLUDE_PREFIXES = (
@@ -1935,7 +1934,6 @@ def cli_screenshot() -> int:
     _load_cli_env()
     from virtuoso_bridge import VirtuosoClient
 
-    client = VirtuosoClient.from_env()
     raw_target = _SCREENSHOT_TARGET[0]
 
     # Resolve target
@@ -1947,7 +1945,8 @@ def cli_screenshot() -> int:
 
     output = _SCREENSHOT_OUTPUT[0]
 
-    result = client.screenshot(output=output, target=target)
+    with VirtuosoClient.from_env(profile=_get_cli_profile()) as client:
+        result = client.screenshot(output=output, target=target)
     if result.status.value != "success":
         print(f"Error: {result.errors[0] if result.errors else 'screenshot failed'}")
         return 1

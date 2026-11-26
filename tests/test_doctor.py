@@ -1098,3 +1098,132 @@ def _after_daemon(ctx):
     _configured(ctx)
     doctor.check_daemon(ctx)
     return ctx
+
+
+@pytest.mark.parametrize("lane_state", ["busy", "poisoned"])
+def test_busy_or_poisoned_local_daemon_never_sends_skill(monkeypatch, tmp_path, lane_state):
+    token_file = tmp_path / "token"
+    token_file.write_text(TOKEN + "\n", encoding="utf-8")
+    monkeypatch.setenv("VB_BRIDGE_TOKEN", str(token_file))
+    monkeypatch.setenv("VB_REMOTE_HOST", "localhost")
+    state = {"mode": "local", "port": 65432, "identity_path": str(tmp_path / "none.txt")}
+    monkeypatch.setattr(SSHClient, "is_running", staticmethod(lambda profile=None: True))
+    monkeypatch.setattr(SSHClient, "read_state", staticmethod(lambda profile=None, **kw: state))
+    monkeypatch.setattr(x11, "inspect_dialogs", lambda runner, user, **kw: _payload(pid=kw["pid"]))
+    monkeypatch.setattr("virtuoso_bridge.spectre.runner.probe_spectre_locally",
+                        lambda spectre_bin="": ("/cad/ic/bin/spectre", "23.1"))
+    caps = {
+        "proto": 1, "auth": "on", "virtuoso_pid": 4242, "server_time_ms": 90_000,
+        "lane": {"state": lane_state, "detail": "long query", "since_ms": 30_000},
+    }
+    client = FakeDaemonClient(caps)
+    ctx = doctor.DoctorContext(None)
+    ctx.make_ssh = lambda: SSHClient(remote_host="localhost", discover_instances=False)
+    ctx.make_daemon_client = lambda port, token: (setattr(client, "daemon_token", token), client)[1]
+
+    results = _run(ctx)
+
+    assert results["tunnel/daemon"].status == doctor.WARN
+    assert "daemon user not verified" in results["tunnel/daemon"].detail
+    assert results["license checkout"].status == doctor.SKIP
+    assert client.sent == []
+
+
+def test_busy_unauthenticated_remote_daemon_never_sends_skill(monkeypatch, tmp_path):
+    monkeypatch.setenv("VB_ALLOW_UNAUTHENTICATED_DAEMON", "1")
+    caps = {
+        "proto": 1, "auth": "off", "virtuoso_pid": None, "server_time_ms": 90_000,
+        "lane": {"state": "busy", "detail": "running sim", "since_ms": 60_000},
+    }
+    ctx, _, client = _context(monkeypatch, tmp_path, client=FakeDaemonClient(caps))
+
+    results = _run(ctx)
+
+    assert results["tunnel/daemon"].status == doctor.WARN
+    assert "daemon user not verified" in results["tunnel/daemon"].detail
+    assert client.sent == []
+
+
+def test_poisoned_remote_daemon_unreadable_proc_does_not_fall_back_to_skill(monkeypatch, tmp_path):
+    caps = {
+        "proto": 1, "auth": "on", "virtuoso_pid": 4242, "server_time_ms": 90_000,
+        "lane": {"state": "poisoned", "detail": "legacy timeout", "since_ms": 30_000},
+    }
+    runner = FakeRunner({
+        "stat -c %U /proc/": CommandResult(1, "", ""),
+        "ps -o user=": CommandResult(1, "", ""),
+    })
+    ctx, _, client = _context(monkeypatch, tmp_path, runner=runner, client=FakeDaemonClient(caps))
+
+    results = _run(ctx)
+
+    assert results["tunnel/daemon"].status == doctor.WARN
+    assert "daemon user not verified" in results["tunnel/daemon"].detail
+    assert client.sent == []
+
+
+def test_poisoned_remote_daemon_still_fails_foreign_owner_without_skill(monkeypatch, tmp_path):
+    caps = {
+        "proto": 1, "auth": "on", "virtuoso_pid": 4242, "server_time_ms": 90_000,
+        "lane": {"state": "poisoned", "detail": "legacy timeout", "since_ms": 30_000},
+    }
+    runner = FakeRunner({"stat -c %U /proc/": "intruder\n"})
+    ctx, _, client = _context(monkeypatch, tmp_path, runner=runner, client=FakeDaemonClient(caps))
+
+    results = _run(ctx)
+
+    assert results["tunnel/daemon"].status == doctor.FAIL
+    assert "'intruder'" in results["tunnel/daemon"].detail
+    assert client.sent == []
+
+
+def test_listen_address_skips_ssh_after_daemon_host_failure(monkeypatch, tmp_path):
+    down = CommandResult(255, "", "ssh: connect to host eda-host port 22: Connection timed out")
+    runner = FakeRunner({"bridge_token": down})
+    ctx, _, client = _context(monkeypatch, tmp_path, runner=runner)
+
+    results = _run(ctx)
+
+    assert results["tunnel/daemon"].status == doctor.FAIL
+    assert results["remote scratch directory"].status == doctor.SKIP
+    assert not any("daemon_identity.txt" in cmd for cmd, _ in runner.commands)
+    assert len(runner.commands) == 1
+    assert client.sent == []
+
+
+def test_listen_address_uses_readonly_deploy_runner_and_records_ssh_failure(monkeypatch, tmp_path):
+    hang = subprocess.TimeoutExpired("ssh", 10)
+    runner = FakeRunner({"daemon_identity.txt": hang})
+    ctx, _, client = _context(monkeypatch, tmp_path, runner=runner)
+    cache = ctx.ssh.remote_cache_path()
+    daemon_auth.update_remote_cache(cache, token=TOKEN)
+    # Fail on check_listen_address (after check_daemon used cached token & mock runner)
+    # by using a separate dead deploy host.
+    monkeypatch.setenv("VB_DEPLOY_HOST", "dead-deploy-host")
+    deploy_runner = FakeRunner({"daemon_identity.txt": hang})
+    deploy_runner.host = "dead-deploy-host"
+    ctx.ssh._deploy_host = "dead-deploy-host"
+    ctx.ssh._deployment_runner = deploy_runner
+    ctx.ssh._role_runners["deploy"] = deploy_runner
+
+    results = _run(ctx)
+
+    assert "dead-deploy-host" in ctx.ssh_failures
+    assert results["remote scratch directory"].status == doctor.SKIP
+    assert "SSH to dead-deploy-host already failed" in results["remote scratch directory"].detail
+    assert len(deploy_runner.commands) == 1
+
+
+def test_automatic_doctor_skips_raw_ssh_after_host_failure(monkeypatch, tmp_path):
+    ctx, _, client = _context(monkeypatch, tmp_path)
+    ctx.ssh._discover_instances = True
+    monkeypatch.setattr(ctx.ssh, "list_instances", lambda: pytest.fail("must not probe failed host"))
+    monkeypatch.setattr(ctx.ssh, "read_daemon_token", lambda: pytest.fail("must not read token from failed host"))
+    _configured(ctx)
+    ctx.ssh_failures["eda-host"] = "Connection timed out"
+
+    result = doctor.check_daemon(ctx)
+
+    assert result.status == doctor.FAIL
+    assert "SSH to eda-host failed" in result.detail
+    assert ctx.created == [] and client.sent == []
