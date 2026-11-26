@@ -389,10 +389,28 @@ def restart_session_cellview(owner: VirtuosoClient, lib: str, cell: str, view: s
             ))
             return result
         if exit_reply.returncode:
-            result["diagnostics"].append(
-                exit_reply.stderr.strip() or exit_reply.stdout.strip()
-                or "Forced SOS exit failed."
-            )
+            detail = exit_reply.stderr.strip() or exit_reply.stdout.strip()
+            try:
+                still_running = _query_code(
+                    owner, target.workarea, executable, "is_running", {0, 1}, timeout,
+                )
+            except Exception as exc:
+                result["outcome"] = "unknown"
+                if detail:
+                    result["diagnostics"].append(detail)
+                result["diagnostics"].extend((
+                    f"Forced SOS exit failed and follow-up session state is unavailable: {exc}",
+                    "Do not repeat the forced exit; query session status first.",
+                ))
+                return result
+            if still_running != 1:
+                result["outcome"] = "unknown"
+                result["diagnostics"].extend((
+                    detail or "Forced SOS exit returned nonzero after the session stopped.",
+                    "The session state changed despite an unsuccessful reply; no command was repeated.",
+                ))
+                return result
+            result["diagnostics"].append(detail or "Forced SOS exit failed.")
             return result
 
     try:

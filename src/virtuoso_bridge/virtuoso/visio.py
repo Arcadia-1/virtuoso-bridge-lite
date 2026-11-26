@@ -274,12 +274,14 @@ def build_visio_schematic(
         terms = dict(raw_inst.get("terms", {}))
         pin_map: dict[str, VisioPin] = {}
 
-        for index, (term_name, net_name) in enumerate(terms.items()):
+        kept_index = 0
+        for term_name, net_name in terms.items():
             term = str(term_name)
             net = str(net_name)
             if term.upper() in excluded_pins or net.upper() in excluded_nets:
                 continue
-            rel_x, rel_y = _pin_relative_position(spec, term, index)
+            rel_x, rel_y = _pin_relative_position(spec, term, kept_index)
+            kept_index += 1
             dx, dy = _transform_offset(rel_x * width, rel_y * height, orient)
             pin = VisioPin(
                 instance=str(raw_inst.get("name", "")),
