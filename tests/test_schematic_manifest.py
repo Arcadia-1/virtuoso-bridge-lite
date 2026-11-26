@@ -354,6 +354,8 @@ def test_import_rejects_cross_process_output_collisions_before_contacting_client
 
 
 def test_cdf_updates_restore_cell_values_and_propagate_callback_failure() -> None:
+    from tests.test_layout_edit_target import _balanced
+
     client = _FakeClient()
     import_schematic_manifest(
         client,
@@ -364,9 +366,17 @@ def test_cdf_updates_restore_cell_values_and_propagate_callback_failure() -> Non
         validate_masters=False,
     )
     script = "\n".join(client.operations)
+    assert _balanced(script)
     assert "rbUpdateAttempt = errset(unwindProtect" in script
     assert "CDF callback failed: l" in script
     assert "foreach(rbParam rbCCDF~>parameters putpropq" in script
+    assert 'when(rbParam~>paramType == "int" && (rbIntVal = atoi(rbVal))' in script
+    assert 'when(rbParam~>paramType == "float" && stringp(rbVal)' in script
+    assert "if(isCallable('cdfParseFloatString) cdfParseFloatString(rbVal) atof(rbVal))" in script
+    assert 'when(rbParam~>paramType == "boolean" && stringp(rbVal)' in script
+    assert '(rbBoolVal == "t" || rbBoolVal == "true" rbVal = t)' in script
+    assert '(rbBoolVal == "nil" || rbBoolVal == "false" rbVal = nil)' in script
+    assert "rbParam~>value = rbVal" in script
 
 
 def test_failed_final_check_rolls_back_existing_target(monkeypatch) -> None:
@@ -641,3 +651,115 @@ def test_display_rail_readback_rejects_loss_or_electrical_binding(corruption) ->
         {"id": "rail", "points": [[1.0, 2.125], [3.0, 2.125]]}]}
     errors = manifest_module._verify_display_rails(Client(), result, timeout=30)
     assert bool(errors) is (corruption != "none")
+
+
+def _detour_source_and_layout(route_points, *, ports=(), junctions=(), contacts=(), horizontal=False):
+    if horizontal:
+        source = {
+            "cellName": "detour_horiz",
+            "instances": [
+                {"reference": "M1", "nodes": [{"pinName": "D", "netName": "NET1"}]},
+                {"reference": "M2", "nodes": [{"pinName": "D", "netName": "NET1"}]},
+                {"reference": "M3", "nodes": [{"pinName": "G", "netName": "OTHER"}]},
+            ],
+        }
+        layout = {
+            "placements": {"M1": (0.0, 6.0), "M2": (10.0, 6.0), "M3": (5.0, 6.0)},
+            "anchors": {
+                "M1": {"D": (0.0, 10.0)},
+                "M2": {"D": (10.0, 10.0)},
+                "M3": {"G": (5.0, 10.0)},
+            },
+            "ports": list(ports),
+            "junctions": list(junctions),
+            "contacts": list(contacts),
+            "routes": [{"id": "R0", "netName": "NET1", "points": list(route_points)}],
+        }
+        return source, layout
+
+    source = {
+        "cellName": "detour_vert",
+        "instances": [
+            {"reference": "M1", "nodes": [{"pinName": "D", "netName": "NET1"}]},
+            {"reference": "M2", "nodes": [{"pinName": "D", "netName": "NET1"}]},
+            {"reference": "M3", "nodes": [{"pinName": "G", "netName": "OTHER"}]},
+        ],
+    }
+    layout = {
+        "placements": {"M1": (6.0, 0.0), "M2": (6.0, 10.0), "M3": (6.0, 5.0)},
+        "anchors": {
+            "M1": {"D": (10.0, 0.0)},
+            "M2": {"D": (10.0, 10.0)},
+            "M3": {"G": (10.0, 5.0)},
+        },
+        "ports": list(ports),
+        "junctions": list(junctions),
+        "contacts": list(contacts),
+        "routes": [{"id": "R0", "netName": "NET1", "points": list(route_points)}],
+    }
+    return source, layout
+
+
+def test_terminal_escape_detour_preserves_two_point_terminal_and_port_endpoints() -> None:
+    # 2-point vertical terminal-to-terminal route (M2.D -> M1.D crossing M3.G).
+    source, layout = _detour_source_and_layout([(10.0, 10.0), (10.0, 0.0)])
+    adjustments = manifest_module.apply_terminal_escape_detours(source, layout, clearance=6.0)
+    assert len(adjustments) == 1
+    assert layout["routes"][0]["points"] == [
+        (10.0, 10.0), (16.0, 10.0), (16.0, 0.0), (10.0, 0.0),
+    ]
+
+    # 2-point port-to-terminal route (port -> M1.D crossing M3.G).
+    source_p, layout_p = _detour_source_and_layout(
+        [(10.0, 10.0), (10.0, 0.0)],
+        ports=[{"name": "P0", "xy": (10.0, 10.0)}],
+    )
+    source_p["instances"] = [i for i in source_p["instances"] if i["reference"] != "M2"]
+    del layout_p["placements"]["M2"]
+    del layout_p["anchors"]["M2"]
+    manifest_module.apply_terminal_escape_detours(source_p, layout_p, clearance=6.0)
+    assert layout_p["routes"][0]["points"] == [
+        (10.0, 10.0), (16.0, 10.0), (16.0, 0.0), (10.0, 0.0),
+    ]
+
+    # 2-point horizontal terminal-to-terminal route (M2.D -> M1.D crossing M3.G).
+    source_h, layout_h = _detour_source_and_layout([(10.0, 10.0), (0.0, 10.0)], horizontal=True)
+    manifest_module.apply_terminal_escape_detours(source_h, layout_h, clearance=6.0)
+    assert layout_h["routes"][0]["points"] == [
+        (10.0, 10.0), (10.0, 16.0), (0.0, 16.0), (0.0, 10.0),
+    ]
+
+
+def test_terminal_escape_detour_slides_only_free_orthogonal_interior_bends() -> None:
+    # Free interior orthogonal bend slides cleanly.
+    source, layout = _detour_source_and_layout([(0.0, 10.0), (10.0, 10.0), (10.0, 0.0)])
+    source["instances"] = [i for i in source["instances"] if i["reference"] != "M2"]
+    del layout["placements"]["M2"]
+    del layout["anchors"]["M2"]
+    manifest_module.apply_terminal_escape_detours(source, layout, clearance=6.0)
+    assert layout["routes"][0]["points"] == [
+        (0.0, 10.0), (16.0, 10.0), (16.0, 0.0), (10.0, 0.0),
+    ]
+
+    # Interior bend that sits on a junction must remain attached.
+    source_j, layout_j = _detour_source_and_layout(
+        [(0.0, 10.0), (10.0, 10.0), (10.0, 0.0)],
+        junctions=[{"id": "J0", "xy": (10.0, 10.0)}],
+    )
+    source_j["instances"] = [i for i in source_j["instances"] if i["reference"] != "M2"]
+    del layout_j["placements"]["M2"]
+    del layout_j["anchors"]["M2"]
+    manifest_module.apply_terminal_escape_detours(source_j, layout_j, clearance=6.0)
+    assert layout_j["routes"][0]["points"] == [
+        (0.0, 10.0), (10.0, 10.0), (16.0, 10.0), (16.0, 0.0), (10.0, 0.0),
+    ]
+
+    # Collinear preceding segment (not perpendicular) must not be bent diagonally.
+    source_c, layout_c = _detour_source_and_layout([(10.0, 20.0), (10.0, 10.0), (10.0, 0.0)])
+    source_c["instances"] = [i for i in source_c["instances"] if i["reference"] != "M2"]
+    del layout_c["placements"]["M2"]
+    del layout_c["anchors"]["M2"]
+    manifest_module.apply_terminal_escape_detours(source_c, layout_c, clearance=6.0)
+    assert layout_c["routes"][0]["points"] == [
+        (10.0, 20.0), (10.0, 10.0), (16.0, 10.0), (16.0, 0.0), (10.0, 0.0),
+    ]

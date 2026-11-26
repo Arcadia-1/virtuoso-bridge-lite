@@ -41,27 +41,33 @@ def schematic_create_inst_by_master_name(
     mode: str = "r",
 ) -> str:
     """Build SKILL to open a master cellview and create a schematic instance."""
-    resolved_view_type = view_type or default_view_type_for(view)
-    if resolved_view_type != view:
-        open_expr = (
-            f'dbOpenCellViewByType("{escape_skill_string(lib)}" '
-            f'"{escape_skill_string(cell)}" '
-            f'"{escape_skill_string(view)}" '
-            f'"{escape_skill_string(resolved_view_type)}" '
-            f'"{escape_skill_string(mode)}")'
-        )
+    if view_type is not None:
+        resolved_view_type = view_type
     else:
-        open_expr = (
-            f'dbOpenCellView("{escape_skill_string(lib)}" '
-            f'"{escape_skill_string(cell)}" '
-            f'"{escape_skill_string(view)}")'
-        )
+        normalized_view = (view or "").strip().lower()
+        if normalized_view in {"schematic", "symbol", "maestro"} or normalized_view.startswith("layout"):
+            resolved_view_type = default_view_type_for(view)
+        else:
+            resolved_view_type = ""
+    escaped_lib = escape_skill_string(lib)
+    escaped_cell = escape_skill_string(cell)
+    escaped_view = escape_skill_string(view)
+    open_expr = (
+        f'dbOpenCellViewByType("{escaped_lib}" '
+        f'"{escaped_cell}" '
+        f'"{escaped_view}" '
+        f'"{escape_skill_string(resolved_view_type)}" '
+        f'"{escape_skill_string(mode)}")'
+    )
     return (
         "let((rbMaster) "
         f"rbMaster = {open_expr} "
+        f'unless(rbMaster error("master cellview not found: {escaped_lib}/{escaped_cell}/{escaped_view}")) '
+        "unwindProtect("
         f'dbCreateInst({cv_expr} rbMaster "{escape_skill_string(instance_name)}" '
         f"{skill_point(x, y)} "
-        f'"{escape_skill_string(orientation)}"))'
+        f'"{escape_skill_string(orientation)}") '
+        "when(rbMaster dbClose(rbMaster))))"
     )
 
 def schematic_create_wire(
@@ -615,7 +621,7 @@ _PIN_MASTER_CELL = {"input": "ipin", "output": "opin", "inputOutput": "iopin"}
 
 def _pin_master_expr(direction: str) -> str:
     cell = _PIN_MASTER_CELL.get(direction, "iopin")
-    return f'dbOpenCellViewByType("basic" "{cell}" "symbol")'
+    return f'dbOpenCellViewByType("basic" "{cell}" "symbol" "schematicSymbol" "r")'
 
 def schematic_create_pin(
     pin_name: str,
@@ -627,10 +633,16 @@ def schematic_create_pin(
     direction: str = "inputOutput",
 ) -> str:
     """Build SKILL to create a schematic pin."""
+    cell = _PIN_MASTER_CELL.get(direction, "iopin")
     return (
-        f'schCreatePin({cv_expr} {_pin_master_expr(direction)} "{escape_skill_string(pin_name)}" '
+        "let((rbPinMaster) "
+        f"rbPinMaster = {_pin_master_expr(direction)} "
+        f'unless(rbPinMaster error("pin master cellview not found: basic/{cell}/symbol")) '
+        "unwindProtect("
+        f'schCreatePin({cv_expr} rbPinMaster "{escape_skill_string(pin_name)}" '
         f'"{escape_skill_string(direction)}" nil {skill_point(x, y)} '
-        f'"{escape_skill_string(orientation)}")'
+        f'"{escape_skill_string(orientation)}") '
+        "when(rbPinMaster dbClose(rbPinMaster))))"
     )
 
 def schematic_create_pin_at_instance_term(
@@ -643,13 +655,18 @@ def schematic_create_pin_at_instance_term(
     orientation: str = "R0",
 ) -> str:
     """Build SKILL to create a schematic pin at an instance terminal center."""
+    cell = _PIN_MASTER_CELL.get(direction, "iopin")
     return (
-        "let((rbCtr) "
+        "let((rbCtr rbPinMaster) "
         f"rbCtr = {_schematic_term_center_expr(instance_name, term_name, cv_expr=cv_expr)} "
         "when(rbCtr "
-        f'schCreatePin({cv_expr} {_pin_master_expr(direction)} "{escape_skill_string(pin_name)}" '
+        f"rbPinMaster = {_pin_master_expr(direction)} "
+        f'unless(rbPinMaster error("pin master cellview not found: basic/{cell}/symbol")) '
+        "unwindProtect("
+        f'schCreatePin({cv_expr} rbPinMaster "{escape_skill_string(pin_name)}" '
         f'"{escape_skill_string(direction)}" nil rbCtr '
-        f'"{escape_skill_string(orientation)}")))'
+        f'"{escape_skill_string(orientation)}") '
+        "when(rbPinMaster dbClose(rbPinMaster)))))"
     )
 
 def schematic_create_wire_between_instance_terms(

@@ -834,3 +834,78 @@ def test_skill_escapes_identifiers_message_and_rechecks_paths_and_dirty_flag():
     assert code.index("when(vbDirty") < code.index("ddCheckin(")
     assert "dbIsCellViewModified" in code
     assert "dbSave" not in code and "schCheck" not in code
+
+
+def test_native_checkin_reads_fresh_post_completion_state_not_stale_snapshot(monkeypatch):
+    from virtuoso_bridge.virtuoso.sos import cellview as sos_cellview
+
+    monkeypatch.setattr(sos_cellview.time, "sleep", lambda _s: None)
+    complete = _skill_ok('("ok" t t t nil)')
+    # Poll 1: still running -> intermediate status reads stale rev "3".
+    # Poll 2: native completes -> must perform a fresh status read returning rev "4".
+    client = _Client(
+        native=True,
+        native_result=[_skill_ok('("ok" nil t nil nil)'), complete, complete],
+    )
+    client.states = iter([_state("O", "M", "3"), _state("O", "M", "3"), _state("-", "-", "4")])
+
+    result = _ci(client)
+
+    assert result.outcome == "success"
+    assert result.ok
+    assert result.before.revision == "3"
+    assert result.after.revision == "4"
+    assert len(client.writes) == 1
+
+
+@pytest.mark.parametrize(
+    ("dispatch_reply", "expected_outcome", "expected_message"),
+    [
+        (
+            _skill_ok('("blocked" "A modal form is already active in the connected CIW.")'),
+            "blocked",
+            "modal form",
+        ),
+        (
+            _skill_ok('("failed" "SOS Design Manager forms are unavailable.")'),
+            "failed",
+            "forms are unavailable",
+        ),
+    ],
+)
+def test_native_blocked_or_failed_dispatch_exits_immediately_without_waiting(
+    monkeypatch, dispatch_reply, expected_outcome, expected_message,
+):
+    from virtuoso_bridge.virtuoso.sos import cellview as sos_cellview
+
+    def fail_sleep(_seconds):
+        raise AssertionError("should not sleep when native dispatch did not schedule")
+
+    monkeypatch.setattr(sos_cellview.time, "sleep", fail_sleep)
+    client = _Client(
+        before=_state("O", "M", "3"),
+        after=_state("O", "M", "3"),
+        native=True,
+        native_dispatch=dispatch_reply,
+        native_result=_skill_ok('("ok" nil nil nil nil)'),
+    )
+
+    result = _ci(client, timeout=60)
+
+    assert result.outcome == expected_outcome
+    assert expected_message in result.diagnostics[0]
+    assert not any("VB_SOS_NATIVE_RESULT" in code for code, _ in client.skill_calls)
+
+
+@pytest.mark.parametrize("timeout", [0.0, -1.0])
+def test_read_post_state_zero_or_expired_timeout_raises_timeout_error_not_assertion(timeout):
+    from virtuoso_bridge.virtuoso.sos.cellview import SOSCellViewState, _read_post_state
+    from virtuoso_bridge.virtuoso.sos.workarea import SOSWorkarea
+
+    client = _Client(native=True)
+    area = SOSWorkarea(client, ROOT, soscmd="/opt/sos/bin/soscmd")
+    target = SOSCellViewTarget("lib", "cell", "schematic_Vt", DIRECTORY, MASTER, "schematic", ROOT, PATH)
+    before = SOSCellViewState("p", "O", "M", "-", "-", "-", "3")
+
+    with pytest.raises(TimeoutError, match="Timed out waiting for SOS Design Manager completion"):
+        _read_post_state(client, area, target, "ci", before, timeout, native=True)

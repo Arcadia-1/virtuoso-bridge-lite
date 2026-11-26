@@ -605,24 +605,30 @@ def _read_post_state(owner: VirtuosoClient, area: SOSWorkarea, target: SOSCellVi
         if remaining <= 0:
             if last_state is not None:
                 return last_state
-            assert last_error is not None
-            raise last_error
-        try:
-            last_state = _read_state(
-                area, target, remaining, include_unmanaged=action == "register",
-            )
-            last_error = None
-        except Exception as exc:
-            last_error = exc
+            if last_error is not None:
+                raise last_error
+            raise TimeoutError("Timed out waiting for SOS Design Manager completion.")
         try:
             completion = _native_result(owner, remaining)
         except Exception:
             completion = None
         if completion is not None and completion[1] is True:
-            if last_state is not None:
-                return last_state
-            assert last_error is not None
-            raise last_error
+            fresh_timeout = deadline - time.monotonic()
+            return _read_state(
+                area,
+                target,
+                fresh_timeout if fresh_timeout > 0 else timeout,
+                include_unmanaged=action == "register",
+            )
+        remaining_after = deadline - time.monotonic()
+        if remaining_after > 0:
+            try:
+                last_state = _read_state(
+                    area, target, remaining_after, include_unmanaged=action == "register",
+                )
+                last_error = None
+            except Exception as exc:
+                last_error = exc
         time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
 
 
@@ -786,13 +792,18 @@ def operate_cellview(
         if after is not None and _verified(action, before, after):
             diagnostics.append("SOS now shows the intended state, but the GDM result was not confirmed.")
         return report("unknown", *diagnostics, "Do not retry automatically; inspect SOS status first.")
+    if reply[0] != "ok" and (not native or reply[0] != "scheduled"):
+        try:
+            after = _read_state(
+                area, target, timeout, include_unmanaged=action == "register",
+            )
+        except Exception as exc:
+            diagnostics.append(f"Post-operation SOS status unavailable: {exc}")
+        return report(reply[0], reply[1], *diagnostics)
     try:
         after = _read_post_state(owner, area, target, action, before, timeout, native=native)
     except Exception as exc:
         diagnostics.append(f"Post-operation SOS status unavailable: {exc}")
-    if reply[0] != "ok":
-        if not native or reply[0] != "scheduled":
-            return report(reply[0], reply[1], *diagnostics)
     if native:
         try:
             native_reply = _native_result(owner, timeout)

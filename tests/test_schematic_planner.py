@@ -373,3 +373,79 @@ def test_readback_report_handles_malformed_position_as_a_mismatch() -> None:
 def test_planner_rejects_non_positive_grid_spacing(grid_spacing: float) -> None:
     with pytest.raises(ValueError, match="grid_spacing must be positive"):
         SchematicPlannerConfig(grid_spacing=grid_spacing)
+
+
+def test_readback_roundtrip_succeeds_for_lowercase_mos_terminals() -> None:
+    readback = {
+        "instances": [
+            {
+                "name": "MN0",
+                "lib": "gpdk045",
+                "cell": "nmos1v",
+                "view": "symbol",
+                "xy": [0.0, 0.0],
+                "orient": "R0",
+                "terms": {"d": "OUT", "g": "IN", "s": "VSS", "b": "VSS"},
+            },
+            {
+                "name": "MP0",
+                "lib": "gpdk045",
+                "cell": "pmos1v",
+                "view": "symbol",
+                "xy": [0.0, 3.0],
+                "orient": "R0",
+                "terms": {"d": "OUT", "g": "IN", "s": "VDD", "b": "VDD"},
+            },
+        ],
+        "pins": {"IN": {"direction": "input"}, "OUT": {"direction": "output"}},
+    }
+
+    request = SchematicPlanRequest.from_readback(readback)
+    plan = SchematicPlanner().plan(request)
+    report = plan.verify_readback(readback)
+
+    assert report.ok
+    assert report.mismatches == ()
+
+
+def test_verify_readback_reports_wrong_net_on_lowercase_mos_and_stays_strict_for_other_devices() -> None:
+    plan = SchematicPlanner().plan(
+        SchematicPlanRequest(
+            instances=[
+                SchematicInstanceSpec("MN0", "gpdk045", "nmos1v", terminals={"D": "OUT", "G": "IN"}),
+                SchematicInstanceSpec("R0", "analogLib", "res", terminals={"PLUS": "OUT", "MINUS": "VSS"}),
+            ],
+            positions=[
+                GridPositionConstraint("MN0", col=0, row=0),
+                GridPositionConstraint("R0", col=1, row=0),
+            ],
+        )
+    )
+    readback = {
+        "instances": [
+            {
+                "name": "MN0",
+                "lib": "gpdk045",
+                "cell": "nmos1v",
+                "xy": [0.0, 0.0],
+                "orient": "R0",
+                "terms": {"d": "WRONG", "g": "IN"},
+            },
+            {
+                "name": "R0",
+                "lib": "analogLib",
+                "cell": "res",
+                "xy": [1.5, 0.0],
+                "orient": "R0",
+                "terms": {"plus": "OUT", "MINUS": "VSS"},
+            },
+        ],
+        "pins": {},
+    }
+
+    report = plan.verify_readback(readback)
+
+    assert not report.ok
+    by_subject = {m.subject: m for m in report.mismatches}
+    assert by_subject["MN0.D"].actual == "WRONG"
+    assert by_subject["R0.PLUS"].actual is None
