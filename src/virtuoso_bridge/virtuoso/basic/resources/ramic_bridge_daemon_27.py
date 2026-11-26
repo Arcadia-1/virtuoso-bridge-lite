@@ -76,6 +76,27 @@ _MAX_REQUEST_BYTES = 8 * 1024 * 1024
 _CONNECTION_TIMEOUT = 5.0
 _RESPONSE_WRITE_TIMEOUT = 5.0
 _MAX_CONNECTIONS = 8
+_LISTEN_BACKLOG = 64
+_BUSY_REJECT_TIMEOUT = 0.5
+_MAX_BUSY_REJECTORS = 32
+_BUSY_LIMIT_REPLY = "\x15BusyError: daemon connection limit reached"
+_TRANSIENT_ACCEPT_ERRNOS = frozenset(
+    err for err in (
+        getattr(errno, "EINTR", None),
+        getattr(errno, "ECONNABORTED", None),
+        getattr(errno, "ECONNRESET", None),
+        getattr(errno, "EAGAIN", None),
+        getattr(errno, "EWOULDBLOCK", None),
+        getattr(errno, "EPROTO", None),
+    ) if err is not None
+)
+_RESOURCE_ACCEPT_ERRNOS = frozenset(
+    err for err in (
+        getattr(errno, "EMFILE", None),
+        getattr(errno, "ENFILE", None),
+    ) if err is not None
+)
+_ACCEPT_STOP = object()
 
 
 def _frame(parts):
@@ -255,7 +276,7 @@ def _consume_nonce(nonce, ttl_seconds):
     return "ok"
 
 
-def _auth_error(request_data, kind):
+def _auth_error(request_data, kind, consume_nonce=True):
     """Return an error string for unauthenticated/invalid requests, else None.
 
     *kind* selects the MAC domain: "hello" (capability handshake) or "req"
@@ -340,18 +361,19 @@ def _auth_error(request_data, kind):
         )
     if kind == "bound" and request_data["daemon_instance"] != _RECOVERY.instance_id:
         return "AuthError: daemon_instance mismatch; request was not executed"
-    with _NONCE_LOCK:
-        verdict = _consume_nonce(nonce, ttl)
-    if verdict == "replay":
-        return (
-            "AuthError: replayed request nonce - rejected by server-side "
-            "replay protection"
-        )
-    if verdict == "full":
-        return (
-            "AuthError: nonce cache at capacity - request rejected "
-            "(fail-closed; retry shortly)"
-        )
+    if consume_nonce:
+        with _NONCE_LOCK:
+            verdict = _consume_nonce(nonce, ttl)
+        if verdict == "replay":
+            return (
+                "AuthError: replayed request nonce - rejected by server-side "
+                "replay protection"
+            )
+        if verdict == "full":
+            return (
+                "AuthError: nonce cache at capacity - request rejected "
+                "(fail-closed; retry shortly)"
+            )
     if proto != _PROTO:
         return "AuthError: protocol version mismatch (daemon speaks v1)"
     return None
@@ -607,9 +629,10 @@ def read_until_delimiter(start_ok=b'\x02', start_err=b'\x15', end=b'\x1e'):
     return result
 
 
-def _recv_request(conn):
+def _recv_request(conn, timeout=None):
     clock = getattr(time, "monotonic", time.time)
-    deadline = clock() + _CONNECTION_TIMEOUT
+    budget = _CONNECTION_TIMEOUT if timeout is None else float(timeout)
+    deadline = clock() + budget
     chunks = []
     total = 0
     while True:
@@ -945,6 +968,100 @@ def handle_external_connection(conn, addr):
         _safe_close_connection(conn)
 
 
+def _request_auth_kind(request_data):
+    op = request_data.get("op")
+    if op == "hello":
+        return "hello"
+    if op in ("submit", "receipt"):
+        return "recoverable"
+    if op == "execute":
+        return "bound"
+    return "req"
+
+
+def _reject_connection_limit(conn, reject_slots):
+    """Reply to overflow connections without consuming a worker slot or nonce.
+
+    Under token auth, read the request with a short bounded timeout and sign
+    the BusyError only after verifying the client's request MAC so legitimate
+    clients retry instead of hitting DaemonAuthError while unauthorized peers
+    never receive a signed frame.
+    """
+    try:
+        try:
+            data = _recv_request(conn, timeout=_BUSY_REJECT_TIMEOUT)
+            request_data = json.loads(data)
+        except Exception:
+            if not BRIDGE_TOKEN:
+                _safe_sendall(conn, _BUSY_LIMIT_REPLY)
+            return
+        if not BRIDGE_TOKEN:
+            _safe_sendall(conn, _BUSY_LIMIT_REPLY)
+            return
+        if not isinstance(request_data, dict):
+            return
+        kind = _request_auth_kind(request_data)
+        auth_error = _auth_error(request_data, kind, consume_nonce=False)
+        if auth_error:
+            _safe_sendall(conn, "\x15" + _to_utf8_bytes(auth_error))
+            return
+        request_nonce = request_data.get("nonce")
+        _safe_sendall(conn, _signed_response(request_nonce, _BUSY_LIMIT_REPLY))
+    finally:
+        _safe_close_connection(conn)
+        reject_slots.release()
+
+
+def _dispatch_overflow_connection(conn, reject_slots):
+    """Handle a connection accepted while all worker slots are occupied."""
+    if reject_slots.acquire(False):
+        rejector = threading.Thread(
+            target=_reject_connection_limit,
+            args=(conn, reject_slots),
+            name="ramic-busy-reject",
+        )
+        rejector.daemon = True
+        try:
+            rejector.start()
+            return
+        except Exception:
+            reject_slots.release()
+    if not BRIDGE_TOKEN:
+        _safe_sendall(conn, _BUSY_LIMIT_REPLY)
+    _safe_close_connection(conn)
+
+
+def _accept_next(server_sock):
+    """Accept one client socket, surviving transient errors without crashing."""
+    try:
+        return server_sock.accept()
+    except (socket.error, OSError) as exc:
+        err = getattr(exc, "errno", None)
+        if err is None and exc.args and isinstance(exc.args[0], int):
+            err = exc.args[0]
+        if err in _TRANSIENT_ACCEPT_ERRNOS:
+            try:
+                sys.stderr.write("[RB-accept] transient accept error (%s); continuing\n" % (exc,))
+                sys.stderr.flush()
+            except Exception:
+                pass
+            return None
+        if err in _RESOURCE_ACCEPT_ERRNOS:
+            try:
+                sys.stderr.write("[RB-accept] fd limit reached (%s); backing off\n" % (exc,))
+                sys.stderr.flush()
+            except Exception:
+                pass
+            time.sleep(0.05)
+            return None
+        try:
+            sys.stderr.write("[RB-accept] fatal accept error (%s); stopping listener\n" % (exc,))
+            sys.stderr.flush()
+        except Exception:
+            pass
+        return _ACCEPT_STOP
+
+
 def _connection_thread(conn, addr, slots):
     try:
         handle_external_connection(conn, addr)
@@ -970,7 +1087,7 @@ def start_server():
                 from virtuoso_bridge.virtuoso.basic.resources.ramic_registry import bind_instance
             try:
                 _INSTANCE_LEASE = bind_instance(
-                    s, HOST, PORT, pid=virtuoso_pid, backlog=_MAX_CONNECTIONS,
+                    s, HOST, PORT, pid=virtuoso_pid, backlog=_LISTEN_BACKLOG,
                     work_dir=os.environ.get("RB_VIRTUOSO_WORK_DIR") or os.getcwd())
             except socket.error as exc:
                 if exc.errno == errno.EADDRINUSE:
@@ -986,7 +1103,7 @@ def start_server():
                     sys.stderr.write("ERROR: Port %s is already in use. Leave the existing session running; load the automatic bootstrap or use RBSetPort(port).\n" % PORT)
                     raise SystemExit(1)
                 raise
-            s.listen(_MAX_CONNECTIONS)
+            s.listen(_LISTEN_BACKLOG)
         # Banner -- SKILL side parses this from stderr to populate
         # RBLastPid / RBLastBind / RBLastHost / RBLastIP for the monitor
         # display.  Format is frozen:
@@ -1017,12 +1134,21 @@ def start_server():
         sys.stderr.flush()
         start_pipe_monitor(stdin_fd)
         slots = threading.BoundedSemaphore(_MAX_CONNECTIONS)
+        reject_slots = threading.BoundedSemaphore(_MAX_BUSY_REJECTORS)
         while True:
-            conn, addr = s.accept()
-            conn.settimeout(_CONNECTION_TIMEOUT)
-            if not slots.acquire(False):
-                _safe_sendall(conn, "\x15BusyError: daemon connection limit reached")
+            accepted = _accept_next(s)
+            if accepted is None:
+                continue
+            if accepted is _ACCEPT_STOP:
+                break
+            conn, addr = accepted
+            try:
+                conn.settimeout(_CONNECTION_TIMEOUT)
+            except (socket.error, OSError):
                 _safe_close_connection(conn)
+                continue
+            if not slots.acquire(False):
+                _dispatch_overflow_connection(conn, reject_slots)
                 continue
             worker = threading.Thread(
                 target=_connection_thread,

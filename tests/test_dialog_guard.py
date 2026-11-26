@@ -390,7 +390,7 @@ def test_x11_inspection_uses_quoted_content_addressed_helper_and_cache(monkeypat
         def upload(self, path, remote_path, timeout=None):
             uploads.append(remote_path)
             return SimpleNamespace(returncode=0, stderr="")
-    monkeypatch.setattr(x11, "default_virtuoso_bridge_dir", lambda *a: "/shared root/x11")
+    monkeypatch.setattr(x11, "default_virtuoso_bridge_dir", lambda *a, **k: "/shared root/x11")
     monkeypatch.setattr(x11, "resolve_client_id", lambda *a: "test")
     runner = Runner()
     for _ in range(2):
@@ -620,3 +620,64 @@ def test_probe_and_remember_pid_track_endpoint_and_disable_guard(monkeypatch):
     current_pid[0] = 99
     assert client.dialogs.probe(timeout=5).target.pid == 99
     assert inspected == [42, 88, 99]
+
+
+def test_dialog_inspect_resolves_remote_user_never_empty(monkeypatch):
+    seen_users = []
+    client = _client(monkeypatch)
+    monkeypatch.setattr(
+        x11,
+        "inspect_dialogs",
+        lambda runner, user, **kw: seen_users.append(user) or _payload(),
+    )
+
+    assert client.dialogs.inspect(pid=42).status == "clear"
+    assert seen_users == ["tester"]
+
+    # When runner.user is unset, falls back to whoami via runner.run_command.
+    client._tunnel = SimpleNamespace(
+        gui_host="gui",
+        daemon_host="gui",
+        gui_runner=SimpleNamespace(
+            user=None,
+            run_command=lambda cmd, **k: SimpleNamespace(
+                returncode=0, stdout="remote_alice\n" if cmd == "whoami" else "", stderr=""
+            ),
+        ),
+    )
+    assert client.dialogs.inspect(pid=42).status == "clear"
+    assert seen_users == ["tester", "remote_alice"]
+
+
+def test_remember_pid_preserves_cached_pid_on_socket_timeout(monkeypatch):
+    import socket as _socket
+    from virtuoso_bridge.virtuoso import dialogs as dialogs_mod
+
+    client = _client(monkeypatch)
+    calls = [0]
+
+    class _Py39SocketTimeout(OSError):
+        """Simulates Python 3.9 where socket.timeout is not a TimeoutError subclass."""
+
+    assert not issubclass(_Py39SocketTimeout, TimeoutError)
+
+    def fake_connected_pid(timeout=15):
+        calls[0] += 1
+        if calls[0] == 1:
+            return 42
+        if calls[0] == 2:
+            raise _socket.timeout("timed out")
+        raise _Py39SocketTimeout("py39 socket timeout")
+
+    monkeypatch.setattr(client.dialogs, "connected_pid", fake_connected_pid)
+    assert client.dialogs.remember_pid() is True
+    assert client.dialogs._probe_pid == 42
+
+    # Built-in socket.timeout preserves cached _probe_pid.
+    assert client.dialogs.remember_pid() is True
+    assert client.dialogs._probe_pid == 42
+
+    # Distinct non-TimeoutError socket.timeout (Python 3.9) also preserves cached _probe_pid.
+    monkeypatch.setattr(dialogs_mod.socket, "timeout", _Py39SocketTimeout)
+    assert client.dialogs.remember_pid() is True
+    assert client.dialogs._probe_pid == 42

@@ -21,6 +21,25 @@ except (ImportError, ValueError):
     from ramic_paths import private_directory, check_private
 
 
+try:
+    _TEXT_TYPES = (basestring,)
+except NameError:
+    _TEXT_TYPES = (str,)
+
+
+def _redact(value, anchor, root):
+    if not isinstance(value, _TEXT_TYPES):
+        return value
+    try:
+        return value.replace(anchor, root)
+    except UnicodeError:
+        if isinstance(value, bytes) and not isinstance(root, bytes):
+            return value.replace(anchor.encode("ascii"), root.encode("utf-8"))
+        if not isinstance(value, bytes) and isinstance(root, bytes):
+            return value.replace(anchor, root.decode("utf-8", "replace"))
+        raise
+
+
 def _private_directory(path):
     info = os.lstat(path)
     check_private(info, path)
@@ -52,16 +71,16 @@ def publish(destination, files, replace=False, timeout=10):
         for key in ("path", "backup"):
             if result.get(key):
                 result[key] = root + result[key][len(anchor):]
-        result["warnings"] = [warning.replace(anchor, root) for warning in result.get("warnings", [])]
+        result["warnings"] = [_redact(warning, anchor, root) for warning in result.get("warnings", [])]
         return result
     except Exception as exc:
         # Never report a closed /proc descriptor as an operator recovery path.
-        exc.args = tuple(arg.replace(anchor, root) if isinstance(arg, str) else arg for arg in exc.args)
-        if isinstance(exc, OSError):
-            for name in ("filename", "filename2"):
+        exc.args = tuple(_redact(arg, anchor, root) for arg in exc.args)
+        if isinstance(exc, (OSError, IOError)):
+            for name in ("strerror", "filename", "filename2"):
                 value = getattr(exc, name, None)
-                if isinstance(value, str):
-                    setattr(exc, name, value.replace(anchor, root))
+                if isinstance(value, _TEXT_TYPES):
+                    setattr(exc, name, _redact(value, anchor, root))
         raise
     finally:
         os.close(root_fd)

@@ -61,6 +61,10 @@ _INSTALL_ROOT_QUERY_TIMEOUT = 5.0
 _UNSET: Any = object()
 
 
+class _DaemonBusyError(RuntimeError):
+    """Internal signal for a verified retryable BusyError during handshake."""
+
+
 def _default_remote_port(
     username: str | None = None, *, environ: Mapping[str, str] | None = None,
 ) -> int:
@@ -240,6 +244,7 @@ class VirtuosoClient(VirtuosoInterface):
         self._daemon_token = daemon_token
         self._pending_nonce: str | None = None
         self._daemon_caps: dict[str, Any] | None = None
+        self._handshake_busy_retries = 0
         self._remote_virtuoso_pid: int | None = None
         self.layout = LayoutOps(self)
         self.library = LibraryOps(self)
@@ -600,8 +605,10 @@ class VirtuosoClient(VirtuosoInterface):
             self.daemon_token = self._tunnel.refresh_daemon_token()
             try:
                 caps = self._ensure_daemon_capabilities(time.monotonic() + timeout)
-            except (daemon_auth.DaemonAuthError, OSError):
+            except (daemon_auth.DaemonAuthError, _DaemonBusyError, OSError):
                 return None
+        except _DaemonBusyError:
+            return None
         except OSError:
             if from_cache:
                 self.daemon_token = self._tunnel.refresh_daemon_token()
@@ -722,11 +729,14 @@ class VirtuosoClient(VirtuosoInterface):
                 if time.monotonic() >= deadline:
                     raise socket.timeout
                 try:
+                    self._handshake_busy_retries = 0
                     raw_response = self._execute_skill_once(
                         skill_code,
                         effective_timeout,
                         deadline,
                     )
+                    busy_retries += self._handshake_busy_retries
+                    self._handshake_busy_retries = 0
                     elapsed = time.monotonic() - start_time
                     result = self._parse_response(raw_response, elapsed)
                     if (
@@ -927,9 +937,12 @@ class VirtuosoClient(VirtuosoInterface):
         return self.execute_skill(op_close_current_cellview(), timeout=effective_timeout)
 
     def get_current_design(self, timeout: int | None = None) -> tuple[str | None, str | None, str | None]:
+        from virtuoso_bridge.virtuoso.skill_output import parse_sexpr
+
         effective_timeout = timeout if timeout is not None else self._timeout
         skill = (
-            "ddGetObjReadPath(dbGetCellViewDdId(geGetEditCellView()))"
+            "let((cv) cv = geGetEditCellView() "
+            "if(cv list(cv~>libName cv~>cellName cv~>viewName) nil))"
         )
         result = self.execute_skill(skill, timeout=effective_timeout)
         if result.status != ExecutionStatus.SUCCESS:
@@ -937,10 +950,16 @@ class VirtuosoClient(VirtuosoInterface):
         output = (result.output or "").strip()
         if not output or output.lower() == "nil":
             return None, None, None
-        parts = output.split("/")
-        if len(parts) < 4:
+        try:
+            parsed = parse_sexpr(output)
+        except ValueError:
             return None, None, None
-        return parts[-4], parts[-3], parts[-2]
+        if not isinstance(parsed, list) or len(parsed) != 3:
+            return None, None, None
+        lib = parsed[0] if isinstance(parsed[0], str) and parsed[0] else None
+        cell = parsed[1] if isinstance(parsed[1], str) and parsed[1] else None
+        view = parsed[2] if isinstance(parsed[2], str) and parsed[2] else None
+        return lib, cell, view
 
     # -- screenshot -------------------------------------------------------------
 
@@ -1011,8 +1030,13 @@ let((result winName ciwNum)
         """
         from virtuoso_bridge.transport.remote_paths import (
             default_virtuoso_bridge_dir,
+            resolve_client_id,
+            resolve_remote_scratch_root,
             resolve_remote_username,
         )
+
+        if isinstance(target, bool):
+            raise ValueError("target must be a window name or integer window number, not bool")
 
         effective_timeout = timeout if timeout is not None else self._timeout
 
@@ -1023,8 +1047,9 @@ let((result winName ciwNum)
             win_expr = "hiGetCurrentWindow()"
         elif isinstance(target, int):
             win_expr = (
-                f'let((found) foreach(w hiGetWindowList() '
-                f'when(w~>windowNum=={target} found=w)) found)'
+                f"let((ciw found) ciw=hiGetCIWindow() "
+                f"if(ciw && ciw~>windowNum=={target} found=ciw "
+                f"foreach(w hiGetWindowList() when(w~>windowNum=={target} found=w))) found)"
             )
         else:
             escaped_view = _escape_skill_string(str(target))
@@ -1033,45 +1058,67 @@ let((result winName ciwNum)
                 f'when(w~>cellView && w~>cellView~>viewName=="{escaped_view}" found=w)) found)'
             )
 
-        # Remote path
+        # Remote path on the GUI host (where Virtuoso renders and writes the image)
+        runner = self.gui_runner
+        configured_user: str | None = None
+        for candidate in (
+            getattr(runner, "user", None) if runner is not None else None,
+            getattr(self._tunnel, "remote_user", None) if self._tunnel else None,
+            getattr(self._tunnel, "_remote_user", None) if self._tunnel else None,
+        ):
+            if isinstance(candidate, str) and candidate.strip():
+                configured_user = candidate.strip()
+                break
         username = resolve_remote_username(
-            configured_user=self._tunnel._remote_user if self._tunnel else None,
-            runner=self._tunnel._ssh_runner if self._tunnel else None,
+            configured_user=configured_user,
+            runner=runner,
         )
-        from virtuoso_bridge.transport.remote_paths import resolve_client_id
-
-        client_id = resolve_client_id(getattr(self._tunnel, '_profile', None)) if self._tunnel else None
-        screenshot_dir = default_virtuoso_bridge_dir(username, "screenshots", client_id)
-        if self._tunnel and self._tunnel._ssh_runner:
-            self._tunnel._ssh_runner.run_command(f"mkdir -p {shlex.quote(screenshot_dir)}")
-        elif self.ssh_runner is None:
+        scratch_root = resolve_remote_scratch_root(
+            runner, error_context="screenshot capture"
+        )
+        client_id = resolve_client_id(getattr(self._tunnel, "_profile", None)) if self._tunnel else None
+        screenshot_dir = default_virtuoso_bridge_dir(
+            username, "screenshots", client_id, root=scratch_root
+        )
+        if runner is not None:
+            runner.run_command(f"mkdir -p {shlex.quote(screenshot_dir)}")
+        else:
             local_dir = Path(screenshot_dir).expanduser().resolve()
             local_dir.mkdir(parents=True, exist_ok=True)
             screenshot_dir = local_dir.as_posix()
 
         from datetime import datetime
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        label = str(target) if isinstance(target, int) else target
+        label = re.sub(r"[^A-Za-z0-9._-]+", "_", str(target))
+        label = re.sub(r"\.{2,}", "_", label).strip("._") or "window"
         remote_path = f"{screenshot_dir}/{label}_{stamp}.png"
         escaped_path = _escape_skill_string(remote_path)
 
         skill = (
             f'let((w) w={win_expr} '
             f'if(w '
-            f'hiWindowSaveImage(?target w ?path "{escaped_path}" ?format "png" ?toplevel t) '
+            f'if(hiWindowSaveImage(?target w ?path "{escaped_path}" ?format "png" ?toplevel t) '
+            f'"ok" "error: image save failed") '
             f'"error: window not found"))'
         )
         r = self.execute_skill(skill, timeout=effective_timeout)
         if r.status != ExecutionStatus.SUCCESS:
             return r
-        if (r.output or "").strip().strip('"') == "error: window not found":
+        save_output = (r.output or "").strip().strip('"')
+        if save_output == "error: window not found":
             return VirtuosoResult(
                 status=ExecutionStatus.ERROR,
                 errors=[f"Window not found: {target}"],
                 execution_time=r.execution_time,
             )
+        if save_output in ("error: image save failed", "nil", ""):
+            return VirtuosoResult(
+                status=ExecutionStatus.ERROR,
+                errors=[f"hiWindowSaveImage failed for target {target!r}: {remote_path}"],
+                execution_time=r.execution_time,
+            )
 
-        # Download
+        # Download from the GUI host where Virtuoso wrote the image
         filename = f"{label}_{stamp}.png"
         if output is None:
             from virtuoso_bridge.runtime_paths import artifact_dir
@@ -1080,6 +1127,37 @@ let((result winName ciwNum)
             output = Path(output)
             if output.is_dir():
                 output = output / filename
+        if runner is not None:
+            tunnel_download_runner = (
+                getattr(self._tunnel, "deployment_runner", None)
+                if self._tunnel is not None and getattr(self._tunnel, "ssh_runner", None) is not None
+                else None
+            )
+            if tunnel_download_runner is not None and runner is tunnel_download_runner:
+                return self.download_file(remote_path, output, timeout=effective_timeout)
+            if hasattr(runner, "download"):
+                started = time.perf_counter()
+                output.parent.mkdir(parents=True, exist_ok=True)
+                dl = runner.download(
+                    remote_path,
+                    output,
+                    recursive=False,
+                    timeout=effective_timeout,
+                )
+                elapsed = time.perf_counter() - started
+                if dl.returncode != 0:
+                    return VirtuosoResult(
+                        status=ExecutionStatus.ERROR,
+                        errors=[dl.stderr.strip() or f"Failed to download {remote_path}"],
+                        execution_time=elapsed,
+                        metadata={"remote_path": remote_path, "local_path": str(output)},
+                    )
+                return VirtuosoResult(
+                    status=ExecutionStatus.SUCCESS,
+                    output=str(output),
+                    execution_time=elapsed,
+                    metadata={"remote_path": remote_path, "local_path": str(output)},
+                )
         return self.download_file(remote_path, output, timeout=effective_timeout)
 
     def ciw_print(self, message: str, timeout: int | None = None) -> VirtuosoResult:
@@ -1583,12 +1661,14 @@ let((result winName ciwNum)
                 except Exception as exc:
                     logger.warning("find_skill: download error — %s", exc)
                     return []
+            from pathlib import PurePosixPath
+
+            remote_doc_root = PurePosixPath(remote_finder_root).parent.parent.as_posix()
             finder_root = cache_path
-            # Also store the doc root (parent of doc/finder/SKILL) for More Info use
-            doc_root = finder_root.parent.parent
+            # Also store the remote doc root (parent of finder/SKILL) for More Info use
             doc_root_marker = cache_path / ".doc_root"
-            if not doc_root_marker.exists() or doc_root_marker.read_text().strip() != str(doc_root):
-                doc_root_marker.write_text(str(doc_root))
+            if not doc_root_marker.exists() or doc_root_marker.read_text().strip() != remote_doc_root:
+                doc_root_marker.write_text(remote_doc_root)
         else:
             # Local mode
             finder = SKILLFinder()
@@ -1719,13 +1799,17 @@ let((result winName ciwNum)
             tgf_remote_path = f"{remote_doc_root}/api_more_info/api_more_info.tgf"
             tgf_local_path = mi_cache / "api_more_info.tgf"
 
-            needs_download = (
-                not tgf_local_path.exists()
-                or tgf_marker.exists()
-                and tgf_marker.read_text().strip() != tgf_remote_path
-            )
+            cached_source = tgf_marker.read_text().strip() if tgf_marker.exists() else None
+            source_changed = cached_source != tgf_remote_path
+            needs_download = not tgf_local_path.exists() or source_changed
 
             if needs_download:
+                if source_changed:
+                    import shutil
+                    # Invalidate stale cached HTML/index from a previous Cadence
+                    # release or an untagged cache before writing the new .tgf.
+                    shutil.rmtree(mi_cache)
+                    mi_cache.mkdir(parents=True, exist_ok=True)
                 logger.info(
                     "get_skill_more_info: downloading .tgf index from %s", tgf_remote_path
                 )
@@ -2088,19 +2172,28 @@ let((result winName ciwNum)
             from virtuoso_bridge.transport.remote_paths import (
                 default_virtuoso_bridge_dir,
                 resolve_client_id,
+                resolve_remote_scratch_root,
                 resolve_remote_username,
             )
             from virtuoso_bridge.transport.tunnel import _profiled_bridge_leaf
             work_dir = self._tunnel.remote_work_dir
             if not work_dir:
+                upload_runner = (
+                    getattr(self._tunnel, "deployment_runner", None)
+                    or self._tunnel.ssh_runner
+                )
                 remote_username = resolve_remote_username(
                     configured_user=getattr(self._tunnel, '_remote_user', None),
-                    runner=self._tunnel.ssh_runner,
+                    runner=upload_runner,
+                )
+                scratch_root = resolve_remote_scratch_root(
+                    upload_runner, error_context="IL file upload"
                 )
                 work_dir = default_virtuoso_bridge_dir(
                     remote_username,
                     _profiled_bridge_leaf(getattr(self._tunnel, '_profile', None)),
                     resolve_client_id(getattr(self._tunnel, '_profile', None)),
+                    root=scratch_root,
                 )
             resolved_key = str(p.resolve())
             path_tag = hashlib.sha256(resolved_key.encode("utf-8")).hexdigest()[:12]
@@ -2253,12 +2346,35 @@ let((result winName ciwNum)
         if (self._daemon_caps is not None and not refresh
                 and (not expected or self._daemon_caps.get("instance_record") == expected)):
             return self._daemon_caps
-        payload = self._build_hello_payload()
-        nonce = payload["nonce"]
-        raw = self._exchange_payload(payload, deadline)
+        busy_delay = _BUSY_RETRY_FIRST_DELAY
+        while True:
+            payload = self._build_hello_payload()
+            nonce = payload["nonce"]
+            raw = self._exchange_payload(payload, deadline)
 
-        if raw[:1] == b"\x15":
-            message = raw[1:].decode("utf-8", errors="ignore").strip()
+            if raw[:1] != b"\x15":
+                break
+            retryable_busy: str | None = None
+            if self._daemon_token and daemon_auth.looks_like_hex_mac(raw[1:]):
+                verified = daemon_auth.verify_response_bytes(raw, self._daemon_token, nonce)
+                message = verified[1:].decode("utf-8", errors="ignore").strip()
+                if message in _RETRYABLE_BUSY_ERRORS:
+                    retryable_busy = message
+            else:
+                message = raw[1:].decode("utf-8", errors="ignore").strip()
+                if (
+                    not self._daemon_token
+                    and daemon_auth.allow_unauthenticated()
+                    and message in _RETRYABLE_BUSY_ERRORS
+                ):
+                    retryable_busy = message
+            if retryable_busy is not None:
+                if time.monotonic() + busy_delay < deadline:
+                    self._handshake_busy_retries += 1
+                    time.sleep(busy_delay)
+                    busy_delay = min(busy_delay * 2, _BUSY_RETRY_MAX_DELAY)
+                    continue
+                raise _DaemonBusyError(retryable_busy)
             if message.startswith("AuthError"):
                 # Authenticated daemon refused our token: it belongs to a
                 # different user (or the token was rotated).
@@ -2351,7 +2467,10 @@ let((result winName ciwNum)
     ) -> str:
         # Handshake first: authentication failures must never cost an
         # execution on a foreign or outdated daemon.
-        caps = self._ensure_daemon_capabilities(deadline)
+        try:
+            caps = self._ensure_daemon_capabilities(deadline)
+        except _DaemonBusyError as exc:
+            return f"{_NAK}{exc}"
         binding = caps.get("instance_bound_requests")
         if binding is not None and (type(binding) is not int or binding not in (0, 1)):
             raise daemon_auth.DaemonAuthError("Invalid instance-bound execution capabilities")

@@ -245,3 +245,33 @@ def test_ticket_cannot_be_reused_by_another_client(monkeypatch):
     second, _, calls, _, _ = setup(monkeypatch)
     assert second.dialogs.close(preview, authorized=True, expected_content_sha256=HASH).status == "not_started"
     assert not calls
+
+
+def test_dialog_actions_exchange_resolves_remote_user(monkeypatch):
+    from types import SimpleNamespace
+    import time
+    from virtuoso_bridge.virtuoso import x11
+    from virtuoso_bridge.virtuoso.dialog_actions import DialogActionOps
+
+    seen = []
+    client = VirtuosoClient(daemon_token="ab" * 32)
+    client._tunnel = SimpleNamespace(
+        gui_host="gui",
+        daemon_host="gui",
+        _profile="p1",
+        gui_runner=SimpleNamespace(
+            user=None,
+            run_command=lambda cmd, **k: SimpleNamespace(
+                returncode=0, stdout="bob\n" if cmd == "whoami" else "", stderr=""
+            ),
+        ),
+    )
+    actions = DialogActionOps(client.dialogs)
+    monkeypatch.setattr(
+        x11,
+        "dialog_close_exchange",
+        lambda runner, user, payload, **kw: seen.append((user, kw["profile"])) or {"status": "prepared"},
+    )
+    reply = actions._exchange({"op": "prepare"}, time.monotonic() + 10)
+    assert reply == {"status": "prepared"}
+    assert seen == [("bob", "p1")]

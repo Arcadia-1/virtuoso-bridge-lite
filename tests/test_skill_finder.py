@@ -266,6 +266,88 @@ def test_skill_more_info_remote_downloads_tgf_into_cache_file(monkeypatch, tmp_p
     assert local_path.parent.is_dir()
 
 
+def test_find_skill_writes_remote_doc_root_not_local_cache_ancestor(tmp_path):
+    class _RemoteFinderRunner(_RemoteMoreInfoRunner):
+        def download(self, remote_path, local_path, recursive=False, timeout=None):
+            self.download_calls.append((remote_path, Path(local_path)))
+            local_path = Path(local_path)
+            if recursive:
+                db_dir = local_path / "database"
+                db_dir.mkdir(parents=True, exist_ok=True)
+                (db_dir / "database.fnd").write_text(
+                    '("dbOpenCellViewByType"\n"dbOpenCellViewByType(l c v)"\n"Open.")\n',
+                    encoding="utf-8",
+                )
+                return CommandResult(0, "", "")
+            return super().download(remote_path, local_path, recursive=recursive, timeout=timeout)
+
+    runner = _RemoteFinderRunner("/opt/cadence/IC231/doc")
+    client = VirtuosoClient(tunnel=_RemoteMoreInfoTunnel(runner))
+    cache_dir = tmp_path / "local_parent" / "skill_cache"
+
+    results = client.find_skill("dbOpenCellViewByType", mode="exact", cache_dir=cache_dir)
+
+    assert len(results) == 1
+    doc_root_marker = cache_dir / ".doc_root"
+    assert doc_root_marker.read_text().strip() == "/opt/cadence/IC231/doc"
+    assert str(tmp_path) not in doc_root_marker.read_text()
+
+
+def test_skill_more_info_invalidates_stale_html_on_doc_root_switch_and_missing_marker(tmp_path):
+    class _VersionedMoreInfoRunner(_RemoteMoreInfoRunner):
+        def __init__(self, remote_doc_root: str, tag: str) -> None:
+            super().__init__(remote_doc_root)
+            self.tag = tag
+
+        def download(self, remote_path, local_path, recursive=False, timeout=None):
+            self.download_calls.append((remote_path, Path(local_path)))
+            local_path = Path(local_path)
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            if remote_path.endswith(".tgf"):
+                local_path.write_text(
+                    'dbOpenCellViewByType $skdfref/cvio.html "pgfId-5447242" HTML\n',
+                    encoding="utf-8",
+                )
+            else:
+                local_path.write_text(
+                    "<html><body>\n"
+                    "<!-- [TOPIC_START_OPEN] [TOPIC_START_ATTR]text=pgfId-5447242 -->\n"
+                    f"<h1>dbOpenCellViewByType</h1><p>Release {self.tag} doc.</p>\n"
+                    "<!-- [TOPIC_END] -->\n"
+                    "</body></html>",
+                    encoding="utf-8",
+                )
+            return CommandResult(0, "", "")
+
+    cache_dir = tmp_path / "cache"
+    runner_old = _VersionedMoreInfoRunner("/opt/cadence/IC618/doc", "IC618")
+    client_old = VirtuosoClient(tunnel=_RemoteMoreInfoTunnel(runner_old))
+    res_old = client_old.get_skill_more_info("dbOpenCellViewByType", cache_dir=cache_dir)
+    assert res_old is not None and "Release IC618 doc." in res_old["plain_text"]
+
+    # Switching remote doc_root to IC231 must invalidate stale IC618 HTML files.
+    runner_new = _VersionedMoreInfoRunner("/opt/cadence/IC231/doc", "IC231")
+    client_new = VirtuosoClient(tunnel=_RemoteMoreInfoTunnel(runner_new))
+    res_new = client_new.get_skill_more_info("dbOpenCellViewByType", cache_dir=cache_dir)
+    assert res_new is not None
+    assert "Release IC231 doc." in res_new["plain_text"]
+    assert "IC618" not in res_new["plain_text"]
+
+    # Missing .source_dir marker with stale cached HTML must also invalidate & re-download.
+    (cache_dir / "more_info" / ".source_dir").unlink()
+    (cache_dir / "more_info" / "skdfref" / "cvio.html").write_text(
+        "<html><body><!-- [TOPIC_START_OPEN] [TOPIC_START_ATTR]text=pgfId-5447242 -->"
+        "<p>Stale untagged HTML</p><!-- [TOPIC_END] --></body></html>",
+        encoding="utf-8",
+    )
+    runner_new.download_calls.clear()
+    res_refreshed = client_new.get_skill_more_info("dbOpenCellViewByType", cache_dir=cache_dir)
+    assert res_refreshed is not None
+    assert "Release IC231 doc." in res_refreshed["plain_text"]
+    assert "Stale untagged HTML" not in res_refreshed["plain_text"]
+    assert len(runner_new.download_calls) == 2
+
+
 class _LocalBashRunner:
     def __init__(self, env: dict[str, str] | None = None) -> None:
         self.env = env
