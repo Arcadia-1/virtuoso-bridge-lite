@@ -32,6 +32,10 @@ def _isolate_profile_env(monkeypatch, tmp_path: Path) -> None:
         "virtuoso_bridge.profile.get_runtime_env_file",
         lambda: None,
     )
+    monkeypatch.setattr(
+        "virtuoso_bridge.profile.discover_workspace_env_path",
+        lambda: None,
+    )
 
 
 def test_resolve_profile_prefers_explicit(monkeypatch, tmp_path) -> None:
@@ -381,3 +385,95 @@ def test_cli_status_uses_venv_binding(monkeypatch, tmp_path, capsys) -> None:
 
     assert rc == 1
     assert "[t28_io]" in capsys.readouterr().out
+
+
+def test_load_vb_env_does_not_pollute_os_environ_vb_profile_or_override_venv(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from virtuoso_bridge import env
+
+    _isolate_profile_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(env, "_RUNTIME_ENV_FILE", None)
+    user_env = tmp_path / "user.env"
+    user_env.write_text(
+        "VB_PROFILE=user_default\nVB_REMOTE_HOST_t28_io=eda-t28\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("virtuoso_bridge.env.default_user_env_path", lambda: user_env)
+    monkeypatch.setattr("virtuoso_bridge.profile.default_user_env_path", lambda: user_env)
+    monkeypatch.chdir(tmp_path)
+    venv = tmp_path / ".venv"
+    monkeypatch.setenv("VIRTUAL_ENV", str(venv))
+    bind_venv_profile("t28_io")
+
+    assert env.load_vb_env(cwd=tmp_path) == user_env
+    assert "VB_PROFILE" not in os.environ
+    info = resolve_profile_info()
+    assert info.profile == "t28_io"
+    assert info.source == "venv"
+
+    # Process environment VB_PROFILE must also survive load_vb_env().
+    monkeypatch.setenv("VB_PROFILE", "shell_override")
+    env.load_vb_env(cwd=tmp_path)
+    assert os.environ["VB_PROFILE"] == "shell_override"
+    assert resolve_profile_info().profile == "shell_override"
+    assert resolve_profile_info().source == "environment"
+
+
+def test_workspace_dotenv_vb_profile_produces_single_profile_ssh_client(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from virtuoso_bridge import env
+    from virtuoso_bridge.transport.tunnel import SSHClient
+
+    for key in list(os.environ):
+        if key.startswith("VB_") and key != "VB_STATE_DIR":
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setattr(sys, "prefix", str(tmp_path / "base-python"))
+    monkeypatch.setattr(sys, "base_prefix", str(tmp_path / "base-python"))
+    monkeypatch.setattr(env, "_RUNTIME_ENV_FILE", None)
+    monkeypatch.setattr(
+        "virtuoso_bridge.env.default_user_env_path",
+        lambda: tmp_path / "missing-user.env",
+    )
+    monkeypatch.setattr(
+        "virtuoso_bridge.profile.default_user_env_path",
+        lambda: tmp_path / "missing-user.env",
+    )
+    workspace = tmp_path / "proj"
+    workspace.mkdir()
+    (workspace / ".env").write_text(
+        "\n".join(
+            [
+                "VB_PROFILE=gpu1",
+                "VB_REMOTE_HOST=default-host",
+                "VB_REMOTE_USER=default-user",
+                "VB_REMOTE_PORT=65001",
+                "VB_LOCAL_PORT=65101",
+                "VB_SSH_BACKEND=openssh",
+                "VB_REMOTE_HOST_gpu1=gpu1-host",
+                "VB_REMOTE_USER_gpu1=gpu1-user",
+                "VB_REMOTE_PORT_gpu1=65002",
+                "VB_LOCAL_PORT_gpu1=65102",
+                "VB_SSH_BACKEND_gpu1=paramiko",
+                "VB_SSH_PROXY_gpu1=socks5://127.0.0.1:10808",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(workspace)
+
+    client = SSHClient.from_env()
+
+    assert "VB_PROFILE" not in os.environ
+    assert client._profile == "gpu1"
+    assert client.daemon_host == "gpu1-host"
+    assert client.remote_user == "gpu1-user"
+    assert client.remote_port == 65002
+    assert client.port == 65102
+    assert client.ssh_backend == "paramiko"
+    assert client._runner_kwargs["proxy_url"] == "socks5://127.0.0.1:10808"

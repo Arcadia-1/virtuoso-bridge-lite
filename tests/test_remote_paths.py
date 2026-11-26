@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
 from virtuoso_bridge.transport.remote_paths import (
     default_virtuoso_bridge_dir,
     default_remote_spectre_work_dir,
+    instance_scratch_root,
+    remote_scratch_root,
     resolve_client_id,
+    resolve_remote_scratch_root,
 )
 
 
@@ -57,3 +64,84 @@ def test_home_scratch_root_scopes_bridge_and_spectre_without_new_host_settings(m
     assert default_remote_spectre_work_dir("designer", "laptop") == (
         root + "/virtuoso_bridge_spectre"
     )
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected"),
+    [
+        (None, "/tmp"),
+        ("", "/tmp"),
+        ("   ", "/tmp"),
+        ("/", "/"),
+        ("///", "/"),
+        ("/tmp/", "/tmp"),
+        ("~/", "~"),
+        ("~", "~"),
+        ("~/scratch/", "~/scratch"),
+    ],
+)
+def test_remote_scratch_root_normalizes_blank_root_and_tilde(
+    monkeypatch, raw_value, expected
+) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
+    if raw_value is None:
+        monkeypatch.delenv("VB_REMOTE_SCRATCH_ROOT", raising=False)
+    else:
+        monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", raw_value)
+
+    assert remote_scratch_root() == expected
+
+
+def test_blank_scratch_root_uses_tmp_and_explicit_slash_avoids_double_slash(monkeypatch) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", "")
+    assert default_virtuoso_bridge_dir("designer", "virtuoso_bridge") == (
+        "/tmp/virtuoso_bridge_designer/virtuoso_bridge"
+    )
+
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", "/")
+    assert default_virtuoso_bridge_dir("designer", "virtuoso_bridge") == (
+        "/virtuoso_bridge_designer/virtuoso_bridge"
+    )
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        ("~/", "/home/remote"),
+        ("~", "/home/remote"),
+        ("~/scratch", "/home/remote/scratch"),
+        ("~/scratch/", "/home/remote/scratch"),
+    ],
+)
+def test_instance_and_remote_scratch_root_expand_tilde_via_remote_home(
+    monkeypatch, configured, expected
+) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", configured)
+    runner = SimpleNamespace(
+        run_command=lambda command: SimpleNamespace(
+            returncode=0 if "getent" in command else 1,
+            stdout="/home/remote/\n" if "getent" in command else "",
+            stderr="",
+        )
+    )
+
+    assert resolve_remote_scratch_root(runner) == expected
+    assert instance_scratch_root(runner) == expected
+
+
+def test_tilde_expansion_falls_back_to_remote_home_env_when_getent_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.remote_paths.load_vb_env", lambda: None)
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", "~/")
+    commands: list[str] = []
+
+    def fake_run(command: str):
+        commands.append(command)
+        if "getent" in command:
+            return SimpleNamespace(returncode=127, stdout="", stderr="getent: not found")
+        return SimpleNamespace(returncode=0, stdout="/Users/remote", stderr="")
+
+    runner = SimpleNamespace(run_command=fake_run)
+    assert resolve_remote_scratch_root(runner) == "/Users/remote"
+    assert len(commands) == 2

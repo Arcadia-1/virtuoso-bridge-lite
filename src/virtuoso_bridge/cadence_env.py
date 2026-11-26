@@ -44,7 +44,7 @@ class CadenceEnvironment:
                 'source "$_VB_ENV_SCRIPT" > /dev/stderr; '
                 "set vb_source_status = $status; "
                 'if ($vb_source_status != 0) exec sh -c "exit $vb_source_status"; '
-                'exec sh -c "$_VB_ENV_COMMAND"'
+                'exec sh -c \'exec sh -c "$_VB_ENV_COMMAND"\''
             )
             body = (
                 f"exec env _VB_ENV_SCRIPT={shlex.quote(self.script)} "

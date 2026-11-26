@@ -1103,3 +1103,353 @@ def test_persistent_shell_probe_and_command_share_one_timeout_budget(
 
     assert command_timeouts == pytest.approx([0.01])
     assert clock.now == pytest.approx(0.05)
+
+
+@pytest.mark.skipif(
+    os.name == "nt"
+    or not os.path.exists("/bin/sh")
+    or not __import__("shutil").which("mktemp")
+    or not __import__("shutil").which("base64"),
+    reason="requires POSIX /bin/sh, mktemp, and base64",
+)
+def test_persistent_shell_isolates_state_exit_and_mktemp_in_real_shell(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh._setup_command_log", lambda: None)
+    shell_tmp = tmp_path / "shell_tmp"
+    shell_tmp.mkdir()
+    counter_file = tmp_path / "counter.txt"
+    real_popen = subprocess.Popen
+
+    def local_shell_popen(cmd, **kwargs):
+        if cmd[-3:] == ["sh", "-l", "-s"]:
+            env = dict(os.environ)
+            env["TMPDIR"] = str(shell_tmp)
+            kwargs["env"] = env
+            return real_popen(["/bin/sh", "-s"], **kwargs)
+        return real_popen(cmd, **kwargs)
+
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.subprocess.Popen", local_shell_popen)
+    runner = SSHRunner(host="fixture-host", persistent_shell=True, timeout=15)
+    try:
+        pid_before = runner.run_command("printf %s $$").stdout
+        pwd_before = runner.run_command("pwd").stdout
+        umask_before = runner.run_command("umask").stdout
+
+        res_set_e = runner.run_command("set -e; false; echo unreachable")
+        assert res_set_e.returncode == 1
+        assert res_set_e.stdout == ""
+        assert runner.run_command("false; echo still-alive").stdout == "still-alive\n"
+
+        assert runner.run_command("umask 077").returncode == 0
+        assert runner.run_command("umask").stdout == umask_before
+
+        assert runner.run_command("cd /tmp").returncode == 0
+        assert runner.run_command("pwd").stdout == pwd_before
+
+        assert runner.run_command("VB_POISON=yes; export VB_POISON").returncode == 0
+        assert runner.run_command('printf %s "${VB_POISON:-clean}"').stdout == "clean"
+
+        # Non-zero exit must NOT kill the persistent shell or replay the command.
+        res_exit = runner.run_command(f"printf x >> {shlex.quote(str(counter_file))}; exit 7")
+        assert res_exit.returncode == 7
+        assert counter_file.read_text(encoding="utf-8") == "x"
+        assert runner.run_command("printf %s $$").stdout == pid_before
+        assert list(shell_tmp.iterdir()) == []
+    finally:
+        runner.close()
+
+
+def test_persistent_shell_upload_text_redacts_secret_from_log_verbose_and_timeout(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    import logging
+    import stat
+    from virtuoso_bridge.transport import ssh as ssh_mod
+
+    secret = "super-secret-bridge-token-" + ("ab" * 24)
+    encoded_secret = base64.b64encode((secret + "\n").encode("utf-8")).decode("ascii")
+    log_dir = tmp_path / "private_logs"
+    monkeypatch.setenv("VB_LOG_DIR", str(log_dir))
+
+    pkg_logger = logging.getLogger("virtuoso_bridge")
+    saved_handlers = list(pkg_logger.handlers)
+    for handler in list(pkg_logger.handlers):
+        if getattr(handler, "_vb_cmd_log", False):
+            pkg_logger.removeHandler(handler)
+
+    try:
+        ssh_mod._setup_command_log()
+        log_file = log_dir / "commands.log"
+        assert log_file.is_file()
+        if os.name == "posix":
+            assert stat.S_IMODE(log_dir.stat().st_mode) == 0o700
+            assert stat.S_IMODE(log_file.stat().st_mode) == 0o600
+
+        runner = SSHRunner(host="fixture-host", persistent_shell=True, verbose=True)
+        runner._persistent_shell_enabled = True
+        sent_scripts: list[str] = []
+
+        class _FakeStdin:
+            def __init__(self, out_q) -> None:
+                self._q = out_q
+
+            def write(self, data: bytes) -> int:
+                text = data.decode("utf-8")
+                sent_scripts.append(text)
+                begin = re.search(r"__vb_STDOUT_B64_BEGIN_[0-9a-f]+__", text).group(0)
+                stderr_m = re.search(r"__vb_STDERR_B64_BEGIN_[0-9a-f]+__", text).group(0)
+                rc_m = re.search(r"__vb_RC_[0-9a-f]+__", text).group(0)
+                self._q.put(begin + "\n")
+                self._q.put("\n")
+                self._q.put(stderr_m + "\n")
+                self._q.put("\n")
+                self._q.put(rc_m + "0\n")
+                return len(data)
+
+            def flush(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        import queue as _queue
+
+        out_q: _queue.Queue[str | None] = _queue.Queue()
+        fake_proc = type(
+            "_FakeShellProc",
+            (),
+            {
+                "stdin": _FakeStdin(out_q),
+                "stdout": None,
+                "poll": staticmethod(lambda: None),
+                "terminate": staticmethod(lambda: None),
+                "wait": staticmethod(lambda timeout=None: 0),
+                "kill": staticmethod(lambda: None),
+            },
+        )()
+        runner._shell_proc = fake_proc
+        runner._shell_queue = out_q
+
+        result = runner.upload_text(secret + "\n", "/home/u/.virtuoso-bridge/bridge_token.tmp")
+        assert result.returncode == 0
+        assert len(sent_scripts) == 1
+        assert encoded_secret in sent_scripts[0]
+
+        for handler in pkg_logger.handlers:
+            if getattr(handler, "_vb_cmd_log", False):
+                handler.flush()
+        log_text = log_file.read_text(encoding="utf-8")
+        err_text = capsys.readouterr().err
+        assert "upload_text" in log_text
+        assert "/home/u/.virtuoso-bridge/bridge_token.tmp" in log_text
+        assert secret not in log_text
+        assert encoded_secret not in log_text
+        assert "upload_text" in err_text
+        assert secret not in err_text
+        assert encoded_secret not in err_text
+
+        # TimeoutExpired must also carry only the redacted summary, not the secret.
+        monkeypatch.setattr(
+            runner,
+            "ensure_persistent_shell",
+            lambda **_kw: None,
+        )
+        with pytest.raises(subprocess.TimeoutExpired) as exc_info:
+            runner.upload_text(secret + "\n", "/home/u/.virtuoso-bridge/bridge_token.tmp", timeout=0.0)
+        assert secret not in str(exc_info.value)
+        assert encoded_secret not in str(exc_info.value)
+    finally:
+        for handler in list(pkg_logger.handlers):
+            if getattr(handler, "_vb_cmd_log", False) and handler not in saved_handlers:
+                pkg_logger.removeHandler(handler)
+                handler.close()
+        for handler in saved_handlers:
+            if handler not in pkg_logger.handlers:
+                pkg_logger.addHandler(handler)
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or not os.path.exists("/bin/sh"),
+    reason="requires POSIX shell for POSIX start_port_forward path",
+)
+def test_posix_port_forward_retries_cannot_listen_and_surfaces_real_stderr(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh._setup_command_log", lambda: None)
+    temp_dir = tmp_path / "tunnel_tmp"
+    temp_dir.mkdir()
+    monkeypatch.setenv("TMPDIR", str(temp_dir))
+
+    fake_ssh = tmp_path / "fake_ssh.sh"
+    fake_ssh.write_text(
+        "#!/bin/sh\n"
+        'for arg in "$@"; do\n'
+        '  case "$arg" in\n'
+        "    65120:127.0.0.1:*)\n"
+        '      printf "channel_setup_fwd_listener_tcpip: cannot listen to port: 65120\\n" >&2\n'
+        "      exit 255\n"
+        "      ;;\n"
+        "    65130:127.0.0.1:*)\n"
+        '      printf "Permission denied (publickey).\\n" >&2\n'
+        "      exit 255\n"
+        "      ;;\n"
+        "  esac\n"
+        "done\n"
+        "exec sleep 30\n",
+        encoding="utf-8",
+    )
+    fake_ssh.chmod(0o700)
+
+    monkeypatch.setattr(
+        "virtuoso_bridge.transport.tunnel.SSHRunner.can_reach_port",
+        staticmethod(lambda _p: False),
+    )
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel._TUNNEL_STARTUP_SETTLE_SECONDS", 0.5)
+    monkeypatch.setattr("virtuoso_bridge.transport.tunnel._update_env_file", lambda *a: True)
+
+    client = SSHClient(remote_host="eda-host", remote_user="designer", port=65000, local_port=65120)
+    client._ssh_runner = SSHRunner(host="eda-host", user="designer", ssh_cmd=str(fake_ssh))
+    try:
+        spawned = client.ensure_tunnel()
+        assert spawned is True
+        assert client.port == 65121
+        assert client._ssh_runner._tunnel_proc is not None
+        assert client._ssh_runner._tunnel_proc.stderr is None
+        assert list(temp_dir.glob("vb_tunnel_stderr_*.log")) == []
+    finally:
+        client._ssh_runner.stop_port_forward()
+
+    # Non-retryable startup failure must preserve the real stderr message.
+    failing_client = SSHClient(remote_host="eda-host", remote_user="designer", port=65000, local_port=65130)
+    failing_client._ssh_runner = SSHRunner(host="eda-host", user="designer", ssh_cmd=str(fake_ssh))
+    with pytest.raises(RuntimeError, match=r"Permission denied \(publickey\)\."):
+        failing_client.ensure_tunnel()
+    assert list(temp_dir.glob("vb_tunnel_stderr_*.log")) == []
+
+
+def test_windows_start_port_forward_closes_handle_checks_poll_first_and_stops_orphan(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from virtuoso_bridge.transport import ssh as ssh_mod
+
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh.load_vb_env", lambda: None)
+    monkeypatch.setattr("virtuoso_bridge.transport.ssh._setup_command_log", lambda: None)
+    monkeypatch.setattr(ssh_mod, "_windows_no_window_kwargs", lambda **_kw: {})
+    monkeypatch.setattr(ssh_mod, "_process_identity", lambda _pid: None)
+
+    real_os = os
+
+    class _NtOsProxy:
+        name = "nt"
+
+        def __getattr__(self, item: str):
+            return getattr(real_os, item)
+
+    monkeypatch.setattr(ssh_mod, "os", _NtOsProxy())
+    monkeypatch.setattr(ssh_mod.tempfile, "gettempdir", lambda: str(tmp_path))
+
+    # Case 1: stderr handle closes right after Popen, stderr tail surfaced, temp log deleted.
+    observed_handles: list[object] = []
+
+    class _DeadProc:
+        pid = 9001
+
+        def __init__(self, _cmd, **kwargs) -> None:
+            fh = kwargs["stderr"]
+            observed_handles.append(fh)
+            fh.write(b"banner exchange timeout\n")
+            fh.flush()
+
+        def poll(self):
+            return 255
+
+        def terminate(self) -> None:
+            pass
+
+        def wait(self, timeout=None) -> int:
+            return 255
+
+        def kill(self) -> None:
+            pass
+
+    monkeypatch.setattr(ssh_mod.subprocess, "Popen", _DeadProc)
+    runner = SSHRunner(host="eda-host", user="designer", ssh_cmd="ssh.exe")
+    runner.can_reach_port = lambda _port: False  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match=r"rc=255.*banner exchange timeout"):
+        runner.start_port_forward(65200, settle=0.1)
+    assert len(observed_handles) == 1
+    assert observed_handles[0].closed is True
+    assert list(tmp_path.glob("vb_tunnel_stderr_*.log")) == []
+
+    # Case 2: proc.poll() is checked BEFORE can_reach_port() so a dead proc is never adopted.
+    call_order: list[str] = []
+
+    class _DeadWithForeignPortProc:
+        pid = 9002
+
+        def __init__(self, _cmd, **kwargs) -> None:
+            observed_handles.append(kwargs["stderr"])
+
+        def poll(self):
+            call_order.append("poll")
+            return 1
+
+        def terminate(self) -> None:
+            pass
+
+        def wait(self, timeout=None) -> int:
+            return 1
+
+    monkeypatch.setattr(ssh_mod.subprocess, "Popen", _DeadWithForeignPortProc)
+    runner2 = SSHRunner(host="eda-host", user="designer", ssh_cmd="ssh.exe")
+
+    def fake_reach(_port: int) -> bool:
+        call_order.append("can_reach_port")
+        return True
+
+    runner2.can_reach_port = fake_reach  # type: ignore[method-assign]
+    assert runner2.start_port_forward(65201, settle=0.1) is None
+    assert call_order[0] == "poll"
+    assert runner2._tunnel_proc is None
+    assert runner2._tunnel_using_external is True
+    assert list(tmp_path.glob("vb_tunnel_stderr_*.log")) == []
+
+    # Case 3: post-loop can_reach_port() terminates still-alive proc before returning None.
+    terminated: list[bool] = []
+    reach_calls = iter([False, True])
+    clock_ticks = iter([0.0, 0.0, 100.0])
+
+    class _StuckProc:
+        pid = 9003
+
+        def __init__(self, _cmd, **_kwargs) -> None:
+            self._alive = True
+
+        def poll(self):
+            return None if self._alive else 0
+
+        def terminate(self) -> None:
+            terminated.append(True)
+            self._alive = False
+
+        def wait(self, timeout=None) -> int:
+            self._alive = False
+            return 0
+
+    monkeypatch.setattr(ssh_mod.subprocess, "Popen", _StuckProc)
+    monkeypatch.setattr(ssh_mod.time, "monotonic", lambda: next(clock_ticks))
+    monkeypatch.setattr(ssh_mod.time, "sleep", lambda _s: None)
+    runner3 = SSHRunner(host="eda-host", user="designer", ssh_cmd="ssh.exe")
+    runner3.can_reach_port = lambda _port: next(reach_calls)  # type: ignore[method-assign]
+    assert runner3.start_port_forward(65202, settle=0.1) is None
+    assert terminated == [True]
+    assert runner3._tunnel_proc is None
+    assert list(tmp_path.glob("vb_tunnel_stderr_*.log")) == []

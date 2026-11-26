@@ -237,3 +237,32 @@ def test_legacy_csh_selector_can_handle_unsuccessful_optional_probe(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout == "/eda/legacy"
+
+
+@pytest.mark.skipif(not shutil.which("csh"), reason="csh not installed")
+def test_csh_selector_preserves_multiline_commands_quotes_specials_and_exit_code(tmp_path):
+    selector = tmp_path / "env.csh"
+    selector.write_text(
+        "setenv CDSHOME '/eda/ic 23.1'\nsetenv TAG 'alpha\\!beta'\n",
+        encoding="utf-8",
+    )
+    multiline_cmd = (
+        'a="line one"\n'
+        "b='single \"quoted\" ! $HOME'\n"
+        'c=$(printf "%s" "sub_ok")\n'
+        'printf "%s\\n%s\\n%s\\n%s\\n%s\\n" "$CDSHOME" "$TAG" "$a" "$b" "$c"\n'
+        "exit 7"
+    )
+
+    result = ShellRunner().run_command(
+        CadenceEnvironment(str(selector), "csh").wrap(multiline_cmd)
+    )
+
+    assert result.returncode == 7, result.stderr
+    assert result.stdout == (
+        "/eda/ic 23.1\n"
+        "alpha!beta\n"
+        "line one\n"
+        'single "quoted" ! $HOME\n'
+        "sub_ok\n"
+    )
