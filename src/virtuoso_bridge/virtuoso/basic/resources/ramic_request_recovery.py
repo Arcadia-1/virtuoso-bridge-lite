@@ -576,7 +576,11 @@ class RecoverableRequestManager(object):
                 if remaining <= 0:
                     break
                 self._finished.wait(remaining)
-        return self.receipt(request_id)
+            if entry is None:
+                return self._ephemeral(
+                    request_id, "unknown", "request_id is not retained by this daemon"
+                )
+            return self._snapshot_locked(entry)
 
     def receipt(self, request_id):
         with self._lock:

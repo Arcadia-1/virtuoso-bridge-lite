@@ -8,10 +8,19 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import posixpath
+import re
 import stat
 import sys
 
 from virtuoso_bridge.transport.tunnel import _find_ramic_helper, _generate_virtuoso_setup_il
+
+
+def _daemon_major(python: str) -> str:
+    base = posixpath.basename(python.strip()).lower()
+    if re.match(r"^python2(?:\.\d+|$)", base):
+        return "27"
+    return "3"
 
 
 def install(destination: Path, python: str = "python3", scratch_root: str | None = None) -> Path:
@@ -37,7 +46,7 @@ def install(destination: Path, python: str = "python3", scratch_root: str | None
             os.fchmod(stream.fileno(), 0o644)
     # The launcher contains no user, project, identity-file or fixed-port data.
     setup = destination / "virtuoso_setup.il"
-    major = "27" if python.endswith("2.7") else "3"
+    major = _daemon_major(python)
     source = _generate_virtuoso_setup_il(
         (destination / ("ramic_bridge_daemon_%s.py" % major)).as_posix(),
         (destination / "ramic_bridge.il").as_posix(), python, port=0,

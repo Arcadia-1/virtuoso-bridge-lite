@@ -241,17 +241,20 @@ def execute(skill, host="127.0.0.1", port=65432, timeout=60, token=None,
     if error:
         return None, error
 
-    if data and data[:1] == NAK:
+    if not data or data[:1] not in (STX, NAK):
+        return None, "no response from bridge"
+    if token and nonce:
+        if data[:1] == NAK and data[1:].startswith(b"AuthError"):
+            return None, data[1:].decode("utf-8", errors="replace").strip()
+        marker, body = _verify_response(data, token, nonce)
+        if marker is None:
+            return None, body
+        if marker == NAK:
+            return None, body.decode("utf-8", errors="replace").strip()
+        return body.decode("utf-8", errors="replace"), None
+    if data[:1] == NAK:
         return None, data[1:].decode("utf-8", errors="replace").strip()
-    if data and data[:1] == STX:
-        if token and nonce:
-            marker, body = _verify_response(data, token, nonce)
-            if marker is None:
-                return None, body
-            return body.decode("utf-8", errors="replace"), None
-        if not token:
-            return data[1:].decode("utf-8", errors="replace"), None
-    return None, "no response from bridge"
+    return data[1:].decode("utf-8", errors="replace"), None
 
 
 def _default_port():

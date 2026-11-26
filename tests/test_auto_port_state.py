@@ -64,3 +64,14 @@ def test_positive_port_preserves_registration_mode():
 def test_resource_override_is_visible(record_property):
     record_property("daemon_resources", str(RESOURCES.resolve()))
     assert SOURCE.is_file()
+
+
+def test_ipc_begin_process_quotes_python_and_daemon_path_with_shell_single_quotes():
+    source = SOURCE.read_text(encoding="utf-8")
+    launch = next(
+        line for line in source.splitlines()
+        if "ipcBeginProcess(" in line and "RBDPath" in line
+    )
+    assert "RBQuoteShellArg(RBPython)" in launch
+    assert "RBQuoteShellArg(RBDPath)" in launch
+    assert "stdbuf -oL %s %s-u %s %L %L" in launch

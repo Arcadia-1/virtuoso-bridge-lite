@@ -11,7 +11,9 @@ import stat
 
 def check_private(info, path):
     if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
-            or stat.S_IMODE(info.st_mode) != 0o700):
+            or (info.st_mode & 0o077) != 0
+            or (info.st_mode & 0o700) != 0o700
+            or (info.st_mode & stat.S_ISUID) != 0):
         raise ValueError("Private directory requires current owner and mode 0700: " + path)
 
 

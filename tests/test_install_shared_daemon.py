@@ -96,7 +96,33 @@ def private_parent():
         yield Path(path)
 
 
-@pytest.mark.parametrize("python,worker", [("/usr/bin/python3", "3"), ("/opt/python/bin/python2.7", "27")])
+@pytest.mark.parametrize(
+    ("python", "worker"),
+    [
+        ("python3", "3"),
+        ("/usr/bin/python3", "3"),
+        ("/usr/bin/python3.12", "3"),
+        ("/opt/python2/bin/python3", "3"),
+        ("python", "3"),
+        ("python2", "27"),
+        ("/usr/bin/python2", "27"),
+        ("python2.7", "27"),
+        ("/opt/python/bin/python2.7", "27"),
+    ],
+)
+def test_daemon_major_selects_py27_for_python2_basenames(python, worker):
+    assert installer._daemon_major(python) == worker
+
+
+@pytest.mark.parametrize(
+    "python,worker",
+    [
+        ("/usr/bin/python3", "3"),
+        ("/opt/python/bin/python2.7", "27"),
+        ("python2", "27"),
+        ("/usr/bin/python2", "27"),
+    ],
+)
 def test_publish_under_umask_zero_without_overwrite(private_parent, python, worker):
     destination = private_parent / "v1"
     mask = os.umask(0)

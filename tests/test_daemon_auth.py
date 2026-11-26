@@ -264,6 +264,20 @@ def test_verify_rejects_non_hex_prefix() -> None:
         daemon_auth.verify_response(STX + "zz" * 32 + "body", TOKEN, "12" * 16)
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"\x02" + b"\xff" * 64 + b"ok",
+        b"\x02" + b"a" * 63 + b"\xff" + b"ok",
+        b"\x15" + b"ab" * 31 + b"\xff\xfe" + b"err",
+    ],
+)
+def test_split_signed_and_verify_reject_non_ascii_bytes_as_auth_error(raw: bytes) -> None:
+    assert daemon_auth.split_signed(raw) is None
+    with pytest.raises(daemon_auth.DaemonAuthError, match="did not authenticate"):
+        daemon_auth.verify_response_bytes(raw, TOKEN, "12" * 16)
+
+
 # ---------------------------------------------------------------------------
 # Token storage: atomic 0600 file under a 0700 directory
 # ---------------------------------------------------------------------------
@@ -709,6 +723,73 @@ def test_skill_exec_execute_optin_against_auth_off_daemon(
     )
     assert error is None and result == '"2"'
     assert authoff_daemon.executed == ["1+1"]
+
+
+def test_skill_exec_verifies_hmac_on_authenticated_nak_and_rejects_spoofed_nak(
+    monkeypatch,
+) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "skill_exec", Path(__file__).resolve().parents[1] / "tools" / "skill_exec.py"
+    )
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    caps = {"proto": 1, "auth": "on", "virtuoso_pid": 4242}
+
+    # 1. Valid signed NAK (e.g. SKILL error) is verified and returned without the 64-char HMAC.
+    def signed_nak(payload, host, port, timeout):
+        body = b"*Error* eval: unbound variable - foo"
+        mac = daemon_auth.response_mac(
+            TOKEN, nonce=payload["nonce"], marker=b"\x15", body=body
+        ).encode("ascii")
+        return b"\x15" + mac + body, None
+
+    monkeypatch.setattr(tool, "_exchange", signed_nak)
+    result, error = tool.execute("foo", port=9, timeout=5, token=TOKEN, caps=caps)
+    assert result is None
+    assert error == "*Error* eval: unbound variable - foo"
+
+    # 2. Unsigned non-AuthError NAK (spoofed listener) is rejected.
+    monkeypatch.setattr(
+        tool, "_exchange", lambda payload, host, port, timeout: (b"\x15*Error* spoofed", None)
+    )
+    result, error = tool.execute("foo", port=9, timeout=5, token=TOKEN, caps=caps)
+    assert result is None
+    assert "did not authenticate" in error
+
+    # 3. Signed NAK with wrong token / tampered MAC is rejected.
+    def wrong_token_nak(payload, host, port, timeout):
+        body = b"*Error* eval: tampered"
+        mac = daemon_auth.response_mac(
+            WRONG_TOKEN, nonce=payload["nonce"], marker=b"\x15", body=body
+        ).encode("ascii")
+        return b"\x15" + mac + body, None
+
+    monkeypatch.setattr(tool, "_exchange", wrong_token_nak)
+    result, error = tool.execute("foo", port=9, timeout=5, token=TOKEN, caps=caps)
+    assert result is None
+    assert "failed token authentication" in error
+
+    # 4. Unsigned AuthError NAK is accepted as an authentication refusal.
+    monkeypatch.setattr(
+        tool,
+        "_exchange",
+        lambda payload, host, port, timeout: (b"\x15AuthError: bridge token mismatch", None),
+    )
+    result, error = tool.execute("foo", port=9, timeout=5, token=TOKEN, caps=caps)
+    assert result is None
+    assert error == "AuthError: bridge token mismatch"
+
+    # 5. Unauthenticated (--no-token) NAK still returns the error body.
+    monkeypatch.setattr(
+        tool,
+        "_exchange",
+        lambda payload, host, port, timeout: (b"\x15*Error* unauthed", None),
+    )
+    result, error = tool.execute(
+        "foo", port=9, timeout=5, token=None, caps={"proto": 1, "auth": "off"}
+    )
+    assert result is None
+    assert error == "*Error* unauthed"
 
 
 # ---------------------------------------------------------------------------
