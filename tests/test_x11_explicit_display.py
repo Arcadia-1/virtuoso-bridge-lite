@@ -167,6 +167,101 @@ def test_auto_detected_displays_do_not_inherit_a_previous_cookie(helper, monkeyp
     assert [(display, xauth) for display, _, xauth in seen] == [(":5", "/tmp/xvfb-5/Xauthority"), (":7", None)]
 
 
+def test_multi_display_dismiss_window_restores_matching_display_xauthority(helper, monkeypatch, capsys):
+    monkeypatch.setattr(helper, "find_x11_envs", lambda: [
+        {"DISPLAY": ":5", "XAUTHORITY": "/tmp/xvfb-5/Xauthority"},
+        {"DISPLAY": ":7", "XAUTHORITY": "/tmp/xvfb-7/Xauthority"},
+    ])
+    events = []
+    monkeypatch.setattr(
+        helper,
+        "discover_windows",
+        lambda display, top_level=False: [{"frame_id": "0xf", "dismiss_id": "0xabc"}] if display == ":5" else [],
+    )
+
+    def fake_dismiss(display, win_id, *args, **kwargs):
+        events.append(("dismiss", display, win_id, helper.os.environ.get("DISPLAY"), helper.os.environ.get("XAUTHORITY")))
+        return {"dismissed": win_id}
+
+    def fake_verify(result):
+        events.append(("verify", result.get("display"), result.get("dismissed"),
+                       helper.os.environ.get("DISPLAY"), helper.os.environ.get("XAUTHORITY")))
+        return dict(result, status="closed", closure_confirmed=True, still_mapped=False)
+
+    monkeypatch.setattr(helper, "dismiss_window", fake_dismiss)
+    monkeypatch.setattr(helper, "_verify_dismissal", fake_verify)
+
+    assert _run_main(helper, monkeypatch, ["--dismiss-window", "0xabc"]) == 0
+    assert events == [
+        ("dismiss", ":5", "0xabc", ":5", "/tmp/xvfb-5/Xauthority"),
+        ("verify", ":5", "0xabc", ":5", "/tmp/xvfb-5/Xauthority"),
+    ]
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])["display"] == ":5"
+
+
+def test_multi_display_dismiss_window_refuses_ambiguous_xid(helper, monkeypatch, capsys):
+    monkeypatch.setattr(helper, "find_x11_envs", lambda: [
+        {"DISPLAY": ":5", "XAUTHORITY": "/tmp/xvfb-5/Xauthority"},
+        {"DISPLAY": ":7", "XAUTHORITY": "/tmp/xvfb-7/Xauthority"},
+    ])
+    monkeypatch.setattr(
+        helper,
+        "discover_windows",
+        lambda display, top_level=False: [{"frame_id": "0x400010", "dismiss_id": "0x400010"}],
+    )
+    monkeypatch.setattr(
+        helper,
+        "dismiss_window",
+        lambda *a, **k: pytest.fail("must not dismiss ambiguous window id across displays"),
+    )
+
+    assert _run_main(helper, monkeypatch, ["--dismiss-window", "0x400010"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert "more than one display" in payload["error"]
+    assert payload["window_id"] == "0x400010"
+    assert payload["displays"] == [":5", ":7"]
+
+
+def test_multi_display_bulk_dismiss_restores_each_displays_xauthority(helper, monkeypatch, capsys):
+    monkeypatch.setattr(helper, "find_x11_envs", lambda: [
+        {"DISPLAY": ":5", "XAUTHORITY": "/tmp/xvfb-5/Xauthority"},
+        {"DISPLAY": ":7", "XAUTHORITY": "/tmp/xvfb-7/Xauthority"},
+    ])
+    monkeypatch.setattr(
+        helper,
+        "find_dialogs",
+        lambda display: [{
+            "window_id": "0x101" if display == ":5" else "0x202",
+            "title": "Notice",
+            "suggested_action": "enter",
+        }],
+    )
+    events = []
+
+    def fake_dismiss(display, win_id, *args, **kwargs):
+        events.append(("dismiss", display, win_id, helper.os.environ.get("DISPLAY"), helper.os.environ.get("XAUTHORITY")))
+        return {"dismissed": win_id}
+
+    def fake_verify(result):
+        events.append(("verify", result.get("display"), result.get("dismissed"),
+                       helper.os.environ.get("DISPLAY"), helper.os.environ.get("XAUTHORITY")))
+        return dict(result, status="closed", closure_confirmed=True, still_mapped=False)
+
+    monkeypatch.setattr(helper, "dismiss_window", fake_dismiss)
+    monkeypatch.setattr(helper, "_verify_dismissal", fake_verify)
+
+    assert _run_main(helper, monkeypatch, ["--dismiss"]) == 0
+    assert events == [
+        ("dismiss", ":5", "0x101", ":5", "/tmp/xvfb-5/Xauthority"),
+        ("verify", ":5", "0x101", ":5", "/tmp/xvfb-5/Xauthority"),
+        ("dismiss", ":7", "0x202", ":7", "/tmp/xvfb-7/Xauthority"),
+        ("verify", ":7", "0x202", ":7", "/tmp/xvfb-7/Xauthority"),
+    ]
+    out_lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert len(out_lines) == 4
+    assert "XAUTHORITY" not in out_lines[0]
+
+
 def test_client_and_cli_pass_pid_through(monkeypatch, capsys):
     commands = []
     monkeypatch.setattr(x11, "load_vb_env", lambda: None)

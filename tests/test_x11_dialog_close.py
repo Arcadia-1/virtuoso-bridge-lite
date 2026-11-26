@@ -504,3 +504,110 @@ def test_changed_visual_refuses_close_even_if_pixel_indices_match(monkeypatch):
     result = MODULE.handle_command(command("close", snapshot))
     assert result["status"] == "not_started"
     assert fake.send_calls == 0
+
+
+def test_prepare_close_matches_virtuoso_registered_trademark_title_from_c_locale_xprop(monkeypatch):
+    title = 'Virtuoso\u00ae "Save" Notice'
+
+    class _FakeInventoryConnection:
+        def root(self):
+            return 1
+
+        def children(self, window_id):
+            return [0x100, 0x200] if window_id == 1 else []
+
+        def attributes(self, window_id):
+            sizes = {1: (1920, 1080), 0x100: (900, 200), 0x200: (300, 120)}
+            w, h = sizes[window_id]
+            return {
+                "mapped": True,
+                "window_class": 1,
+                "depth": 24,
+                "override_redirect": False,
+                "geometry": {"x": 10, "y": 20, "w": w, "h": h},
+            }
+
+        def close(self):
+            pass
+
+    xprops = {
+        "0x100": "\n".join([
+            f"_NET_WM_PID(CARDINAL) = {PID}",
+            'WM_CLIENT_MACHINE(STRING) = "eda-host"',
+            'WM_NAME(STRING) = "Virtuoso? Studio IC23.1 - Log: /tmp/CDS.log"',
+            r'_NET_WM_NAME(UTF8_STRING) = "Virtuoso\302\256 Studio IC23.1 - Log: /tmp/CDS.log"',
+            'WM_CLASS(STRING) = "virtuoso", "Virtuoso"',
+            "WM_STATE(WM_STATE): window state: Normal",
+        ]),
+        "0x200": "\n".join([
+            f"_NET_WM_PID(CARDINAL) = {PID}",
+            "WM_TRANSIENT_FOR(WINDOW): window id # 0x100",
+            'WM_CLIENT_MACHINE(STRING) = "eda-host"',
+            "_NET_WM_STATE(ATOM) = _NET_WM_STATE_MODAL",
+            r'WM_NAME(STRING) = "Virtuoso? \"Save\" Notice"',
+            r'_NET_WM_NAME(UTF8_STRING) = "Virtuoso\302\256 \"Save\" Notice"',
+            'WM_CLASS(STRING) = "virtuoso", "Virtuoso"',
+            "WM_STATE(WM_STATE): window state: Normal",
+        ]),
+    }
+
+    monkeypatch.setattr(
+        MODULE._inventory,
+        "_read_process_x11_env",
+        lambda _pid: {"DISPLAY": DISPLAY, "XAUTHORITY": None, "HOSTNAME": "eda-host"},
+    )
+    monkeypatch.setattr(MODULE._inventory, "_open_x11_inventory", lambda *_a: _FakeInventoryConnection())
+    monkeypatch.setattr(
+        MODULE._inventory,
+        "_bounded_check_output",
+        lambda cmd, env=None, timeout=None: xprops[cmd[2]],
+    )
+    monkeypatch.setattr(MODULE, "_read_process_start_ticks", lambda _pid: 777)
+    fake = FakeConnection([native(title=title)])
+    monkeypatch.setattr(MODULE, "_open_native_connection", lambda pid, display: fake)
+
+    prepare_cmd = command()
+    prepare_cmd["title"] = title
+    result = MODULE.handle_command(prepare_cmd)
+
+    assert result["status"] == "prepared", result
+    assert result["snapshot"]["dialog"]["title"] == title
+    assert result["snapshot"]["native"]["title"] == title
+
+
+def test_native_capture_falls_back_to_wm_name_when_net_wm_name_is_empty():
+    connection = object.__new__(MODULE._NativeDialogConnection)
+    connection._display = 1
+    connection._grabbed = True
+
+    pixel_buf = ctypes.create_string_buffer(b"\xff" * 4)
+    image = MODULE._XImage()
+    image.width = 1
+    image.height = 1
+    image.bytes_per_line = 4
+    image.bits_per_pixel = 32
+    image.depth = 24
+    image.data = ctypes.addressof(pixel_buf)
+    image_ptr = ctypes.pointer(image)
+
+    connection._attributes = lambda _win: SimpleNamespace(map_state=MODULE._IS_VIEWABLE, width=1, height=1)
+    connection._require_pixels_observable = lambda _w, _a: {
+        "visual_id": 42, "visual_class": 4, "red_mask": 0xFF0000, "green_mask": 0xFF00, "blue_mask": 0xFF,
+    }
+    connection._xlib = SimpleNamespace(
+        XGetImage=lambda *a: image_ptr,
+        XDestroyImage=lambda *a: 0,
+    )
+    connection._text_property = lambda _w, name: {
+        "_NET_WM_NAME": "",
+        "WM_NAME": "Fallback Title",
+        "WM_CLIENT_MACHINE": "localhost",
+    }[name]
+    connection._pid_property = lambda _w: PID
+    connection._class_hint = lambda _w: ["virtuoso", "Virtuoso"]
+    connection._protocols = lambda _w: ["WM_DELETE_WINDOW"]
+    connection._atom_list_property = lambda _w, _n: ["_NET_WM_STATE_MODAL"]
+    connection._window_property = lambda _w, _n: CIW
+
+    captured = connection._capture_locked(WINDOW, make_preview=False)
+    assert captured["native"]["title"] == "Fallback Title"

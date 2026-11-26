@@ -61,6 +61,11 @@ class _InspectionBudgetExceeded(_InspectionFailure):
     pass
 
 
+class _InspectionBadWindow(_InspectionFailure):
+    """X11 BadWindow (error code 3) for a specific queried XID."""
+    pass
+
+
 def find_x11_envs(user=None):
     """Return X11 environments for all interactive Virtuoso processes."""
     candidates = []
@@ -240,14 +245,14 @@ def _read_xprop_metadata(win_id):
     titles = {}
     classes = []
     for line in output.splitlines():
-        values = re.findall(r'"((?:\\.|[^"\\])*)"', line)
+        values = [_unescape_xprop_string(v) for v in re.findall(r'"((?:\\.|[^"\\])*)"', line)]
         if line.startswith("WM_NAME(") and values:
             titles["wm"] = values[0]
         elif line.startswith("_NET_WM_NAME(") and values:
             titles["net"] = values[0]
         elif line.startswith("WM_CLASS(") and values:
             classes = values
-    return {"title": titles.get("wm") or titles.get("net") or "", "class": classes}
+    return {"title": titles.get("net") or titles.get("wm") or "", "class": classes}
 
 
 def _repair_locale_damaged_metadata(window):
@@ -393,6 +398,70 @@ def _decode_text(value):
     return value
 
 
+_XPROP_SIMPLE_ESCAPES = {
+    "\\": u"\\",
+    '"': u'"',
+    "'": u"'",
+    "a": u"\a",
+    "b": u"\b",
+    "f": u"\f",
+    "n": u"\n",
+    "r": u"\r",
+    "t": u"\t",
+    "v": u"\v",
+}
+_XPROP_OCTAL_RE = re.compile(r"([0-3][0-7]{2}|[0-7]{1,2})")
+
+
+def _unescape_xprop_string(value):
+    """Decode xprop C and octal byte escapes into Unicode text (Py2.7/Py3 safe)."""
+    text = _decode_text(value)
+    if "\\" not in text:
+        return text
+    out = []
+    octal_bytes = bytearray()
+    index = 0
+    length = len(text)
+
+    def flush_octal():
+        if not octal_bytes:
+            return
+        raw = bytes(octal_bytes)
+        del octal_bytes[:]
+        try:
+            out.append(raw.decode("utf-8", "strict"))
+        except UnicodeDecodeError:
+            out.append(raw.decode("latin-1", "strict"))
+
+    while index < length:
+        ch = text[index]
+        if ch != "\\":
+            flush_octal()
+            out.append(ch)
+            index += 1
+            continue
+        if index + 1 >= length:
+            flush_octal()
+            out.append(u"\\")
+            index += 1
+            continue
+        nxt = text[index + 1]
+        octal_match = _XPROP_OCTAL_RE.match(text, index + 1)
+        if octal_match:
+            octal_bytes.append(int(octal_match.group(1), 8))
+            index = octal_match.end()
+        elif nxt in _XPROP_SIMPLE_ESCAPES:
+            flush_octal()
+            out.append(_XPROP_SIMPLE_ESCAPES[nxt])
+            index += 2
+        else:
+            flush_octal()
+            out.append(u"\\" + nxt)
+            index += 2
+    flush_octal()
+    return u"".join(out)
+
+
 def _bounded_check_output(command, env=None, timeout=_INSPECTION_TIMEOUT_SECONDS):
     """Run one inspection probe with a Python 2 compatible wall-clock bound."""
     try:
@@ -503,7 +572,7 @@ def _parse_xprop_inspection(output):
     titles = {}
     for raw_line in output.splitlines():
         line = raw_line.strip()
-        values = re.findall(r'"((?:\\.|[^"\\])*)"', line)
+        values = [_unescape_xprop_string(v) for v in re.findall(r'"((?:\\.|[^"\\])*)"', line)]
         if line.startswith("_NET_WM_PID("):
             match = re.search(r"=\s*([0-9]+)\s*$", line)
             if match and int(match.group(1)) > 0:
@@ -528,7 +597,7 @@ def _parse_xprop_inspection(output):
             titles["net"] = values[0]
         elif line.startswith("WM_CLASS(") and values:
             metadata["class"] = values
-    metadata["title"] = titles.get("wm") or titles.get("net") or ""
+    metadata["title"] = titles.get("net") or titles.get("wm") or ""
     return metadata
 
 
@@ -745,6 +814,11 @@ class _X11InventoryConnection(object):
         status = self._xlib.XGetWindowAttributes(
             self._display, int(window_id), ctypes.byref(attributes)
         )
+        if self._error_codes == [3]:  # BadWindow, not a display I/O failure.
+            raise _InspectionBadWindow(
+                "cannot read X11 window attributes for %s"
+                % _normalize_xid(window_id)
+            )
         if self._request_failed(status):
             raise _InspectionFailure(
                 "cannot read X11 window attributes for %s"
@@ -765,6 +839,11 @@ class _X11InventoryConnection(object):
                 ctypes.byref(absolute_y),
                 ctypes.byref(child_return),
             )
+            if self._error_codes == [3]:  # BadWindow, not a display I/O failure.
+                raise _InspectionBadWindow(
+                    "cannot translate X11 window coordinates for %s"
+                    % _normalize_xid(window_id)
+                )
             if self._request_failed(translated):
                 raise _InspectionFailure(
                     "cannot translate X11 window coordinates for %s"
@@ -1006,12 +1085,20 @@ def _inspect_window_inventory(
             for field in ("transient_for", "client_leader"):
                 if record.get(field):
                     pending.append(record[field])
+        seen_related = set()
         while pending:
             related_id = _normalize_xid(pending.pop(0))
-            if related_id in records:
+            if related_id in records or related_id in seen_related:
                 continue
+            seen_related.add(related_id)
             related_number = int(related_id, 16)
-            attributes = connection_call(connection.attributes, related_number)
+            try:
+                attributes = connection_call(connection.attributes, related_number)
+            except _InspectionBadWindow:
+                # A stale WM_TRANSIENT_FOR/WM_CLIENT_LEADER on an unrelated
+                # desktop window must not abort inspection; _resolve_window_owner()
+                # still fails closed if a Virtuoso/candidate window depends on it.
+                continue
             related = add_record(
                 connection,
                 related_number,
@@ -1020,7 +1107,11 @@ def _inspect_window_inventory(
                 metadata_only=True,
             )
             for field in ("transient_for", "client_leader"):
-                if related.get(field) and related[field] not in records:
+                if (
+                    related.get(field)
+                    and related[field] not in records
+                    and related[field] not in seen_related
+                ):
                     pending.append(related[field])
     finally:
         connection.close()
@@ -1969,18 +2060,26 @@ def main():
                 dismiss_target in (w.get("frame_id"), w.get("window_id"), w.get("dismiss_id"))
                 for w in discover_windows(active_display)
             ):
-                matches.append((active_display, resolved_target))
+                matches.append((x11_env, active_display, resolved_target))
         if not matches:
             print(json.dumps({"error": "window id not found on any Virtuoso display", "window_id": dismiss_target}))
             sys.exit(1)
-        failed = False
-        for active_display, resolved_target in matches:
-            result = dismiss_window(active_display, resolved_target, action=action)
-            result["display"] = active_display
-            result["requested_window_id"] = dismiss_target
-            verified = _verify_dismissal(result)
-            print(json.dumps(verified))
-            failed = failed or "error" in verified or not verified.get("closure_confirmed", False)
+        if len(matches) > 1:
+            print(json.dumps({
+                "error": "window id matched more than one display; specify display or --pid explicitly",
+                "window_id": dismiss_target,
+                "displays": [match_display for _env, match_display, _target in matches],
+            }))
+            sys.exit(1)
+        x11_env, active_display, resolved_target = matches[0]
+        _apply_x11_env(x11_env)
+        result = dismiss_window(active_display, resolved_target, action=action)
+        result["display"] = active_display
+        result["requested_window_id"] = dismiss_target
+        _apply_x11_env(x11_env)
+        verified = _verify_dismissal(result)
+        print(json.dumps(verified))
+        failed = "error" in verified or not verified.get("closure_confirmed", False)
         sys.exit(1 if failed else 0)
 
     if bootstrap_target:
@@ -2038,15 +2137,16 @@ def main():
         active_display = _apply_x11_env(x11_env)
         for dialog in find_dialogs(active_display):
             dialog["display"] = active_display
-            dialogs.append(dialog)
+            dialogs.append((x11_env, dialog))
             print(json.dumps(dialog))
     if not dialogs:
         sys.exit(1)
 
     if do_dismiss:
         failed = False
-        for d in dialogs:
+        for x11_env, d in dialogs:
             if "window_id" in d:
+                _apply_x11_env(x11_env)
                 explicit_action = d.get("suggested_action")
                 result = dismiss_window(
                     d["display"],
@@ -2058,9 +2158,11 @@ def main():
                     d.get("h", 0),
                     explicit_action,
                 )
+                result.setdefault("display", d["display"])
+                _apply_x11_env(x11_env)
                 verified = _verify_dismissal(result)
                 print(json.dumps(verified))
-                failed = failed or "error" in verified or verified.get("still_mapped", False)
+                failed = failed or "error" in verified or not verified.get("closure_confirmed", False)
         if failed:
             sys.exit(1)
 

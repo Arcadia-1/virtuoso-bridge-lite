@@ -95,6 +95,18 @@ def _timeout(value: float) -> float:
     return value
 
 
+_STALE_PID_DIAGNOSTIC_MARKERS = (
+    "is unavailable or stale",
+    "metadata is unavailable",
+    "is a zombie",
+    "command line is unavailable",
+    "is not a live interactive virtuoso process",
+    "has no display in its environment",
+    "no mapped ciw belongs to pid",
+    "pid must be a positive integer",
+)
+
+
 class DialogOps:
     """The guard observes only. It never dismisses dialogs or retries SKILL."""
 
@@ -105,6 +117,15 @@ class DialogOps:
         self._protect_inflight = False
         self._actions = None
         self._probe_pid: int | None = None
+        self._probe_endpoint: tuple[Any, Any] | None = None
+
+    def _current_endpoint(self) -> tuple[Any, Any]:
+        return (getattr(self._owner, "host", None), getattr(self._owner, "port", None))
+
+    @staticmethod
+    def _is_stale_pid_diagnostic(diagnostic: str) -> bool:
+        lowered = diagnostic.lower()
+        return any(marker in lowered for marker in _STALE_PID_DIAGNOSTIC_MARKERS)
 
     def prepare_close(self, window_id: str, *, expected_title: str, timeout: float = 30):
         """Read an informational window preview, without authorizing any action."""
@@ -217,11 +238,20 @@ class DialogOps:
         held the CIW (IC23.1), so the PID must be known before a dialog can
         appear. Call this before starting work that may raise one.
         """
-        if self.enabled or self._probe_pid is not None:
-            return True
+        endpoint = self._current_endpoint()
+        if self.enabled:
+            return self._endpoint == endpoint
+        if self._probe_endpoint != endpoint:
+            self._probe_pid = None
+            self._probe_endpoint = None
         try:
             self._probe_pid = self.connected_pid(timeout=timeout)
+            self._probe_endpoint = endpoint
+        except TimeoutError:
+            return self._probe_pid is not None
         except Exception:
+            self._probe_pid = None
+            self._probe_endpoint = None
             return False
         return True
 
@@ -236,19 +266,32 @@ class DialogOps:
         daemon identity, X11 unavailable): a caller must treat that as
         "unknown", never as clear.
         """
+        endpoint = self._current_endpoint()
         if self.enabled:
+            if self._endpoint != endpoint:
+                return None
             return self.inspect(timeout=timeout)
         deadline = time.monotonic() + timeout
         try:
+            if self._probe_endpoint != endpoint:
+                self._probe_pid = None
+                self._probe_endpoint = None
             if self._probe_pid is None:
                 self._probe_pid = self.connected_pid(timeout=timeout)
+                self._probe_endpoint = endpoint
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return None
             report = self.inspect(pid=self._probe_pid, timeout=remaining)
         except Exception:
             self._probe_pid = None
+            self._probe_endpoint = None
             return None
+        if report.status == "indeterminate" and any(
+            self._is_stale_pid_diagnostic(diag) for diag in report.diagnostics
+        ):
+            self._probe_pid = None
+            self._probe_endpoint = None
         return report
 
     def connected_pid(self, *, timeout: float = 15) -> int:
@@ -281,6 +324,8 @@ class DialogOps:
         self._target = None
         self._endpoint = None
         self._protect_inflight = False
+        self._probe_pid = None
+        self._probe_endpoint = None
 
     def preflight(self, timeout: float) -> VirtuosoResult | None:
         if not self.enabled:

@@ -71,6 +71,29 @@ def test_unavailable_display_never_confirms_closure(helper, monkeypatch):
     assert "dismissed" not in result
 
 
+def test_bulk_dismiss_exits_nonzero_on_verification_error(helper, monkeypatch, capsys):
+    monkeypatch.setattr(helper.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(helper, "find_x11_envs", lambda: [{"DISPLAY": ":7", "XAUTHORITY": "/tmp/x7"}])
+    monkeypatch.setattr(helper, "find_dialogs", lambda display: [{
+        "window_id": "0x10", "title": "Notice", "suggested_action": "enter",
+    }])
+    monkeypatch.setattr(helper, "dismiss_window", lambda *a, **k: {"dismissed": "0x10", "action": "enter"})
+
+    def unavailable(*args):
+        raise helper._InspectionFailure("cannot open display")
+
+    monkeypatch.setattr(helper, "_open_x11_inventory", unavailable)
+    monkeypatch.setattr(helper.sys, "argv", ["x11_dismiss_dialog.py", "--dismiss"])
+
+    with pytest.raises(SystemExit) as exc:
+        helper.main()
+
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert '"verification_error"' in out
+    assert '"closure_confirmed": false' in out
+
+
 def test_cli_confirms_only_verified_closed_result(monkeypatch, capsys):
     monkeypatch.setattr(cli, "_load_cli_env", lambda: None)
     monkeypatch.setattr(cli, "_make_ssh_runner", lambda: (None, "fixture"))
