@@ -5,12 +5,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from virtuoso_bridge.virtuoso.editor import (
-    close_editor_cellview,
+    EDITOR_CV,
     ensure_operation_response,
     redraw_editor_windows,
     remember_editor_cellview,
+    require_editor_cellview,
+    save_editor_cellview,
+    wrap_editor_batch,
 )
-from virtuoso_bridge.virtuoso.ops import open_cell_view, save_current_cellview
+from virtuoso_bridge.virtuoso.ops import open_cell_view
 from virtuoso_bridge.virtuoso.symbol.ops import symbol_check
 
 if TYPE_CHECKING:
@@ -51,6 +54,7 @@ class SymbolEditor:
                 mode=self.mode,
             )
         )
+        self.commands.append(require_editor_cellview(self.lib, self.cell, self.view))
         self.commands.append(remember_editor_cellview(opened=True))
         return self
 
@@ -60,10 +64,9 @@ class SymbolEditor:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         if exc_type is None:
-            self.commands.append(symbol_check())
-            self.commands.append(save_current_cellview())
+            self.commands.append(symbol_check(cv_expr=EDITOR_CV))
+            self.commands.append(save_editor_cellview())
             self.commands.append(redraw_editor_windows())
-            if not self.keep_open:
-                self.commands.append(close_editor_cellview())
-            response = self.client.execute_operations(self.commands, timeout=self.timeout)
+            script = wrap_editor_batch(self.commands, keep_open=self.keep_open)
+            response = self.client.execute_operations([script], timeout=self.timeout)
             ensure_operation_response(response, context="symbol edit")

@@ -204,7 +204,12 @@ def test_symbol_generation_skill_backs_up_before_replacing_and_rolls_back() -> N
     backup_view = backup_match.group(1)
     _assert_ordered(
         skill,
-        'when(dbFindOpenCellViewByName("demoLib" "nand2" "symbol") error("target symbol is open"))',
+        "when(if(isCallable('dbFindOpenCellViewByName) then "
+        'dbFindOpenCellViewByName("demoLib" "nand2" "symbol") '
+        "else when(isCallable('dbGetOpenCellViews) "
+        'setof(vbOpenCv dbGetOpenCellViews() vbOpenCv~>libName == "demoLib" && '
+        'vbOpenCv~>cellName == "nand2" && vbOpenCv~>viewName == "symbol"))) '
+        'error("target symbol is open"))',
         f'dbCopyCellView(vbBackupSourceCv "demoLib" "nand2" "{backup_view}" nil nil nil)',
         'dbCopyCellView(vbTempCv "demoLib" "nand2" "symbol" nil nil t)',
         "vbFinalOrder = schGetPinOrder(vbTargetCv)",
@@ -212,6 +217,21 @@ def test_symbol_generation_skill_backs_up_before_replacing_and_rolls_back() -> N
         'dbCopyCellView(vbBackupCv "demoLib" "nand2" "symbol" nil nil t)',
     )
     assert f'"target symbol rollback failed; backup retained as %s" "{backup_view}"' in skill
+
+
+def test_symbol_generation_skill_guards_open_lookup_and_protects_rollback_handles() -> None:
+    skill = _full_skill()
+
+    assert "isCallable('dbFindOpenCellViewByName)" in skill
+    assert "dbGetOpenCellViews()" in skill
+    rollback_start = skill.index("vbRollback = errset(unwindProtect(progn(")
+    rollback_end = _matching_parenthesis(skill, skill.index("(", rollback_start))
+    rollback = skill[rollback_start : rollback_end + 1]
+    assert 'dbOpenCellViewByType("demoLib" "nand2" "__vb_symbol_backup_' in rollback
+    assert 'dbCopyCellView(vbBackupCv "demoLib" "nand2" "symbol" nil nil t)' in rollback
+    assert "when(vbTargetCv errset(dbClose(vbTargetCv) nil) vbTargetCv = nil)" in rollback
+    assert "when(vbBackupCv errset(dbClose(vbBackupCv) nil) vbBackupCv = nil)" in rollback
+    assert _matching_parenthesis(skill, skill.index("(")) == len(skill) - 1
 
 
 def test_symbol_generation_skill_rolls_back_after_temporary_cleanup_failure() -> None:

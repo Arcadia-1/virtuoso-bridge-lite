@@ -78,8 +78,50 @@ def test_layout_reads_report_vias_as_their_own_objects() -> None:
     )
     assert parsed == [{
         "kind": "via", "objType": "stdVia", "via": "M2_M1", "xy": (1.0, 1.0),
-        "orient": '"R0"', "bbox": [(0.81, 0.81), (1.19, 1.19)],
+        "orient": "R0", "bbox": [(0.81, 0.81), (1.19, 1.19)],
     }]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '"ERROR: cannot open L/C/layout"',
+        '"ERROR: cannot open L/C/layout\\n"',
+        "ERROR: cannot open L/C/layout",
+    ],
+)
+def test_parse_layout_geometry_output_raises_on_error_prefix(raw: str) -> None:
+    from virtuoso_bridge.virtuoso.layout.reader import parse_layout_geometry_output
+
+    with pytest.raises(ValueError, match="ERROR: cannot open L/C/layout"):
+        parse_layout_geometry_output(raw)
+
+
+def test_parse_layout_geometry_output_unquotes_and_unescapes_percent_l_fields() -> None:
+    from virtuoso_bridge.virtuoso.layout.reader import parse_layout_geometry_output
+
+    raw = (
+        '"shape\\tobjType=label\\tlayer=M1\\tpurpose=drawing\\tbbox=((0 0) (1 1))\\tpoints=nil\\t'
+        'xy=(0.5 0.5)\\torient=\\"R90\\"\\ttext=\\"line1\\\\nline2\\\\t\\\\\\"q\\\\\\"\\\\\\\\end\\"\\n'
+        'mosaic\\tname=ARR\\tlib=\\"lib\\\\\\"1\\"\\tcell=\\"cell\\\\\\\\2\\"\\tview=\\"layout\\"\\t'
+        'xy=(0 0)\\torient=\\"MY\\"\\trows=2\\tcolumns=3\\tbbox=((0 0) (4 6))\\n"'
+    )
+    parsed = parse_layout_geometry_output(raw)
+    assert parsed[0]["orient"] == "R90"
+    assert parsed[0]["text"] == 'line1\nline2\t"q"\\end'
+    assert parsed[1]["lib"] == 'lib"1'
+    assert parsed[1]["cell"] == "cell\\2"
+    assert parsed[1]["view"] == "layout"
+    assert parsed[1]["orient"] == "MY"
+
+
+def test_escape_skill_string_escapes_newlines_and_carriage_returns() -> None:
+    from virtuoso_bridge.virtuoso.ops import escape_skill_string, q
+
+    escaped = escape_skill_string('line1\nline2\r\n"quoted"\\slash')
+    assert "\n" not in escaped and "\r" not in escaped
+    assert escaped == r'line1\nline2\r\n\"quoted\"\\slash'
+    assert q("a\nb\rc") == r'"a\nb\rc"'
 
 
 def test_open_window_shows_layout_hierarchy_only_in_a_window_it_opens() -> None:

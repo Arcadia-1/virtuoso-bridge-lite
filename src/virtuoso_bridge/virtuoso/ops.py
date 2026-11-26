@@ -7,7 +7,12 @@ from typing import Iterable
 
 def escape_skill_string(value: str) -> str:
     """Escape a Python string for use inside a SKILL string literal."""
-    return value.replace("\\", "\\\\").replace('"', '\\"')
+    return (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+    )
 
 def q(value: str) -> str:
     """Wrap a Python string as a SKILL string literal (escaped + quoted).

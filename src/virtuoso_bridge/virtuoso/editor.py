@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from virtuoso_bridge.models import ExecutionStatus, VirtuosoResult
+from virtuoso_bridge.virtuoso.basic.composition import compose_skill_script
+from virtuoso_bridge.virtuoso.ops import escape_skill_string
 
 # The editor's own cellview handle, and whether the editor opened it (rather
 # than binding to a cellview a window already holds). Commands in the batch
@@ -13,10 +15,25 @@ EDITOR_CV = "vbEditorCv"
 EDITOR_OPENED = "vbEditorOpenedCv"
 
 
+def require_editor_cellview(lib: str, cell: str, view: str) -> str:
+    """SKILL failing fast when the target cellview could not be opened."""
+    target = escape_skill_string(f"{lib}/{cell}/{view}")
+    return f'unless(cv && dbValidP(cv) error("failed to open target cellview: {target}"))'
+
+
 def remember_editor_cellview(*, opened: bool) -> str:
     """SKILL recording the editor's cellview right after it was bound."""
     flag = "t" if opened else EDITOR_OPENED
     return f"{EDITOR_CV} = cv {EDITOR_OPENED} = {flag}"
+
+
+def save_editor_cellview() -> str:
+    """SKILL saving the editor's own cellview and failing if ``dbSave`` returns nil."""
+    return (
+        f"progn(unless({EDITOR_CV} && dbValidP({EDITOR_CV}) "
+        'error("editor cellview is not open")) '
+        f'unless(dbSave({EDITOR_CV}) error("dbSave failed")) t)'
+    )
 
 
 def close_editor_cellview() -> str:
@@ -31,6 +48,27 @@ def close_editor_cellview() -> str:
         f"&& !{EDITOR_CV}~>modifiedButNotSaved dbClose({EDITOR_CV})) "
         f"{EDITOR_OPENED} = nil"
     )
+
+
+def wrap_editor_batch(
+    commands: list[str],
+    *,
+    keep_open: bool,
+    extra_init: tuple[str, ...] = (),
+    extra_cleanup: tuple[str, ...] = (),
+) -> str:
+    """Wrap an editor batch in ``unwindProtect`` with handle close and global resets."""
+    init_cmds = [f"{EDITOR_CV} = nil", f"{EDITOR_OPENED} = nil", *extra_init]
+    body = compose_skill_script([*init_cmds, *commands])
+    cleanup_cmds: list[str] = []
+    if not keep_open:
+        cleanup_cmds.append(close_editor_cellview())
+    else:
+        cleanup_cmds.append(f"{EDITOR_OPENED} = nil")
+    cleanup_cmds.append(f"{EDITOR_CV} = nil")
+    cleanup_cmds.extend(extra_cleanup)
+    cleanup = f"progn({' '.join(cleanup_cmds)})"
+    return f"unwindProtect({body} {cleanup})"
 
 
 def redraw_editor_windows() -> str:

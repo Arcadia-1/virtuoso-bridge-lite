@@ -225,11 +225,13 @@ class _FakeRemoteRunner:
         self.discard = discard or CommandResult(0, "", "")
         self.calls: list[tuple[str, float]] = []
 
-    def run_command(self, command: str, timeout: float) -> CommandResult:
+    def run_command(self, command: str, timeout: float = 30.0) -> CommandResult:
         assert timeout > 0.0
         self.calls.append((command, timeout))
         if command == "whoami":
             return self.whoami
+        if "getent passwd" in command or 'printf %s "$HOME"' in command:
+            return CommandResult(0, f"{self._vb_remote_home}\n", "")
         if "VBXSTREAM_STAGE_READY" in command:
             if self.mkdir.returncode == 0 and not self.mkdir.stdout:
                 return CommandResult(
@@ -1195,6 +1197,11 @@ _E2E_CASES = [
         _PARTIAL_LOG, None, None,
         (Status.PARTIAL, Reason.INCOMPLETE_LOG, True), 0, None,
         id="incomplete-log",
+    ),
+    pytest.param(
+        "", None, None,
+        (Status.PARTIAL, Reason.INCOMPLETE_LOG, True), 0, None,
+        id="empty-log",
     ),
     pytest.param(
         _MALFORMED_LOG, b"invalid-gds", None,
@@ -2757,6 +2764,41 @@ def test_remote_export_resolves_username_for_restored_scratch_layout(
     assert first.remote_run_dir != second.remote_run_dir
     assert [command for command, _timeout in runner.calls].count("whoami") == 2
     assert len(client.uploads) == 2
+
+
+@pytest.mark.parametrize(
+    ("configured_root", "expected_prefix"),
+    [
+        ("~/vb_scratch", "/home/designer/vb_scratch"),
+        ("~", "/home/designer"),
+    ],
+)
+def test_remote_export_expands_tilde_scratch_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stream_map: Path,
+    configured_root: str,
+    expected_prefix: str,
+) -> None:
+    monkeypatch.setenv("VB_REMOTE_SCRATCH_ROOT", configured_root)
+    monkeypatch.setenv("VB_CLIENT_ID", "laptop")
+    runner = _FakeRemoteRunner(user="remote_user")
+    client = _FakeRemoteClient(runner, skill_result=_REJECTED)
+
+    result = _run_export(
+        client,
+        tmp_path / "top.gds",
+        stream_map,
+        cleanup_policy="never",
+    )
+
+    assert (result.status, result.reason) == (Status.ERROR, Reason.SKILL_ERROR)
+    assert result.remote_run_dir is not None
+    assert re.fullmatch(
+        rf"{re.escape(expected_prefix)}/virtuoso_bridge_remote_user/laptop/xstream/[0-9a-f]{{32}}",
+        result.remote_run_dir,
+    )
+    assert "~" not in result.remote_run_dir
 
 
 @pytest.mark.parametrize(

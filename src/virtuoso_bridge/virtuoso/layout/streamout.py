@@ -23,6 +23,7 @@ from virtuoso_bridge.transport.remote_paths import (
     default_virtuoso_bridge_dir,
     private_dir_shell_prelude,
     resolve_client_id,
+    resolve_remote_scratch_root,
     sanitize_username_for_path,
 )
 from virtuoso_bridge.virtuoso.layout.xstream import (
@@ -778,11 +779,16 @@ def _export_gds_remote(
 
     try:
         client_id = resolve_client_id()
+        scratch_root = resolve_remote_scratch_root(
+            runner,
+            error_context="remote XStream scratch root",
+        )
         owned_root = PurePosixPath(
             default_virtuoso_bridge_dir(
                 username,
                 "xstream",
                 client_id,
+                root=scratch_root,
             ).replace("\\", "/")
         )
         if not owned_root.is_absolute() or ".." in owned_root.parts:
@@ -800,6 +806,7 @@ def _export_gds_remote(
             inputs,
             budget,
             f"failed to allocate remote XStream staging path: {exc}",
+            timed_out=_exception_timed_out(exc),
         )
 
     remote_run_dir = paths.run_dir.as_posix()
@@ -1299,7 +1306,7 @@ def _stabilize_remote_log(
             )
 
     for _ in range(_MAX_FINAL_LOG_REFRESHES):
-        if not observation.log_present:
+        if not observation.log_present or observation.log_size <= 0:
             return _RemoteLogFinalization(
                 observation=observation,
                 log=None,
