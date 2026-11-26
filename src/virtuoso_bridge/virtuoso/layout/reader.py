@@ -5,14 +5,23 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from virtuoso_bridge.virtuoso.skill_output import parse_sexpr
+from virtuoso_bridge.virtuoso.skill_output import (
+    _is_single_complete_skill_string,
+    parse_sexpr,
+)
 
 
 def _decode_skill_output(raw: str) -> str:
     text = (raw or "").strip()
-    if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+    if _is_single_complete_skill_string(text):
         return parse_sexpr(text)
     return text
+
+
+def _decode_skill_string(value: Any) -> Any:
+    if isinstance(value, str) and _is_single_complete_skill_string(value):
+        return parse_sexpr(value)
+    return value
 
 
 _SKILL_NUMBER_RE = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
@@ -36,8 +45,11 @@ def _parse_skill_point_list(value: str) -> list[tuple[float, float]] | None:
 
 def parse_layout_geometry_output(raw: str) -> list[dict[str, Any]]:
     """Parse the line-oriented geometry dump returned by ``layout_read_geometry``."""
+    decoded = _decode_skill_output(raw)
+    if decoded.lstrip().startswith("ERROR:"):
+        raise ValueError(decoded.strip())
     objects: list[dict[str, Any]] = []
-    for line in _decode_skill_output(raw).splitlines():
+    for line in decoded.splitlines():
         if not line.strip():
             continue
         fields = line.split("\t")
@@ -61,14 +73,16 @@ def parse_layout_geometry_output(raw: str) -> list[dict[str, Any]]:
             obj["points"] = _parse_skill_point_list(obj["points"])
         if "xy" in obj and isinstance(obj["xy"], str):
             obj["xy"] = _parse_skill_point(obj["xy"])
+        for key in ("orient", "text"):
+            if key in obj:
+                obj[key] = _decode_skill_string(obj[key])
         if obj["kind"] == "mosaic":
             for key in ("rows", "columns"):
                 value = obj.get(key)
                 if isinstance(value, str) and re.fullmatch(r"\d+", value):
                     obj[key] = int(value)
             for key in ("lib", "cell", "view"):
-                value = obj.get(key)
-                if isinstance(value, str) and value.startswith('"') and value.endswith('"'):
-                    obj[key] = value[1:-1]
+                if key in obj:
+                    obj[key] = _decode_skill_string(obj[key])
         objects.append(obj)
     return objects

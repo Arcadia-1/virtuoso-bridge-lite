@@ -121,20 +121,22 @@ def schematic_check_save_diagnostics_skill(
         "vbLogAvailable = vbLogPath && isFile(vbLogPath) "
         "when(vbLogAvailable vbCheckStart = fileLength(vbLogPath))) "
         "vbCounts = schCheck(vbCv) "
-        "vbErrorCount = if(vbCounts car(vbCounts) 0) "
-        "vbWarningCount = if(vbCounts cadr(vbCounts) 0) "
+        'unless(vbCounts && listp(vbCounts) error("schCheck returned nil")) '
+        "vbErrorCount = car(vbCounts) "
+        "vbWarningCount = cadr(vbCounts) "
         "when(vbLogAvailable "
         "hiFlushLogFile() "
         "vbCheckEnd = fileLength(vbLogPath) "
         "when(vbCheckEnd >= vbCheckStart "
         "vbCheckPort = infile(vbLogPath) "
         "when(vbCheckPort "
+        "unwindProtect(progn("
         "fileSeek(vbCheckPort vbCheckStart 0) "
         "while(fileTell(vbCheckPort) < vbCheckEnd && "
         "gets(vbCheckLine vbCheckPort) "
         "vbCheckLines = cons(vbCheckLine vbCheckLines)) "
-        "close(vbCheckPort) "
-        "vbCheckLines = reverse(vbCheckLines))) "
+        "vbCheckLines = reverse(vbCheckLines)) "
+        "close(vbCheckPort)))) "
         "hiFlushLogFile() "
         "vbSaveStart = fileLength(vbLogPath)) "
         "vbSaved = dbSave(vbCv) "
@@ -144,11 +146,12 @@ def schematic_check_save_diagnostics_skill(
         "when(vbSaveEnd >= vbSaveStart "
         "vbSavePort = infile(vbLogPath) "
         "when(vbSavePort "
+        "unwindProtect(progn("
         "fileSeek(vbSavePort vbSaveStart 0) "
         "while(fileTell(vbSavePort) < vbSaveEnd && gets(vbSaveLine vbSavePort) "
         "vbSaveLines = cons(vbSaveLine vbSaveLines)) "
-        "close(vbSavePort) "
-        "vbSaveLines = reverse(vbSaveLines)))) "
+        "vbSaveLines = reverse(vbSaveLines)) "
+        "close(vbSavePort))))) "
         'list("vbCheckSave" vbErrorCount vbWarningCount '
         "if(vbSaved t nil) if(vbLogAvailable t nil) "
         "vbCheckLines vbSaveLines)) "
@@ -254,7 +257,10 @@ def check_and_save_schematic(
                 ),
             )
         )
-    if not saved and not any(item.source == "dbSave" for item in diagnostics):
+    if not saved and not any(
+        item.severity == "error" and item.source == "dbSave"
+        for item in diagnostics
+    ):
         diagnostics.append(
             SchematicDiagnostic(
                 severity="error",

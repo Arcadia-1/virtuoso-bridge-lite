@@ -6,9 +6,12 @@ import pytest
 from virtuoso_bridge.models import ExecutionStatus, VirtuosoResult
 from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
 from virtuoso_bridge.virtuoso.editor import (
+    EDITOR_CV,
     close_editor_cellview,
     redraw_editor_windows,
     remember_editor_cellview,
+    require_editor_cellview,
+    save_editor_cellview,
 )
 from virtuoso_bridge.virtuoso.symbol import SymbolOps
 from virtuoso_bridge.virtuoso.symbol.editor import SymbolEditor
@@ -185,19 +188,54 @@ def test_symbol_check_uses_symbol_pin_list_api() -> None:
     ],
 )
 def test_symbol_editor_appends_then_checks_before_save(kwargs, open_command: str) -> None:
+    from tests.test_layout_edit_target import _balanced
+
     client = _RecordingClient()
     shape = symbol_create_rect("device", "drawing", -1, -1, 1, 1)
     with SymbolEditor(client, "demoLib", "nand2", timeout=7, **kwargs) as symbol:
         symbol.add(shape)
 
     assert client.timeout == 7
-    assert client.commands is not None
-    assert client.commands[:4] == [
-        open_command, remember_editor_cellview(opened=True), shape, symbol_check(),
+    assert client.commands is not None and len(client.commands) == 1
+    script = client.commands[0]
+    assert _balanced(script)
+    assert script.startswith("unwindProtect(progn(")
+    parts = [
+        open_command,
+        require_editor_cellview("demoLib", "nand2", "symbol"),
+        remember_editor_cellview(opened=True),
+        shape,
+        symbol_check(cv_expr=EDITOR_CV),
+        save_editor_cellview(),
+        redraw_editor_windows(),
+        close_editor_cellview(),
     ]
-    assert "dbSave(rbCv)" in client.commands[4]
-    assert client.commands[5] == redraw_editor_windows()
-    assert client.commands[6] == close_editor_cellview()
+    positions = [script.index(part) for part in parts]
+    assert positions == sorted(positions)
+    cleanup = script[script.rindex(") progn(") :]
+    assert close_editor_cellview() in cleanup
+    assert "vbEditorCv = nil" in cleanup
+    assert "vbEditorOpenedCv = nil" in cleanup
+
+
+def test_symbol_labels_escape_multiline_newlines_into_single_line_skill() -> None:
+    raw = symbol_create_label(
+        "annotate",
+        "drawing",
+        0,
+        0,
+        "line1\nline2\r\nline3",
+        "centerCenter",
+        "R0",
+        "stick",
+        0.0625,
+    )
+    semantic = symbol_create_instance_label(0, 0, text="top\nbottom")
+
+    assert "\n" not in raw and "\r" not in raw
+    assert '"line1\\nline2\\r\\nline3"' in raw
+    assert "\n" not in semantic and "\r" not in semantic
+    assert '"top\\nbottom"' in semantic
 
 
 @pytest.mark.parametrize(

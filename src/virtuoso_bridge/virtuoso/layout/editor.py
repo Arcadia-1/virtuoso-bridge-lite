@@ -16,17 +16,17 @@ from typing import TYPE_CHECKING
 
 from virtuoso_bridge.virtuoso.editor import (
     EDITOR_OPENED,
-    close_editor_cellview,
     ensure_operation_response,
     redraw_editor_windows,
     remember_editor_cellview,
+    require_editor_cellview,
+    save_editor_cellview,
+    wrap_editor_batch,
 )
 from virtuoso_bridge.virtuoso.ops import (
     close_current_cellview,
     open_cell_view,
-    save_current_cellview,
 )
-from virtuoso_bridge.virtuoso.basic.composition import compose_skill_script
 from virtuoso_bridge.virtuoso.layout.ops import (
     LAYOUT_EDIT_CV_MARKER,
     layout_bind_current_or_open_cell_view,
@@ -62,6 +62,7 @@ class LayoutEditor:
         if self.mode == "w":
             # Creation must not silently reuse an open existing cellview.
             self.commands.append(open_cell_view(self.lib, self.cell, view=self.view, mode="w"))
+            self.commands.append(require_editor_cellview(self.lib, self.cell, self.view))
             self.commands.append(remember_editor_cellview(opened=True))
         else:
             # A layout the current window already shows is reused, not opened,
@@ -72,6 +73,7 @@ class LayoutEditor:
                     opened_flag=EDITOR_OPENED,
                 )
             )
+            self.commands.append(require_editor_cellview(self.lib, self.cell, self.view))
             self.commands.append(remember_editor_cellview(opened=False))
         # Lets content operations such as layout_delete_shapes_on_layer() target
         # this cellview instead of the current window; cleared on exit below.
@@ -88,12 +90,14 @@ class LayoutEditor:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         if exc_type is None:
-            self.commands.append(save_current_cellview())
+            self.commands.append(save_editor_cellview())
             self.commands.append(redraw_editor_windows())
-            if not self.keep_open:
-                self.commands.append(close_editor_cellview())
-            batch = compose_skill_script(self.commands)
-            script = f"unwindProtect({batch} {LAYOUT_EDIT_CV_MARKER} = nil)"
+            script = wrap_editor_batch(
+                self.commands,
+                keep_open=self.keep_open,
+                extra_init=(f"{LAYOUT_EDIT_CV_MARKER} = nil",),
+                extra_cleanup=(f"{LAYOUT_EDIT_CV_MARKER} = nil",),
+            )
             response = self.client.execute_operations(
                 [script], timeout=self.timeout, wrap_in_progn=False,
             )

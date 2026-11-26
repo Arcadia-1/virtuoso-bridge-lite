@@ -672,15 +672,15 @@ def test_parse_xstream_log_empty_text_and_non_string_input() -> None:
 
 
 def test_xstream_refuses_unsaved_cellviews_before_changing_any_field() -> None:
-    """xstOutDoTranslate() opens a modal Save All dialog for unsaved
-    cellviews, which blocks the CIW; the request fails before that."""
+    """xstOutDoTranslate() opens a modal Save All dialog for any unsaved
+    open cellview (including cross-library subcells), which blocks the CIW;
+    the request fails before changing any XStream fields."""
     request = _request()
     skill = xstream_export_gds_skill(request)
 
-    library = request.library.replace("\\", "\\\\").replace('"', '\\"')
-    check = (f'vbUnsaved = setof(x dbGetOpenCellViews() '
-             f'x~>libName == "{library}" && dbIsCellViewModified(x))')
+    check = "vbUnsaved = setof(x dbGetOpenCellViews() dbIsCellViewModified(x))"
     assert check in skill
+    assert 'x~>libName == "' not in skill
     assert "when(isCallable('dbGetOpenCellViews) " in skill
     assert "when(vbUnsaved error(" in skill
     first_capture = skill.index("xstGetField(")

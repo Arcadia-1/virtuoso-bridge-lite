@@ -81,6 +81,12 @@ class _Client:
 
 @pytest.mark.parametrize("mode", ["a", "w"])
 def test_editor_marks_its_cellview_and_always_clears_the_mark(mode):
+    from virtuoso_bridge.virtuoso.editor import (
+        close_editor_cellview,
+        require_editor_cellview,
+        save_editor_cellview,
+    )
+
     client = _Client()
     with LayoutEditor(client, "L", "C", mode=mode) as lay:
         lay.add(layout_delete_shapes_on_layer("M3"))
@@ -89,12 +95,18 @@ def test_editor_marks_its_cellview_and_always_clears_the_mark(mode):
     assert wrap is False and len(commands) == 1
     script = commands[0]
     assert script.startswith("unwindProtect(progn(")
-    assert script.endswith(f" {LAYOUT_EDIT_CV_MARKER} = nil)")
+    assert script.endswith(f" {LAYOUT_EDIT_CV_MARKER} = nil))")
     opened = script.index('cv = ')
+    checked = script.index(require_editor_cellview("L", "C", "layout"))
     marked = script.index(f"{LAYOUT_EDIT_CV_MARKER} = cv")
     deleted = script.index('"M3"')
-    saved = script.index("dbSave(")
-    assert opened < marked < deleted < saved
+    saved = script.index(save_editor_cellview())
+    cleanup = script[script.rindex(") progn(") :]
+    assert opened < checked < marked < deleted < saved
+    assert close_editor_cellview() in cleanup
+    assert "vbEditorCv = nil" in cleanup
+    assert "vbEditorOpenedCv = nil" in cleanup
+    assert f"{LAYOUT_EDIT_CV_MARKER} = nil" in cleanup
     assert _balanced(script)
 
 

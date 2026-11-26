@@ -33,19 +33,27 @@ def _success(output: str) -> VirtuosoResult:
 
 
 def test_check_save_skill_uses_explicit_cellview_and_incremental_log_slices() -> None:
+    from tests.test_layout_edit_target import _balanced
+
     skill = schematic_check_save_diagnostics_skill(
         'my"lib',
         "amp",
         view="schematic",
     )
 
+    assert _balanced(skill)
     assert 'ddGetObj("my\\\"lib" "amp" "schematic")' in skill
     assert skill.index("ddGetObj(") < skill.index("dbOpenCellViewByType(")
     assert 'dbOpenCellViewByType("my\\\"lib" "amp" "schematic"' in skill
     assert "hiGetLogFileName()" in skill
     assert "hiFlushLogFile()" in skill
     assert "vbCheckStart = fileLength(vbLogPath)" in skill
-    assert "fileSeek(vbCheckPort vbCheckStart 0)" in skill
+    assert 'unless(vbCounts && listp(vbCounts) error("schCheck returned nil"))' in skill
+    assert "if(vbCounts car(vbCounts) 0)" not in skill
+    assert "when(vbCheckPort unwindProtect(progn(fileSeek(vbCheckPort vbCheckStart 0)" in skill
+    assert "close(vbCheckPort))))" in skill
+    assert "when(vbSavePort unwindProtect(progn(fileSeek(vbSavePort vbSaveStart 0)" in skill
+    assert "close(vbSavePort)))))" in skill
     assert skill.index("schCheck(vbCv)") < skill.index("dbSave(vbCv)")
     assert "unwindProtect" in skill
     assert "dbClose(vbCv)" in skill
@@ -121,6 +129,25 @@ def test_check_save_reports_db_save_nil() -> None:
     assert result.checked
     assert not result.saved
     assert any(item.source == "dbSave" for item in result.errors)
+
+
+def test_check_save_reports_db_save_nil_even_when_save_logged_warnings() -> None:
+    client = _Client(
+        _success(
+            '("vbCheckSave" 0 0 nil t nil '
+            '("WARNING (DB-270000): read-only warning\\n" "INFO (DB-1): note\\n"))'
+        )
+    )
+
+    result = check_and_save_schematic(client, "LIB", "AMP")
+
+    assert result.status == "save_failed"
+    assert not result.saved
+    assert any(
+        item.source == "dbSave" and item.message == "dbSave returned nil"
+        for item in result.errors
+    )
+    assert any(item.source == "dbSave" and item.code == "DB-270000" for item in result.warnings)
 
 
 def test_check_save_reports_blocking_modal_after_timeout(monkeypatch) -> None:

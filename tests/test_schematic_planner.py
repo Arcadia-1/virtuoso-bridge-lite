@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from virtuoso_bridge.virtuoso.editor import close_editor_cellview, redraw_editor_windows
+from virtuoso_bridge.virtuoso.editor import (
+    close_editor_cellview,
+    redraw_editor_windows,
+    require_editor_cellview,
+    save_editor_cellview,
+)
 from virtuoso_bridge.virtuoso.schematic import SchematicOps
 from virtuoso_bridge.virtuoso.schematic.planner import (
     ConstraintLevel,
@@ -299,11 +304,20 @@ def test_schematic_ops_create_from_plan_executes_schcheck_and_save() -> None:
 
     SchematicOps(client).create_from_plan("LIB", "CELL", plan)
 
-    assert client.operations is not None
-    assert client.operations[-4] == "schCheck(cv)"
-    assert "dbSave(rbCv)" in client.operations[-3]
-    assert client.operations[-2] == redraw_editor_windows()
-    assert client.operations[-1] == close_editor_cellview()
+    assert client.operations is not None and len(client.operations) == 1
+    script = client.operations[0]
+    assert script.startswith("unwindProtect(progn(")
+    parts = [
+        require_editor_cellview("LIB", "CELL", "schematic"),
+        "schCheck(vbEditorCv)",
+        save_editor_cellview(),
+        redraw_editor_windows(),
+        close_editor_cellview(),
+    ]
+    assert [script.index(part) for part in parts] == sorted(
+        script.index(part) for part in parts
+    )
+    assert "vbEditorCv = nil" in script[script.rindex(") progn(") :]
 
 
 def test_readback_report_is_structured_and_can_be_required() -> None:

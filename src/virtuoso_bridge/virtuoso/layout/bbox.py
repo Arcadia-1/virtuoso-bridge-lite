@@ -101,7 +101,7 @@ def _payload(raw: str, schema: str, count: int) -> list:
     return value
 
 
-def _bbox(value):
+def _bbox(value, *, allow_inverted: bool = False):
     if value is None:
         return None
     try:
@@ -110,7 +110,7 @@ def _bbox(value):
         box = [[float(n) for n in p] for p in value]
         if any(not math.isfinite(n) for p in box for n in p):
             raise ValueError
-        if box[0][0] > box[1][0] or box[0][1] > box[1][1]:
+        if not allow_inverted and (box[0][0] > box[1][0] or box[0][1] > box[1][1]):
             raise ValueError
         return box
     except (ValueError, TypeError):
@@ -191,6 +191,7 @@ def parse_layout_bbox_recompute_output(raw: str) -> dict:
         raise ValueError("invalid BBox recompute evidence")
     if bool(saved) != (verification != "memory_only"):
         raise ValueError("inconsistent BBox save evidence")
-    before, after = _bbox(before), _bbox(after)
+    before = _bbox(before, allow_inverted=True)
+    after = _bbox(after)
     return dict(before=before, after=after, changed=before != after,
                 saved=bool(saved), verification=verification)

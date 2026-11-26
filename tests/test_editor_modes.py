@@ -162,3 +162,65 @@ def test_editors_redraw_the_windows_of_the_edited_cellview(ops_type, keep_open) 
     # every non-editor window (the CIW itself), checked on IC 23.1.
     assert "geGetWindowCellView" not in redraw
     assert "errset(hiRedraw(vbWin) nil)" in redraw
+
+
+@pytest.mark.parametrize("ops_type", [SchematicOps, LayoutOps, SymbolOps])
+@pytest.mark.parametrize("method", ["create", "modify"])
+@pytest.mark.parametrize("keep_open", [False, True])
+def test_editors_validate_open_save_vb_editor_cv_and_wrap_in_unwind_protect(
+    ops_type,
+    method: str,
+    keep_open: bool,
+) -> None:
+    from tests.test_layout_edit_target import _balanced
+    from virtuoso_bridge.virtuoso.editor import (
+        close_editor_cellview,
+        remember_editor_cellview,
+        require_editor_cellview,
+        save_editor_cellview,
+    )
+
+    client = _Recorder()
+    user_cmd = 'cv = otherCv'
+    with getattr(ops_type(client), method)('demo"Lib', "demoCell", keep_open=keep_open) as editor:
+        editor.add(user_cmd)
+
+    batch = client.batches[-1]
+    assert _balanced(batch)
+    assert batch.startswith("unwindProtect(progn(")
+    view = "schematic" if ops_type is SchematicOps else ("layout" if ops_type is LayoutOps else "symbol")
+    req = require_editor_cellview('demo"Lib', "demoCell", view)
+    save = save_editor_cellview()
+    assert req in batch
+    assert 'unless(cv && dbValidP(cv) error("failed to open target cellview: demo\\"Lib/demoCell/' in req
+    assert save in batch
+    assert 'unless(dbSave(vbEditorCv) error("dbSave failed"))' in save
+    assert "geGetEditCellView" not in save
+    assert "dbSave(rbCv)" not in batch
+
+    # Validate open before recording vbEditorCv / running user commands / saving.
+    open_idx = batch.index("dbOpenCellViewByType(")
+    req_idx = batch.index(req)
+    rem_idx = batch.index(remember_editor_cellview(opened=(method == "create" or ops_type is not LayoutOps)))
+    user_idx = batch.index(user_cmd)
+    save_idx = batch.index(save)
+    assert open_idx < req_idx < rem_idx < user_idx < save_idx
+
+    # Cleanup runs inside unwindProtect after the body and always clears globals.
+    cleanup = batch[batch.rindex(") progn(") :]
+    assert "vbEditorCv = nil" in cleanup
+    assert "vbEditorOpenedCv = nil" in cleanup
+    if ops_type is LayoutOps:
+        assert "vbLayoutEditCv = nil" in cleanup
+    if not keep_open:
+        assert close_editor_cellview() in cleanup
+    else:
+        assert close_editor_cellview() not in batch
+
+    # Check helpers in schematic/symbol target vbEditorCv rather than a rebound cv.
+    if ops_type is SchematicOps:
+        assert "schCheck(vbEditorCv)" in batch
+        assert user_idx < batch.index("schCheck(vbEditorCv)") < save_idx
+    elif ops_type is SymbolOps:
+        assert "rbCv = vbEditorCv" in batch
+        assert user_idx < batch.index("rbCv = vbEditorCv") < save_idx

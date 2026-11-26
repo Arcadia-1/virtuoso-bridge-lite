@@ -141,8 +141,15 @@ def symbol_generate_from_schematic_skill(
         'unless(equal(vbExpectedOrder vbActualOrder) error("generated symbol pin order mismatch")) '
         f"{sort_finalize}"
         "unless(isCallable('dbCopyCellView) error(\"dbCopyCellView API unavailable\")) "
-        f'when(dbFindOpenCellViewByName("{escaped_lib}" "{escaped_cell}" '
-        f'"{escaped_symbol_view}") error("target symbol is open")) '
+        "when(if(isCallable('dbFindOpenCellViewByName) then "
+        f'dbFindOpenCellViewByName("{escaped_lib}" "{escaped_cell}" '
+        f'"{escaped_symbol_view}") '
+        "else when(isCallable('dbGetOpenCellViews) "
+        "setof(vbOpenCv dbGetOpenCellViews() "
+        f'vbOpenCv~>libName == "{escaped_lib}" && '
+        f'vbOpenCv~>cellName == "{escaped_cell}" && '
+        f'vbOpenCv~>viewName == "{escaped_symbol_view}"))) '
+        'error("target symbol is open")) '
         "when(vbReplacing "
         f'vbBackupSourceCv = dbOpenCellViewByType("{escaped_lib}" "{escaped_cell}" '
         f'"{escaped_symbol_view}" "schematicSymbol" "r") '
@@ -199,7 +206,7 @@ def symbol_generate_from_schematic_skill(
         "when(vbInstallAttempted "
         "if(vbReplacing "
         "then if(vbBackupReady "
-        "then vbRollback = errset(progn("
+        "then vbRollback = errset(unwindProtect(progn("
         f'vbBackupCv = dbOpenCellViewByType("{escaped_lib}" "{escaped_cell}" '
         f'"{escaped_backup_view}" "schematicSymbol" "r") '
         'unless(vbBackupCv error("symbol backup open failed")) '
@@ -220,7 +227,10 @@ def symbol_generate_from_schematic_skill(
         'unless(dbClose(vbTargetCv) error("target symbol rollback close failed")) '
         "vbTargetCv = nil "
         'unless(dbClose(vbBackupCv) error("symbol backup close failed")) '
-        "vbBackupCv = nil t) nil) "
+        "vbBackupCv = nil t) "
+        "progn("
+        "when(vbTargetCv errset(dbClose(vbTargetCv) nil) vbTargetCv = nil) "
+        "when(vbBackupCv errset(dbClose(vbBackupCv) nil) vbBackupCv = nil))) nil) "
         "if(vbRollback && car(vbRollback) "
         "then vbRollbackSucceeded = t "
         "else vbCleanupFailures = cons("

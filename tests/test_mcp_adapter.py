@@ -109,12 +109,13 @@ def test_new_schematic_guards_existing_view_in_same_batch(monkeypatch, replace):
         args['replace'] = True
     mcp._impl_schematic_create(args)
     commands = execute.call_args.args[0]
+    script = '\n'.join(commands)
     if replace:
-        assert 'ddGetObj' not in commands[0]
+        assert 'ddGetObj' not in script
     else:
-        assert 'ddGetObj("demo" "test" "schematic")' in commands[0]
-        assert 'error(' in commands[0]
-        assert 'dbOpenCellViewByType' in commands[1]
+        assert 'ddGetObj("demo" "test" "schematic")' in script
+        assert 'error(' in script
+        assert script.index('ddGetObj("demo" "test" "schematic")') < script.index('dbOpenCellViewByType')
     execute.assert_called_once()
 
 

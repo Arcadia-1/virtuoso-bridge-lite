@@ -116,3 +116,33 @@ def test_inverted_database_boxes_are_reported_not_hidden_by_parser_failure():
     assert report["bbox"] is None and report["observed_bbox"] is None
     assert [issue["location"] for issue in report["invalid_bboxes"]] == ["cellview", "objects[0]"]
     assert report["invalid_bboxes"][1]["raw_bbox"] == [["10", "10"], ["0", "0"]]
+
+
+@pytest.mark.parametrize(
+    "before_expr,expected_before",
+    [
+        ("((5.0 0.0) (1.0 1.0))", [[5.0, 0.0], [1.0, 1.0]]),
+        ("((5.0 2.0) (1.0 0.0))", [[5.0, 2.0], [1.0, 0.0]]),
+    ],
+)
+def test_recompute_evidence_accepts_inverted_before_box_when_after_is_valid(
+    before_expr, expected_before
+):
+    raw = f'("VB_BBOX_RECOMPUTE_V1" {before_expr} ((0.0 0.0) (5.0 1.0)) t "reopened")'
+    report = parse_layout_bbox_recompute_output(raw)
+    assert report["before"] == expected_before
+    assert report["after"] == [[0.0, 0.0], [5.0, 1.0]]
+    assert report["changed"] is True
+    assert report["saved"] is True
+    assert report["verification"] == "reopened"
+
+
+def test_recompute_evidence_still_rejects_inverted_after_or_malformed_before():
+    with pytest.raises(ValueError, match="invalid BBox coordinates"):
+        parse_layout_bbox_recompute_output(
+            '("VB_BBOX_RECOMPUTE_V1" ((0.0 0.0) (5.0 1.0)) ((5.0 0.0) (1.0 1.0)) nil "memory_only")'
+        )
+    with pytest.raises(ValueError, match="invalid BBox coordinates"):
+        parse_layout_bbox_recompute_output(
+            '("VB_BBOX_RECOMPUTE_V1" ((5.0) (1.0 1.0)) ((0.0 0.0) (5.0 1.0)) nil "memory_only")'
+        )

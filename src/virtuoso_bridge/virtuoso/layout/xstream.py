@@ -157,13 +157,13 @@ def xstream_export_gds_skill(request: XStreamExportRequest) -> str:
         for xstream_field, old_variable in restored_fields
     )
 
-    # xstOutDoTranslate() opens a modal "Save All" dialog when cellviews are
-    # unsaved, which blocks the CIW. Refuse instead, before any field changes.
-    library = escaped_values["library"]
+    # xstOutDoTranslate() opens a modal "Save All" dialog when any open
+    # cellview is unsaved (including cross-library subcells), which blocks the
+    # CIW. Refuse instead, before any field changes.
     unsaved_check = (
         "when(isCallable('dbGetOpenCellViews) "
         "vbUnsaved = setof(x dbGetOpenCellViews() "
-        f'x~>libName == "{library}" && dbIsCellViewModified(x)) '
+        "dbIsCellViewModified(x)) "
         'when(vbUnsaved error(sprintf(nil "unsaved cellviews would open the XStream '
         'Save All dialog; save them first: %s" '
         'buildString(mapcar(lambda((x) sprintf(nil "%s/%s/%s" '
