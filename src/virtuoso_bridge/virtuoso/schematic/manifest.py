@@ -784,6 +784,7 @@ def _set_instance_properties(
     }
     body = [
         "let((rbInst rbICDF rbCCDF rbSaved cdfgData cdfgForm rbParam "
+        "rbVal rbIntVal rbFloatVal rbBoolVal "
         "rbCallback rbCallbackResult rbUpdateAttempt)",
         f'rbInst = car(setof(x cv~>instances x~>name == {_q(str(item["reference"]))}))',
         'unless(rbInst error("instance not found for parameters"))',
@@ -808,7 +809,16 @@ def _set_instance_properties(
                 (
                     f"rbParam = get(rbCCDF {_q(name)})",
                     f'unless(rbParam error("unknown CDF parameter: {escape_skill_string(name)}"))',
-                    f"rbParam~>value = {_q(value)}",
+                    f"rbVal = {_q(value)}",
+                    'when(rbParam~>paramType == "int" && (rbIntVal = atoi(rbVal)) && sprintf(nil "%d" rbIntVal) == rbVal rbVal = rbIntVal)',
+                    'when(rbParam~>paramType == "float" && stringp(rbVal) '
+                    "rbFloatVal = if(isCallable('cdfParseFloatString) cdfParseFloatString(rbVal) atof(rbVal)) "
+                    "when(numberp(rbFloatVal) rbVal = float(rbFloatVal)))",
+                    'when(rbParam~>paramType == "boolean" && stringp(rbVal) '
+                    "rbBoolVal = lowerCase(rbVal) "
+                    'cond((rbBoolVal == "t" || rbBoolVal == "true" rbVal = t) '
+                    '(rbBoolVal == "nil" || rbBoolVal == "false" rbVal = nil)))',
+                    "rbParam~>value = rbVal",
                 )
             )
         for name in mapped:
@@ -954,6 +964,22 @@ def apply_terminal_escape_detours(
                 }
             )
 
+    fixed_points: set[PointLike] = {anchor["point"] for anchor in anchors}
+    for key in ("ports", "junctions"):
+        for row in layout.get(key, ()):
+            if "xy" in row:
+                fixed_points.add(tuple(row["xy"]))
+    for key in (
+        "contacts",
+        "expandedLinks",
+        "bulkStubs",
+        "bulkShorts",
+        "annotationStubs",
+    ):
+        for row in layout.get(key, ()):
+            for point in row.get("points", ()):
+                fixed_points.add(tuple(point))
+
     point_use: dict[tuple[str, PointLike], int] = {}
     for route in layout["routes"]:
         for point in route["points"]:
@@ -992,19 +1018,40 @@ def apply_terminal_escape_detours(
                 key=lambda item: (item["reference"], item["pinName"]),
             )[0]
             origin = origins[anchor["reference"]]
+            can_shift_interior_bend = (
+                anchor["point"] == end
+                and index > 0
+                and len(rewritten) >= 2
+                and start not in fixed_points
+                and point_use[(route["netName"], start)] == 1
+            )
             if start[0] == end[0]:
                 direction = -1 if anchor["point"][0] < origin[0] else 1
                 offset = direction * clearance
                 shifted_start = (start[0] + offset, start[1])
-                if anchor["point"] == end and point_use[(route["netName"], start)] == 1:
-                    rewritten[-1] = shifted_start
+                if (
+                    can_shift_interior_bend
+                    and rewritten[-2][1] == start[1]
+                    and rewritten[-2][0] != start[0]
+                ):
+                    if rewritten[-2] == shifted_start:
+                        rewritten.pop()
+                    else:
+                        rewritten[-1] = shifted_start
                 dogleg = [shifted_start, (end[0] + offset, end[1]), end]
             elif start[1] == end[1]:
                 direction = -1 if anchor["point"][1] < origin[1] else 1
                 offset = direction * clearance
                 shifted_start = (start[0], start[1] + offset)
-                if anchor["point"] == end and point_use[(route["netName"], start)] == 1:
-                    rewritten[-1] = shifted_start
+                if (
+                    can_shift_interior_bend
+                    and rewritten[-2][0] == start[0]
+                    and rewritten[-2][1] != start[1]
+                ):
+                    if rewritten[-2] == shifted_start:
+                        rewritten.pop()
+                    else:
+                        rewritten[-1] = shifted_start
                 dogleg = [shifted_start, (end[0], end[1] + offset), end]
             else:
                 raise ValueError(

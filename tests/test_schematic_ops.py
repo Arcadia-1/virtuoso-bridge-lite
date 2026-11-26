@@ -4,8 +4,11 @@ import pytest
 
 from virtuoso_bridge.virtuoso.schematic.ops import (
     pin_anchored_label_placement,
+    schematic_create_inst_by_master_name,
     schematic_create_net_stub,
     schematic_create_net_expression,
+    schematic_create_pin,
+    schematic_create_pin_at_instance_term,
     schematic_label_instance_term,
     schematic_set_netset_property,
     schematic_wire_instance_terms_labeled,
@@ -236,3 +239,62 @@ def test_mos_labels_use_the_terminal_names_given_for_a_role() -> None:
 
     assert 'x~>name == "sx"' in body and 'list("SX")' in body
     assert 'error("terminal %s not found on %s/%s; its terminals: %L" "sx" ' in body
+
+
+@pytest.mark.parametrize(
+    ("view", "view_type", "mode", "expected_view_type"),
+    [
+        ("symbol", None, "r", "schematicSymbol"),
+        ("schematic", None, "r", "schematic"),
+        ("schematic", None, "a", "schematic"),
+        ("symbol_alt", None, "r", ""),
+        ("symbol_alt", "schematicSymbol", "r", "schematicSymbol"),
+        ("layout", None, "r", "maskLayout"),
+    ],
+)
+def test_create_inst_by_master_name_uses_db_open_cell_view_by_type_and_closes_master(
+    view: str,
+    view_type: str | None,
+    mode: str,
+    expected_view_type: str,
+) -> None:
+    from tests.test_layout_edit_target import _balanced
+
+    skill = schematic_create_inst_by_master_name(
+        "demoLib",
+        "inv",
+        view,
+        "I0",
+        1.0,
+        2.0,
+        "R0",
+        view_type=view_type,
+        mode=mode,
+    )
+
+    assert _balanced(skill)
+    assert "dbOpenCellView(" not in skill
+    assert (
+        f'dbOpenCellViewByType("demoLib" "inv" "{view}" "{expected_view_type}" "{mode}")'
+        in skill
+    )
+    assert 'unless(rbMaster error("master cellview not found: demoLib/inv/' in skill
+    assert "unwindProtect(dbCreateInst(cv rbMaster \"I0\"" in skill
+    assert "when(rbMaster dbClose(rbMaster))" in skill
+
+
+def test_create_pin_helpers_check_and_close_pin_master() -> None:
+    from tests.test_layout_edit_target import _balanced
+
+    pin_skill = schematic_create_pin("IN", 0.0, 1.0, "R0", direction="input")
+    term_pin_skill = schematic_create_pin_at_instance_term("M0", "G", "IN", direction="output")
+
+    for skill, cell in ((pin_skill, "ipin"), (term_pin_skill, "opin")):
+        assert _balanced(skill)
+        assert (
+            f'rbPinMaster = dbOpenCellViewByType("basic" "{cell}" "symbol" "schematicSymbol" "r")'
+            in skill
+        )
+        assert f'unless(rbPinMaster error("pin master cellview not found: basic/{cell}/symbol"))' in skill
+        assert "unwindProtect(schCreatePin(cv rbPinMaster " in skill
+        assert "when(rbPinMaster dbClose(rbPinMaster))" in skill

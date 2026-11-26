@@ -41,10 +41,24 @@ def test_offset_polyline_and_label_share_explicit_cellview():
 
 
 def test_layout_uses_native_aggregate_bbox_and_serializes_arrays():
+    from tests.test_layout_edit_target import _balanced
+    from virtuoso_bridge.virtuoso.layout import layout_read_summary
+
     skill = layout_read_geometry("L", "C")
+    assert _balanced(skill)
     assert 'mosaic\\t' in skill
     assert 'rows=' in skill and 'columns=' in skill
     assert 'dbTransformBBox(inst~>master~>bBox inst~>transform)' not in skill
+    assert "(or inst~>libName inst~>master~>libName)" in skill
+    assert "(or inst~>cellName inst~>master~>cellName)" in skill
+    assert "(or inst~>viewName inst~>master~>viewName)" in skill
+    assert "(or inst~>orient car(inst~>tileArray))" in skill
+
+    summary = layout_read_summary("L", "C")
+    assert _balanced(summary)
+    assert '(or inst~>name "")' in summary
+    assert '(or inst~>libName inst~>master~>libName "?")' in summary
+    assert '(or inst~>cellName inst~>master~>cellName "?")' in summary
 
 
 def test_modeled_mosaic_row_counts_are_numeric_not_ordinary_instances():
@@ -54,3 +68,22 @@ def test_modeled_mosaic_row_counts_are_numeric_not_ordinary_instances():
     assert data[0]["kind"] == "mosaic"
     assert (data[0]["rows"], data[0]["columns"]) == (2, 3)
     assert data[0]["bbox"] == [(0., 0.), (5., 3.)]
+
+
+def test_parse_layout_geometry_handles_scientific_notation_coordinates():
+    raw = (
+        'shape\tobjType=path\tlayer=M1\tpurpose=drawing\t'
+        'bbox=((1e-05 0.0) (1.0 2.0))\t'
+        'points=((0 0) (1e-05 2e-05) (1 1))\t'
+        'xy=(1e-05 2.0)\torient="R0"\ttext=nil\n'
+        'shape\tobjType=label\tlayer=M1\tpurpose=pin\t'
+        'bbox=((-1.5E+06 +.25) (1. 2.e-3))\tpoints=nil\t'
+        'xy=(-1.5E+06 +.25)\torient="R0"\ttext="VDD"\n'
+    )
+    objects = parse_layout_geometry_output(raw)
+    assert len(objects) == 2
+    assert objects[0]["xy"] == (1e-05, 2.0)
+    assert objects[0]["bbox"] == [(1e-05, 0.0), (1.0, 2.0)]
+    assert objects[0]["points"] == [(0.0, 0.0), (1e-05, 2e-05), (1.0, 1.0)]
+    assert objects[1]["xy"] == (-1.5e6, 0.25)
+    assert objects[1]["bbox"] == [(-1.5e6, 0.25), (1.0, 0.002)]

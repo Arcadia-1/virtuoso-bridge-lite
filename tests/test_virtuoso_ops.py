@@ -139,3 +139,28 @@ def test_close_windows_never_leaves_a_modified_cellview_to_a_dialog(unsaved) -> 
 def test_close_windows_rejects_unknown_unsaved_policy() -> None:
     with pytest.raises(ValueError, match="refuse"):
         close_windows(unsaved="ignore")
+
+
+def test_layout_bind_current_or_open_requires_writable_mode_for_edits() -> None:
+    from virtuoso_bridge.virtuoso.layout.ops import layout_bind_current_or_open_cell_view
+
+    for mode in ("a", "w"):
+        skill = layout_bind_current_or_open_cell_view("demoLib", "nand2", mode=mode)
+        assert _balanced(skill)
+        assert 'member(rbEditCv~>mode list("a" "w"))' in skill
+
+    read_skill = layout_bind_current_or_open_cell_view("demoLib", "nand2", mode="r")
+    assert _balanced(read_skill)
+    assert 'member(rbEditCv~>mode list("a" "w"))' not in read_skill
+
+
+def test_layout_delete_cell_checks_dd_delete_obj_return_value() -> None:
+    from virtuoso_bridge.virtuoso.layout.ops import layout_delete_cell
+
+    skill = layout_delete_cell("demoLib", "nand2")
+    assert _balanced(skill)
+    assert (
+        'if(ddcell then if(ddDeleteObj(ddcell) then sprintf(nil "deleted: %s/%s" "demoLib" "nand2") '
+        'else sprintf(nil "ERROR: failed to delete: %s/%s" "demoLib" "nand2")) '
+        'else sprintf(nil "ERROR: cell not found: %s/%s" "demoLib" "nand2"))'
+    ) in skill

@@ -95,3 +95,48 @@ def test_integer_cdf_params_are_set_as_integers():
     update = client.updates()[-1]
     assert 'when(p~>paramType == "int" && (iv = atoi(v)) && sprintf(nil "%d" iv) == v' in update
     assert "p~>value = v)" in update
+
+
+def test_params_skill_closes_all_cellviews_and_protects_ccdf_with_unwind_protect():
+    from tests.test_layout_edit_target import _balanced
+
+    client = FakeClient(ANALOG_RES)
+    set_instance_params(client, "R0", param_filters=None, r="10k")
+
+    # Expect: active cv probe, master resolve, CDF read, batched update.
+    assert len(client.skill) == 4
+    master_skill, cdf_skill, update_skill = client.skill[1], client.skill[2], client.skill[3]
+    for skill in (master_skill, cdf_skill, update_skill):
+        assert _balanced(skill), skill
+        assert 'unless(cv error("schematic cellview not found"))' in skill
+        assert "unwindProtect(" in skill
+        assert "when(cv dbClose(cv))" in skill
+        assert skill.index("dbOpenCellViewByType(") < skill.index("unless(cv error(")
+        assert skill.index("unless(cv error(") < skill.index("unwindProtect(")
+        assert skill.index("unwindProtect(") < skill.index("when(cv dbClose(cv))")
+
+    # Update skill must also wrap cCDF mutation/callbacks/update in an inner unwindProtect
+    # that restores saved values on error.
+    assert update_skill.count("unwindProtect(") == 2
+    saved_idx = update_skill.index("foreach(p cCDF~>parameters setarray(saved p~>name p~>value))")
+    inner_up = update_skill.index("unwindProtect(", saved_idx)
+    mutate_idx = update_skill.index("p~>value = v)", inner_up)
+    update_idx = update_skill.index("cdfUpdateInstParam(inst)", mutate_idx)
+    restore_idx = update_skill.index(
+        "foreach(p cCDF~>parameters putpropq(p arrayref(saved p~>name) value))",
+        update_idx,
+    )
+    assert saved_idx < inner_up < mutate_idx < update_idx < restore_idx < update_skill.index("schCheck(cv)")
+
+
+def test_params_skill_coerces_float_and_boolean_cdf_types():
+    client = FakeClient({"gain": ("Gain", None), "enable": ("Enable", None)})
+    set_instance_params(client, "U0", param_filters=None, gain="1.5u", enable="true")
+    update = client.updates()[-1]
+    assert 'when(p~>paramType == "float" && stringp(v)' in update
+    assert "if(isCallable('cdfParseFloatString) cdfParseFloatString(v) atof(v))" in update
+    assert "when(numberp(fv) v = float(fv))" in update
+    assert 'when(p~>paramType == "boolean" && stringp(v)' in update
+    assert "bv = lowerCase(v)" in update
+    assert '(bv == "t" || bv == "true" v = t)' in update
+    assert '(bv == "nil" || bv == "false" v = nil)' in update

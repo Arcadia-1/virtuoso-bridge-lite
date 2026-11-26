@@ -88,13 +88,6 @@ def _require_result_ok(result: Any, default_error: str) -> None:
     raise RuntimeError(errors)
 
 
-def _decode_skill_string(raw: str) -> str:
-    text = (raw or "").strip()
-    if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
-        return bytes(text[1:-1], "utf-8").decode("unicode_escape")
-    return text
-
-
 def _path_exists(path: Path) -> bool:
     return path.exists() or path.is_symlink()
 
@@ -268,9 +261,10 @@ def _export_into_run_dir(
         errors = "; ".join(_result_errors(skill_result)) or "createNetlist failed"
         raise RuntimeError(errors)
 
-    source_file = _decode_skill_string(_result_output(skill_result))
-    if not source_file or source_file == "nil":
+    parsed_source = parse_sexpr(_result_output(skill_result))
+    if not isinstance(parsed_source, str) or not parsed_source:
         raise RuntimeError("createNetlist did not return a netlist path")
+    source_file = parsed_source
 
     source_path = PurePosixPath(source_file)
     if not source_path.is_absolute():
@@ -284,7 +278,7 @@ def _export_into_run_dir(
             source_dir,
             run_dir,
         )
-    destination = Path(output_dir)
+    destination = Path(output_dir).expanduser().resolve()
     tmp_destination = destination.with_name(
         f".{destination.name}.tmp-{uuid.uuid4().hex}"
     )
@@ -400,6 +394,7 @@ def schematic_import_netlist_skill(
         f'vbCopyOk = car(errset(dbCopyCellView(vbTempCv "{escaped_lib}" "{escaped_cell}" '
         f'"{escaped_schematic_view}" nil nil t) nil)) '
         'unless(vbCopyOk vbFailure = "target schematic copy failed")) '
+        "when(vbCopyOk && isCallable('dbClose) dbClose(vbCopyOk)) vbCopyOk = nil "
         "when(vbTempCv when(isCallable('dbClose) dbClose(vbTempCv)) vbTempCv = nil) "
         f'vbTempObj = ddGetObj("{escaped_lib}" "{escaped_cell}" vbDestViewName) '
         "when(vbTempObj errset(ddDeleteObj(vbTempObj) nil)) "

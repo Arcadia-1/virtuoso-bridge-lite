@@ -56,36 +56,50 @@ _SHORTHAND_CANDIDATES = {
 _DEFAULT_FILTERS_PATH = Path(__file__).parent / "cdf_param_filters.yaml"
 
 _RUN_CALLBACKS_ON_CV = '''
-let((cv inst iCDF cCDF saved cdfgData cdfgForm p cb n v iv)
+let((cv inst iCDF cCDF saved cdfgData cdfgForm p cb n v iv fv bv)
   cv = dbOpenCellViewByType("{slib}" "{scell}" "schematic" "schematic" "a")
-  inst = car(setof(x cv~>instances x~>name == "{inst}"))
-  unless(inst error("instance not found"))
-  iCDF = cdfGetInstCDF(inst)
-  unless(iCDF error("instance has no CDF"))
-  cCDF = cdfGetCellCDF(ddGetObj(inst~>libName inst~>cellName))
-  unless(cCDF error("cell CDF not found"))
-  saved = makeTable('s)
-  foreach(p cCDF~>parameters setarray(saved p~>name p~>value))
-  foreach(p cCDF~>parameters
-    when(get(iCDF p~>name) putpropq(p get(iCDF p~>name)~>value value)))
-  cdfgData = cCDF
-  cdfgForm = cCDF
-  foreach(n list({params})
-    p = get(cCDF n)
-    unless(p error(sprintf(nil "unknown CDF param: %s" n)))
-    v = arrayref(paramVals n)
-    when(p~>paramType == "int" && (iv = atoi(v)) && sprintf(nil "%d" iv) == v
-      v = iv)
-    p~>value = v)
-  foreach(n list({params})
-    p = get(cCDF n)
-    cb = p~>callback
-    when(cb && cb != "" errset(evalstring(cb) t)))
-  cdfUpdateInstParam(inst)
-  foreach(p cCDF~>parameters putpropq(p arrayref(saved p~>name) value))
-  schCheck(cv)
-  dbSave(cv)
-  t)
+  unless(cv error("schematic cellview not found"))
+  unwindProtect(
+    progn(
+      inst = car(setof(x cv~>instances x~>name == "{inst}"))
+      unless(inst error("instance not found"))
+      iCDF = cdfGetInstCDF(inst)
+      unless(iCDF error("instance has no CDF"))
+      cCDF = cdfGetCellCDF(ddGetObj(inst~>libName inst~>cellName))
+      unless(cCDF error("cell CDF not found"))
+      saved = makeTable('s)
+      foreach(p cCDF~>parameters setarray(saved p~>name p~>value))
+      unwindProtect(
+        progn(
+          foreach(p cCDF~>parameters
+            when(get(iCDF p~>name) putpropq(p get(iCDF p~>name)~>value value)))
+          cdfgData = cCDF
+          cdfgForm = cCDF
+          foreach(n list({params})
+            p = get(cCDF n)
+            unless(p error(sprintf(nil "unknown CDF param: %s" n)))
+            v = arrayref(paramVals n)
+            when(p~>paramType == "int" && (iv = atoi(v)) && sprintf(nil "%d" iv) == v
+              v = iv)
+            when(p~>paramType == "float" && stringp(v)
+              fv = if(isCallable('cdfParseFloatString) cdfParseFloatString(v) atof(v))
+              when(numberp(fv) v = float(fv)))
+            when(p~>paramType == "boolean" && stringp(v)
+              bv = lowerCase(v)
+              cond(
+                (bv == "t" || bv == "true" v = t)
+                (bv == "nil" || bv == "false" v = nil)))
+            p~>value = v)
+          foreach(n list({params})
+            p = get(cCDF n)
+            cb = p~>callback
+            when(cb && cb != "" errset(evalstring(cb) t)))
+          cdfUpdateInstParam(inst))
+        foreach(p cCDF~>parameters putpropq(p arrayref(saved p~>name) value)))
+      schCheck(cv)
+      dbSave(cv)
+      t)
+    when(cv dbClose(cv))))
 '''
 
 
@@ -129,8 +143,11 @@ def _resolve_instance_master(
     skill = (
         "let((cv inst) "
         f'cv = dbOpenCellViewByType("{escape_skill_string(schematic_lib)}" "{escape_skill_string(schematic_cell)}" "schematic" "schematic" "r") '
+        'unless(cv error("schematic cellview not found")) '
+        "unwindProtect(progn("
         f'inst = car(setof(x cv~>instances x~>name == "{escape_skill_string(inst_name)}")) '
-        'if(inst sprintf(nil "%s|%s" inst~>libName inst~>cellName) ""))'
+        'if(inst sprintf(nil "%s|%s" inst~>libName inst~>cellName) "")) '
+        "when(cv dbClose(cv))))"
     )
     result = client.execute_skill(skill)
     if result.errors:
@@ -151,9 +168,12 @@ def _read_instance_cdf(
     skill = (
         "let((cv inst cdf) "
         f'cv = dbOpenCellViewByType("{escape_skill_string(schematic_lib)}" "{escape_skill_string(schematic_cell)}" "schematic" "schematic" "r") '
+        'unless(cv error("schematic cellview not found")) '
+        "unwindProtect(progn("
         f'inst = car(setof(x cv~>instances x~>name == "{escape_skill_string(inst_name)}")) '
         "cdf = when(inst cdfGetInstCDF(inst)) "
-        "when(cdf mapcar(lambda((p) list(p~>name p~>prompt p~>editable)) cdf~>parameters)))"
+        "when(cdf mapcar(lambda((p) list(p~>name p~>prompt p~>editable)) cdf~>parameters))) "
+        "when(cv dbClose(cv))))"
     )
     result = client.execute_skill(skill)
     if result.errors:

@@ -74,6 +74,7 @@ def layout_bind_current_or_open_cell_view(
     flag_reset = f"{opened_flag} = nil " if opened_flag else ""
     if opened_flag:
         open_expr = f"progn({opened_flag} = t {open_expr})"
+    mode_guard = '&& member(rbEditCv~>mode list("a" "w")) ' if mode != "r" else ""
     return (
         "cv = let((rbEditCv) "
         "rbEditCv = geGetEditCellView() "
@@ -81,6 +82,7 @@ def layout_bind_current_or_open_cell_view(
         f"if(rbEditCv && rbEditCv~>libName == \"{escaped_lib}\" "
         f"&& rbEditCv~>cellName == \"{escaped_cell}\" "
         f"&& rbEditCv~>viewName == \"{escaped_view}\" "
+        f"{mode_guard}"
         "then rbEditCv "
         f"else {open_expr}))"
     )
@@ -422,7 +424,9 @@ def layout_read_summary(
         'foreach(via cv~>vias '
         'buf = strcat(buf sprintf(nil "  via: %s [%s]  @ (%.3f %.3f)\\n" via~>viaHeader~>viaDefName via~>objType xCoord(via~>origin) yCoord(via~>origin)))) '
         'foreach(inst cv~>instances '
-        'buf = strcat(buf sprintf(nil "  inst: %s  [%s/%s]  @ (%.3f %.3f)\\n" inst~>name inst~>libName inst~>cellName xCoord(inst~>xy) yCoord(inst~>xy)))) '
+        'buf = strcat(buf sprintf(nil "  inst: %s  [%s/%s]  @ (%.3f %.3f)\\n" '
+        '(or inst~>name "") (or inst~>libName inst~>master~>libName "?") '
+        '(or inst~>cellName inst~>master~>cellName "?") xCoord(inst~>xy) yCoord(inst~>xy)))) '
         "buf"
     )
     return _layout_read_cellview(lib, cell, view, view_type, "buf bb", body)
@@ -455,7 +459,9 @@ def layout_read_geometry(
         'if(inst~>objType == "mosaic" then '
         'out = strcat(out sprintf(nil '
         '"mosaic\\tname=%s\\tlib=%L\\tcell=%L\\tview=%L\\txy=%L\\torient=%L\\trows=%L\\tcolumns=%L\\tbbox=%L\\n" '
-        'inst~>name inst~>libName inst~>cellName inst~>viewName inst~>xy inst~>orient '
+        '(or inst~>name "") (or inst~>libName inst~>master~>libName) '
+        '(or inst~>cellName inst~>master~>cellName) (or inst~>viewName inst~>master~>viewName) '
+        'inst~>xy (or inst~>orient car(inst~>tileArray)) '
         'inst~>rows inst~>columns inst~>bBox)) '
         'else '
         'out = strcat(out sprintf(nil '
@@ -574,6 +580,7 @@ def layout_delete_cell(lib: str, cell: str) -> str:
         "dbSave(win~>cellView) "
         "hiCloseWindow(win))) "
         f'ddcell = ddGetObj("{escaped_lib}" "{escaped_cell}") '
-        f'if(ddcell then ddDeleteObj(ddcell) sprintf(nil "deleted: %s/%s" "{escaped_lib}" "{escaped_cell}") '
+        f'if(ddcell then if(ddDeleteObj(ddcell) then sprintf(nil "deleted: %s/%s" "{escaped_lib}" "{escaped_cell}") '
+        f'else sprintf(nil "ERROR: failed to delete: %s/%s" "{escaped_lib}" "{escaped_cell}")) '
         f'else sprintf(nil "ERROR: cell not found: %s/%s" "{escaped_lib}" "{escaped_cell}")))'
     )

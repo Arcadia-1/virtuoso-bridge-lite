@@ -15,8 +15,11 @@ def _decode_skill_output(raw: str) -> str:
     return text
 
 
+_SKILL_NUMBER_RE = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
+
+
 def _parse_skill_numbers(value: str) -> list[float]:
-    return [float(token) for token in re.findall(r"-?\d+(?:\.\d+)?", value or "")]
+    return [float(token) for token in _SKILL_NUMBER_RE.findall(value or "")]
 
 
 def _parse_skill_point(value: str) -> tuple[float, float] | None:

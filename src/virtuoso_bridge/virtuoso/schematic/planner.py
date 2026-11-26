@@ -505,8 +505,19 @@ class SchematicPlan:
                     )
                 )
             observed_terms = actual.get("terms") or {}
+            observed_terms_upper = {
+                str(key).upper(): value for key, value in observed_terms.items()
+            }
             for term, expected_net in sorted(spec.terminals.items()):
-                observed_net = observed_terms.get(term)
+                if term in observed_terms:
+                    observed_net = observed_terms[term]
+                elif (
+                    spec.kind in {DeviceKind.NMOS, DeviceKind.PMOS}
+                    and term.upper() in {"D", "G", "S", "B"}
+                ):
+                    observed_net = observed_terms_upper.get(term.upper())
+                else:
+                    observed_net = None
                 if observed_net != expected_net:
                     mismatches.append(
                         ReadbackMismatch(

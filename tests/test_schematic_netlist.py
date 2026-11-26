@@ -1127,3 +1127,42 @@ def test_local_export_cleanup_keeps_only_the_netlisters_process_file(tmp_path, f
         assert [p for p in run_dir.rglob("*") if not p.is_dir()] == [kept]
     else:
         assert not run_dir.exists()
+
+
+def test_schematic_import_netlist_skill_overwrite_closes_copied_cellview() -> None:
+    from tests.test_layout_edit_target import _balanced
+
+    skill = schematic_import_netlist_skill("demoLib", "nand2", overwrite=True)
+
+    assert _balanced(skill)
+    close_copy = "when(vbCopyOk && isCallable('dbClose) dbClose(vbCopyOk)) vbCopyOk = nil"
+    assert close_copy in skill
+    assert skill.index("dbCopyCellView(vbTempCv") < skill.index(close_copy)
+    assert skill.index(close_copy) < skill.index("errset(ddDeleteObj(vbTempObj) nil)")
+
+
+def test_export_schematic_netlist_accepts_dot_output_dir(tmp_path, monkeypatch) -> None:
+    target = tmp_path / "cwd_export"
+    target.mkdir()
+    monkeypatch.chdir(target)
+
+    result = export_schematic_netlist(_ExportClient(), "demoLib", "tb_inv", ".")
+
+    expected = target.resolve()
+    assert result["output_dir"] == str(expected)
+    assert result["input_file"] == str(expected / "input.scs")
+    assert (expected / "input.scs").read_text(encoding="utf-8") == _SPECTRE_TEXT
+
+
+def test_export_schematic_netlist_preserves_non_ascii_remote_path(tmp_path) -> None:
+    remote_dir = "/tmp/设计_café/tb_inv/spectre/schematic/netlist"
+    remote_file = f"{remote_dir}/input.scs"
+    client = _ExportClient(f'"{remote_file}"')
+    output_dir = tmp_path / "utf8_netlist"
+
+    result = export_schematic_netlist(client, "demoLib", "tb_inv", output_dir)
+
+    assert result["source_file"] == remote_file
+    assert result["source_dir"] == remote_dir
+    assert client.downloads[0][0] == remote_dir
+    assert (output_dir / "input.scs").read_text(encoding="utf-8") == _SPECTRE_TEXT
