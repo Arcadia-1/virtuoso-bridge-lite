@@ -804,12 +804,15 @@ def test_save_state_records_tunnel_identity_and_stop_refuses_mismatched_pid(
     )
 
     proc = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(30)"],
+        [sys.executable, "-c", "import sys, time; print('ready', flush=True); time.sleep(30)"],
         stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
+        text=True,
     )
     try:
+        assert proc.stdout is not None
+        assert proc.stdout.readline().strip() == "ready"
         client = SSHClient(
             remote_host="eda-host",
             remote_user="designer",
@@ -879,6 +882,8 @@ def test_save_state_records_tunnel_identity_and_stop_refuses_mismatched_pid(
         assert proc.pid in killed
         assert proc.wait(timeout=5) is not None
     finally:
+        if proc.stdout is not None:
+            proc.stdout.close()
         if proc.poll() is None:
             proc.terminate()
             try:
